@@ -88,13 +88,23 @@ async fn insert_and_confirm(
     memory_type: &str,
     space: &str,
 ) {
+    insert_and_confirm_optional(db, source_id, content, memory_type, Some(space)).await;
+}
+
+async fn insert_and_confirm_optional(
+    db: &Arc<MemoryDB>,
+    source_id: &str,
+    content: &str,
+    memory_type: &str,
+    space: Option<&str>,
+) {
     let doc = RawDocument {
         source: "memory".to_string(),
         source_id: source_id.to_string(),
         title: format!("test-{}", source_id),
         content: content.to_string(),
         memory_type: Some(memory_type.to_string()),
-        space: Some(space.to_string()),
+        space: space.map(str::to_string),
         last_modified: chrono::Utc::now().timestamp(),
         // confirmed=None: upsert_documents stores confirmed=NULL (default 0).
         // We call confirm_memory immediately after to set confirmed=1.
@@ -124,6 +134,8 @@ async fn context_filters_memories_by_space_across_all_shelves() {
     db.register_agent(TEST_AGENT)
         .await
         .expect("register_agent must succeed");
+    db.create_space("alpha", None, false).await.unwrap();
+    db.create_space("beta", None, false).await.unwrap();
 
     // Insert and confirm memories for both spaces across three shelved types.
     // Content strings carry unique markers (ALPHA_MARKER vs BETA_MARKER) so we
@@ -247,5 +259,210 @@ async fn context_filters_memories_by_space_across_all_shelves() {
     assert!(
         ctx.context.contains("ALPHA_MARKER"),
         "combined context string must contain ALPHA_MARKER"
+    );
+}
+
+#[tokio::test]
+async fn context_uncategorized_filters_profile_lanes_to_null_space() {
+    let (router, _tmp, db) = common::test_app_no_gate().await;
+    db.register_agent(TEST_AGENT)
+        .await
+        .expect("register_agent must succeed");
+    db.create_space("alpha", None, false).await.unwrap();
+
+    for (source_id, content, memory_type, space) in [
+        (
+            "mem_uncategorized_id",
+            "UNCAT_MARKER identity content",
+            "identity",
+            None,
+        ),
+        (
+            "mem_uncategorized_pref",
+            "UNCAT_MARKER preference content",
+            "preference",
+            None,
+        ),
+        (
+            "mem_uncategorized_dec",
+            "UNCAT_MARKER decision content",
+            "decision",
+            None,
+        ),
+        (
+            "mem_alpha_id_for_uncat",
+            "ALPHA_UNCAT_LEAK identity content",
+            "identity",
+            Some("alpha"),
+        ),
+        (
+            "mem_alpha_pref_for_uncat",
+            "ALPHA_UNCAT_LEAK preference content",
+            "preference",
+            Some("alpha"),
+        ),
+        (
+            "mem_alpha_dec_for_uncat",
+            "ALPHA_UNCAT_LEAK decision content",
+            "decision",
+            Some("alpha"),
+        ),
+    ] {
+        insert_and_confirm_optional(&db, source_id, content, memory_type, space).await;
+    }
+
+    let ctx = chat_context(&router, "UNCAT_MARKER ALPHA_UNCAT_LEAK", "uncategorized").await;
+
+    assert!(
+        ctx.profile
+            .identity
+            .iter()
+            .any(|item| item.contains("UNCAT_MARKER identity")),
+        "uncategorized context must include NULL-space identity memories; got {:?}",
+        ctx.profile.identity
+    );
+    assert!(
+        ctx.profile
+            .preferences
+            .iter()
+            .any(|item| item.contains("UNCAT_MARKER preference")),
+        "uncategorized context must include NULL-space preference memories; got {:?}",
+        ctx.profile.preferences
+    );
+    assert!(
+        ctx.knowledge
+            .decisions
+            .iter()
+            .any(|item| item.contains("UNCAT_MARKER decision")),
+        "uncategorized context must include NULL-space decisions; got {:?}",
+        ctx.knowledge.decisions
+    );
+    assert!(
+        !ctx.context.contains("ALPHA_UNCAT_LEAK"),
+        "uncategorized context must not leak registered-space profile memories; context=\n{}",
+        ctx.context
+    );
+}
+
+#[tokio::test]
+async fn context_registered_space_does_not_fallback_to_unscoped_profile_lanes() {
+    let (router, _tmp, db) = common::test_app_no_gate().await;
+    db.register_agent(TEST_AGENT)
+        .await
+        .expect("register_agent must succeed");
+    db.create_space("alpha", None, false).await.unwrap();
+
+    for (source_id, content, memory_type) in [
+        (
+            "mem_unscoped_id_for_alpha_empty",
+            "UNSCOPED_PROFILE_LEAK identity content",
+            "identity",
+        ),
+        (
+            "mem_unscoped_pref_for_alpha_empty",
+            "UNSCOPED_PROFILE_LEAK preference content",
+            "preference",
+        ),
+    ] {
+        insert_and_confirm_optional(&db, source_id, content, memory_type, None).await;
+    }
+
+    let ctx = chat_context(&router, "UNSCOPED_PROFILE_LEAK", "alpha").await;
+
+    assert!(
+        ctx.profile.identity.is_empty(),
+        "explicit registered scope with no scoped identity rows must stay empty, got {:?}",
+        ctx.profile.identity
+    );
+    assert!(
+        ctx.profile.preferences.is_empty(),
+        "explicit registered scope with no scoped preference rows must stay empty, got {:?}",
+        ctx.profile.preferences
+    );
+    assert!(
+        !ctx.context.contains("UNSCOPED_PROFILE_LEAK"),
+        "explicit registered scope must not fall back to unscoped profile memories; context=\n{}",
+        ctx.context
+    );
+}
+
+#[tokio::test]
+async fn context_uncategorized_empty_profile_lanes_do_not_fallback_to_registered_spaces() {
+    let (router, _tmp, db) = common::test_app_no_gate().await;
+    db.register_agent(TEST_AGENT)
+        .await
+        .expect("register_agent must succeed");
+    db.create_space("alpha", None, false).await.unwrap();
+
+    for (source_id, content, memory_type) in [
+        (
+            "mem_alpha_id_for_empty_uncat",
+            "ALPHA_EMPTY_UNCAT_LEAK identity content",
+            "identity",
+        ),
+        (
+            "mem_alpha_pref_for_empty_uncat",
+            "ALPHA_EMPTY_UNCAT_LEAK preference content",
+            "preference",
+        ),
+    ] {
+        insert_and_confirm_optional(&db, source_id, content, memory_type, Some("alpha")).await;
+    }
+
+    let ctx = chat_context(&router, "ALPHA_EMPTY_UNCAT_LEAK", "uncategorized").await;
+
+    assert!(
+        ctx.profile.identity.is_empty(),
+        "uncategorized scope with no NULL-space identity rows must stay empty, got {:?}",
+        ctx.profile.identity
+    );
+    assert!(
+        ctx.profile.preferences.is_empty(),
+        "uncategorized scope with no NULL-space preference rows must stay empty, got {:?}",
+        ctx.profile.preferences
+    );
+    assert!(
+        !ctx.context.contains("ALPHA_EMPTY_UNCAT_LEAK"),
+        "uncategorized scope must not fall back to registered-space profile memories; context=\n{}",
+        ctx.context
+    );
+}
+
+#[tokio::test]
+async fn context_registered_space_filters_correction_facts() {
+    let (router, _tmp, db) = common::test_app_no_gate().await;
+    db.register_agent(TEST_AGENT)
+        .await
+        .expect("register_agent must succeed");
+    db.create_space("alpha", None, false).await.unwrap();
+    db.create_space("beta", None, false).await.unwrap();
+
+    insert_and_confirm_optional(
+        &db,
+        "mem_beta_correction_fact",
+        "CORRECTION_SPACE_LEAK beta fact content",
+        "fact",
+        Some("beta"),
+    )
+    .await;
+
+    let ctx = chat_context(&router, "CORRECTION_SPACE_LEAK", "alpha").await;
+
+    assert!(
+        !ctx.context.contains("CORRECTION_SPACE_LEAK"),
+        "registered alpha context must not include beta correction facts; context=\n{}",
+        ctx.context
+    );
+    assert!(
+        ctx.knowledge
+            .relevant_memories
+            .iter()
+            .all(|result| result.space.as_deref() != Some("beta")),
+        "registered alpha context must not include beta relevant memories; got {:?}",
+        ctx.knowledge
+            .relevant_memories
+            .iter()
+            .map(|result| (&result.source_id, result.space.as_deref()))
+            .collect::<Vec<_>>()
     );
 }

@@ -788,7 +788,7 @@ pub async fn update_page(
 /// Accept a pending memory revision. Canonical entry for both agent-triggered
 /// (`/api/memory/revision/{id}/accept`) and daemon-internal accept-dispatch.
 /// Activates the revision row, suppresses the original, and logs activity.
-/// Returns `NotFound` if no pending revision exists for the target.
+/// Returns `NotFound` if no pending revision exists for the supplied id.
 pub async fn accept_pending_revision(
     db: &MemoryDB,
     id: &str,
@@ -808,9 +808,9 @@ pub async fn accept_pending_revision(
 
 /// Dismiss a pending memory revision. Canonical entry for both
 /// agent-triggered (`/api/memory/revision/{id}/dismiss`) and daemon-internal
-/// triggers. Unstages the pending revision (clears its revision link, keeping
-/// the memory as an independent row); the original is untouched.
-/// Returns `NotFound` if no pending revision exists for the target.
+/// triggers. Unstages the pending revision (clears its false revision link,
+/// keeping it as an independent row); the original is untouched.
+/// Returns `NotFound` if no pending revision exists for the supplied id.
 pub async fn dismiss_pending_revision(
     db: &MemoryDB,
     id: &str,

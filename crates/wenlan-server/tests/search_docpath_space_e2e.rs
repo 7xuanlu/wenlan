@@ -65,10 +65,16 @@ async fn seed_doc(
         .unwrap_or_else(|e| panic!("upsert_documents failed for {source_id}: {e}"));
 }
 
+async fn register_test_spaces(db: &std::sync::Arc<wenlan_core::db::MemoryDB>) {
+    db.create_space("alpha", None, false).await.unwrap();
+    db.create_space("beta", None, false).await.unwrap();
+}
+
 #[tokio::test]
 async fn doc_search_filters_by_space_alpha() {
     let (router, _tmp, db) = common::test_app().await;
 
+    register_test_spaces(&db).await;
     seed_doc(&db, "doc_alpha_001", "unique_alpha_content", "alpha").await;
     seed_doc(&db, "doc_beta_001", "unique_beta_content", "beta").await;
 
@@ -102,6 +108,7 @@ async fn doc_search_filters_by_space_alpha() {
 async fn doc_search_filters_by_space_beta() {
     let (router, _tmp, db) = common::test_app().await;
 
+    register_test_spaces(&db).await;
     seed_doc(&db, "doc_alpha_001", "unique_alpha_content", "alpha").await;
     seed_doc(&db, "doc_beta_001", "unique_beta_content", "beta").await;
 

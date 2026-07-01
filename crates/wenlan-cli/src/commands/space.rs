@@ -195,7 +195,7 @@ async fn default_cmd(
             }
             None => {
                 if !quiet {
-                    println!("(no default space set; resolver layer-6 fallback is \"personal\")");
+                    println!("(no default space set; unscoped calls omit the space)");
                 }
             }
         },
@@ -211,7 +211,10 @@ async fn move_cmd(
 ) -> Result<()> {
     let n = client.move_space(from, to).await?;
     if !quiet {
-        println!("Moved {} memories from '{}' to '{}'.", n, from, to);
+        println!(
+            "Moved {} memory rows from '{}' to '{}'; pages and entities were cascaded.",
+            n, from, to
+        );
     }
     Ok(())
 }
