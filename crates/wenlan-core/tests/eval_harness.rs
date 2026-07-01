@@ -9765,6 +9765,7 @@ async fn enrichment_parity_contract() {
             let opts = EnrichmentOpts {
                 initial_memory_type: "fact".to_string(),
                 initial_domain: None,
+                rejected_explicit_domain: false,
                 initial_supersede_mode: "hide".to_string(),
                 initial_structured_fields: None,
                 agent_supplied_memory_type: false,

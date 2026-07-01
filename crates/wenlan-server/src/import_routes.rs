@@ -305,10 +305,34 @@ pub async fn handle_chat_export_import(
                                     if let Some(c) =
                                         wenlan_core::llm_provider::parse_classify_response(&output)
                                     {
+                                        let classified_space = c.space;
+                                        let proposed_space = classified_space
+                                            .as_deref()
+                                            .map(str::trim)
+                                            .filter(|s| !s.is_empty())
+                                            .map(str::to_string);
                                         memory_type = c.memory_type;
-                                        domain = c.space;
                                         quality = c.quality;
                                         importance = c.importance;
+                                        match db_inner
+                                            .registered_space_or_none(classified_space.as_deref())
+                                            .await
+                                        {
+                                            Ok(Some(space)) => domain = Some(space),
+                                            Ok(None) => {
+                                                if let Some(space) = proposed_space.as_deref() {
+                                                    tracing::warn!(
+                                                        "[chat-import-enrich] ignoring unregistered classifier space {:?}; memory remains unscoped",
+                                                        space
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "[chat-import-enrich] classifier space lookup failed for {source_id}: {e}"
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                                 Ok(Err(e)) => {

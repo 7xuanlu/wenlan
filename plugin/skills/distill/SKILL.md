@@ -62,29 +62,21 @@ Call the bundled resolver:
     space="$(printf '%s\n' "$resolved" | cut -f1)"
     source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 
-Pass `space="$space"` to the `distill` MCP tool to scope cluster
-discovery. Print one line before the call:
+The `distill` MCP tool has no separate `space` parameter. Use the resolved
+non-empty space as `target` unless an explicit target argument or rebuild target
+is already being forwarded. Print one line before the call:
 
     Resolved space: <space> (from <source-layer>)
+
+If `space` is empty, print `Resolved space: none (unscoped)` and omit `target`
+unless the user supplied an explicit target.
 
 ## Flow
 
 ### 1. Pick the scope
 
-For bare `/distill`, infer a target from cwd:
+Use exactly one target rule:
 
-```
-Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
-      common=$(git -C "$PWD" rev-parse --git-common-dir 2>/dev/null); \
-      if [ -n "$common" ]; then \
-        case "$common" in /*) root=$(dirname "$common");; *) root=$(cd "$top" && cd "$(dirname "$common")" && pwd);; esac; \
-        basename "$root"; \
-      fi
-```
-
-- Output → use it (e.g. `wenlan`).
-- Not a git repo → fall back to `basename "$PWD"`.
-- Reserved keyword `deep` → no scope (global pass).
 - Reserved keyword sequence `rebuild <page-id>` → call
   `distill(target=<page-id>, force=true)`. Confirms "Rebuild page <id>?
   Your edits will be wiped, page regenerates from sources." before
@@ -92,13 +84,17 @@ Bash: top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); \
   not produce `pending` clusters; the daemon's response shape is
   `{"status": "ok", "force": true, "page_id": ..., "updated": true}`.
   Report verbatim.
-
-For `/distill <arg>` → forward `<arg>` to `target`.
+- Reserved keyword `deep` → no target (global pass).
+- `/distill <arg>` after removing any `space:<name>` token → forward `<arg>`
+  to `target`.
+- Bare `/distill` with a non-empty resolved space → use the resolved space as
+  `target`.
+- Bare `/distill` with no resolved space → omit `target`.
 
 ### 2. Call the MCP tool
 
 ```
-distill(target="<scope>", space=<resolved>)
+distill(target="<scope>")
 ```
 
 The tool returns the daemon's full JSON payload as text. Parse it as

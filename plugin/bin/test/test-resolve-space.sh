@@ -31,10 +31,10 @@ assert_eq() {
     fi
 }
 
-# --- Test 1: bare invocation returns default "personal" from "default" layer
+# --- Test 1: bare invocation returns no resolved space
 out="$(WENLAN_SPACE='' "$RESOLVER" --cwd /tmp 2>/dev/null)"
-assert_eq 'bare invocation -> personal/default' \
-    'personal	default' \
+assert_eq 'bare invocation -> unscoped' \
+    $'\tunscoped' \
     "$out"
 
 # --- Test 2: --topic falls back to topic when no higher layer hits
@@ -54,6 +54,24 @@ assert_eq 'cwd-repo inside git -> basename/cwd-repo' \
     "$out"
 cd - >/dev/null
 rm -rf "$tmpdir"
+
+# --- Test 3b: --cwd inside a linked worktree returns the canonical repo basename
+tmpbase="$(mktemp -d)"
+repo="$tmpbase/canonical-repo"
+worktree="$tmpbase/feature-worktree"
+mkdir -p "$repo"
+cd "$repo"
+git init -q
+printf 'seed\n' > README.md
+git add README.md
+git -c user.name='Wenlan Test' -c user.email='wenlan@example.com' commit -q -m init
+git worktree add -q -b feature/test "$worktree"
+out="$(WENLAN_SPACE='' "$RESOLVER" --cwd "$worktree" 2>/dev/null)"
+assert_eq 'linked worktree cwd-repo -> canonical repo basename/cwd-repo' \
+    'canonical-repo	cwd-repo' \
+    "$out"
+cd - >/dev/null
+rm -rf "$tmpbase"
 
 # --- Test 4: cwd inside a configured prefix returns the mapped space
 out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-basic.toml" WENLAN_SPACE='' "$RESOLVER" --cwd /tmp/origin-test/career/foo 2>/dev/null)"
@@ -86,14 +104,14 @@ assert_eq 'cwd-config no match with default key -> personal/cwd-config-default' 
 
 # --- Test 7: malformed TOML falls through to next layer; never crashes
 out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-malformed.toml" WENLAN_SPACE='' "$RESOLVER" --cwd /opt/no-repo-here 2>/dev/null)"
-assert_eq 'malformed TOML -> falls through to default' \
-    'personal	default' \
+assert_eq 'malformed TOML -> falls through to unscoped' \
+    $'\tunscoped' \
     "$out"
 
 # --- Test 8: missing TOML file -> falls through to next layer
 out="$(SPACES_FILE=/tmp/this-does-not-exist.toml WENLAN_SPACE='' "$RESOLVER" --cwd /opt/no-repo-here 2>/dev/null)"
-assert_eq 'missing TOML file -> falls through to default' \
-    'personal	default' \
+assert_eq 'missing TOML file -> falls through to unscoped' \
+    $'\tunscoped' \
     "$out"
 
 # --- Test 9: WENLAN_SPACE env var overrides cwd-config + cwd-repo
@@ -141,14 +159,14 @@ assert_eq 'precedence: cwd-config beats topic -> career/cwd-config' \
 
 # --- Test 16: whitespace-only --arg falls through (does not produce whitespace space)
 out="$(WENLAN_SPACE='' "$RESOLVER" --cwd /tmp --arg '   ' 2>/dev/null)"
-assert_eq 'whitespace-only --arg falls through -> personal/default' \
-    'personal	default' \
+assert_eq 'whitespace-only --arg falls through -> unscoped' \
+    $'\tunscoped' \
     "$out"
 
 # --- Test 17: whitespace-only WENLAN_SPACE falls through
 out="$(WENLAN_SPACE='   ' "$RESOLVER" --cwd /tmp 2>/dev/null)"
-assert_eq 'whitespace-only WENLAN_SPACE falls through -> personal/default' \
-    'personal	default' \
+assert_eq 'whitespace-only WENLAN_SPACE falls through -> unscoped' \
+    $'\tunscoped' \
     "$out"
 
 # --- Test 18: trailing whitespace in TOML values still produces a valid mapping
@@ -163,10 +181,10 @@ assert_eq 'cwd-config default key -> personal/cwd-config-default' \
     'personal	cwd-config-default' \
     "$out"
 
-# --- Test 15: no-default fixture without mapping match -> falls through to layer-6 default
+# --- Test 15: no-default fixture without mapping match -> falls through to unscoped
 out="$(SPACES_FILE="$SCRIPT_DIR/fixtures/spaces-no-default.toml" WENLAN_SPACE='' "$RESOLVER" --cwd /opt/no-match-here 2>/dev/null)"
-assert_eq 'no-default fixture no match -> personal/default' \
-    'personal	default' \
+assert_eq 'no-default fixture no match -> unscoped' \
+    $'\tunscoped' \
     "$out"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

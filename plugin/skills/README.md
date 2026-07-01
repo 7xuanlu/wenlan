@@ -40,8 +40,8 @@ Plugin metadata lives in [`.claude-plugin`](../.claude-plugin/README.md).
 
 ## Choosing the active space
 
-Every space-aware skill resolves the active memory bucket through six
-layers. Higher layers override lower ones:
+Every space-aware skill resolves the active memory bucket through the
+ordered chain below. Higher layers override lower ones:
 
 | Layer | Mechanism | Example |
 |---|---|---|
@@ -50,7 +50,7 @@ layers. Higher layers override lower ones:
 | 3 | `~/.wenlan/spaces.toml` cwd-prefix mapping (longest prefix wins; ties go to first-defined) | see `plugin/examples/spaces.toml` |
 | 4 | cwd git-repo basename | `~/Repos/wenlan/...` → `wenlan` |
 | 5 | conversation topic | (rarely used directly) |
-| 6 | default | `personal` |
+| 6 | none | omit the space |
 
 To pin a session to a specific bucket regardless of cwd, set
 `WENLAN_SPACE` before invoking Claude Code. To pin by working directory
@@ -62,6 +62,9 @@ On the first space-aware skill call of a session, the skill prints one
 line so the user can confirm the active bucket:
 
     Resolved space: <name> (from <layer>)
+
+If the resolver reports no space, the skill omits the space parameter
+instead of falling back to `personal`.
 
 ## Links
 

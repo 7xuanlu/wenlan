@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# resolve-space.sh — Resolve the active Wenlan space from the 6-layer chain.
+# resolve-space.sh — Resolve the active Wenlan space from the scoped chain.
 #
 # Layers (highest to lowest priority):
 #   1. --arg <space>                explicit override from skill caller
@@ -8,11 +8,11 @@
 #      3.5. top-level `default` key  applies when no [[mapping]] matched
 #   4. cwd repo basename            git rev-parse --show-toplevel
 #   5. --topic <string>             conversation topic fallback
-#   6. "personal"                   hard default
+#   6. no resolved space            leave the call unscoped
 #
 # Output: "<space>\t<source-layer>" on stdout.
-# Source-layer values: arg | env | cwd-config | cwd-config-default | cwd-repo | topic | default
-# Exit code: 0 on success (always succeeds; layer 6 is the floor).
+# Source-layer values: arg | env | cwd-config | cwd-config-default | cwd-repo | topic | unscoped
+# Exit code: 0 on success. When no space resolves, stdout is "\tunscoped".
 
 set -u
 
@@ -123,7 +123,16 @@ fi
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     repo_root="$(cd "$cwd" && git rev-parse --show-toplevel 2>/dev/null || true)"
     if [ -n "$repo_root" ]; then
-        printf '%s\tcwd-repo\n' "$(basename "$repo_root")"
+        git_common_dir="$(cd "$cwd" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+        case "$git_common_dir" in
+            */.git)
+                repo_name="$(basename "$(dirname "$git_common_dir")")"
+                ;;
+            *)
+                repo_name="$(basename "$repo_root")"
+                ;;
+        esac
+        printf '%s\tcwd-repo\n' "$repo_name"
         exit 0
     fi
 fi
@@ -134,5 +143,6 @@ if [ -n "$topic" ]; then
     exit 0
 fi
 
-# Layer 6: default
-printf 'personal\tdefault\n'
+# Layer 6: unscoped. Do not fall back to "personal"; callers should omit the
+# space parameter/header when the first field is empty.
+printf '\tunscoped\n'

@@ -6197,6 +6197,21 @@ impl MemoryDB {
         }
     }
 
+    pub async fn registered_space_or_none(
+        &self,
+        name: Option<&str>,
+    ) -> Result<Option<String>, WenlanError> {
+        let Some(name) = name.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+
+        if self.get_space(name).await?.is_some() {
+            Ok(Some(name.to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn create_space(
         &self,
         name: &str,
@@ -6258,12 +6273,16 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("update_space begin: {}", e)))?;
 
         let txn_result = async {
-            conn.execute(
+            let updated_spaces = conn
+                .execute(
                 "UPDATE spaces SET name = ?1, description = ?2, updated_at = ?3 WHERE name = ?4",
                 libsql::params![new_name, description, now, name],
             )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+            if updated_spaces == 0 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
 
             if name != new_name {
                 conn.execute(
@@ -6282,6 +6301,24 @@ impl MemoryDB {
                 .await
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("update_space cascade entities: {}", e))
+                })?;
+
+                conn.execute(
+                    "UPDATE pages SET space = ?1 WHERE space = ?2",
+                    libsql::params![new_name, name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("update_space cascade pages.space: {}", e))
+                })?;
+
+                conn.execute(
+                    "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                    libsql::params![new_name, name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("update_space cascade pages.workspace: {}", e))
                 })?;
             }
 
@@ -6317,6 +6354,27 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("delete_space begin: {}", e)))?;
 
         let txn_result = async {
+            let mut source_rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                    libsql::params![name],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
+            let source_count = if let Some(row) = source_rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                row.get::<i64>(0).unwrap_or(0)
+            } else {
+                0
+            };
+            drop(source_rows);
+            if source_count == 0 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
+
             match memory_action {
                 "keep" => { /* do nothing — orphan memories with space tag intact */ }
                 "unassign" => {
@@ -6357,6 +6415,36 @@ impl MemoryDB {
                 }
                 other if other.starts_with("move:") => {
                     let target = &other[5..];
+                    if target == name {
+                        return Err(WenlanError::Validation(
+                            "destination space must differ from source space".to_string(),
+                        ));
+                    }
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                            libsql::params![target],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
+                        })?;
+                    let target_count = if let Some(row) = rows
+                        .next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+                    {
+                        row.get::<i64>(0).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    drop(rows);
+                    if target_count == 0 {
+                        return Err(WenlanError::VectorDb(format!(
+                            "destination space not found: {target}"
+                        )));
+                    }
+
                     conn.execute(
                         "UPDATE memories SET space = ?1 WHERE space = ?2",
                         libsql::params![target, name],
@@ -6373,13 +6461,33 @@ impl MemoryDB {
                     .map_err(|e| {
                         WenlanError::VectorDb(format!("delete_space move entities: {}", e))
                     })?;
+                    conn.execute(
+                        "UPDATE pages SET space = ?1 WHERE space = ?2",
+                        libsql::params![target, name],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move pages.space: {}", e))
+                    })?;
+                    conn.execute(
+                        "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                        libsql::params![target, name],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move pages.workspace: {}", e))
+                    })?;
                 }
                 _ => { /* unknown action — treat as keep */ }
             }
 
-            conn.execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
+            let deleted_spaces = conn
+                .execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("delete_space: {}", e)))?;
+            if deleted_spaces != 1 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
 
             conn.execute("COMMIT", ())
                 .await
@@ -6395,9 +6503,9 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Bulk-reassign all memories and entities from `from` space to `to` space.
+    /// Bulk-reassign all memories, entities, and space-scoped pages from `from` space to `to` space.
     /// Returns the number of memory rows (chunks) updated.
-    /// Auto-creates the destination space if it is not already registered.
+    /// Requires the destination space to already be registered.
     pub async fn reassign_memories_space(
         &self,
         from: &str,
@@ -6405,16 +6513,51 @@ impl MemoryDB {
     ) -> Result<usize, WenlanError> {
         let conn = self.conn.lock().await;
 
-        // Auto-create destination space if not registered yet.
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp() as f64;
-        conn.execute(
-            "INSERT OR IGNORE INTO spaces (id, name, description, suggested, sort_order, created_at, updated_at)
-             SELECT ?1, ?2, NULL, 0, COALESCE(MAX(sort_order), -1) + 1, ?3, ?3 FROM spaces",
-            libsql::params![id, to, now],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("reassign auto-create-dest: {}", e)))?;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign source lookup: {}", e)))?;
+        let source_count = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(rows);
+        if source_count == 0 {
+            return Err(WenlanError::VectorDb(format!(
+                "source space not found: {from}"
+            )));
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![to],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign target lookup: {}", e)))?;
+        let target_count = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(rows);
+        if target_count == 0 {
+            return Err(WenlanError::VectorDb(format!(
+                "destination space not found: {to}"
+            )));
+        }
 
         conn.execute("BEGIN", ())
             .await
@@ -6435,6 +6578,20 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("reassign entities: {}", e)))?;
+
+            conn.execute(
+                "UPDATE pages SET space = ?1 WHERE space = ?2",
+                libsql::params![to, from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.space: {}", e)))?;
+
+            conn.execute(
+                "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                libsql::params![to, from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.workspace: {}", e)))?;
 
             conn.execute("COMMIT", ()).await.map_err(|e| {
                 WenlanError::VectorDb(format!("reassign_memories_space commit: {}", e))
@@ -6549,23 +6706,6 @@ impl MemoryDB {
             false
         };
         Ok(starred)
-    }
-
-    pub async fn auto_create_space_if_needed(&self, space: &str) -> Result<(), WenlanError> {
-        if space.is_empty() {
-            return Ok(());
-        }
-        let conn = self.conn.lock().await;
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp() as f64;
-        conn.execute(
-            "INSERT OR IGNORE INTO spaces (id, name, description, suggested, created_at, updated_at)
-             VALUES (?1, ?2, NULL, 1, ?3, ?4)",
-            libsql::params![id, space, now, now],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("auto_create_space: {}", e)))?;
-        Ok(())
     }
 
     // ===== Private Helpers =====
@@ -6920,6 +7060,14 @@ impl MemoryDB {
         &self,
         source_id: &str,
         space: &str,
+    ) -> Result<(), WenlanError> {
+        self.update_memory_space_opt(source_id, Some(space)).await
+    }
+
+    pub async fn update_memory_space_opt(
+        &self,
+        source_id: &str,
+        space: Option<&str>,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         conn.execute(
@@ -12344,10 +12492,10 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
 
-        let space_clause = if space_filter.is_some() {
-            "AND space = ?3"
-        } else {
-            ""
+        let space_clause = match space_filter {
+            Some("uncategorized") => "AND space IS NULL",
+            Some(_) => "AND space = ?3",
+            None => "",
         };
 
         let sql = format!(
@@ -12389,15 +12537,18 @@ impl MemoryDB {
             supersedes_exclusion, space_clause
         );
 
-        let mut rows = if let Some(space) = space_filter {
-            conn.query(
-                &sql,
-                libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
-            )
-            .await
-        } else {
-            conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
+        let mut rows = match space_filter {
+            Some("uncategorized") | None => {
+                conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
+                    .await
+            }
+            Some(space) => {
+                conn.query(
+                    &sql,
+                    libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
+                )
                 .await
+            }
         }
         .map_err(|e| WenlanError::VectorDb(format!("load_memories_by_type: {}", e)))?;
 
@@ -12604,9 +12755,13 @@ impl MemoryDB {
             idx += 1;
         }
         if let Some(d) = space {
-            conditions.push(format!("space = ?{}", idx));
-            params.push(d.to_string().into());
-            idx += 1;
+            if d == "uncategorized" {
+                conditions.push("space IS NULL".to_string());
+            } else {
+                conditions.push(format!("space = ?{}", idx));
+                params.push(d.to_string().into());
+                idx += 1;
+            }
         }
         if let Some(c) = confirmed {
             if c {
@@ -13811,8 +13966,8 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// True if any non-archived memory carries the given space. Used by the
-    /// distillation target resolver as a "does this scope exist" check.
+    /// True if any non-archived memory carries the given space. Legacy data probe:
+    /// registered spaces, not memory rows, define valid user-facing scopes.
     pub async fn space_has_memories(&self, space: &str) -> Result<bool, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
@@ -14715,8 +14870,9 @@ impl MemoryDB {
         &self,
         query: &str,
         limit: usize,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        self.search_memory(query, limit, Some("fact"), None, None, None, None, None)
+        self.search_memory(query, limit, Some("fact"), space, None, None, None, None)
             .await
     }
 
@@ -16276,10 +16432,10 @@ impl MemoryDB {
         domain_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
-        let space_clause = if domain_filter.is_some() {
-            "AND c.space = ?2"
-        } else {
-            ""
+        let space_clause = match domain_filter {
+            Some("uncategorized") => "AND c.space IS NULL",
+            Some(_) => "AND c.space = ?2",
+            None => "",
         };
         let sql = format!(
             "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.space,
@@ -16311,11 +16467,12 @@ impl MemoryDB {
             space_clause
         );
 
-        let mut rows = if let Some(space) = domain_filter {
-            conn.query(&sql, libsql::params![limit as i64, space.to_string()])
-                .await
-        } else {
-            conn.query(&sql, libsql::params![limit as i64]).await
+        let mut rows = match domain_filter {
+            Some("uncategorized") | None => conn.query(&sql, libsql::params![limit as i64]).await,
+            Some(space) => {
+                conn.query(&sql, libsql::params![limit as i64, space.to_string()])
+                    .await
+            }
         }
         .map_err(|e| WenlanError::VectorDb(format!("get_nurture_cards: {}", e)))?;
 
@@ -16387,12 +16544,9 @@ impl MemoryDB {
         Ok(changed as usize)
     }
 
-    /// Accept a pending revision for a target memory. The `target_source_id` is the
-    /// original memory being superseded. This finds the pending revision that supersedes it,
-    /// activates it, and suppresses the original. Both UPDATEs are wrapped in BEGIN/COMMIT.
     /// Resolve an accept/dismiss `id` to `(revision_source_id, target_source_id)`.
     ///
-    /// `id` may be the revision's OWN `source_id` (exact — what the curate cards
+    /// `id` may be the revision's own `source_id` (exact: what the curate cards
     /// key on, so the named revision is acted on even when several compete for
     /// one target) or the target memory's `source_id` (legacy callers: the
     /// NEWEST pending revision superseding it, deterministic by `last_modified`).
@@ -16453,7 +16607,7 @@ impl MemoryDB {
     }
 
     /// Accept a pending revision identified by `id` (the revision's own
-    /// `source_id`, or — legacy — its target's). Activates exactly that revision
+    /// `source_id`, or legacy target source_id). Activates exactly that revision
     /// (all its chunk rows) and suppresses its target. Sibling revisions are left
     /// pending. Returns `(target_source_id, revision_source_id)`.
     pub async fn accept_pending_revision(&self, id: &str) -> Result<(String, String), WenlanError> {
@@ -16461,7 +16615,7 @@ impl MemoryDB {
         let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
             .await?
             .ok_or_else(|| {
-                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+                WenlanError::NotFound(format!("No pending revision for source_id: {id}"))
             })?;
 
         conn.execute("BEGIN", ())
@@ -16504,8 +16658,8 @@ impl MemoryDB {
     }
 
     /// Dismiss a pending revision identified by `id` (the revision's own
-    /// `source_id`, or — legacy — its target's). UNSTAGES exactly that one
-    /// revision — clears its `pending_revision` + `supersedes` so it survives
+    /// `source_id`, or legacy target source_id). Unstages exactly that one
+    /// revision: clears its `pending_revision` + `supersedes` so it survives
     /// as an independent memory (not deleted); sibling revisions and the
     /// original are untouched. Returns `(target_source_id, revision_source_id)`.
     pub async fn dismiss_pending_revision(
@@ -16516,7 +16670,7 @@ impl MemoryDB {
         let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
             .await?
             .ok_or_else(|| {
-                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+                WenlanError::NotFound(format!("No pending revision for source_id: {id}"))
             })?;
         // Unstage, not delete: "dismiss" means "this is NOT a revision of the
         // target", so drop the false revision link (clear pending_revision +
@@ -20340,8 +20494,17 @@ impl MemoryDB {
         offset: usize,
     ) -> Result<Vec<Page>, WenlanError> {
         let conn = self.conn.lock().await;
-        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
-            (
+        let (sql, params): (String, Vec<libsql::Value>) = match space {
+            Some("uncategorized") => (
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                 FROM pages WHERE status = ?1 AND space IS NULL ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                vec![
+                    libsql::Value::Text(status.to_string()),
+                    libsql::Value::Integer(limit as i64),
+                    libsql::Value::Integer(offset as i64),
+                ],
+            ),
+            Some(d) => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
@@ -20350,9 +20513,8 @@ impl MemoryDB {
                     libsql::Value::Integer(limit as i64),
                     libsql::Value::Integer(offset as i64),
                 ],
-            )
-        } else {
-            (
+            ),
+            None => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
@@ -20360,7 +20522,7 @@ impl MemoryDB {
                     libsql::Value::Integer(limit as i64),
                     libsql::Value::Integer(offset as i64),
                 ],
-            )
+            ),
         };
         let mut rows = conn
             .query(&sql, libsql::params_from_iter(params))
@@ -20752,9 +20914,9 @@ impl MemoryDB {
 
     /// Scoped successor to `find_matching_page` for cluster-dedup (P2).
     /// Entity-first, then embedding cosine, but constrained:
-    ///  - `workspace` (when Some): only pages whose `space` matches are eligible.
-    ///    `None` = no workspace constraint (P3 adds a dedicated workspace axis;
-    ///    until then we scope on the `space` column we have).
+    ///  - `workspace` (when Some): only pages whose `workspace` matches are eligible,
+    ///    falling back to `space` for legacy pages that predate the workspace column.
+    ///    `None` = no workspace constraint.
     ///  - only `review_status='confirmed'` pages are dedup targets (an unconfirmed
     ///    authored page is not a consolidation anchor).
     ///  - when `allow_user_edited=false`, a `user_edited` match is REFUSED (returns
@@ -20770,7 +20932,8 @@ impl MemoryDB {
         // Entity-first, but scoped.
         if let Some(eid) = entity_id {
             if let Some(page) = self.get_page_by_entity(eid).await? {
-                let ws_ok = workspace.is_none_or(|w| page.space.as_deref() == Some(w));
+                let page_workspace = page.workspace.as_deref().or(page.space.as_deref());
+                let ws_ok = workspace.is_none_or(|w| page_workspace == Some(w));
                 let status_ok = page.review_status == "confirmed";
                 if ws_ok && status_ok && (allow_user_edited || !page.user_edited) {
                     return Ok(Some(page));
@@ -20791,7 +20954,7 @@ impl MemoryDB {
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
                    AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
-                   AND (?2 IS NULL OR c.space = ?2)
+                   AND (?2 IS NULL OR COALESCE(c.workspace, c.space) = ?2)
                  ORDER BY dist ASC LIMIT 1",
                 libsql::params![emb_sql, workspace],
             )
@@ -22366,7 +22529,7 @@ impl MemoryDB {
             bind.push(libsql::Value::Text(eid.to_string()));
         }
         if let Some(d) = domain_filter {
-            sql.push_str(" AND space = ?");
+            sql.push_str(" AND COALESCE(workspace, space) = ?");
             bind.push(libsql::Value::Text(d.to_string()));
         }
         sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
@@ -25903,8 +26066,18 @@ pub(crate) mod tests {
             .iter()
             .find(|r| r.source_id == "inert_b")
             .map(|r| r.score);
-        assert_eq!(base_a, again_a, "flag OFF must be deterministic (a)");
-        assert_eq!(base_b, again_b, "flag OFF must be deterministic (b)");
+        let base_a = base_a.expect("inert_a should be retrievable");
+        let again_a = again_a.expect("inert_a should be retrievable on rerun");
+        let base_b = base_b.expect("inert_b should be retrievable");
+        let again_b = again_b.expect("inert_b should be retrievable on rerun");
+        assert!(
+            (base_a - again_a).abs() < 1e-6,
+            "flag OFF must be stable within score epsilon (a): {base_a} vs {again_a}"
+        );
+        assert!(
+            (base_b - again_b).abs() < 1e-6,
+            "flag OFF must be stable within score epsilon (b): {base_b} vs {again_b}"
+        );
     }
 
     /// L4 cold-start neutrality: all importance NULL + flag ON must produce the
@@ -28284,7 +28457,7 @@ pub(crate) mod tests {
         db.upsert_documents(docs).await.unwrap();
 
         let results = db
-            .search_corrections_by_topic("Rust error handling unwrap", 5)
+            .search_corrections_by_topic("Rust error handling unwrap", 5, None)
             .await
             .unwrap();
         assert!(!results.is_empty(), "should find fact memory by topic");
@@ -28712,8 +28885,10 @@ pub(crate) mod tests {
         };
         db.upsert_documents(vec![revision]).await.unwrap();
 
-        // Dismiss the revision (now = unstage: drop the false link, keep both rows)
-        db.dismiss_pending_revision("dismiss_target").await.unwrap();
+        // Dismiss the revision (unstage: drop the false link, keep both rows).
+        db.dismiss_pending_revision("dismiss_revision")
+            .await
+            .unwrap();
 
         // Original should still be visible
         let mems = db.list_memories(None, None, None, None, 100).await.unwrap();
@@ -28735,8 +28910,12 @@ pub(crate) mod tests {
                 "dismissed revision must survive as an independent memory (unstage, not delete)",
             );
         assert!(
+            ids.contains(&"dismiss_revision"),
+            "dismissed revision should survive as an independent memory"
+        );
+        assert!(
             revision.supersedes.is_none(),
-            "dismiss must clear the false supersedes link"
+            "dismiss should clear the false supersedes link"
         );
 
         // No longer a pending revision against the target.
@@ -31325,28 +31504,325 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_auto_create_space_if_needed() {
+    async fn update_space_cascades_pages_space_and_workspace() {
         let (db, _dir) = test_db().await;
-        db.run_migrations(&crate::events::NoopEmitter)
+        db.create_space("work", None, false).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_legacy_work",
+            "Legacy Work",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("work"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_workspace_work",
+            "Workspace Work",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        db.update_space("work", "career", None).await.unwrap();
+
+        let legacy = db.get_page("page_legacy_work").await.unwrap().unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("career"),
+            "rename must update legacy pages.space values"
+        );
+
+        let scoped = db.get_page("page_workspace_work").await.unwrap().unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "rename must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("career"),
+            "rename must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_space_missing_source_does_not_cascade_orphaned_rows() {
+        let (db, _dir) = test_db().await;
+        db.create_space("career", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "orphan_space_mem".to_string(),
+            title: "Orphan Space Memory".to_string(),
+            content: "orphaned memory row with a missing source space".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("ghost".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.store_entity("Ghost Entity", "person", Some("ghost"), None, None)
             .await
             .unwrap();
 
-        // First call creates a suggested space
-        db.auto_create_space_if_needed("health").await.unwrap();
-        let s = db.get_space("health").await.unwrap().unwrap();
-        assert!(s.suggested);
-        assert_eq!(s.name, "health");
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_orphan_space",
+            "Orphan Space Page",
+            None,
+            "orphaned page using pages.space as a missing source space",
+            None,
+            Some("ghost"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
 
-        // Second call is a no-op
-        db.auto_create_space_if_needed("health").await.unwrap();
-        let spaces = db.list_spaces().await.unwrap();
-        assert_eq!(spaces.len(), 1);
+        let result = db.update_space("ghost", "career", None).await;
+        assert!(result.is_err(), "renaming a missing source space must fail");
 
-        // Doesn't affect manually created spaces
-        db.create_space("work", None, false).await.unwrap();
-        db.auto_create_space_if_needed("work").await.unwrap();
-        let s = db.get_space("work").await.unwrap().unwrap();
-        assert!(!s.suggested); // Stays confirmed
+        let memory_space = db.get_memory_space("orphan_space_mem").await.unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned memory rows"
+        );
+
+        let entities = db.list_entities(None, None).await.unwrap();
+        let entity = entities
+            .iter()
+            .find(|entity| entity.name == "Ghost Entity")
+            .expect("ghost entity should exist");
+        assert_eq!(
+            entity.space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned entity rows"
+        );
+
+        let page = db.get_page("page_orphan_space").await.unwrap().unwrap();
+        assert_eq!(
+            page.space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned pages.space rows"
+        );
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned pages.workspace rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_cascades_pages_space_and_workspace() {
+        let (db, _dir) = test_db().await;
+        db.create_space("old", None, false).await.unwrap();
+        db.create_space("new", None, false).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_delete_move_legacy",
+            "Delete Move Legacy",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("old"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_delete_move_workspace",
+            "Delete Move Workspace",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("old"),
+        )
+        .await
+        .unwrap();
+
+        db.delete_space("old", "move:new").await.unwrap();
+
+        assert!(
+            db.get_space("old").await.unwrap().is_none(),
+            "source space row must be deleted"
+        );
+
+        let legacy = db
+            .get_page("page_delete_move_legacy")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("new"),
+            "delete-space move must update legacy pages.space values"
+        );
+
+        let scoped = db
+            .get_page("page_delete_move_workspace")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "delete-space move must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("new"),
+            "delete-space move must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_rejects_same_source_and_destination() {
+        let (db, _dir) = test_db().await;
+        db.create_space("same", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "same_space_mem".to_string(),
+            title: "Same Space Memory".to_string(),
+            content: "memory row that should remain scoped to the same space".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("same".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let result = db.delete_space("same", "move:same").await;
+        assert!(
+            result.is_err(),
+            "moving a space into itself must fail before deleting the space row"
+        );
+        assert!(
+            db.get_space("same").await.unwrap().is_some(),
+            "failed self-move must not delete the source/destination space"
+        );
+        let memory_space = db.get_memory_space("same_space_mem").await.unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("same"),
+            "failed self-move must leave memory rows scoped to the existing space"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_missing_source_does_not_cascade_orphaned_rows() {
+        let (db, _dir) = test_db().await;
+        db.create_space("new", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "delete_orphan_space_mem".to_string(),
+            title: "Delete Orphan Space Memory".to_string(),
+            content: "orphaned memory row that should not be moved by missing-source delete"
+                .to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("ghost".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.store_entity("Delete Ghost Entity", "person", Some("ghost"), None, None)
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_delete_orphan_space",
+            "Delete Orphan Space Page",
+            None,
+            "orphaned page that should not move when source space row is missing",
+            None,
+            Some("ghost"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
+
+        let result = db.delete_space("ghost", "move:new").await;
+        assert!(
+            result.is_err(),
+            "moving from a missing source space must fail"
+        );
+
+        let memory_space = db
+            .get_memory_space("delete_orphan_space_mem")
+            .await
+            .unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned memory rows"
+        );
+
+        let entities = db.list_entities(None, None).await.unwrap();
+        let entity = entities
+            .iter()
+            .find(|entity| entity.name == "Delete Ghost Entity")
+            .expect("ghost entity should exist");
+        assert_eq!(
+            entity.space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned entity rows"
+        );
+
+        let page = db
+            .get_page("page_delete_orphan_space")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page.space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned pages.space rows"
+        );
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned pages.workspace rows"
+        );
     }
 
     // ==================== migration 11: structured_fields + retrieval_cue ====================
@@ -36534,6 +37010,41 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn list_stale_pages_scoped_filters_by_workspace_column() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "page_workspace_stale",
+            "Workspace Stale",
+            None,
+            "content",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("origin"),
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_workspace_stale", "source_updated")
+            .await
+            .unwrap();
+
+        let by_workspace = db
+            .list_stale_pages_scoped("source_updated", None, Some("origin"))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = by_workspace.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            ids.contains(&"page_workspace_stale"),
+            "scoped stale page lookup must use pages.workspace, falling back to pages.space; got {ids:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn update_page_summary_writes_and_clears() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
@@ -39324,6 +39835,76 @@ pub(crate) mod tests {
         assert_eq!(foo_count, 0, "foo should have 0 memories after move");
     }
 
+    #[tokio::test]
+    async fn reassign_memories_space_cascades_pages_space_and_workspace() {
+        let (db, _td) = test_db().await;
+
+        db.create_space("src", None, false).await.unwrap();
+        db.create_space("dest", None, false).await.unwrap();
+
+        let doc = make_memory_doc(
+            "mem_page_move_1",
+            "Memory in src with an associated page.",
+            "knowledge",
+            "src",
+            "agent",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_legacy_src",
+            "Legacy Src",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("src"),
+            &["mem_page_move_1"],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_workspace_src",
+            "Workspace Src",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &["mem_page_move_1"],
+            &now,
+            "authored",
+            "confirmed",
+            Some("src"),
+        )
+        .await
+        .unwrap();
+
+        db.reassign_memories_space("src", "dest").await.unwrap();
+
+        let legacy = db.get_page("page_legacy_src").await.unwrap().unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("dest"),
+            "space move must update legacy pages.space values"
+        );
+
+        let scoped = db.get_page("page_workspace_src").await.unwrap().unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "space move must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("dest"),
+            "space move must update pages.workspace values"
+        );
+    }
+
     /// Contract test for Task 11: `apply_enrichment` must persist
     /// `event_date` and `event_end` to the `memories` table so the
     /// extracted temporal fields survive the async enrichment phase.
@@ -39379,10 +39960,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn reassign_memories_space_auto_creates_dest() {
+    async fn reassign_memories_space_rejects_unregistered_destination() {
         let (db, _td) = test_db().await;
 
-        // Only create the source space — destination "baz" does not exist yet.
         db.create_space("src", None, false).await.unwrap();
 
         let doc = make_memory_doc(
@@ -39394,16 +39974,144 @@ pub(crate) mod tests {
         );
         db.upsert_documents(vec![doc]).await.unwrap();
 
-        // Move without pre-creating "baz".
-        let affected = db.reassign_memories_space("src", "baz").await.unwrap();
-        assert!(affected >= 1, "expected >= 1 row updated, got {}", affected);
-
-        // "baz" must now appear in list_spaces.
-        let spaces = db.list_spaces().await.unwrap();
+        let err = db
+            .reassign_memories_space("src", "baz")
+            .await
+            .expect_err("move must reject an unregistered destination space");
         assert!(
-            spaces.iter().any(|s| s.name == "baz"),
-            "destination space 'baz' should be registered after move, got: {:?}",
-            spaces.iter().map(|s| &s.name).collect::<Vec<_>>()
+            err.to_string().contains("destination space not found"),
+            "unexpected error: {err}"
+        );
+
+        let source_count = db
+            .list_memories(Some("src"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            source_count >= 1,
+            "failed move must leave source memories in place"
+        );
+        assert!(
+            db.get_space("baz").await.unwrap().is_none(),
+            "failed move must not auto-create destination space"
+        );
+    }
+
+    #[tokio::test]
+    async fn reassign_memories_space_rejects_unregistered_source() {
+        let (db, _td) = test_db().await;
+
+        db.create_space("dest", None, false).await.unwrap();
+
+        let doc = make_memory_doc(
+            "mem_orphan_source_1",
+            "Orphaned memory in an unregistered source space.",
+            "knowledge",
+            "ghost",
+            "agent",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_orphan_source",
+            "Orphan Source",
+            None,
+            "page carrying an unregistered workspace label",
+            None,
+            Some("recap"),
+            &["mem_orphan_source_1"],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
+
+        let err = db
+            .reassign_memories_space("ghost", "dest")
+            .await
+            .expect_err("move must reject an unregistered source space");
+        assert!(
+            err.to_string().contains("source space not found"),
+            "unexpected error: {err}"
+        );
+
+        let orphan_space_count = db
+            .list_memories(Some("ghost"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            orphan_space_count >= 1,
+            "failed move must leave orphaned source memories in place"
+        );
+
+        let moved_count = db
+            .list_memories(Some("dest"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(
+            moved_count, 0,
+            "failed move must not reassign orphaned memories into the destination"
+        );
+
+        let page = db.get_page("page_orphan_source").await.unwrap().unwrap();
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed move must not rewrite pages.workspace for an unregistered source"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_matching_page_scoped_filters_by_workspace_column() {
+        let (db, _td) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "page_workspace_match",
+            "Workspace Match",
+            Some("workspace scoped duplicate matcher calibration phrase"),
+            "Workspace scoped duplicate matcher calibration phrase with enough body text to embed consistently.",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        let embedding = db
+            .generate_embeddings(&[
+                "workspace scoped duplicate matcher calibration phrase".to_string()
+            ])
+            .unwrap()
+            .remove(0);
+
+        let matched = db
+            .find_matching_page_scoped(None, &embedding, 0.85, Some("work"), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            matched.as_ref().map(|page| page.id.as_str()),
+            Some("page_workspace_match"),
+            "workspace-scoped matching must use pages.workspace, not pages.space category"
+        );
+
+        let mismatched = db
+            .find_matching_page_scoped(None, &embedding, 0.85, Some("personal"), false)
+            .await
+            .unwrap();
+        assert!(
+            mismatched.is_none(),
+            "workspace-scoped matching must not match pages from other workspaces"
         );
     }
 

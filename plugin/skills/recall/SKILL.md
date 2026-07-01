@@ -35,10 +35,13 @@ Call the bundled resolver:
     space="$(printf '%s\n' "$resolved" | cut -f1)"
     source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 
-Pass `space="$space"` to the `recall` MCP tool. Print one line before
-the call:
+Pass `space="$space"` to the `recall` MCP tool only when `space` is
+non-empty. Print one line before the call:
 
     Resolved space: <space> (from <source-layer>)
+
+If `space` is empty, print `Resolved space: none (unscoped)` and omit the
+space filter.
 
 ## Two phases
 
@@ -66,15 +69,14 @@ matters, use that endpoint instead of issuing parallel calls here.
 ### Phase 2 — call the MCP tool
 
 ```
-recall(query="<expanded query>", space=<resolved>, memory_type=<inferred>)
+recall(query="<expanded query>", space=<resolved if non-empty>, memory_type=<inferred>)
 ```
 
 Inferences (do not ask the user):
 
 - `space`: current working directory (e.g. `~/Repos/wenlan/...` → `"wenlan"`),
   the topic being discussed, or whatever space was mentioned in recent turns.
-  Always pass when scope is known; if uncertain, run `list_spaces` later
-  (post-PR-C) or omit.
+  Pass only when scope is known; omit when uncertain or unscoped.
 - `memory_type`: only when the query itself names a type ("decision on X",
   "lesson about Y", "preference for Z"). Otherwise omit and let hybrid
   search rank.

@@ -105,6 +105,7 @@ pub async fn handle_search(
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (db, s.reranker_light.clone())
     };
+    req.space = crate::memory_routes::registered_read_space(&db, &req.space, "search").await?;
 
     let results = if req.source_filter.as_deref() == Some("memory") {
         match reranker_light {
@@ -248,6 +249,7 @@ pub async fn handle_context(
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (db, s.access_tracker.clone(), s.reranker_light.clone())
     }; // guard dropped here
+    req.space = crate::memory_routes::registered_read_space(&db_arc, &req.space, "context").await?;
     let db = db_arc.as_ref();
 
     let agent_trust = if agent_name == "unknown" {
@@ -269,27 +271,14 @@ pub async fn handle_context(
 
     // Tier 1 (identity + preferences)
     let (identity, preferences) = if tier_allowed(&classification.trust_level, 1) {
-        let mut id_mems = db
+        let id_mems = db
             .load_memories_by_type("identity", 10, space_filter)
             .await
             .unwrap_or_default();
-        let mut pref_mems = db
+        let pref_mems = db
             .load_memories_by_type("preference", 10, space_filter)
             .await
             .unwrap_or_default();
-
-        if id_mems.is_empty() && space_filter.is_some() {
-            id_mems = db
-                .load_memories_by_type("identity", 5, None)
-                .await
-                .unwrap_or_default();
-        }
-        if pref_mems.is_empty() && space_filter.is_some() {
-            pref_mems = db
-                .load_memories_by_type("preference", 5, None)
-                .await
-                .unwrap_or_default();
-        }
 
         (
             id_mems
@@ -323,7 +312,7 @@ pub async fn handle_context(
     };
 
     let corrections = if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
-        db.search_corrections_by_topic(query, 5)
+        db.search_corrections_by_topic(query, 5, space_filter)
             .await
             .unwrap_or_default()
             .iter()

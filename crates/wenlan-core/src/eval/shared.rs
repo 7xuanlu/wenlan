@@ -1897,6 +1897,7 @@ pub async fn run_classification_for_eval_concurrent(
                 let opts = crate::ingest::EnrichmentOpts {
                     initial_memory_type: "fact".to_string(),
                     initial_domain: None,
+                    rejected_explicit_domain: false,
                     initial_supersede_mode: "hide".to_string(),
                     initial_structured_fields: None,
                     agent_supplied_memory_type: false,
@@ -2610,6 +2611,8 @@ mod tests {
         )
         .await
         .unwrap();
+
+        db.create_space("work", None, false).await.unwrap();
 
         let source_id = "mem_eval_classify_1";
         let content = "Moved the launch review to 2026-02-10 since the demo slipped a week.";
