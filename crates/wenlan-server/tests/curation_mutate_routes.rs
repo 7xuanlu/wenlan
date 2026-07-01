@@ -82,6 +82,30 @@ async fn accept_revision_succeeds_and_returns_typed_response() {
 }
 
 #[tokio::test]
+async fn accept_revision_accepts_revision_source_id() {
+    let (router, _tmp, db) = common::test_app().await;
+    seed_pending_revision_in_test_app(&db, "mem_ar_rev_id_target", "mem_ar_rev_id_rev").await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memory/revision/mem_ar_rev_id_rev/accept")
+                .header("x-agent-name", "test-agent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let parsed: RevisionAcceptResponse = body_as_json(response).await;
+    assert_eq!(parsed.target_source_id, "mem_ar_rev_id_target");
+    assert_eq!(parsed.revision_source_id, "mem_ar_rev_id_rev");
+    assert!(parsed.wrote);
+}
+
+#[tokio::test]
 async fn accept_revision_returns_404_on_missing_target() {
     let (router, _tmp, _db) = common::test_app().await;
     let response = router
@@ -161,7 +185,7 @@ async fn dismiss_revision_succeeds_and_returns_typed_response() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/memory/revision/mem_dr1_target/dismiss")
+                .uri("/api/memory/revision/mem_dr1_rev/dismiss")
                 .header("x-agent-name", "test-agent")
                 .body(Body::empty())
                 .unwrap(),
@@ -172,6 +196,22 @@ async fn dismiss_revision_succeeds_and_returns_typed_response() {
     let parsed: RevisionDismissResponse = body_as_json(response).await;
     assert_eq!(parsed.target_source_id, "mem_dr1_target");
     assert!(parsed.wrote);
+    let revision = db
+        .get_memory_detail("mem_dr1_rev")
+        .await
+        .unwrap()
+        .expect("dismissed revision must survive as an independent memory");
+    assert!(
+        revision.supersedes.is_none(),
+        "dismiss must clear the false supersedes link"
+    );
+    assert!(
+        db.get_memory_detail("mem_dr1_target")
+            .await
+            .unwrap()
+            .is_some(),
+        "the original target must remain after dismiss"
+    );
 }
 
 #[tokio::test]

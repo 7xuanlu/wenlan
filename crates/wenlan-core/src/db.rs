@@ -16544,34 +16544,71 @@ impl MemoryDB {
         Ok(changed as usize)
     }
 
-    /// Accept a pending revision for a target memory. The `target_source_id` is the
-    /// original memory being superseded. This finds the pending revision that supersedes it,
-    /// activates it, and suppresses the original. Both UPDATEs are wrapped in BEGIN/COMMIT.
-    pub async fn accept_pending_revision(&self, target_source_id: &str) -> Result<(), WenlanError> {
-        let conn = self.conn.lock().await;
-
-        // Find the pending revision that supersedes this target
+    /// Resolve a pending revision by either the revision's own source_id or the
+    /// target memory source_id. Revision id wins so actions can address a
+    /// specific pending row when several compete for one target.
+    async fn resolve_pending_revision(
+        conn: &libsql::Connection,
+        id: &str,
+    ) -> Result<Option<(String, String)>, WenlanError> {
         let mut rows = conn
             .query(
-                "SELECT source_id FROM memories WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory' LIMIT 1",
-                libsql::params![target_source_id.to_string()],
+                "SELECT source_id, supersedes FROM memories \
+                 WHERE source_id = ?1 AND pending_revision = 1 AND supersedes IS NOT NULL AND source = 'memory' LIMIT 1",
+                libsql::params![id.to_string()],
             )
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("accept_pending_revision query: {}", e)))?;
-
-        let revision_source_id: String = if let Some(row) = rows
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_pending_revision rev: {e}")))?;
+        if let Some(row) = rows
             .next()
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<String>(0)
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        } else {
-            return Err(WenlanError::NotFound(format!(
-                "No pending revision for source_id: {}",
-                target_source_id
-            )));
-        };
+            let rev = row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let target = row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            return Ok(Some((rev, target)));
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT source_id, supersedes FROM memories \
+                 WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory' \
+                 ORDER BY last_modified DESC LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_pending_revision target: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            let rev = row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let target = row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            return Ok(Some((rev, target)));
+        }
+
+        Ok(None)
+    }
+
+    /// Accept a pending revision identified by `id` (the revision's own
+    /// source_id, or legacy target source_id). Activates exactly that revision
+    /// and suppresses the original. Returns `(target_source_id, revision_source_id)`.
+    pub async fn accept_pending_revision(&self, id: &str) -> Result<(String, String), WenlanError> {
+        let conn = self.conn.lock().await;
+        let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
+            .await?
+            .ok_or_else(|| {
+                WenlanError::NotFound(format!("No pending revision for source_id: {id}"))
+            })?;
 
         conn.execute("BEGIN", ())
             .await
@@ -16609,30 +16646,29 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("accept_pending_revision commit: {}", e)))?;
 
-        Ok(())
+        Ok((target_source_id, revision_source_id))
     }
 
-    /// Dismiss a pending revision for a target memory. Deletes the pending revision,
-    /// leaving the original unchanged.
+    /// Dismiss a pending revision identified by `id` (the revision's own
+    /// source_id, or legacy target source_id). Dismiss means the staged row was
+    /// not actually a revision: clear the revision link and keep both memories.
     pub async fn dismiss_pending_revision(
         &self,
-        target_source_id: &str,
-    ) -> Result<(), WenlanError> {
+        id: &str,
+    ) -> Result<(String, String), WenlanError> {
         let conn = self.conn.lock().await;
-        let rows_affected = conn
-            .execute(
-                "DELETE FROM memories WHERE supersedes = ?1 AND pending_revision = 1 AND source = 'memory'",
-                libsql::params![target_source_id.to_string()],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("dismiss_pending_revision: {}", e)))?;
-        if rows_affected == 0 {
-            return Err(WenlanError::NotFound(format!(
-                "No pending revision for source_id: {}",
-                target_source_id
-            )));
-        }
-        Ok(())
+        let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
+            .await?
+            .ok_or_else(|| {
+                WenlanError::NotFound(format!("No pending revision for source_id: {id}"))
+            })?;
+        conn.execute(
+            "UPDATE memories SET pending_revision = 0, supersedes = NULL WHERE source_id = ?1",
+            libsql::params![revision_source_id.clone()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dismiss_pending_revision: {}", e)))?;
+        Ok((target_source_id, revision_source_id))
     }
 
     pub async fn get_pending_revision_for(
@@ -28990,8 +29026,10 @@ pub(crate) mod tests {
         };
         db.upsert_documents(vec![revision]).await.unwrap();
 
-        // Dismiss the revision
-        db.dismiss_pending_revision("dismiss_target").await.unwrap();
+        // Dismiss the revision (unstage: drop the false link, keep both rows).
+        db.dismiss_pending_revision("dismiss_revision")
+            .await
+            .unwrap();
 
         // Original should still be visible
         let mems = db.list_memories(None, None, None, None, 100).await.unwrap();
@@ -29001,8 +29039,17 @@ pub(crate) mod tests {
             "original should remain after dismiss"
         );
         assert!(
-            !ids.contains(&"dismiss_revision"),
-            "dismissed revision should be deleted"
+            ids.contains(&"dismiss_revision"),
+            "dismissed revision should survive as an independent memory"
+        );
+        let dismissed = db
+            .get_memory_detail("dismiss_revision")
+            .await
+            .unwrap()
+            .expect("dismissed revision should remain visible");
+        assert!(
+            dismissed.supersedes.is_none(),
+            "dismiss should clear the false supersedes link"
         );
 
         // No more pending revision

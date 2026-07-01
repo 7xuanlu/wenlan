@@ -152,7 +152,7 @@ Inline accept/dismiss verbs map to:
 If `<N> > 3`, end the block with one line:
 
 ```
-Run `/review revisions` to walk the rest.
+Run `/curate revisions` to walk the rest.
 ```
 
 Do not auto-action anything. The user picks per item.

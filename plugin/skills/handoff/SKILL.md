@@ -68,7 +68,7 @@ Pending captures this session (<N> total, top 3 shown):
 2. ...
 
 Default: proceed (captures stay pending). Opt in by running
-`/review captures` before re-invoking /handoff if you want to walk them.
+`/curate captures` before re-invoking /handoff if you want to walk them.
 ```
 
 Do NOT prompt for per-item action inline. The user proceeds with /handoff

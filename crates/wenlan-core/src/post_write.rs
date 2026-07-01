@@ -788,28 +788,17 @@ pub async fn update_page(
 /// Accept a pending memory revision. Canonical entry for both agent-triggered
 /// (`/api/memory/revision/{id}/accept`) and daemon-internal accept-dispatch.
 /// Activates the revision row, suppresses the original, and logs activity.
-/// Returns `NotFound` if no pending revision exists for the target.
+/// Returns `NotFound` if no pending revision exists for the supplied id.
 pub async fn accept_pending_revision(
     db: &MemoryDB,
-    target_source_id: &str,
+    id: &str,
     agent: &str,
 ) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
-    // Pre-fetch the revision row id so we can return it in the response,
-    // since the DB method consumes the row before returning.
-    let pending = db.get_pending_revision_for(target_source_id).await?;
-    let Some(pending) = pending else {
-        return Err(WenlanError::NotFound(format!(
-            "No pending revision for {}",
-            target_source_id
-        )));
-    };
-    let revision_source_id = pending.source_id.clone();
-
-    db.accept_pending_revision(target_source_id).await?;
-    log_activity_best_effort(db, agent, "revision_accept", target_source_id).await;
+    let (target_source_id, revision_source_id) = db.accept_pending_revision(id).await?;
+    log_activity_best_effort(db, agent, "revision_accept", &target_source_id).await;
 
     Ok(wenlan_types::RevisionAcceptResponse {
-        target_source_id: target_source_id.to_string(),
+        target_source_id,
         revision_source_id,
         wrote: true,
     })
@@ -817,17 +806,18 @@ pub async fn accept_pending_revision(
 
 /// Dismiss a pending memory revision. Canonical entry for both
 /// agent-triggered (`/api/memory/revision/{id}/dismiss`) and daemon-internal
-/// triggers. Deletes the pending revision row; the original is untouched.
-/// Returns `NotFound` if no pending revision exists for the target.
+/// triggers. Unstages the pending revision (clears its false revision link,
+/// keeping it as an independent row); the original is untouched.
+/// Returns `NotFound` if no pending revision exists for the supplied id.
 pub async fn dismiss_pending_revision(
     db: &MemoryDB,
-    target_source_id: &str,
+    id: &str,
     agent: &str,
 ) -> Result<wenlan_types::RevisionDismissResponse, WenlanError> {
-    db.dismiss_pending_revision(target_source_id).await?;
-    log_activity_best_effort(db, agent, "revision_dismiss", target_source_id).await;
+    let (target_source_id, _revision_source_id) = db.dismiss_pending_revision(id).await?;
+    log_activity_best_effort(db, agent, "revision_dismiss", &target_source_id).await;
     Ok(wenlan_types::RevisionDismissResponse {
-        target_source_id: target_source_id.to_string(),
+        target_source_id,
         wrote: true,
     })
 }
