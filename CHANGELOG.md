@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.5](https://github.com/7xuanlu/wenlan/compare/v0.9.4...v0.9.5) (2026-06-30)
+
+
+### Bug Fixes
+
+* /curate revision queue overhaul — diff preview, dismiss=unstage, dead-code cleanup ([#311](https://github.com/7xuanlu/wenlan/issues/311)) ([d072a38](https://github.com/7xuanlu/wenlan/commit/d072a380c8fe819bc896176e4d5a6705d424cf49))
+
 ## [0.9.4](https://github.com/7xuanlu/wenlan/compare/v0.9.3...v0.9.4) (2026-06-30)
 
 
