@@ -144,6 +144,11 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+        with:
+          # pnpm/action-setup reads packageManager from $GITHUB_WORKSPACE/package.json
+          # by default; ours lives under wenlan-app/ because the checkout step above
+          # uses path: wenlan-app (needed to check out the sibling wenlan backend too).
+          package_json_file: wenlan-app/package.json
 
       - name: Install Node.js
         uses: actions/setup-node@v4
