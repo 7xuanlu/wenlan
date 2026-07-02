@@ -195,6 +195,10 @@ pub struct RawDocument {
     /// Original prose content, preserved when structured_fields are promoted to primary content
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_text: Option<String>,
+    /// Provenance: content hash of the source file this document came from.
+    /// All chunks of one file share this hash (folder / multi-format ingest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 fn default_enrichment_status() -> String {
@@ -233,6 +237,7 @@ impl Default for RawDocument {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
         }
     }
 }

@@ -2642,6 +2642,7 @@ mod tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
         };
         db.upsert_documents(vec![doc]).await.unwrap();
 
@@ -2715,6 +2716,7 @@ mod tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
         };
 
         // Create the mode upfront so the cache stamp and the re-open use the same provenance.

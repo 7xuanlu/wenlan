@@ -34,7 +34,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 64;
+pub const SCHEMA_VERSION: u32 = 65;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -5989,6 +5989,37 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("m64 bump: {e}")))?;
                 log::info!("[migration] Migration 64 applied: memories.last_distilled_at column (P3 consolidation demotion)");
             }
+
+            // Migration 65 (provenance): memories.content_hash — content hash of the
+            // source file a document chunk came from (folder / multi-format ingest,
+            // decision-6). All chunks of one file share the file hash. NULL for rows
+            // that carry no file provenance. Feeds the retrieval-cap schema unification
+            // and the sub-project-2 backfill. No backfill — existing rows stay NULL.
+            if version < 65 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'content_hash'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m65 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m65 add content_hash: {e}")))?;
+                }
+                conn.execute("PRAGMA user_version = 65", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m65 bump: {e}")))?;
+                log::info!("[migration] Migration 65 applied: memories.content_hash column (folder-ingest provenance)");
+            }
         }
 
         Ok(())
@@ -7372,6 +7403,10 @@ impl MemoryDB {
             structured_fields: Option<String>,
             retrieval_cue: Option<String>,
             source_text: Option<String>,
+            // Provenance: content hash of the source file (folder / multi-format
+            // ingest, decision-6). Shared by every chunk of one file; None for rows
+            // with no file provenance.
+            content_hash: Option<String>,
             // T2: parent fact source_id for a verbatim `source='episode'` row;
             // None for every ordinary memory row.
             episode_of: Option<String>,
@@ -7478,6 +7513,8 @@ impl MemoryDB {
                     source_text: derived_source_text
                         .clone()
                         .or_else(|| doc.source_text.clone()),
+                    // Provenance: every chunk of one file shares the file's content_hash.
+                    content_hash: doc.content_hash.clone(),
                     // Ordinary memory rows are never episodes.
                     episode_of: None,
                 });
@@ -7548,6 +7585,8 @@ impl MemoryDB {
                     structured_fields: None,
                     retrieval_cue: None,
                     source_text: None,
+                    // Episodes are a derived retrieval channel, not file provenance.
+                    content_hash: None,
                     episode_of: Some(doc.source_id.clone()),
                 });
             }
@@ -7750,6 +7789,10 @@ impl MemoryDB {
                 .episode_of
                 .map(|s| s.into())
                 .unwrap_or(libsql::Value::Null);
+            let content_hash_val: libsql::Value = row
+                .content_hash
+                .map(|s| s.into())
+                .unwrap_or(libsql::Value::Null);
 
             conn.execute(
                 "INSERT INTO memories (id, content, source, source_id, title, summary, url,
@@ -7758,12 +7801,12 @@ impl MemoryDB {
                     stability, supersedes, pending_revision, word_count,
                     entity_id, enrichment_status, quality, is_recap, supersede_mode,
                     structured_fields, retrieval_cue, source_text,
-                    embedding, created_at, importance, episode_of)
+                    embedding, created_at, importance, episode_of, content_hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                     ?24, ?25, ?26, ?27, ?28,
                     ?29, ?30, ?31,
-                    vector32(?32), ?33, ?34, ?35)",
+                    vector32(?32), ?33, ?34, ?35, ?36)",
                 libsql::params![
                     row.id,
                     row.content,
@@ -7799,7 +7842,8 @@ impl MemoryDB {
                     vec_str,
                     row.last_modified, // created_at = last_modified at insert time
                     importance_val,
-                    episode_of_val
+                    episode_of_val,
+                    content_hash_val
                 ],
             )
             .await
@@ -43351,8 +43395,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (64 after P3 memories.last_distilled_at).
-        assert_eq!(uv, 64);
+        // the current SCHEMA_VERSION (65 after folder-ingest memories.content_hash).
+        assert_eq!(uv, 65);
     }
 
     #[tokio::test]
@@ -43369,7 +43413,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 65,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43403,7 +43447,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 64);
+        assert_eq!(uv, 65);
     }
 
     #[tokio::test]
@@ -43420,7 +43464,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 65,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43469,8 +43513,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 64,
-            "terminal version is 64 after P3 memories.last_distilled_at"
+            uv, 65,
+            "terminal version is 65 after folder-ingest memories.content_hash"
         );
     }
 
@@ -43488,7 +43532,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 65,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -45304,5 +45348,63 @@ pub(crate) mod tests {
             .unwrap();
         let got: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(got, Some(now));
+    }
+
+    /// decision-6 provenance: a folder-ingested document upserted with a file
+    /// `content_hash` + `source_agent='folder'` stamps that hash and agent onto
+    /// EVERY chunk row of the file, and the chunker's byte offsets persist.
+    #[tokio::test]
+    async fn provenance_content_hash_stamps_all_document_chunks() {
+        let (db, _dir) = test_db().await;
+
+        // Multi-paragraph content large enough to split into >1 chunk under both
+        // the char-fallback (512) and token-aware (~512 tok) chunker modes.
+        let para = "Wenlan is a local-first personal agent memory layer where \
+            agents write what they learn and humans curate the knowledge base. \
+            The daemon owns all business logic and data while thin clients talk HTTP. ";
+        let content = para.repeat(40);
+
+        let doc = RawDocument {
+            source: "memory".into(),
+            source_id: "src_a::/notes/wenlan.txt".into(),
+            title: "wenlan.txt".into(),
+            content,
+            source_agent: Some("folder".into()),
+            content_hash: Some("abc".into()),
+            last_modified: 1_700_000_000,
+            ..Default::default()
+        };
+
+        let n = db.upsert_documents(vec![doc]).await.unwrap();
+        assert!(n >= 2, "content should split into multiple chunks, got {n}");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content_hash, source_agent, byte_start FROM memories \
+                 WHERE source = 'memory' AND source_id = 'src_a::/notes/wenlan.txt'",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut seen = 0;
+        while let Some(r) = rows.next().await.unwrap() {
+            seen += 1;
+            assert_eq!(
+                r.get::<Option<String>>(0).unwrap().as_deref(),
+                Some("abc"),
+                "every chunk row must carry the file content_hash"
+            );
+            assert_eq!(
+                r.get::<Option<String>>(1).unwrap().as_deref(),
+                Some("folder"),
+                "every chunk row must carry source_agent='folder'"
+            );
+            assert!(
+                r.get::<Option<i64>>(2).unwrap().is_some(),
+                "document chunks must persist non-null byte_start"
+            );
+        }
+        assert_eq!(seen, n, "every upserted chunk row should be returned");
     }
 }

@@ -460,6 +460,7 @@ pub async fn handle_store_memory(
             .or(extracted_fields),
         retrieval_cue: req.retrieval_cue.clone().or(extracted_cue),
         source_text: None,
+        content_hash: None,
     };
 
     // Pre-chunk locally so we know chunks_created for the response even
