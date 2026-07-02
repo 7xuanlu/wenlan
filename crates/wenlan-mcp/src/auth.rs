@@ -1,4 +1,3 @@
-use std::net::IpAddr;
 use subtle::ConstantTimeEq;
 
 pub fn verify_token(provided: &str, expected: &str) -> bool {
@@ -22,16 +21,8 @@ pub fn verify_token(provided: &str, expected: &str) -> bool {
     p.ct_eq(&e).into()
 }
 
-pub fn is_loopback(addr: &IpAddr) -> bool {
-    addr.is_loopback()
-}
-
 pub fn is_origin_allowed(origin: &str, allowed: &[String]) -> bool {
     allowed.iter().any(|a| a == "*" || a == origin)
-}
-
-pub fn extract_bearer_token(header_value: &str) -> Option<&str> {
-    header_value.strip_prefix("Bearer ")
 }
 
 #[cfg(test)]
@@ -61,36 +52,6 @@ mod tests {
     }
 
     #[test]
-    fn test_loopback_ipv4() {
-        let addr: IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(is_loopback(&addr));
-    }
-
-    #[test]
-    fn test_loopback_ipv6() {
-        let addr: IpAddr = "::1".parse().unwrap();
-        assert!(is_loopback(&addr));
-    }
-
-    #[test]
-    fn test_not_loopback_0000() {
-        let addr: IpAddr = "0.0.0.0".parse().unwrap();
-        assert!(!is_loopback(&addr));
-    }
-
-    #[test]
-    fn test_not_loopback_ipv6_unspecified() {
-        let addr: IpAddr = "::".parse().unwrap();
-        assert!(!is_loopback(&addr));
-    }
-
-    #[test]
-    fn test_not_loopback_lan() {
-        let addr: IpAddr = "192.168.1.1".parse().unwrap();
-        assert!(!is_loopback(&addr));
-    }
-
-    #[test]
     fn test_origin_allowed_exact_match() {
         let allowed = vec!["https://claude.ai".into(), "https://chatgpt.com".into()];
         assert!(is_origin_allowed("https://claude.ai", &allowed));
@@ -112,33 +73,5 @@ mod tests {
     fn test_origin_empty_list_denies_all() {
         let allowed: Vec<String> = vec![];
         assert!(!is_origin_allowed("https://claude.ai", &allowed));
-    }
-
-    #[test]
-    fn test_extract_bearer_valid() {
-        assert_eq!(
-            extract_bearer_token("Bearer mytoken123"),
-            Some("mytoken123")
-        );
-    }
-
-    #[test]
-    fn test_extract_bearer_no_prefix() {
-        assert_eq!(extract_bearer_token("mytoken123"), None);
-    }
-
-    #[test]
-    fn test_extract_bearer_wrong_scheme() {
-        assert_eq!(extract_bearer_token("Basic abc123"), None);
-    }
-
-    #[test]
-    fn test_extract_bearer_case_sensitive() {
-        assert_eq!(extract_bearer_token("bearer mytoken"), None);
-    }
-
-    #[test]
-    fn test_extract_bearer_empty_token() {
-        assert_eq!(extract_bearer_token("Bearer "), Some(""));
     }
 }

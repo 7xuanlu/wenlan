@@ -48,7 +48,6 @@ pub mod privacy;
 pub mod prompts;
 pub mod quality_gate;
 pub mod refinery;
-pub mod rerank;
 pub mod reranker;
 pub(crate) mod retrieval;
 pub mod router;
@@ -56,12 +55,10 @@ pub mod schema;
 pub mod sources;
 pub mod spaces;
 pub mod synthesis;
-pub mod system_info;
 pub mod tags;
 pub(crate) mod temporal_query;
 pub mod topic_match;
 pub mod tuning;
-pub mod working_memory;
 
 // Re-exports for convenience.
 pub use error::WenlanError;

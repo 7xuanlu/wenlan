@@ -6,15 +6,9 @@
 //! here so intra-crate imports keep working via `crate::sources::*`.
 //!
 //! This module owns helpers that need `tuning::ConfidenceConfig` (confidence
-//! computation, decay rates) and the `DataSource` trait plus supporting
-//! structs used by connectors.
-pub mod local_files;
+//! computation, decay rates).
 pub mod obsidian;
 pub mod page_watcher;
-
-use crate::error::WenlanError;
-use async_trait::async_trait;
-use std::any::Any;
 
 // Re-export canonical type definitions from wenlan-types. This keeps
 // `crate::sources::RawDocument` working for wenlan-core modules while the
@@ -73,44 +67,6 @@ pub fn compute_effective_confidence(
     } else {
         base
     }
-}
-
-/// Trait that all data source connectors must implement.
-///
-/// Intentionally duplicated in `wenlan-app/app/src/sources/data_source.rs`
-/// because wenlan-app has no wenlan-core dependency (Phase 5-D PR2). The
-/// two trait declarations are identical except for the error type
-/// (`WenlanError` here, `AppError` in wenlan-app). The shared data shapes
-/// (`RawDocument`, `SourceStatus`) live in wenlan-types so connectors can
-/// move freely between crates.
-#[async_trait]
-pub trait DataSource: Send + Sync {
-    /// Unique name for this source ("gmail", "notion", etc.)
-    fn name(&self) -> &str;
-
-    /// Whether this source requires OAuth authentication
-    fn requires_auth(&self) -> bool;
-
-    /// Check if the source is currently connected/authenticated
-    async fn is_connected(&self) -> bool;
-
-    /// Connect/authenticate the source (triggers OAuth if needed)
-    async fn connect(&mut self) -> Result<(), WenlanError>;
-
-    /// Disconnect the source (revoke tokens, cleanup)
-    async fn disconnect(&mut self) -> Result<(), WenlanError>;
-
-    /// Fetch new/updated content since last sync
-    async fn fetch_updates(&mut self) -> Result<Vec<RawDocument>, WenlanError>;
-
-    /// Initial full sync - fetches all available content
-    async fn full_sync(&mut self) -> Result<Vec<RawDocument>, WenlanError>;
-
-    /// Get the current status of this source
-    async fn status(&self) -> SourceStatus;
-
-    /// Downcast to concrete type
-    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 #[cfg(test)]
