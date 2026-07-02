@@ -2469,10 +2469,10 @@ mod tests {
         // Craft the content to be a near-duplicate of the probe so that IF the
         // `confirmed = 1` filter was removed, it WOULD surface. This ensures the test
         // can go RED if the invariant is violated.
-        let folder_doc_body = std::iter::repeat(
+        let folder_doc_body = std::iter::repeat_n(
             "I use Rust for backend services, tokio workers, and libsql persistence",
+            10,
         )
-        .take(10)
         .collect::<Vec<_>>()
         .join(" ");
 
