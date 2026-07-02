@@ -90,6 +90,11 @@ enum Commands {
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
     },
+    /// Ingest a folder (or single file) — register it as a source and sync now.
+    Ingest {
+        /// Path to a directory or file to ingest.
+        path: std::path::PathBuf,
+    },
     /// Store a memory. Provide text positionally, or use --file, or pipe via stdin.
     Store {
         /// Content text. If omitted and --file unset, read from stdin.
@@ -164,6 +169,9 @@ async fn main() -> anyhow::Result<()> {
             commands::recall::run(&client, format, cli.quiet, query).await?
         }
         Commands::Pages { query, limit } => commands::pages::run(format, cli.quiet, query, limit)?,
+        Commands::Ingest { path } => {
+            commands::ingest::run(&client, format, cli.quiet, path).await?
+        }
         Commands::Store {
             text,
             file,
