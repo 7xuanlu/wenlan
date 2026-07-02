@@ -144,8 +144,11 @@ pub async fn run_document_enrichment(
             Ok(FileOutcome::Ingested(docs)) => docs,
             Ok(FileOutcome::Skipped(reason)) | Ok(FileOutcome::Error(reason)) => {
                 // A file that yields nothing ingestable won't improve on retry.
+                // Still record sync_state so the next sync skips it instead of
+                // re-parsing it every tick.
                 log::warn!("[doc-enrich] {file_path}: not ingestable ({reason}); marking done");
                 let _ = db.mark_done(&source_id, &file_path).await;
+                record_sync_state(db, entry).await;
                 return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
             }
             Err(join_err) => {
@@ -307,6 +310,7 @@ pub async fn run_document_enrichment(
         }
         // No LLM configured: terminal (a retry can't do better without a provider).
         let _ = db.mark_done(&source_id, &file_path).await;
+        record_sync_state(db, entry).await;
         return DocumentEnrichmentOutcome {
             doc_source_id,
             page_id,
@@ -368,6 +372,7 @@ pub async fn run_document_enrichment(
     }
 
     let _ = db.mark_done(&source_id, &file_path).await;
+    record_sync_state(db, entry).await;
     DocumentEnrichmentOutcome {
         doc_source_id,
         page_id,
@@ -376,6 +381,57 @@ pub async fn run_document_enrichment(
         entities,
         completed: true,
         paused: false,
+    }
+}
+
+/// Record the file's tracked `source_sync_state` after TERMINAL processing
+/// (§4: the sync_state row is written on SUCCESSFUL processing, by the queue).
+/// The scan-side mtime+hash skip and the deletion diff both read this table:
+/// without the write, a directory file is re-enqueued on every sync and its
+/// chunks are never reaped after deletion.
+///
+/// Self-healing against mid-enrichment modification: the file is re-stat'd and
+/// re-hashed NOW. If the hash still matches the enqueue-time hash, the row gets
+/// the current mtime (normal). If it no longer matches — or the file vanished —
+/// the row is written with `mtime_ns = 0` and the ENQUEUE-time hash, so the
+/// next sync cannot mtime-skip it: it re-hashes, sees the drift, and re-enriches
+/// (or, for a vanished file, the deletion diff reaps the chunks just written).
+async fn record_sync_state(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) {
+    let path = PathBuf::from(&entry.file_path);
+    let stat = tokio::task::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path).ok()?;
+        let mtime_ns = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+        let bytes = std::fs::read(&path).ok()?;
+        Some((mtime_ns, crate::sources::directory::sha256_hex(&bytes)))
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let enqueue_hash = entry.content_hash.as_deref();
+    let (mtime_ns, hash) = match (&stat, enqueue_hash) {
+        (Some((m, now)), Some(eh)) if now == eh => (*m, now.clone()),
+        // No pinned enqueue hash: trust the file as it stands now.
+        (Some((m, now)), None) => (*m, now.clone()),
+        // Changed mid-enrichment: force the next sync to re-check content.
+        (Some(_), Some(eh)) => (0, eh.to_string()),
+        // Vanished mid-enrichment: still track it so the deletion diff reaps
+        // the chunks this run just wrote.
+        (None, eh) => (0, eh.unwrap_or_default().to_string()),
+    };
+    if let Err(e) = db
+        .upsert_sync_state(&entry.source_id, &entry.file_path, mtime_ns, &hash)
+        .await
+    {
+        log::warn!(
+            "[doc-enrich] {}: upsert_sync_state failed: {e}",
+            entry.file_path
+        );
     }
 }
 

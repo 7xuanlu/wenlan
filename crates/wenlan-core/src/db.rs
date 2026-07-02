@@ -23314,10 +23314,12 @@ impl MemoryDB {
 
     // ===== Document Enrichment Queue Methods =====
 
-    /// Enqueue a document for enrichment. Idempotent upsert: re-enqueuing a row
-    /// that already exists (in ANY status) is a no-op — it never resets an
-    /// in-progress checkpoint or a completed row. A new row starts `pending`
-    /// with no completed chunk (`last_completed_chunk = -1`).
+    /// Enqueue a document for enrichment. Idempotent upsert: re-enqueuing a
+    /// live row (pending / in_progress / paused) or a `done` row with the SAME
+    /// content hash is a no-op — it never resets an in-progress checkpoint. A
+    /// `done` row with a DIFFERENT hash is reset to a fresh `pending` (changed
+    /// file → re-enrich; the chunk upsert replaces the stale chunks). A new row
+    /// starts `pending` with no completed chunk (`last_completed_chunk = -1`).
     pub async fn enqueue_document(
         &self,
         source_id: &str,
@@ -23331,7 +23333,16 @@ impl MemoryDB {
                 (source_id, file_path, status, content_hash, last_completed_chunk,
                  attempt_count, next_retry_at, error_detail, enqueued_at, updated_at)
              VALUES (?1, ?2, 'pending', ?3, -1, 0, NULL, NULL, ?4, ?4)
-             ON CONFLICT(source_id, file_path) DO NOTHING",
+             ON CONFLICT(source_id, file_path) DO UPDATE SET
+                status = 'pending',
+                content_hash = excluded.content_hash,
+                last_completed_chunk = -1,
+                attempt_count = 0,
+                next_retry_at = NULL,
+                error_detail = NULL,
+                updated_at = excluded.updated_at
+             WHERE document_enrichment_queue.status = 'done'
+               AND document_enrichment_queue.content_hash IS NOT excluded.content_hash",
             libsql::params![
                 source_id.to_string(),
                 file_path.to_string(),

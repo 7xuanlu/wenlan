@@ -2,7 +2,8 @@
 //! §6 end-to-end integration test for folder / multi-format ingest.
 //!
 //! A fixture folder — markdown with wikilinks (in a subdirectory), a plain-text
-//! report, a tiny real text PDF, and an image-only PDF — is ingested into a temp
+//! report, a tiny real text PDF, and a no-extractable-text PDF (empty content
+//! stream, standing in for the scanned/image-only case) — is ingested into a temp
 //! `MemoryDB` and the full L1 pipeline is asserted:
 //!
 //!   1. `scan_directory` walks recursively and extension-filters (md/txt/pdf).
@@ -112,9 +113,11 @@ struct SyncOutcome {
 /// Reconstruction of the core of `wenlan-server`'s `sync_directory_source`:
 /// root-liveness guard, scan + per-file mtime/hash skip, enqueue of changed
 /// files, and deletion propagation for tracked files that vanished under a live
-/// root. Records `source_sync_state` at enqueue time so the tracked set (which
-/// the deletion diff reads) is populated in one place. Rename optimization is
-/// intentionally omitted — it is not part of the §6 assertions.
+/// root. `source_sync_state` is deliberately NOT written here: production
+/// writes it in `run_document_enrichment` on terminal processing (§4), so the
+/// drain — not the sync loop — populates the tracked set the skip and deletion
+/// diffs read. Rename optimization is intentionally omitted — it is not part
+/// of the §6 assertions.
 async fn directory_sync(db: &MemoryDB, root: &Path) -> SyncOutcome {
     // Root-guard (§4/§5): a missing/unreadable root means "source unavailable",
     // NOT "every file deleted". Diff nothing, delete zero rows.
@@ -184,12 +187,6 @@ async fn directory_sync(db: &MemoryDB, root: &Path) -> SyncOutcome {
             }
         }
         db.enqueue_document(SOURCE_ID, &key, Some(&hash))
-            .await
-            .unwrap();
-        // Record the tracked state at enqueue so the deletion diff has a set to
-        // diff against. (The server defers this write to a later tick; the exact
-        // timing does not change the deletion/root-guard semantics under test.)
-        db.upsert_sync_state(SOURCE_ID, &key, mtime, &hash)
             .await
             .unwrap();
         out.enqueued += 1;
@@ -374,14 +371,28 @@ async fn folder_ingest_full_pipeline_e2e() {
     )
     .await;
     assert_hits(&db, "Wenlanborg", &pdf_doc, "pdf marker").await;
-    // A sentence buried deep in the report (Section Eight) is retrievable.
-    assert_hits(
-        &db,
-        "bronze astronomer from the shipwreck",
-        &txt_doc,
-        "buried sentence",
-    )
-    .await;
+    // A sentence buried deep in the report is retrievable, and the hit is the
+    // Section-Eight chunk ITSELF ("millennia" appears only in Section Eight),
+    // not an earlier section that shares the bronze/shipwreck vocabulary.
+    let buried = db
+        .search_memory(
+            "separated by two millennia engaged in the same bargain",
+            30,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        buried
+            .iter()
+            .any(|r| r.source_id == txt_doc && r.content.contains("millennia")),
+        "the buried Section-Eight chunk itself must surface"
+    );
 
     // ── Phase B: idempotent re-sync — nothing changed → everything skipped ────
     let resynced = directory_sync(&db, &root).await;
@@ -398,6 +409,45 @@ async fn folder_ingest_full_pipeline_e2e() {
     assert!(
         drained_again.is_empty(),
         "a no-op sync enqueues nothing to drain"
+    );
+
+    // ── Phase B2: modify a file → re-enqueued, re-enriched, chunks replaced ──
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&txt_path)
+            .unwrap();
+        writeln!(
+            f,
+            "\nSection Nine. Addendum: the veridian-substrate-9271 clause \
+             records that revised reports must re-enrich."
+        )
+        .unwrap();
+    }
+    let modified = directory_sync(&db, &root).await;
+    assert_eq!(modified.enqueued, 1, "the modified file is re-enqueued");
+    assert_eq!(modified.skipped, 3, "unchanged siblings still skip");
+    assert_eq!(modified.deleted, 0);
+    let redrained = drain_queue(&db, &root, &prompts).await;
+    assert_eq!(redrained.len(), 1, "only the modified file re-enriches");
+    let txt_chunks = chunk_count(&db, &txt_doc).await;
+    assert!(
+        txt_chunks >= 3,
+        "re-enriched report still chunks fully, got {txt_chunks}"
+    );
+    assert_hits(
+        &db,
+        "veridian-substrate-9271 clause revised reports",
+        &txt_doc,
+        "modified content is searchable after re-enrichment",
+    )
+    .await;
+    // Still exactly one SOURCE page per document (deterministic page id reused).
+    assert_eq!(
+        db.count_active_pages().await.unwrap(),
+        3,
+        "re-enrichment must not duplicate the document's SOURCE page"
     );
 
     // ── Phase C: delete a file under the LIVE root → its chunks are reaped ────
@@ -552,7 +602,8 @@ fn generate_pdf_fixtures() {
 }
 
 /// A valid one-page PDF whose content stream draws `text` via `Tj`. `None` gives
-/// an empty content stream (no text operators) — the image-only case.
+/// an empty content stream (no text operators, no embedded image) — it
+/// exercises the same no-extractable-text skip a scanned/image-only PDF hits.
 fn build_pdf(text: Option<&str>) -> Vec<u8> {
     use lopdf::content::{Content, Operation};
     use lopdf::{dictionary, Document, Object, Stream};

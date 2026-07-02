@@ -102,4 +102,26 @@ for i in $(seq 1 60); do
 done
 [ -n "$hit" ] || fail "buried sentence not retrievable within 120s"
 
+echo "==> Deletion propagation: remove plain.txt, re-sync, sentence must vanish"
+rm "$FIXTURE_DIR/plain.txt"
+WENLAN_HOST="$HOST" "$BIN/wenlan" ingest "$FIXTURE_DIR"
+gone=""
+for i in $(seq 1 15); do
+    RESP="$(curl -sf -X POST "$HOST/api/memory/search" \
+        -H 'Content-Type: application/json' \
+        -d '{"query":"xylophone birch buried sentinel sentence","limit":5}')" || RESP=""
+    if ! echo "$RESP" | grep -q "xylophone-birch-4242"; then
+        echo "    reaped after ${i} poll(s)"
+        gone=1
+        break
+    fi
+    sleep 2
+done
+[ -n "$gone" ] || fail "deleted file's chunks still retrievable after re-sync"
+# The sibling markdown must survive the sibling's deletion.
+RESP="$(curl -sf -X POST "$HOST/api/memory/search" \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"zebra quokka sentinel markdown fixture","limit":5}')" || RESP=""
+echo "$RESP" | grep -q "zebra-quokka-7139" || fail "sibling markdown chunks lost after a sibling delete"
+
 echo "==> PASS"
