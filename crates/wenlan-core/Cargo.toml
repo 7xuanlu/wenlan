@@ -91,3 +91,7 @@ temp-env = { version = "0.3", features = ["async_closure"] }
 # test-util enables tokio::test(start_paused) for deterministic timeout tests
 # (the `full` feature deliberately excludes test-util). Test-only.
 tokio = { workspace = true, features = ["test-util"] }
+# lopdf generates byte-valid PDF fixtures for sources::directory tests (the same
+# lopdf pdf-extract parses with). default-features=false keeps it to the writer
+# path only, so no new crates enter the graph (mirrors the tokenizers/tempfile note).
+lopdf = { version = "0.38", default-features = false }

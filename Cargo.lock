@@ -5530,6 +5530,7 @@ dependencies = [
  "libsql",
  "llama-cpp-2",
  "log",
+ "lopdf",
  "lru",
  "pdf-extract",
  "regex",
