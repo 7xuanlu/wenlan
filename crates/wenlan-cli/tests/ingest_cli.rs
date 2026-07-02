@@ -109,9 +109,19 @@ fn spawn_stub(responses: Vec<String>) -> (String, Arc<Mutex<Vec<Recorded>>>) {
 }
 
 fn source_json(id: &str, path: &str) -> String {
-    format!(
-        r#"{{"id":"{id}","source_type":"directory","path":"{path}","status":"Active","last_sync":null,"file_count":0,"memory_count":0,"last_sync_errors":0,"last_sync_error_detail":null}}"#
-    )
+    // json! (not format!) so Windows backslash paths are escaped as valid JSON.
+    serde_json::json!({
+        "id": id,
+        "source_type": "directory",
+        "path": path,
+        "status": "Active",
+        "last_sync": null,
+        "file_count": 0,
+        "memory_count": 0,
+        "last_sync_errors": 0,
+        "last_sync_error_detail": null,
+    })
+    .to_string()
 }
 
 fn stats_json(found: usize, ingested: usize, skipped: usize, errors: usize) -> String {
