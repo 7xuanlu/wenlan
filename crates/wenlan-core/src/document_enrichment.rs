@@ -212,6 +212,7 @@ pub async fn run_document_enrichment(
     if chunks.is_empty() {
         log::warn!("[doc-enrich] {file_path}: no chunks after upsert; marking done");
         let _ = db.mark_done(&source_id, &file_path).await;
+        record_sync_state(db, entry).await;
         return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
     }
     if let Some(stored_title) = chunks
