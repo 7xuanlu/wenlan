@@ -25,7 +25,6 @@ pub struct PromptRegistry {
     pub summarize_activity_user: String,
     pub batch_classify: String,
     pub extract_knowledge_graph: String,
-    pub format_ocr_text: String,
     pub extract_structured_fields: String, // template with {memory_type}, {fields_json}, {required}, {optional}
     pub correct_memory: String,            // template with {original}, {correction}
     pub distill_page: String,
@@ -55,7 +54,6 @@ impl Default for PromptRegistry {
             summarize_activity_user: defaults::SUMMARIZE_ACTIVITY_USER.to_string(),
             batch_classify: defaults::BATCH_CLASSIFY.to_string(),
             extract_knowledge_graph: defaults::EXTRACT_KNOWLEDGE_GRAPH.to_string(),
-            format_ocr_text: defaults::FORMAT_OCR_TEXT.to_string(),
             extract_structured_fields: defaults::EXTRACT_STRUCTURED_FIELDS.to_string(),
             correct_memory: defaults::CORRECT_MEMORY.to_string(),
             distill_page: defaults::DISTILL_PAGE.to_string(),
@@ -97,7 +95,6 @@ impl PromptRegistry {
             ("summarize_activity_user", &mut reg.summarize_activity_user),
             ("batch_classify", &mut reg.batch_classify),
             ("extract_knowledge_graph", &mut reg.extract_knowledge_graph),
-            ("format_ocr_text", &mut reg.format_ocr_text),
             (
                 "extract_structured_fields",
                 &mut reg.extract_structured_fields,
@@ -186,7 +183,6 @@ mod tests {
         assert!(!reg.summarize_activity_user.is_empty());
         assert!(!reg.batch_classify.is_empty());
         assert!(!reg.extract_knowledge_graph.is_empty());
-        assert!(!reg.format_ocr_text.is_empty());
         assert!(!reg.extract_structured_fields.is_empty());
         assert!(!reg.correct_memory.is_empty());
         assert!(!reg.distill_page.is_empty());

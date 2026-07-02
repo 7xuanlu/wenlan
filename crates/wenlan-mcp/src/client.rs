@@ -8,9 +8,7 @@ const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
 /// Single source of truth for the space-lock header name.
 /// Mirrors the daemon's `X-Wenlan-Space` constant (daemon dual-reads the legacy x-origin-space).
 /// HTTP normalises to lowercase.
-pub fn space_header_name() -> &'static str {
-    "x-wenlan-space"
-}
+const SPACE_HEADER: &str = "x-wenlan-space";
 
 /// Discover the Wenlan server URL.
 /// Priority: CLI flag > HTTP default.
@@ -115,7 +113,7 @@ impl WenlanClient {
             req = req.header("x-agent-name", a);
         }
         if let Some(space) = crate::lock_state::locked_space() {
-            req = req.header(space_header_name(), space);
+            req = req.header(SPACE_HEADER, space);
         }
         req
     }
@@ -277,7 +275,7 @@ mod tests {
             None,
         );
         let req = builder.build().unwrap();
-        let header = req.headers().get(space_header_name()).unwrap();
+        let header = req.headers().get(SPACE_HEADER).unwrap();
         assert_eq!(header.to_str().unwrap(), "career");
 
         // Clean up.
@@ -298,6 +296,6 @@ mod tests {
             None,
         );
         let req = builder.build().unwrap();
-        assert!(req.headers().get(space_header_name()).is_none());
+        assert!(req.headers().get(SPACE_HEADER).is_none());
     }
 }

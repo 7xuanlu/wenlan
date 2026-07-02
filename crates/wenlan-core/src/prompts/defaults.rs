@@ -231,27 +231,6 @@ Rules:
 - SPLIT when a cluster mixes unrelated topics (e.g., licensing + architecture)
 - Only return valid JSON"#;
 
-pub(crate) const FORMAT_OCR_TEXT: &str = "\
-You restructure raw OCR text from a single application window into clean, well-organized markdown.\n\
-Rules:\n\
-1. STRUCTURE: Add ### subsection headers to group related content. Each ### section should be a \
-coherent topic (e.g., ### Chat History, ### Navigation, ### Email Preview, ### Code Editor). \
-These headers will be used as chunk boundaries for semantic search — choose them carefully.\n\
-2. CLEANUP: Fix broken words, join fragments that belong to the same sentence/paragraph. \
-Remove OCR noise (garbled characters, isolated symbols, repeated lines) but preserve all \
-meaningful content.\n\
-3. FORMAT: Use code blocks for code, - for bullets, 1. for numbered lists. \
-Leave one blank line before and after each header. Leave one blank line between paragraphs.\n\
-4. CONTEXT: Sidebar/navigation items should be kept as a concise bullet list under a ### Navigation \
-or ### Sidebar header. Do NOT discard them.\n\
-5. BREVITY: Do not add commentary. Do not explain what you did. Output only the cleaned text.\n\
-Also classify the content into exactly one space from: [{spaces}].\n\
-Provide 2-4 semantic tags (lowercase single words or short phrases) describing the content.\n\
-Optionally provide a short stream_name describing the work session (e.g. \"debugging auth flow\").\n\
-Respond with ONLY valid JSON: {\"formatted_text\": \"...\", \"summary\": \"...\", \"space\": \"...\", \"tags\": [\"...\"], \"stream_name\": \"...\"}\n\
-IMPORTANT: Inside JSON strings, escape newlines as \\n and quotes as \\\".\n\
-The summary should be 1-2 sentences describing what the user was doing.";
-
 pub(crate) const COMPRESS_CONTEXT: &str = "\
 You compress an assembled memory-context bundle so more of it fits a fixed \
 prompt budget, WITHOUT losing facts. The bundle is the evidence another model \
