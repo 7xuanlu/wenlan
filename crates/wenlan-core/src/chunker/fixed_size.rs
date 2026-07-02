@@ -1,46 +1,47 @@
 // SPDX-License-Identifier: Apache-2.0
-use super::traits::{floor_char_boundary, ChunkContext, ChunkInfo, ChunkingStrategy};
+use super::traits::{ChunkContext, ChunkInfo, ChunkingStrategy};
+use super::MAX_CONTENT_TOKENS;
+use text_splitter::{ChunkConfig, TextSplitter};
+use tokenizers::Tokenizer;
 
-/// Fixed-size chunking strategy with intelligent split points
+/// Plain-text chunking strategy backed by `text-splitter`'s [`TextSplitter`],
+/// which splits along Unicode semantic boundaries (paragraph → sentence → word
+/// → grapheme) and never mid-char.
 ///
-/// Uses 512 character chunks with 64 character overlap.
-/// Split priority: paragraph boundary > sentence boundary > word boundary > hard split.
+/// Built via [`FixedSizeStrategy::with_tokenizer`] chunks are sized by BGE
+/// token count (max [`MAX_CONTENT_TOKENS`]) so no chunk is silently truncated
+/// at embed time. [`FixedSizeStrategy::new`] falls back to a character cap when
+/// no tokenizer is available.
+enum Splitter {
+    Chars(TextSplitter<text_splitter::Characters>),
+    // Boxed: a `Tokenizer` carries its vocab maps, dwarfing the char variant.
+    Tokens(Box<TextSplitter<Tokenizer>>),
+}
+
 pub struct FixedSizeStrategy {
-    chunk_size: usize,
-    overlap: usize,
+    splitter: Splitter,
 }
 
 impl FixedSizeStrategy {
+    /// Character-based fallback cap (no tokenizer available). Keeps the
+    /// historical ~512-char chunk size.
+    const MAX_CHARS: usize = 512;
+
     pub fn new() -> Self {
+        let config = ChunkConfig::new(Self::MAX_CHARS);
         Self {
-            chunk_size: 512,
-            overlap: 64,
+            splitter: Splitter::Chars(TextSplitter::new(config)),
         }
     }
 
-    /// Find the best split point near `end` within the range.
-    /// Preference: paragraph > sentence > word > hard split.
-    fn find_split_point(&self, text: &str, start: usize, end: usize) -> usize {
-        let search_region = &text[start..end];
-
-        // Look for paragraph boundary (double newline) in the last 25% of the chunk
-        let search_start = floor_char_boundary(search_region, search_region.len() * 3 / 4);
-        if let Some(pos) = search_region[search_start..].rfind("\n\n") {
-            return start + search_start + pos + 2;
+    /// Token-aware constructor: chunks are sized so each encodes to at most
+    /// [`MAX_CONTENT_TOKENS`] BGE tokens.
+    pub fn with_tokenizer(tokenizer: Tokenizer) -> Self {
+        let config =
+            ChunkConfig::new((MAX_CONTENT_TOKENS / 2)..=MAX_CONTENT_TOKENS).with_sizer(tokenizer);
+        Self {
+            splitter: Splitter::Tokens(Box::new(TextSplitter::new(config))),
         }
-
-        // Look for sentence boundary in the last 25%
-        if let Some(pos) = search_region[search_start..].rfind(". ") {
-            return start + search_start + pos + 2;
-        }
-
-        // Look for any whitespace near the end
-        if let Some(pos) = search_region[search_start..].rfind(' ') {
-            return start + search_start + pos + 1;
-        }
-
-        // Hard split
-        end
     }
 }
 
@@ -52,52 +53,27 @@ impl Default for FixedSizeStrategy {
 
 impl ChunkingStrategy for FixedSizeStrategy {
     fn chunk(&self, context: ChunkContext) -> Vec<ChunkInfo> {
-        if context.content.is_empty() {
+        if context.content.trim().is_empty() {
             return vec![];
         }
 
-        let mut chunks = Vec::new();
-        let mut start = 0;
-        let text_len = context.content.len();
+        // The two splitter flavours return different `impl Iterator` types, so
+        // collect the (offset, text) pairs inside the match before mapping.
+        let indices: Vec<(usize, &str)> = match &self.splitter {
+            Splitter::Chars(s) => s.chunk_indices(context.content).collect(),
+            Splitter::Tokens(s) => s.chunk_indices(context.content).collect(),
+        };
 
-        while start < text_len {
-            let end = floor_char_boundary(context.content, (start + self.chunk_size).min(text_len));
-
-            // Find a good split point
-            let split_at = if end >= text_len {
-                text_len
-            } else {
-                self.find_split_point(context.content, start, end)
-            };
-
-            let chunk_text = &context.content[start..split_at];
-            let chunk_text = chunk_text.trim();
-
-            if !chunk_text.is_empty() {
-                chunks.push(ChunkInfo {
-                    content: chunk_text.to_string(),
-                    chunk_type: "text".to_string(),
-                    language: None,
-                    byte_range: Some((start, split_at)),
-                    semantic_unit: Some("paragraph".to_string()),
-                });
-            }
-
-            // Move start forward, with overlap
-            if split_at >= text_len {
-                break;
-            }
-            start = floor_char_boundary(
-                context.content,
-                if split_at > self.overlap {
-                    split_at - self.overlap
-                } else {
-                    split_at
-                },
-            );
-        }
-
-        chunks
+        indices
+            .into_iter()
+            .map(|(byte_offset, chunk_text)| ChunkInfo {
+                content: chunk_text.to_string(),
+                chunk_type: "text".to_string(),
+                language: None,
+                byte_range: Some((byte_offset, byte_offset + chunk_text.len())),
+                semantic_unit: Some("paragraph".to_string()),
+            })
+            .collect()
     }
 }
 
@@ -186,5 +162,56 @@ mod tests {
         let metadata = HashMap::new();
         let chunks = strategy.chunk(make_context("Test content", "", &metadata));
         assert_eq!(chunks[0].semantic_unit, Some("paragraph".to_string()));
+    }
+
+    /// Load the real BGE tokenizer from the shared FastEmbed cache (same
+    /// contract as the db tests: skips if the cache is absent).
+    fn bge_tokenizer() -> Option<tokenizers::Tokenizer> {
+        let cache = crate::db::resolve_fastembed_cache_dir(std::path::Path::new(".nonexistent"))?;
+        crate::chunker::load_bge_tokenizer(&cache)
+    }
+
+    /// A prose document of roughly 8k tokens.
+    fn long_prose() -> String {
+        "This is a sentence of prose that describes something meaningful and then keeps going. "
+            .repeat(600)
+    }
+
+    /// A dense, token-heavy document with no whitespace break points, so each
+    /// character maps to roughly one token — a char-capped chunk overshoots the
+    /// token budget.
+    fn dense_document() -> String {
+        "1+2=3;4-5=6;7*8=9;a<b>c|d&e^f~g/h%i.j,k:l;m?n!o@p#q$r".repeat(200)
+    }
+
+    /// Property: every chunk from the text strategy stays within the BGE token
+    /// budget once the strategy is tokenizer-aware.
+    #[test]
+    fn text_chunks_within_token_budget() {
+        let Some(tokenizer) = bge_tokenizer() else {
+            eprintln!("SKIP text_chunks_within_token_budget: BGE tokenizer not in cache");
+            return;
+        };
+        let strategy = FixedSizeStrategy::with_tokenizer(tokenizer.clone());
+        let metadata = HashMap::new();
+        let prose = long_prose();
+        let dense = dense_document();
+        for doc in [prose.as_str(), dense.as_str()] {
+            let chunks = strategy.chunk(make_context(doc, "", &metadata));
+            assert!(!chunks.is_empty(), "expected at least one chunk");
+            for chunk in &chunks {
+                let n_tokens = tokenizer
+                    .encode_fast(chunk.content.as_str(), false)
+                    .expect("encode chunk")
+                    .get_ids()
+                    .len();
+                assert!(
+                    n_tokens <= crate::chunker::MAX_CONTENT_TOKENS,
+                    "chunk encodes to {n_tokens} tokens (> {}); first 80 chars: {:?}",
+                    crate::chunker::MAX_CONTENT_TOKENS,
+                    chunk.content.chars().take(80).collect::<String>()
+                );
+            }
+        }
     }
 }

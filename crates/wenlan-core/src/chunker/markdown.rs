@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::traits::{ChunkContext, ChunkInfo, ChunkingStrategy};
+use super::MAX_CONTENT_TOKENS;
 use text_splitter::{ChunkConfig, MarkdownSplitter};
+use tokenizers::Tokenizer;
+
+/// Either splitter flavour: character-sized (fallback) or token-sized (BGE).
+/// `MarkdownSplitter` is generic over its sizer, so the two monomorphizations
+/// are distinct types; an enum lets `MarkdownStrategy` stay non-generic and
+/// object-safe behind `Box<dyn ChunkingStrategy>`.
+enum Splitter {
+    Chars(MarkdownSplitter<text_splitter::Characters>),
+    // Boxed: a `Tokenizer` carries its vocab maps, dwarfing the char variant.
+    Tokens(Box<MarkdownSplitter<Tokenizer>>),
+}
 
 /// Markdown chunking strategy backed by `text-splitter` (which uses
 /// `pulldown-cmark` for CommonMark parsing).
@@ -14,15 +26,12 @@ use text_splitter::{ChunkConfig, MarkdownSplitter};
 ///   structure. Fewer edge-case bugs than hand-rolled state tracking.
 /// - Byte-accurate offsets via `chunk_indices()`.
 ///
-/// Max chunk size is character-based for now (conservative 1500 chars, safe
-/// for BGE-Base-EN-v1.5-Q's 512-token limit on typical English prose).
-///
-/// TODO(chunker): Switch to tokenizer-aware sizing using the BGE-Base-Q
-/// tokenizer loaded from FastEmbed's cache. This requires loading the
-/// tokenizer at AppState initialization and injecting it into `ChunkingEngine`.
-/// Token-aware sizing eliminates silent truncation during embedding.
+/// Built via [`MarkdownStrategy::with_tokenizer`] the splitter sizes chunks by
+/// BGE token count (max [`MAX_CONTENT_TOKENS`]), eliminating silent truncation
+/// during embedding. [`MarkdownStrategy::new`] falls back to a conservative
+/// character-based cap when no tokenizer is available.
 pub struct MarkdownStrategy {
-    splitter: MarkdownSplitter<text_splitter::Characters>,
+    splitter: Splitter,
 }
 
 impl MarkdownStrategy {
@@ -30,13 +39,28 @@ impl MarkdownStrategy {
     /// 512-token limit for typical English prose (~3 chars/token). Dense
     /// content (code, URLs, CJK) can be shorter per-token; the range-based
     /// capacity lets text-splitter pack chunks tighter when possible.
+    ///
+    /// This is only the fallback path (no tokenizer available). Prefer
+    /// [`Self::with_tokenizer`], which caps by real token count.
     const MIN_CHARS: usize = 800;
     const MAX_CHARS: usize = 1500;
 
     pub fn new() -> Self {
         let config = ChunkConfig::new(Self::MIN_CHARS..Self::MAX_CHARS);
         Self {
-            splitter: MarkdownSplitter::new(config),
+            splitter: Splitter::Chars(MarkdownSplitter::new(config)),
+        }
+    }
+
+    /// Token-aware constructor: chunks are sized so each encodes to at most
+    /// [`MAX_CONTENT_TOKENS`] BGE tokens. The desired lower bound lets
+    /// text-splitter keep larger semantic units (whole sections, tables)
+    /// intact while never exceeding the token budget.
+    pub fn with_tokenizer(tokenizer: Tokenizer) -> Self {
+        let config =
+            ChunkConfig::new((MAX_CONTENT_TOKENS / 2)..=MAX_CONTENT_TOKENS).with_sizer(tokenizer);
+        Self {
+            splitter: Splitter::Tokens(Box::new(MarkdownSplitter::new(config))),
         }
     }
 }
@@ -54,8 +78,15 @@ impl ChunkingStrategy for MarkdownStrategy {
             return Vec::new();
         }
 
-        self.splitter
-            .chunk_indices(content)
+        // The two splitter flavours return different `impl Iterator` types, so
+        // collect the (offset, text) pairs inside the match before mapping.
+        let indices: Vec<(usize, &str)> = match &self.splitter {
+            Splitter::Chars(s) => s.chunk_indices(content).collect(),
+            Splitter::Tokens(s) => s.chunk_indices(content).collect(),
+        };
+
+        indices
+            .into_iter()
             .map(|(byte_offset, chunk_text)| {
                 let semantic_unit = detect_semantic_unit(chunk_text);
                 let end = byte_offset + chunk_text.len();
@@ -270,5 +301,57 @@ mod tests {
     fn test_detect_semantic_unit_seven_hashes_not_heading() {
         // Markdown only allows h1-h6; 7+ hashes is not a heading.
         assert_eq!(detect_semantic_unit("####### Over-deep"), "section_h0");
+    }
+
+    /// Load the real BGE tokenizer from the shared FastEmbed cache, mirroring
+    /// how `db::shared_embedder` locates the ONNX model. Returns `None` when the
+    /// cache is absent (test then skips, same contract as the db tests that
+    /// require the embedder to be present).
+    fn bge_tokenizer() -> Option<tokenizers::Tokenizer> {
+        let cache = crate::db::resolve_fastembed_cache_dir(std::path::Path::new(".nonexistent"))?;
+        crate::chunker::load_bge_tokenizer(&cache)
+    }
+
+    /// A prose document of roughly 8k tokens.
+    fn long_prose() -> String {
+        "This is a sentence of prose that describes something meaningful and then keeps going. "
+            .repeat(600)
+    }
+
+    /// A dense, token-heavy document: symbolic/code content tokenizes at close
+    /// to one token per character, so a char-sized chunk blows past the token
+    /// budget even though its character count looks safe.
+    fn dense_document() -> String {
+        "fn f(x:i32)->i32{let y=x*2+1;y-3/4%5;} a=[1,2,3];b={k:v};c<d>e|f&g^h~i; ".repeat(400)
+    }
+
+    /// Property: every chunk from the markdown strategy stays within the BGE
+    /// token budget once the strategy is tokenizer-aware.
+    #[test]
+    fn markdown_chunks_within_token_budget() {
+        let Some(tokenizer) = bge_tokenizer() else {
+            eprintln!("SKIP markdown_chunks_within_token_budget: BGE tokenizer not in cache");
+            return;
+        };
+        let strategy = MarkdownStrategy::with_tokenizer(tokenizer.clone());
+        let prose = long_prose();
+        let dense = dense_document();
+        for doc in [prose.as_str(), dense.as_str()] {
+            let chunks = strategy.chunk(make_context(doc, &HashMap::new()));
+            assert!(!chunks.is_empty(), "expected at least one chunk");
+            for chunk in &chunks {
+                let n_tokens = tokenizer
+                    .encode_fast(chunk.content.as_str(), false)
+                    .expect("encode chunk")
+                    .get_ids()
+                    .len();
+                assert!(
+                    n_tokens <= crate::chunker::MAX_CONTENT_TOKENS,
+                    "chunk encodes to {n_tokens} tokens (> {}); first 80 chars: {:?}",
+                    crate::chunker::MAX_CONTENT_TOKENS,
+                    chunk.content.chars().take(80).collect::<String>()
+                );
+            }
+        }
     }
 }

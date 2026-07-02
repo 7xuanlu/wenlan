@@ -43,6 +43,10 @@ lru = { workspace = true }
 
 # Markdown chunking (PR #57, re-hosted from app to wenlan-core via PR #58 merge)
 text-splitter = { version = "0.29.3", features = ["markdown", "tokenizers"] }
+# BGE tokenizer for token-aware chunk sizing (loaded from FastEmbed's cache).
+# Matches text-splitter's own tokenizers feature (0.22, onig) so no new crates
+# are pulled into the resolved graph — it's already present transitively.
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 
 # System detection
 sysinfo = { workspace = true }

@@ -25,16 +25,3 @@ pub trait ChunkingStrategy: Send + Sync {
     /// Chunks the content according to this strategy
     fn chunk(&self, context: ChunkContext) -> Vec<ChunkInfo>;
 }
-
-/// Snap a byte index down to the nearest valid UTF-8 char boundary.
-/// Prevents panics when slicing strings with multi-byte characters (curly quotes, em dashes, etc.).
-pub fn floor_char_boundary(text: &str, index: usize) -> usize {
-    if index >= text.len() {
-        return text.len();
-    }
-    let mut i = index;
-    while i > 0 && !text.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}

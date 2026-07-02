@@ -253,6 +253,19 @@ pub fn resolve_fastembed_cache_dir(db_path: &std::path::Path) -> Option<std::pat
     None
 }
 
+/// Build the chunking engine for a DB at `db_path`, preferring token-aware
+/// sizing (the BGE tokenizer loaded from the resolved FastEmbed cache) so no
+/// embedded chunk exceeds the model's 512-token limit. Falls back to
+/// character-based sizing when the tokenizer isn't on disk (e.g. FastEmbed's
+/// default `~/.fastembed_cache` with no per-DB/shared cache resolved).
+fn build_chunker(db_path: &Path) -> ChunkingEngine {
+    resolve_fastembed_cache_dir(db_path)
+        .as_deref()
+        .and_then(crate::chunker::load_bge_tokenizer)
+        .map(ChunkingEngine::with_tokenizer)
+        .unwrap_or_default()
+}
+
 /// How many candidates to fetch from base retrieval before cross-encoder rerank.
 ///
 /// Cross-encoder reorders within the candidate set but cannot promote anything
@@ -1807,7 +1820,7 @@ impl MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder: Arc::new(std::sync::Mutex::new(embedder)),
-            chunker: ChunkingEngine::new(),
+            chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
 
@@ -1878,7 +1891,7 @@ impl MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder,
-            chunker: ChunkingEngine::new(),
+            chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
 
@@ -24375,7 +24388,9 @@ pub(crate) mod tests {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder: shared_embedder(),
-            chunker: ChunkingEngine::new(),
+            // Token-aware chunker matching production; falls back to char-based
+            // when the BGE tokenizer isn't in the resolved cache.
+            chunker: build_chunker(std::path::Path::new(".nonexistent")),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
         memory_db
