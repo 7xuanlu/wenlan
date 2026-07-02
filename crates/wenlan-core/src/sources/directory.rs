@@ -343,7 +343,11 @@ fn file_extension(path: &Path) -> Option<String> {
 
 /// Provenance path: relative to `knowledge_path` when the file lives under it,
 /// otherwise the full path. Used in `source_id` and metadata.
-fn provenance_path(path: &Path, knowledge_path: Option<&Path>) -> String {
+///
+/// `pub(crate)` so `document_enrichment` can recompute the canonical document
+/// `source_id` (`{source_id}::{provenance}`) WITHOUT re-parsing the file on a
+/// resumed run — the same mapping `file_to_documents` stamps at parse time.
+pub(crate) fn provenance_path(path: &Path, knowledge_path: Option<&Path>) -> String {
     if let Some(root) = knowledge_path {
         if let Ok(relative) = path.strip_prefix(root) {
             return relative.to_string_lossy().to_string();

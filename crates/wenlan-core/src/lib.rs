@@ -20,6 +20,7 @@ pub mod context_packager;
 pub mod contradiction;
 pub mod db;
 pub mod decay;
+pub mod document_enrichment;
 #[cfg(test)]
 mod drift_guard;
 pub mod engine;

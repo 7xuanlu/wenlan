@@ -34,7 +34,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 66;
+pub const SCHEMA_VERSION: u32 = 67;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6081,6 +6081,73 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("m66 bump: {e}")))?;
                 log::info!("[migration] Migration 66 applied: document_enrichment_queue table (folder-ingest enrichment state)");
             }
+
+            // Migration 67 (folder-ingest): allow `creation_kind='source'` on pages.
+            // The document-enrichment route (`document_enrichment::run_document_enrichment`)
+            // emits exactly one SOURCE page per ingested file — its chunk-granular
+            // provenance record. Migration 61 added `creation_kind` with a CHECK list
+            // (`'distilled','authored','research','imported'`) that predates the SOURCE
+            // channel, so an unrelaxed CHECK rejects the insert.
+            //
+            // SQLite cannot ALTER a CHECK constraint in place, and a full table rebuild
+            // of `pages` would have to recreate its FTS mirror, vector index, and
+            // triggers (rowid-coupled) — high risk for a value-list widening. Instead
+            // this relaxes the constraint by editing the stored schema text directly:
+            // `PRAGMA writable_schema` + an `sqlite_master.sql` string-substitution that
+            // only widens the IN-list (no column/type/layout change, so rows, rowids,
+            // indexes, triggers, and the FTS mirror are all preserved), then
+            // `PRAGMA writable_schema=RESET` reloads the schema so the relaxed CHECK
+            // takes effect on THIS connection immediately (verified empirically).
+            // Idempotent: the substitution is a no-op once `'source'` is present, and
+            // the `version < 67` guard runs it once.
+            if version < 67 {
+                let conn = self.conn.lock().await;
+                let current_sql: Option<String> = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 read pages sql: {e}")))?;
+                    match rows
+                        .next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 pages sql row: {e}")))?
+                    {
+                        Some(row) => Some(row.get::<String>(0).map_err(|e| {
+                            WenlanError::VectorDb(format!("m67 pages sql col: {e}"))
+                        })?),
+                        None => None,
+                    }
+                };
+                if let Some(sql) = current_sql {
+                    let patched = sql.replace(
+                        "creation_kind IN ('distilled','authored','research','imported')",
+                        "creation_kind IN ('distilled','authored','research','imported','source')",
+                    );
+                    if patched != sql {
+                        conn.execute("PRAGMA writable_schema=ON", ())
+                            .await
+                            .map_err(|e| WenlanError::VectorDb(format!("m67 writable on: {e}")))?;
+                        conn.execute(
+                            "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+                            libsql::params![patched],
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 patch schema: {e}")))?;
+                        conn.execute("PRAGMA writable_schema=RESET", ())
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("m67 writable reset: {e}"))
+                            })?;
+                    }
+                }
+                conn.execute("PRAGMA user_version = 67", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m67 bump: {e}")))?;
+                log::info!("[migration] Migration 67 applied: pages.creation_kind CHECK widened to allow 'source' (folder-ingest SOURCE pages)");
+            }
         }
 
         Ok(())
@@ -11808,6 +11875,30 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("update_summary: {}", e)))?;
+        Ok(())
+    }
+
+    /// Persist a single chunk's summary, keyed by `(source_id, chunk_index)`.
+    ///
+    /// The document-enrichment map-fold (`document_enrichment::run_document_enrichment`)
+    /// writes each chunk's per-chunk analysis here as a DURABLE checkpoint: on a
+    /// resumed run the already-analyzed chunks carry their summary, so the rolling
+    /// digest is rebuilt from stored summaries and no chunk is re-sent to the LLM.
+    /// Distinct from [`update_document_summary`], which overwrites EVERY chunk of a
+    /// document with the same value.
+    pub async fn set_chunk_summary(
+        &self,
+        source_id: &str,
+        chunk_index: i64,
+        summary: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET summary = ?1 WHERE source_id = ?2 AND chunk_index = ?3",
+            libsql::params![summary.to_string(), source_id.to_string(), chunk_index],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_chunk_summary: {}", e)))?;
         Ok(())
     }
 
@@ -43836,8 +43927,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (66 after the document_enrichment_queue table).
-        assert_eq!(uv, 66);
+        // the current SCHEMA_VERSION (67 after the pages.creation_kind='source' widen).
+        assert_eq!(uv, 67);
     }
 
     #[tokio::test]
@@ -43854,7 +43945,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 66,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43888,7 +43979,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 66);
+        assert_eq!(uv, 67);
     }
 
     #[tokio::test]
@@ -43905,7 +43996,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 66,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43954,8 +44045,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 66,
-            "terminal version is 66 after the document_enrichment_queue table"
+            uv, 67,
+            "terminal version is 67 after the pages.creation_kind='source' widen"
         );
     }
 
@@ -43973,7 +44064,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 66,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
