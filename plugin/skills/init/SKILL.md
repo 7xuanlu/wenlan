@@ -61,7 +61,7 @@ Bash: command -v wenlan >/dev/null 2>&1 && echo present || echo absent
 If `absent`, run the installer (no human prompts):
 
 ```
-Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.9.6/install.sh | bash
+Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.9.7/install.sh | bash
 ```
 
 Then add it to PATH for the current session and configure local memory
