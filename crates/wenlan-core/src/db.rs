@@ -9861,11 +9861,16 @@ impl MemoryDB {
         let (page_results, mem_results): (Vec<_>, Vec<_>) =
             results.into_iter().partition(|r| r.source == "page");
         let mut results = mem_results;
+        // Per-document cap on the deep path is a backstop: the reranker pool
+        // came through search_memory_with_cue, which already capped per
+        // document, so the CE only ever sees the RRF-best <=N chunks per doc.
+        // Survivor selection is therefore by RRF rank, not CE rank — intended
+        // (spec: post-RRF, keep best-ranked).
+        results = cap_per_document(results, DEFAULT_PER_DOCUMENT_CAP);
         // T20: per-session diversification cap (opt-in, default OFF).
         // Runs on the full reranked memory pool (pre-truncate) so backfill
         // has demoted-but-valid hits to pull from.  Pages are excluded
         // (already partitioned out above).  Byte-identical when flag unset.
-        results = cap_per_document(results, DEFAULT_PER_DOCUMENT_CAP);
         if session_diversity_enabled() {
             crate::retrieval::session_diversity::cap_per_session(
                 &mut results,
@@ -26452,12 +26457,12 @@ pub(crate) mod tests {
         doc.quality = Some("high".to_string());
         doc.source_text = Some("ORIGINAL SOURCE TEXT MARKER".to_string());
         db.upsert_documents(vec![doc]).await.unwrap();
-        // Also set importance + event_date so the trailing columns carry non-NULL
-        // values (event_date is the last projected column, idx 32).
+        // Also set importance + event_date + content_hash so the trailing columns
+        // carry non-NULL values (content_hash is the last projected column, idx 33).
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "UPDATE memories SET importance = 9, event_date = 1779602400 WHERE source_id = 'corrupt_net'",
+                "UPDATE memories SET importance = 9, event_date = 1779602400, content_hash = 'cafebabe_corrupt_net' WHERE source_id = 'corrupt_net'",
                 libsql::params![],
             )
             .await
@@ -26511,11 +26516,18 @@ pub(crate) mod tests {
         );
         // importance (idx 31) round-trips — completes the corruption net.
         assert_eq!(r.importance, Some(9), "importance (idx 31)");
-        // event_date (idx 32) round-trips — pins the trailing-column alignment.
+        // event_date (idx 32) round-trips.
         assert_eq!(
             r.event_date,
             Some(1_779_602_400),
             "event_date (idx 32) round-trips"
+        );
+        // content_hash (idx 33) round-trips — pins the trailing-column alignment
+        // (the per-document retrieval cap keys on this exact column).
+        assert_eq!(
+            r.content_hash.as_deref(),
+            Some("cafebabe_corrupt_net"),
+            "content_hash (idx 33) round-trips"
         );
     }
 
