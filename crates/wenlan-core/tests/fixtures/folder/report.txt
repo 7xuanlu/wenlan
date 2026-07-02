@@ -1,0 +1,77 @@
+Field Report: Notes on Ancient and Modern Computation
+
+Section One. The history of computation is longer and stranger than most
+introductory courses admit. Long before silicon, people built machines from
+bronze, wood, and brass to answer questions they could not hold in their heads.
+These devices were not general purpose in the modern sense, yet each encoded a
+model of some slice of the world, and each traded human effort for a mechanism
+that could be trusted to turn the same crank and produce the same answer. The
+study of these machines is partly archaeology and partly engineering, because to
+understand what a gear train computes you must both excavate it and re-derive its
+ratios from first principles.
+
+Section Two. Consider the problem of predicting the sky. Farmers, sailors, and
+priests all needed to know when a festival fell, when a tide would turn, and when
+an eclipse might darken the sun. The Antikythera mechanism predicts eclipses with
+an intricate train of bronze gears, and it remains the single most sophisticated
+surviving artifact of Hellenistic engineering. Recovered from a shipwreck off a
+small Greek island, corroded into a green lump, it took a century of imaging work
+to reveal that its hidden dials tracked the Metonic cycle, the Saros cycle, and
+the irregular motion of the moon across the zodiac. Each of these was a hard
+astronomical fact compressed into teeth and axles.
+
+Section Three. What makes the device remarkable is not that it moved, but that it
+modeled. A pin-and-slot arrangement introduced a deliberate variation in the
+moon's speed, reproducing the first anomaly of lunar motion that Greek astronomers
+had measured but could not yet explain. In other words, the builders encoded an
+observed error into the machine on purpose, so that the machine's output would
+match the sky rather than a naive uniform-circular idealization. That is a
+strikingly modern move: prefer the messy empirical model to the clean wrong one,
+and let the gears carry the correction so the human never has to remember it.
+
+Section Four. Fast forward two thousand years and the same instinct reappears in
+the mechanical calculators of the seventeenth and eighteenth centuries. Pascal's
+adding machine carried tens automatically through a falling weight; Leibniz's
+stepped drum multiplied by repeated addition; and much later, Babbage's difference
+engine evaluated polynomials by the method of finite differences, which turns
+multiplication into a cascade of additions that a column of geared wheels can
+perform without any multiplication table at all. Each machine narrowed the gap
+between what a person could compute by hand and what a mechanism could compute
+reliably, tirelessly, and without arithmetic slips.
+
+Section Five. The lesson that threads through all of these examples is that a good
+computational artifact externalizes a model. It takes some structure that lives
+painfully in a human mind, reifies it in a physical or symbolic substrate, and
+then makes that structure cheap to query. Whether the substrate is bronze gears,
+brass drums, punched cards, vacuum tubes, or transistors, the deep idea is
+constant. You pay a large one-time cost to build the model correctly, and in
+return you get a nearly free stream of answers that would otherwise each cost you
+a bout of careful, error-prone thinking.
+
+Section Six. This is also, not coincidentally, a decent description of a memory
+system for software agents. The point of writing something down is to pay the
+modeling cost once and then retrieve the answer many times. A note, a chunk, an
+embedding, and a citation are the modern gears. When the retrieval works, the
+agent does not have to reconstruct a decision from scratch; it queries the stored
+model and moves on. When the retrieval fails, the whole apparatus collapses back
+into the expensive human-in-the-head computation it was supposed to replace, which
+is why the plumbing that stores, embeds, and finds these fragments deserves far
+more care than it usually gets.
+
+Section Seven. There is a temptation, when building such a system, to store
+everything and trust that search will sort it out later. History suggests
+otherwise. The Antikythera mechanism is precious precisely because it is
+selective: it models the cycles that mattered to its users and ignores the rest.
+A memory layer that hoards every keystroke drowns its own signal, and the burden
+of that noise falls on retrieval, which must then work harder to surface the one
+fragment a query actually needs. Curation is not a luxury bolted on after
+ingestion; it is the discipline that makes ingestion worth doing at all.
+
+Section Eight. So the modest report ends where it began, with the observation
+that computation has always been about trading effort for structure. The bronze
+astronomer from the shipwreck and the software agent reading its own notes are
+separated by two millennia and yet are engaged in the same bargain. Build the
+model once, build it carefully, and let the machine remember so the mind can move
+on to the next hard question. Everything else, including the specific choice of
+substrate, is an implementation detail that the next generation will replace with
+something faster and just as easy to get subtly wrong.

@@ -12115,6 +12115,33 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Count chunks under `(source, source_id)` whose vector `embedding` column
+    /// is NULL — rows that were stored but never embedded. Zero means every
+    /// chunk of the document carries an embedding. Enumerates matching ids
+    /// rather than issuing `COUNT(*)` so it stays clear of the libSQL
+    /// COUNT-on-vector-table quirk. Used by the folder-ingest e2e test to assert
+    /// full embedding coverage after `upsert_documents`.
+    pub async fn count_unembedded_chunks(
+        &self,
+        source: &str,
+        source_id: &str,
+    ) -> Result<usize, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM memories \
+                 WHERE source = ?1 AND source_id = ?2 AND embedding IS NULL",
+                libsql::params![source.to_string(), source_id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_unembedded_chunks: {}", e)))?;
+        let mut missing = 0usize;
+        while let Ok(Some(_)) = rows.next().await {
+            missing += 1;
+        }
+        Ok(missing)
+    }
+
     /// Delete memories within a time range. Returns the number deleted.
     pub async fn delete_by_time_range(&self, start: i64, end: i64) -> Result<usize, WenlanError> {
         let conn = self.conn.lock().await;
