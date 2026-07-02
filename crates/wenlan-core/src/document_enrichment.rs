@@ -1,0 +1,1126 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Canonical document-tier enrichment route (folder / multi-format ingest).
+//!
+//! `run_document_enrichment` is the ONE shared path that turns a single queued
+//! file into a searchable, provenance-stamped, digested document — mirroring the
+//! skew-discipline of [`crate::ingest::run_canonical_enrichment`] for the
+//! memory tier. Every consumer (the folder-ingest scheduler, the CLI, any future
+//! caller) drives THIS function; none re-implements a subset. Sharing the code
+//! is what keeps seed-vs-production fidelity by construction (Google "Rules of
+//! ML", Rule #32: re-use code between training and serving pipelines).
+//!
+//! Pipeline for one file:
+//! 1. **Parse** via [`crate::sources::directory::file_to_documents`], wrapped in
+//!    `tokio::task::spawn_blocking` (PDF text extraction is CPU-heavy and must
+//!    never run inline on an async request path).
+//! 2. **Upsert** the merged file body through [`crate::db::MemoryDB::upsert_documents`]
+//!    so EVERY chunk is embedded + provenance-stamped and the document is
+//!    immediately searchable — before any LLM digest runs (§8-q2).
+//! 3. **Map-fold**: one analysis LLM call per chunk, folding into a rolling
+//!    digest capped at ~15K chars. Each chunk's analysis is persisted as that
+//!    chunk's summary and the queue is checkpointed AFTER every chunk
+//!    ([`crate::db::MemoryDB::checkpoint_chunk`]), so a restart resumes
+//!    mid-document without re-sending already-analyzed chunks to the LLM.
+//! 4. **Outputs**: a summary + best-effort entities + exactly ONE
+//!    `creation_kind='source'` page citing its own chunks (chunk-granular).
+//!
+//! Robustness: log-and-degrade at every step (an LLM/DB error warns and the step
+//! degrades, never panics). On an LLM failure the route produces a DETERMINISTIC
+//! stub SOURCE page (so the document is ALWAYS represented) and signals pause
+//! (`mark_paused` with backoff) instead of burning retries in-loop — the
+//! scheduler re-claims after the backoff and resumes from the checkpoint,
+//! upgrading the stub to the real digest. A file that parses to nothing is
+//! terminal (`mark_done`, no page).
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::db::{DocEnrichmentQueueEntry, MemoryDB, MemoryDetail};
+use crate::error::WenlanError;
+use crate::llm_provider::{LlmProvider, LlmRequest};
+use crate::prompts::PromptRegistry;
+use crate::sources::directory::{
+    document_source_id, file_to_documents, provenance_path, FileOutcome,
+};
+
+/// Rolling-digest character cap (~15K).
+const DIGEST_CHAR_CAP: usize = 15_000;
+
+/// System prompt for the per-chunk map-fold analysis call. The document tier has
+/// no registry prompt (the registry is memory-tier); this is a fixed, minimal
+/// framing that folds each section into the running digest.
+const ANALYSIS_SYSTEM_PROMPT: &str = "You are building a running digest of a document, one section at a time. \
+Given the digest so far and the next section, reply with 1-3 concise sentences that capture the new section's key facts. \
+Do not repeat the earlier digest; summarize only the new section.";
+
+/// Result of enriching one queued document.
+#[derive(Debug, Clone)]
+pub struct DocumentEnrichmentOutcome {
+    /// The canonical document `source_id` (`{source_id}::{provenance}`) under
+    /// which the file's chunks live in `memories`.
+    pub doc_source_id: String,
+    /// The SOURCE page id. Set whenever a page (stub or digest) was written;
+    /// empty when the file produced no ingestable content.
+    pub page_id: String,
+    /// The chunk ids the page cites (chunk-granular provenance).
+    pub chunk_ids: Vec<String>,
+    /// The folded map-fold digest (success), or the deterministic stub body
+    /// (LLM failure / no LLM).
+    pub summary: String,
+    /// Best-effort entities extracted from the digest. Empty on the stub path or
+    /// when extraction degrades.
+    pub entities: Vec<String>,
+    /// True when the map-fold ran to completion and the row was marked done.
+    pub completed: bool,
+    /// True when enrichment paused for retry (LLM failure or a transient DB/IO
+    /// error), leaving the checkpoint intact for a later resume.
+    pub paused: bool,
+}
+
+impl DocumentEnrichmentOutcome {
+    fn terminal_no_page(doc_source_id: String) -> Self {
+        Self {
+            doc_source_id,
+            page_id: String::new(),
+            chunk_ids: Vec::new(),
+            summary: String::new(),
+            entities: Vec::new(),
+            completed: false,
+            paused: false,
+        }
+    }
+
+    fn paused_no_page(doc_source_id: String) -> Self {
+        Self {
+            doc_source_id,
+            page_id: String::new(),
+            chunk_ids: Vec::new(),
+            summary: String::new(),
+            entities: Vec::new(),
+            completed: false,
+            paused: true,
+        }
+    }
+}
+
+/// Enrich a single queued document end-to-end. See the module docs for the full
+/// contract. Never propagates an error: every failure mode maps to a returned
+/// [`DocumentEnrichmentOutcome`] plus a queue transition (done / paused).
+pub async fn run_document_enrichment(
+    db: &MemoryDB,
+    entry: &DocEnrichmentQueueEntry,
+    knowledge_path: Option<&Path>,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+) -> DocumentEnrichmentOutcome {
+    let source_id = entry.source_id.clone();
+    let file_path = entry.file_path.clone();
+
+    // Canonical document source_id — recomputed from provenance (a pure path op)
+    // so a resumed run finds the file's chunks WITHOUT re-parsing. Shares the
+    // ONE key authority (`document_source_id`) with folder-sync deletion so the
+    // write-side id and the delete-side id can never drift apart.
+    let provenance = provenance_path(Path::new(&file_path), knowledge_path);
+    let doc_source_id = document_source_id(&source_id, Path::new(&file_path), knowledge_path);
+
+    let is_fresh = entry.last_completed_chunk < 0;
+    let mut title = Path::new(&file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document")
+        .to_string();
+
+    // ── (1)+(2) fresh run only: parse (spawn_blocking) + upsert (embed all chunks) ──
+    if is_fresh {
+        let parse_source_id = source_id.clone();
+        let parse_path = PathBuf::from(&file_path);
+        let parse_knowledge = knowledge_path.map(|p| p.to_path_buf());
+        let parsed = tokio::task::spawn_blocking(move || {
+            file_to_documents(&parse_source_id, &parse_path, parse_knowledge.as_deref())
+        })
+        .await;
+
+        let docs = match parsed {
+            Ok(FileOutcome::Ingested(docs)) => docs,
+            Ok(FileOutcome::Skipped(reason)) | Ok(FileOutcome::Error(reason)) => {
+                // A file that yields nothing ingestable won't improve on retry.
+                // Still record sync_state so the next sync skips it instead of
+                // re-parsing it every tick.
+                log::warn!("[doc-enrich] {file_path}: not ingestable ({reason}); marking done");
+                let _ = db.mark_done(&source_id, &file_path).await;
+                record_sync_state(db, entry).await;
+                return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
+            }
+            Err(join_err) => {
+                log::warn!("[doc-enrich] {file_path}: parse task failed: {join_err}");
+                pause(db, entry, "parse task failed").await;
+                return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+            }
+        };
+
+        if let Some(first) = docs.first() {
+            title = first.title.clone();
+        }
+        // One file = one document: merge the parsed docs' bodies under the
+        // canonical source_id. All chunks of a file share its content_hash.
+        let body = docs
+            .iter()
+            .map(|d| d.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let content_hash = docs.iter().find_map(|d| d.content_hash.clone());
+        let last_modified = docs
+            .first()
+            .map(|d| d.last_modified)
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
+        let mut metadata = std::collections::HashMap::new();
+        if let Some(ext) = docs.first().and_then(|d| d.metadata.get("extension")) {
+            metadata.insert("extension".to_string(), ext.clone());
+        }
+        metadata.insert("path".to_string(), provenance.clone());
+
+        let doc = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: doc_source_id.clone(),
+            title: title.clone(),
+            content: body,
+            last_modified,
+            metadata,
+            source_agent: Some("folder".to_string()),
+            content_hash,
+            ..Default::default()
+        };
+        if let Err(e) = db.upsert_documents(vec![doc]).await {
+            log::warn!("[doc-enrich] {file_path}: upsert failed: {e}; pausing");
+            pause(db, entry, "upsert failed").await;
+            return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+        }
+    }
+
+    // ── read the stored chunks (ordered by chunk_index) ──
+    let chunks = match db.get_memories_by_source_id("memory", &doc_source_id).await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[doc-enrich] {file_path}: read chunks failed: {e}; pausing");
+            pause(db, entry, "read chunks failed").await;
+            return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+        }
+    };
+    let chunk_ids: Vec<String> = chunks.iter().map(|c| c.id.clone()).collect();
+    let page_id = source_page_id(&source_id, &file_path);
+
+    if chunks.is_empty() {
+        log::warn!("[doc-enrich] {file_path}: no chunks after upsert; marking done");
+        let _ = db.mark_done(&source_id, &file_path).await;
+        record_sync_state(db, entry).await;
+        return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
+    }
+    if let Some(stored_title) = chunks
+        .iter()
+        .map(|c| c.title.trim())
+        .find(|title| !title.is_empty())
+    {
+        title = stored_title.to_string();
+    }
+
+    // ── (3) map-fold: rebuild the digest from checkpointed summaries, then
+    // analyze only the not-yet-completed chunks. ──
+    let mut digest = String::new();
+    for c in &chunks {
+        if (c.chunk_index as i64) <= entry.last_completed_chunk {
+            if let Some(s) = c.summary.as_deref() {
+                fold_digest(&mut digest, s);
+            }
+        }
+    }
+
+    let start = (entry.last_completed_chunk + 1).max(0);
+    let mut llm_failed = false;
+    if let Some(llm) = llm {
+        for c in chunks.iter().filter(|c| (c.chunk_index as i64) >= start) {
+            let user_prompt = format!("Digest so far:\n{}\n\nNext section:\n{}", digest, c.content);
+            match llm
+                .generate(LlmRequest {
+                    system_prompt: Some(ANALYSIS_SYSTEM_PROMPT.to_string()),
+                    user_prompt,
+                    max_tokens: 256,
+                    temperature: 0.2,
+                    label: Some("doc_analysis".to_string()),
+                    timeout_secs: None,
+                })
+                .await
+            {
+                Ok(analysis) => {
+                    let analysis = analysis.trim().to_string();
+                    // Durable per-chunk checkpoint of the LLM work: a resumed run
+                    // rebuilds the digest from these stored summaries instead of
+                    // re-sending the chunk to the LLM.
+                    if let Err(e) = db
+                        .set_chunk_summary(&doc_source_id, c.chunk_index as i64, &analysis)
+                        .await
+                    {
+                        log::warn!(
+                            "[doc-enrich] {file_path}: set_chunk_summary({}) failed: {e}",
+                            c.chunk_index
+                        );
+                    }
+                    fold_digest(&mut digest, &analysis);
+                    if let Err(e) = db
+                        .checkpoint_chunk(&source_id, &file_path, c.chunk_index as i64)
+                        .await
+                    {
+                        log::warn!(
+                            "[doc-enrich] {file_path}: checkpoint_chunk({}) failed: {e}",
+                            c.chunk_index
+                        );
+                    }
+                }
+                Err(e) => {
+                    // LLM failure: do NOT burn retries in-loop. Fall through to the
+                    // deterministic stub page + pause; the checkpoint preserves the
+                    // chunks already analyzed for the retry.
+                    log::warn!(
+                        "[doc-enrich] {file_path}: analysis LLM failed at chunk {}: {e}; pausing",
+                        c.chunk_index
+                    );
+                    llm_failed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // ── (4) outputs: exactly one SOURCE page (always), summary + entities ──
+    if llm_failed || llm.is_none() {
+        // Deterministic stub SOURCE page so the document is ALWAYS represented.
+        let body = stub_page_body(&title, &chunks);
+        if let Err(e) = write_source_page(db, &page_id, &title, None, &body, &chunk_ids).await {
+            log::warn!("[doc-enrich] {file_path}: stub source page write failed: {e}");
+        }
+        if llm_failed {
+            pause(db, entry, "analysis LLM failed").await;
+            return DocumentEnrichmentOutcome {
+                doc_source_id,
+                page_id,
+                chunk_ids,
+                summary: body,
+                entities: Vec::new(),
+                completed: false,
+                paused: true,
+            };
+        }
+        // No LLM configured: terminal (a retry can't do better without a provider).
+        let _ = db.mark_done(&source_id, &file_path).await;
+        record_sync_state(db, entry).await;
+        return DocumentEnrichmentOutcome {
+            doc_source_id,
+            page_id,
+            chunk_ids,
+            summary: body,
+            entities: Vec::new(),
+            completed: false,
+            paused: false,
+        };
+    }
+
+    // Success: best-effort entity extraction over the digest, then the real page.
+    let entities = match llm {
+        Some(llm) => {
+            let user_prompt: String = digest.chars().take(4000).collect();
+            match llm
+                .generate(LlmRequest {
+                    system_prompt: Some(prompts.extract_knowledge_graph.clone()),
+                    user_prompt,
+                    max_tokens: 512,
+                    temperature: 0.1,
+                    label: Some("doc_entities".to_string()),
+                    timeout_secs: None,
+                })
+                .await
+            {
+                Ok(out) => parse_entities(&out),
+                Err(e) => {
+                    log::warn!("[doc-enrich] {file_path}: entity extraction failed: {e}");
+                    Vec::new()
+                }
+            }
+        }
+        None => Vec::new(),
+    };
+
+    let summary_line: String = digest.chars().take(280).collect();
+    if let Err(e) = write_source_page(
+        db,
+        &page_id,
+        &title,
+        Some(&summary_line),
+        &digest,
+        &chunk_ids,
+    )
+    .await
+    {
+        log::warn!("[doc-enrich] {file_path}: source page write failed: {e}; pausing");
+        pause(db, entry, "source page write failed").await;
+        return DocumentEnrichmentOutcome {
+            doc_source_id,
+            page_id,
+            chunk_ids,
+            summary: digest,
+            entities,
+            completed: false,
+            paused: true,
+        };
+    }
+
+    let _ = db.mark_done(&source_id, &file_path).await;
+    record_sync_state(db, entry).await;
+    DocumentEnrichmentOutcome {
+        doc_source_id,
+        page_id,
+        chunk_ids,
+        summary: digest,
+        entities,
+        completed: true,
+        paused: false,
+    }
+}
+
+/// Record the file's tracked `source_sync_state` after TERMINAL processing
+/// (§4: the sync_state row is written on SUCCESSFUL processing, by the queue).
+/// The scan-side mtime+hash skip and the deletion diff both read this table:
+/// without the write, a directory file is re-enqueued on every sync and its
+/// chunks are never reaped after deletion.
+///
+/// Self-healing against mid-enrichment modification: the file is re-stat'd and
+/// re-hashed NOW. If the hash still matches the enqueue-time hash, the row gets
+/// the current mtime (normal). If it no longer matches — or the file vanished —
+/// the row is written with `mtime_ns = 0` and the ENQUEUE-time hash, so the
+/// next sync cannot mtime-skip it: it re-hashes, sees the drift, and re-enriches
+/// (or, for a vanished file, the deletion diff reaps the chunks just written).
+async fn record_sync_state(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) {
+    let path = PathBuf::from(&entry.file_path);
+    let stat = tokio::task::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path).ok()?;
+        let mtime_ns = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+        let bytes = std::fs::read(&path).ok()?;
+        Some((mtime_ns, crate::sources::directory::sha256_hex(&bytes)))
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let enqueue_hash = entry.content_hash.as_deref();
+    let (mtime_ns, hash) = match (&stat, enqueue_hash) {
+        (Some((m, now)), Some(eh)) if now == eh => (*m, now.clone()),
+        // No pinned enqueue hash: trust the file as it stands now.
+        (Some((m, now)), None) => (*m, now.clone()),
+        // Changed mid-enrichment: force the next sync to re-check content.
+        (Some(_), Some(eh)) => (0, eh.to_string()),
+        // Vanished mid-enrichment: still track it so the deletion diff reaps
+        // the chunks this run just wrote.
+        (None, eh) => (0, eh.unwrap_or_default().to_string()),
+    };
+    if let Err(e) = db
+        .upsert_sync_state(&entry.source_id, &entry.file_path, mtime_ns, &hash)
+        .await
+    {
+        log::warn!(
+            "[doc-enrich] {}: upsert_sync_state failed: {e}",
+            entry.file_path
+        );
+    }
+}
+
+/// Pause a document for retry with an exponential-ish backoff. `mark_paused`
+/// bumps the attempt counter; the checkpoint is left intact.
+async fn pause(db: &MemoryDB, entry: &DocEnrichmentQueueEntry, reason: &str) {
+    let retry_at = chrono::Utc::now().timestamp() + retry_backoff_secs(entry.attempt_count);
+    if let Err(e) = db
+        .mark_paused(&entry.source_id, &entry.file_path, reason, Some(retry_at))
+        .await
+    {
+        log::warn!("[doc-enrich] {}: mark_paused failed: {e}", entry.file_path);
+    }
+}
+
+/// Write (idempotently) the single `creation_kind='source'` page for a document,
+/// citing its chunks. Deletes any existing page with the deterministic id first
+/// so a retry (stub → real digest) reuses the same id without an INSERT conflict.
+async fn write_source_page(
+    db: &MemoryDB,
+    page_id: &str,
+    title: &str,
+    summary: Option<&str>,
+    content: &str,
+    chunk_ids: &[String],
+) -> Result<(), WenlanError> {
+    let _ = db.delete_page(page_id).await;
+    let now = chrono::Utc::now().to_rfc3339();
+    let cite: Vec<&str> = chunk_ids.iter().map(|s| s.as_str()).collect();
+    db.insert_page_with_kind(
+        page_id,
+        title,
+        summary,
+        content,
+        None,
+        None,
+        &cite,
+        &now,
+        "source",
+        "unconfirmed",
+        None,
+    )
+    .await
+}
+
+/// Retry backoff (seconds) for a paused document, given the attempt count BEFORE
+/// this failure (`mark_paused` increments it). Exponential-ish, capped at 1h.
+fn retry_backoff_secs(attempt_count: i64) -> i64 {
+    let base: i64 = 60;
+    let shift = attempt_count.clamp(0, 6) as u32;
+    base.saturating_mul(1i64 << shift).min(3600)
+}
+
+/// Deterministic SOURCE page id for a document, stable across retries.
+fn source_page_id(source_id: &str, file_path: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"source_page::");
+    hasher.update(source_id.as_bytes());
+    hasher.update(b"::");
+    hasher.update(file_path.as_bytes());
+    let hex = format!("{:x}", hasher.finalize());
+    format!("src_{}", &hex[..16])
+}
+
+/// Deterministic stub page body (no LLM) — the file's chunk text, capped. Used
+/// so a SOURCE page always exists even when enrichment has not run yet.
+fn stub_page_body(title: &str, chunks: &[MemoryDetail]) -> String {
+    let mut body = String::new();
+    for c in chunks {
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(&c.content);
+    }
+    let capped: String = body.chars().take(DIGEST_CHAR_CAP).collect();
+    format!("Source document: {title}\n\n{capped}")
+}
+
+/// Fold a chunk analysis into the rolling digest, capping at [`DIGEST_CHAR_CAP`]
+/// characters (UTF-8 safe — never byte-slices mid-char).
+fn fold_digest(digest: &mut String, analysis: &str) {
+    let trimmed = analysis.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !digest.is_empty() {
+        digest.push('\n');
+    }
+    digest.push_str(trimmed);
+    if digest.chars().count() > DIGEST_CHAR_CAP {
+        *digest = digest.chars().take(DIGEST_CHAR_CAP).collect();
+    }
+}
+
+/// Leniently pull entity names out of an LLM response. Accepts a plain array of
+/// names (`["rust","tdd"]`), the `extract_knowledge_graph` shape
+/// (`[{"entities":[{"name":"..."}]}]`), or a single `{"entities":[...]}` object.
+/// Degrades to an empty vec on any parse failure. Names are trimmed + deduped
+/// (order-preserving).
+fn parse_entities(response: &str) -> Vec<String> {
+    let json = crate::engine::extract_json_array(response)
+        .or_else(|| crate::engine::extract_json(response).map(|s| s.to_string()));
+    let Some(json) = json else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    collect_entity_names(&value, &mut names);
+    let mut seen = std::collections::HashSet::new();
+    names.retain(|n| !n.is_empty() && seen.insert(n.clone()));
+    names
+}
+
+fn collect_entity_names(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s.trim().to_string()),
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                collect_entity_names(v, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(n)) = map.get("name") {
+                out.push(n.trim().to_string());
+            }
+            if let Some(ents) = map.get("entities") {
+                collect_entity_names(ents, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::NoopEmitter;
+    use crate::llm_provider::{LlmBackend, LlmError, SequencedMockProvider};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn test_db() -> (MemoryDB, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("origin_memory.db");
+        let db = MemoryDB::new(db_path.as_path(), Arc::new(NoopEmitter))
+            .await
+            .unwrap();
+        (db, dir)
+    }
+
+    /// Write a temp file whose prose reliably chunks into several (>= 3) chunks in
+    /// both the char-based and token-aware chunker configurations, and enqueue it.
+    /// Returns (path, canonical unique marker present in the content).
+    fn write_doc(dir: &Path) -> PathBuf {
+        let path = dir.join("doc.txt");
+        // ~6K chars of distinct sentences; contains the unique token "Wenlanborg"
+        // so a search proves the chunks are embedded + retrievable.
+        let mut body = String::new();
+        body.push_str("Wenlanborg is the code name for the folder ingestion subsystem.\n\n");
+        for i in 0..80 {
+            body.push_str(&format!(
+                "Paragraph {i} describes an aspect of the document ingestion pipeline in careful, \
+                 concrete detail so that the fixed-size and token-aware chunkers both split it into \
+                 multiple sections rather than a single chunk. It keeps going for a while.\n\n"
+            ));
+        }
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        path
+    }
+
+    /// Markdown fixture whose parsed chunk title differs from the file stem.
+    /// This exposes resume-title drift: a resumed run should reuse the stored
+    /// parsed title from chunks instead of falling back to `file_stem`.
+    fn write_markdown_doc(dir: &Path) -> PathBuf {
+        let path = dir.join("resume-title.md");
+        let mut body = String::new();
+        body.push_str("# Canonical Parsed Heading\n\n");
+        body.push_str("Wenlanborg is the code name for the folder ingestion subsystem.\n\n");
+        for i in 0..80 {
+            body.push_str(&format!(
+                "Paragraph {i} describes an aspect of the document ingestion pipeline in careful, \
+                 concrete detail so that the markdown chunker splits this note into multiple \
+                 sections rather than a single chunk. It keeps going for a while.\n\n"
+            ));
+        }
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        path
+    }
+
+    fn analysis_responses() -> Vec<String> {
+        (0..128)
+            .map(|i| format!("SECTION_ANALYSIS_{i:03}"))
+            .collect()
+    }
+
+    fn mock(responses: &[String]) -> Arc<dyn LlmProvider> {
+        Arc::new(SequencedMockProvider::new(
+            responses.iter().map(String::as_str).collect(),
+        ))
+    }
+
+    // ── pure-helper unit tests ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_entities_plain_array() {
+        assert_eq!(
+            parse_entities(r#"["rust","tdd","rust"]"#),
+            vec!["rust".to_string(), "tdd".to_string()],
+            "plain string array → deduped names"
+        );
+    }
+
+    #[test]
+    fn parse_entities_kg_shape() {
+        let out = parse_entities(
+            r#"prose [{"i":0,"entities":[{"name":"Alice Chen","type":"person"},{"name":"rust","type":"technology"}]}] trailing"#,
+        );
+        assert_eq!(out, vec!["Alice Chen".to_string(), "rust".to_string()]);
+    }
+
+    #[test]
+    fn parse_entities_object_shape() {
+        let out = parse_entities(r#"{"entities":[{"name":"origin"}]}"#);
+        assert_eq!(out, vec!["origin".to_string()]);
+    }
+
+    #[test]
+    fn parse_entities_garbage_degrades_to_empty() {
+        assert!(parse_entities("no json here").is_empty());
+        assert!(parse_entities("").is_empty());
+    }
+
+    #[test]
+    fn fold_digest_caps_at_15k_utf8_safe() {
+        let mut d = String::new();
+        // Multibyte char to prove the cap never byte-slices mid-char.
+        let big = "é".repeat(20_000);
+        fold_digest(&mut d, &big);
+        assert_eq!(d.chars().count(), DIGEST_CHAR_CAP);
+        // Round-trips as valid UTF-8 (would panic on a bad boundary).
+        assert!(d.chars().all(|c| c == 'é'));
+    }
+
+    // ── failing-provider double: always errors ───────────────────────────────
+
+    struct FailingProvider;
+    #[async_trait::async_trait]
+    impl LlmProvider for FailingProvider {
+        async fn generate(&self, _req: LlmRequest) -> Result<String, LlmError> {
+            Err(LlmError::InferenceFailed("boom".into()))
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            "failing"
+        }
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::OnDevice
+        }
+    }
+
+    // ── hang-after double: serves N responses, then hangs forever (crash sim) ─
+
+    struct HangAfterProvider {
+        responses: Vec<String>,
+        hang_after: usize,
+        calls: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl LlmProvider for HangAfterProvider {
+        async fn generate(&self, _req: LlmRequest) -> Result<String, LlmError> {
+            let i = self.calls.fetch_add(1, Ordering::SeqCst);
+            if i >= self.hang_after {
+                // Never resolves — the caller's future is dropped by a timeout,
+                // simulating a process kill after `hang_after` chunks.
+                std::future::pending::<()>().await;
+            }
+            Ok(self.responses[i.min(self.responses.len() - 1)].clone())
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            "hang-after"
+        }
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::OnDevice
+        }
+    }
+
+    // ── integration: full happy-path enrichment ──────────────────────────────
+
+    #[tokio::test]
+    async fn enriches_multichunk_doc_end_to_end() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+        assert_eq!(entry.last_completed_chunk, -1, "fresh claim");
+
+        let responses = analysis_responses();
+        let llm = mock(&responses);
+        let prompts = PromptRegistry::default();
+
+        let outcome = run_document_enrichment(&db, &entry, None, Some(&llm), &prompts).await;
+
+        assert!(outcome.completed, "map-fold ran to completion");
+        assert!(!outcome.paused);
+
+        // All chunks embedded + stored.
+        let chunks = db
+            .get_memories_by_source_id("memory", &outcome.doc_source_id)
+            .await
+            .unwrap();
+        let n = chunks.len();
+        assert!(n >= 3, "doc should chunk into >= 3 chunks, got {n}");
+        assert_eq!(outcome.chunk_ids.len(), n);
+
+        // Searchable: the unique document token retrieves this document's chunks.
+        let results = db
+            .search_memory("Wenlanborg", 30, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            results.iter().any(|r| r.source_id == outcome.doc_source_id),
+            "document chunks must be searchable after upsert"
+        );
+
+        // Exactly ONE creation_kind='source' page, citing its chunks (chunk-granular).
+        let page = db.get_page(&outcome.page_id).await.unwrap().expect("page");
+        assert_eq!(page.creation_kind, "source");
+        assert_eq!(
+            page.source_memory_ids.len(),
+            n,
+            "page cites every chunk (chunk-granular provenance)"
+        );
+        assert_eq!(count_source_pages(&db).await, 1, "exactly one SOURCE page");
+
+        // Digest folded: the page body carries multiple chunk analyses.
+        assert!(page.content.contains("SECTION_ANALYSIS_000"));
+        assert!(page
+            .content
+            .contains(&format!("SECTION_ANALYSIS_{:03}", n - 1)));
+
+        // Queue marked done.
+        let q = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(q.status, "done");
+    }
+
+    // ── integration: kill after 2 chunks (drop), then resume from checkpoint ──
+
+    #[tokio::test]
+    async fn resumes_from_checkpoint_without_reanalyzing() {
+        let (db, dir) = test_db().await;
+        let path = write_markdown_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+
+        let run1_responses = analysis_responses();
+        let provider = Arc::new(HangAfterProvider {
+            responses: run1_responses.clone(),
+            hang_after: 2, // serve chunks 0 and 1, hang on chunk 2 (index 2)
+            calls: AtomicUsize::new(0),
+        });
+        let hang: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        // Drive the future until chunk 2's LLM call has STARTED (calls == 3 — the
+        // loop awaits checkpoint_chunk(1) before generate(chunk 2), so this
+        // guarantees chunks 0+1 are checkpointed), then DROP it (simulated kill).
+        // Condition-based, not wall-clock: a fixed delay flakes under
+        // parallel-test CPU contention.
+        {
+            let enrich = run_document_enrichment(&db, &entry, None, Some(&hang), &prompts);
+            tokio::pin!(enrich);
+            let reached_hang = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+                tokio::select! {
+                    _ = &mut enrich => false,
+                    _ = async {
+                        while provider.calls.load(Ordering::SeqCst) < 3 {
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                    } => true,
+                }
+            })
+            .await
+            .expect("enrichment should reach chunk 2 within 60s");
+            assert!(reached_hang, "run should hang on chunk 2 and be dropped");
+        }
+
+        // Checkpoint committed chunks 0 and 1 (resume point = 1); row still in_progress.
+        let mid = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(mid.last_completed_chunk, 1, "checkpointed after chunk 1");
+        assert_eq!(mid.status, "in_progress");
+
+        // Chunks 0 and 1 carry their analyses (persisted); chunk 2 does not.
+        let doc_source_id = format!("folder-notes::{file_path}");
+        let mid_chunks = db
+            .get_memories_by_source_id("memory", &doc_source_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            mid_chunks[0].summary.as_deref(),
+            Some("SECTION_ANALYSIS_000")
+        );
+        assert_eq!(
+            mid_chunks[1].summary.as_deref(),
+            Some("SECTION_ANALYSIS_001")
+        );
+        assert_eq!(mid_chunks[2].summary, None, "chunk 2 not yet analyzed");
+        let stored_title = mid_chunks[0].title.clone();
+        let file_stem_title = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap()
+            .to_string();
+        assert_ne!(
+            stored_title, file_stem_title,
+            "fixture must expose parsed-title vs file-stem drift"
+        );
+        let n = mid_chunks.len();
+
+        // Re-run with a FRESH provider — it must be asked to analyze only chunks
+        // 2..n plus the single entity call: (n-2)+1 = n-1 total calls.
+        let resume_provider =
+            SequencedMockProvider::new(run1_responses.iter().map(String::as_str).collect());
+        // We need call_count afterwards, so hold a concrete handle.
+        let resume_arc = Arc::new(resume_provider);
+        let resume_dyn: Arc<dyn LlmProvider> = resume_arc.clone();
+        let entry2 = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let outcome =
+            run_document_enrichment(&db, &entry2, None, Some(&resume_dyn), &prompts).await;
+        assert!(outcome.completed);
+
+        assert_eq!(
+            resume_arc.call_count(),
+            n - 1,
+            "resume analyzes only chunks 2..n (+1 entity call); chunks 0-1 NOT re-analyzed"
+        );
+
+        // Chunks 0-1 still carry their ORIGINAL run-1 analyses (never overwritten).
+        let final_chunks = db
+            .get_memories_by_source_id("memory", &doc_source_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            final_chunks[0].summary.as_deref(),
+            Some("SECTION_ANALYSIS_000")
+        );
+        assert_eq!(
+            final_chunks[1].summary.as_deref(),
+            Some("SECTION_ANALYSIS_001")
+        );
+
+        // One SOURCE page, done.
+        assert_eq!(count_source_pages(&db).await, 1);
+        let page = db.get_page(&outcome.page_id).await.unwrap().expect("page");
+        assert_eq!(
+            page.title, stored_title,
+            "resumed completion should reuse the parsed title stored on chunks"
+        );
+        let q = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(q.status, "done");
+    }
+
+    // ── integration: LLM failure → deterministic stub page + pause ────────────
+
+    #[tokio::test]
+    async fn llm_failure_writes_stub_page_and_pauses() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(FailingProvider);
+        let prompts = PromptRegistry::default();
+
+        let outcome = run_document_enrichment(&db, &entry, None, Some(&llm), &prompts).await;
+
+        // Chunks still embedded (upsert ran before the LLM).
+        let chunks = db
+            .get_memories_by_source_id("memory", &outcome.doc_source_id)
+            .await
+            .unwrap();
+        assert!(chunks.len() >= 3);
+
+        // A deterministic stub SOURCE page exists and cites the chunks.
+        assert!(outcome.paused, "LLM failure signals pause");
+        assert!(!outcome.completed);
+        assert_eq!(count_source_pages(&db).await, 1, "stub SOURCE page exists");
+        let page = db
+            .get_page(&outcome.page_id)
+            .await
+            .unwrap()
+            .expect("stub page");
+        assert_eq!(page.creation_kind, "source");
+        assert!(page.content.starts_with("Source document:"));
+        assert_eq!(page.source_memory_ids.len(), chunks.len());
+
+        // Pause is signaled on the queue, with a retry scheduled and attempt bumped.
+        let q = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(q.status, "paused");
+        assert_eq!(q.attempt_count, 1);
+        assert!(q.next_retry_at.is_some());
+    }
+
+    // ── self-healing loop: LLM failure pauses with backoff, then re-claims ────
+
+    #[tokio::test]
+    async fn llm_failure_pauses_with_backoff_then_reclaims_after_retry_elapses() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(FailingProvider);
+        let prompts = PromptRegistry::default();
+        let outcome = run_document_enrichment(&db, &entry, None, Some(&llm), &prompts).await;
+        assert!(outcome.paused, "LLM failure pauses (no in-loop retry burn)");
+
+        // Paused: attempt bumped, a FUTURE retry scheduled → not yet claimable.
+        let paused = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(paused.status, "paused");
+        assert_eq!(paused.attempt_count, 1);
+        let retry_at = paused.next_retry_at.expect("backoff sets next_retry_at");
+        assert!(
+            retry_at > chrono::Utc::now().timestamp(),
+            "backoff schedules the retry in the future"
+        );
+        assert!(
+            db.claim_next_pending().await.unwrap().is_none(),
+            "not claimable before backoff elapses"
+        );
+
+        // Advance time past next_retry_at (simulate elapsed backoff) → claimable
+        // again, so the scheduler auto-resumes with no daemon restart.
+        db.mark_paused(
+            "folder-notes",
+            &file_path,
+            "analysis LLM failed",
+            Some(chrono::Utc::now().timestamp() - 1),
+        )
+        .await
+        .unwrap();
+        let reclaimed = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("claimable after backoff elapses");
+        assert_eq!(reclaimed.file_path, file_path);
+        assert_eq!(
+            reclaimed.attempt_count, 2,
+            "attempts keep incrementing across retries"
+        );
+    }
+
+    // ── queue observability: status summary reflects pending + paused ─────────
+
+    #[tokio::test]
+    async fn queue_status_summarizes_pending_and_paused() {
+        let (db, _dir) = test_db().await;
+
+        // Empty queue → nothing pending, no pause.
+        let empty = db.document_enrichment_queue_status().await.unwrap();
+        assert_eq!(empty.pending, 0);
+        assert!(empty.paused_reason.is_none());
+        assert!(empty.next_retry_at.is_none());
+
+        // Two enqueued, one paused with a reason + retry time.
+        db.enqueue_document("folder", "/a.md", Some("h"))
+            .await
+            .unwrap();
+        db.enqueue_document("folder", "/b.md", Some("h"))
+            .await
+            .unwrap();
+        db.mark_paused(
+            "folder",
+            "/a.md",
+            "analysis LLM failed",
+            Some(1_712_678_400),
+        )
+        .await
+        .unwrap();
+
+        let status = db.document_enrichment_queue_status().await.unwrap();
+        assert_eq!(status.pending, 2, "pending counts all not-done rows");
+        assert_eq!(status.paused_reason.as_deref(), Some("analysis LLM failed"));
+        assert_eq!(status.next_retry_at, Some(1_712_678_400));
+
+        // Once done, rows drop out of the pending count and the pause clears.
+        db.mark_done("folder", "/a.md").await.unwrap();
+        db.mark_done("folder", "/b.md").await.unwrap();
+        let drained = db.document_enrichment_queue_status().await.unwrap();
+        assert_eq!(drained.pending, 0);
+        assert!(drained.paused_reason.is_none());
+        assert!(drained.next_retry_at.is_none());
+    }
+
+    // ── restart resume: in_progress rows are requeued (checkpoint preserved) ──
+
+    #[tokio::test]
+    async fn reset_in_progress_requeues_orphaned_docs_preserving_checkpoint() {
+        let (db, _dir) = test_db().await;
+        db.enqueue_document("folder", "/a.md", Some("h"))
+            .await
+            .unwrap();
+        let claimed = db.claim_next_pending().await.unwrap().expect("claim");
+        assert_eq!(claimed.status, "in_progress");
+        db.checkpoint_chunk("folder", "/a.md", 4).await.unwrap();
+        // Simulate a crash: the row is stuck in_progress and NOT claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // A fresh daemon start requeues orphaned in_progress rows.
+        let requeued = db.reset_in_progress_documents().await.unwrap();
+        assert_eq!(requeued, 1, "one orphaned in_progress row requeued");
+        let entry = db
+            .get_queue_entry("folder", "/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.status, "pending");
+        assert_eq!(
+            entry.last_completed_chunk, 4,
+            "checkpoint preserved so the resume skips analyzed chunks"
+        );
+
+        // Claimable again, resuming from the checkpoint.
+        let resumed = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("claimable after reset");
+        assert_eq!(resumed.last_completed_chunk, 4);
+    }
+
+    /// Count active `creation_kind='source'` pages.
+    async fn count_source_pages(db: &MemoryDB) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pages WHERE creation_kind = 'source' AND status = 'active'",
+                (),
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+}

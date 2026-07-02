@@ -3,6 +3,7 @@
 
 pub mod agents;
 pub mod curate;
+pub mod ingest;
 pub mod list;
 pub mod mcp;
 pub mod pages;

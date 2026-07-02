@@ -210,8 +210,10 @@ jobs:
       # `eval_harness.rs` which requires `ANTHROPIC_API_KEY` (not in CI).
       # wenlan-core integration tests run via the Linux-only nextest step
       # below (chat_import_e2e + distillation_quality + provenance_p2 +
-      # provenance_p3 + space_scoping_e2e — the latter three carry the
-      # cross-workspace-leak security tests and the P3 demotion regression).
+      # provenance_p3 + space_scoping_e2e + folder_ingest_e2e — the middle
+      # three carry the cross-workspace-leak security tests and the P3
+      # demotion regression; folder_ingest_e2e covers the full folder
+      # sync/enrich/delete lifecycle in-process).
       - name: Integration tests wenlan-cli + wenlan-server
         run: cargo nextest run -p wenlan -p wenlan-server
       - name: Cache fastembed model (Linux)
@@ -231,7 +233,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
         # (ONNX atexit FFI race). No --test-threads=1 needed on ubuntu.
-        run: cargo nextest run -p wenlan-core --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e
+        run: cargo nextest run -p wenlan-core --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e --test folder_ingest_e2e
       - name: Run embedding-only eval (main only, Linux)
         if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         env:
@@ -279,6 +281,18 @@ jobs:
           "$STAGE/wenlan" uninstall
           test ! -f ~/.config/systemd/user/wenlan-server.service
           echo "    Linux install/uninstall round-trip PASS"
+      # Full-stack acceptance test over real HTTP: ingest a folder via the
+      # shipped CLI, poll hybrid search for a sentinel string, delete a
+      # file, re-sync, and assert the chunks are reaped while the sibling
+      # survives. Complements the in-process folder_ingest_e2e above by
+      # exercising the daemon boundary (routes, scheduler drain, CLI).
+      # Reuses the binaries built by the install E2E and the cached
+      # fastembed model restored above.
+      - name: E2E folder ingest over HTTP (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          export WENLAN_TEST_FASTEMBED_CACHE="$HOME/.local/share/wenlan/memorydb/fastembed_cache"
+          bash scripts/smoke-folder-ingest.sh
       # Linux Docker smoke + Windows release-build smoke previously ran here.
       # Both duplicated work that release.yml already does on every tag push
       # (Docker daemon image + Windows release matrix). Dropping them shaves

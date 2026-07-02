@@ -460,6 +460,7 @@ pub async fn handle_store_memory(
             .or(extracted_fields),
         retrieval_cue: req.retrieval_cue.clone().or(extracted_cue),
         source_text: None,
+        content_hash: None,
     };
 
     // Pre-chunk locally so we know chunks_created for the response even
@@ -3859,6 +3860,7 @@ mod partition_pages_tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 0,
             pending_revision: false,

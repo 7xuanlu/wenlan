@@ -65,16 +65,44 @@ pub async fn handle_health(
     }))
 }
 
+/// Map the core document-enrichment queue summary to the wire `QueueStatus`.
+/// Pure snapshot→response glue (no business logic): idle when nothing is
+/// pending, paused when a paused row carries a reason, else active.
+fn queue_status_wire(
+    core: wenlan_core::db::DocEnrichmentQueueStatus,
+) -> wenlan_types::responses::QueueStatus {
+    use wenlan_types::responses::QueueStatus;
+    if core.pending == 0 {
+        QueueStatus::Idle
+    } else if let Some(reason) = core.paused_reason {
+        QueueStatus::Paused {
+            reason,
+            pending: core.pending,
+            next_retry_at: core.next_retry_at,
+        }
+    } else {
+        QueueStatus::Active {
+            pending: core.pending,
+        }
+    }
+}
+
 /// GET /api/status - Get indexing status
 pub async fn handle_status(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<wenlan_types::responses::StatusResponse>, ServerError> {
     let s = state.read().await;
 
-    let files_indexed = if let Some(db) = &s.db {
-        db.count().await.unwrap_or(0)
+    let (files_indexed, queue) = if let Some(db) = &s.db {
+        let files_indexed = db.count().await.unwrap_or(0);
+        let queue = db
+            .document_enrichment_queue_status()
+            .await
+            .map(queue_status_wire)
+            .unwrap_or_default();
+        (files_indexed, queue)
     } else {
-        0
+        (0, wenlan_types::responses::QueueStatus::Idle)
     };
 
     Ok(Json(wenlan_types::responses::StatusResponse {
@@ -82,6 +110,7 @@ pub async fn handle_status(
         files_indexed,
         files_total: 0,
         sources_connected: vec![],
+        queue,
         reranker: s.reranker_status.clone(),
         reranker_light: s.reranker_light_status.clone(),
         reranker_mode: s.reranker_mode.clone(),
@@ -1246,6 +1275,32 @@ mod recent_endpoints_tests {
             parsed.reranker,
             wenlan_types::responses::RerankerStatus::Disabled
         );
+    }
+
+    #[tokio::test]
+    async fn status_reports_queue_idle_by_default() {
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        // The additive queue field must be present on the wire.
+        let raw = std::str::from_utf8(&bytes).unwrap();
+        assert!(
+            raw.contains("\"queue\""),
+            "status JSON must include a queue field, got: {raw}"
+        );
+        // With no DB (and thus an empty queue) it defaults cleanly to idle.
+        let parsed: wenlan_types::responses::StatusResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.queue, wenlan_types::responses::QueueStatus::Idle);
     }
 }
 

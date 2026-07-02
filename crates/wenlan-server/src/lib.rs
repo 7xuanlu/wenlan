@@ -22,4 +22,11 @@ pub mod space_header;
 pub mod state;
 pub mod websocket;
 
+/// Shared mutex for tests that mutate the process-wide `WENLAN_DATA_DIR` env
+/// var. Rust tests run in parallel by default, so any test that swaps this env
+/// var must hold this single crate-level lock for the full guard lifetime.
+#[cfg(test)]
+pub(crate) static TEST_DATA_DIR_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
 // cmd_* modules contain main-only CLI logic; not re-exported.

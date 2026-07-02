@@ -5,6 +5,7 @@ use crate::error::WenlanError;
 use crate::events::EventEmitter;
 use crate::pages::Page;
 use crate::privacy::redact_pii;
+use crate::retrieval::document_cap::{cap_per_document, DEFAULT_PER_DOCUMENT_CAP};
 use crate::sources::{stability_tier, RawDocument};
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
@@ -34,7 +35,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 64;
+pub const SCHEMA_VERSION: u32 = 67;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -251,6 +252,19 @@ pub fn resolve_fastembed_cache_dir(db_path: &std::path::Path) -> Option<std::pat
     }
 
     None
+}
+
+/// Build the chunking engine for a DB at `db_path`, preferring token-aware
+/// sizing (the BGE tokenizer loaded from the resolved FastEmbed cache) so no
+/// embedded chunk exceeds the model's 512-token limit. Falls back to
+/// character-based sizing when the tokenizer isn't on disk (e.g. FastEmbed's
+/// default `~/.fastembed_cache` with no per-DB/shared cache resolved).
+fn build_chunker(db_path: &Path) -> ChunkingEngine {
+    resolve_fastembed_cache_dir(db_path)
+        .as_deref()
+        .and_then(crate::chunker::load_bge_tokenizer)
+        .map(ChunkingEngine::with_tokenizer)
+        .unwrap_or_default()
 }
 
 /// How many candidates to fetch from base retrieval before cross-encoder rerank.
@@ -1360,6 +1374,39 @@ pub struct FileSyncState {
     pub last_synced_at: i64,
 }
 
+/// A document queued for enrichment: the persisted state machine for per-file
+/// map-fold document enrichment with checkpoint/resume. Keyed by
+/// `(source_id, file_path)`, where `source_id` is the knowledge-source id and
+/// `file_path` identifies the file within it. Cancellation is source removal
+/// (`dequeue_by_source`), so there is no per-doc cancel API.
+#[derive(Debug, Clone)]
+pub struct DocEnrichmentQueueEntry {
+    pub source_id: String,
+    pub file_path: String,
+    /// `pending` | `in_progress` | `paused` | `done`.
+    pub status: String,
+    pub content_hash: Option<String>,
+    /// Index of the last chunk whose enrichment was committed. `-1` = none yet
+    /// (resume starts at chunk 0).
+    pub last_completed_chunk: i64,
+    pub attempt_count: i64,
+    pub next_retry_at: Option<i64>,
+    pub error_detail: Option<String>,
+    pub enqueued_at: i64,
+    pub updated_at: i64,
+}
+
+/// Aggregate state of the document-enrichment queue, for `/api/status`
+/// observability. `pending` counts rows not yet `done` (pending + in_progress +
+/// paused); `paused_reason` / `next_retry_at` describe the soonest-to-retry
+/// paused row (present only when at least one row is paused).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DocEnrichmentQueueStatus {
+    pub pending: u64,
+    pub paused_reason: Option<String>,
+    pub next_retry_at: Option<i64>,
+}
+
 // ===== Schema =====
 
 const SCHEMA: &str = "
@@ -1807,7 +1854,7 @@ impl MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder: Arc::new(std::sync::Mutex::new(embedder)),
-            chunker: ChunkingEngine::new(),
+            chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
 
@@ -1878,7 +1925,7 @@ impl MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder,
-            chunker: ChunkingEngine::new(),
+            chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
 
@@ -5976,6 +6023,143 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("m64 bump: {e}")))?;
                 log::info!("[migration] Migration 64 applied: memories.last_distilled_at column (P3 consolidation demotion)");
             }
+
+            // Migration 65 (provenance): memories.content_hash — content hash of the
+            // source file a document chunk came from (folder / multi-format ingest,
+            // decision-6). All chunks of one file share the file hash. NULL for rows
+            // that carry no file provenance. Feeds the retrieval-cap schema unification
+            // and the sub-project-2 backfill. No backfill — existing rows stay NULL.
+            if version < 65 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'content_hash'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m65 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m65 add content_hash: {e}")))?;
+                }
+                conn.execute("PRAGMA user_version = 65", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m65 bump: {e}")))?;
+                log::info!("[migration] Migration 65 applied: memories.content_hash column (folder-ingest provenance)");
+            }
+
+            // Migration 66 (folder-ingest): document_enrichment_queue — persisted
+            // state machine for per-file map-fold document enrichment. Keyed by
+            // (source_id, file_path): status (pending/in_progress/paused/done),
+            // content_hash, last_completed_chunk (resume point; -1 = none),
+            // attempt_count + next_retry_at (retry backoff), error_detail.
+            // Cancellation is source removal (dequeue_by_source); there is no
+            // per-doc cancel API. Idempotent + replay-safe via CREATE ... IF NOT
+            // EXISTS.
+            if version < 66 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS document_enrichment_queue (
+                        source_id TEXT NOT NULL,
+                        file_path TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        content_hash TEXT,
+                        last_completed_chunk INTEGER NOT NULL DEFAULT -1,
+                        attempt_count INTEGER NOT NULL DEFAULT 0,
+                        next_retry_at INTEGER,
+                        error_detail TEXT,
+                        enqueued_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        PRIMARY KEY (source_id, file_path)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_doc_enrich_queue_claim
+                        ON document_enrichment_queue(status, enqueued_at);
+                    CREATE INDEX IF NOT EXISTS idx_doc_enrich_queue_source
+                        ON document_enrichment_queue(source_id);",
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("m66 document_enrichment_queue: {e}"))
+                })?;
+                conn.execute("PRAGMA user_version = 66", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m66 bump: {e}")))?;
+                log::info!("[migration] Migration 66 applied: document_enrichment_queue table (folder-ingest enrichment state)");
+            }
+
+            // Migration 67 (folder-ingest): allow `creation_kind='source'` on pages.
+            // The document-enrichment route (`document_enrichment::run_document_enrichment`)
+            // emits exactly one SOURCE page per ingested file — its chunk-granular
+            // provenance record. Migration 61 added `creation_kind` with a CHECK list
+            // (`'distilled','authored','research','imported'`) that predates the SOURCE
+            // channel, so an unrelaxed CHECK rejects the insert.
+            //
+            // SQLite cannot ALTER a CHECK constraint in place, and a full table rebuild
+            // of `pages` would have to recreate its FTS mirror, vector index, and
+            // triggers (rowid-coupled) — high risk for a value-list widening. Instead
+            // this relaxes the constraint by editing the stored schema text directly:
+            // `PRAGMA writable_schema` + an `sqlite_master.sql` string-substitution that
+            // only widens the IN-list (no column/type/layout change, so rows, rowids,
+            // indexes, triggers, and the FTS mirror are all preserved), then
+            // `PRAGMA writable_schema=RESET` reloads the schema so the relaxed CHECK
+            // takes effect on THIS connection immediately (verified empirically).
+            // Idempotent: the substitution is a no-op once `'source'` is present, and
+            // the `version < 67` guard runs it once.
+            if version < 67 {
+                let conn = self.conn.lock().await;
+                let current_sql: Option<String> = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 read pages sql: {e}")))?;
+                    match rows
+                        .next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 pages sql row: {e}")))?
+                    {
+                        Some(row) => Some(row.get::<String>(0).map_err(|e| {
+                            WenlanError::VectorDb(format!("m67 pages sql col: {e}"))
+                        })?),
+                        None => None,
+                    }
+                };
+                if let Some(sql) = current_sql {
+                    let patched = sql.replace(
+                        "creation_kind IN ('distilled','authored','research','imported')",
+                        "creation_kind IN ('distilled','authored','research','imported','source')",
+                    );
+                    if patched != sql {
+                        conn.execute("PRAGMA writable_schema=ON", ())
+                            .await
+                            .map_err(|e| WenlanError::VectorDb(format!("m67 writable on: {e}")))?;
+                        conn.execute(
+                            "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+                            libsql::params![patched],
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 patch schema: {e}")))?;
+                        conn.execute("PRAGMA writable_schema=RESET", ())
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("m67 writable reset: {e}"))
+                            })?;
+                    }
+                }
+                conn.execute("PRAGMA user_version = 67", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m67 bump: {e}")))?;
+                log::info!("[migration] Migration 67 applied: pages.creation_kind CHECK widened to allow 'source' (folder-ingest SOURCE pages)");
+            }
         }
 
         Ok(())
@@ -7248,8 +7432,8 @@ impl MemoryDB {
     /// 21=entity_id, 22=quality, 23=is_recap, 24=supersede_mode,
     /// 25=structured_fields, 26=retrieval_cue, 27=source_text,
     /// 28=version, 29=pending_revision, 30=score/distance/rank,
-    /// 31=importance (T8 salience prior — APPENDED LAST so indices 0-30 and every
-    ///   `row.get(30)` score read stay byte-identical; never insert before 30).
+    /// 31=importance, 32=event_date, 33=content_hash. Append-only after 30 so
+    /// every `row.get(30)` score read stays byte-identical; never insert before 30.
     fn row_to_search_result(row: &libsql::Row, score: f32) -> Result<SearchResult, WenlanError> {
         let source_id: String = row
             .get::<String>(3)
@@ -7305,6 +7489,7 @@ impl MemoryDB {
             structured_fields: row.get::<Option<String>>(25).unwrap_or(None),
             retrieval_cue: row.get::<Option<String>>(26).unwrap_or(None),
             source_text: row.get::<Option<String>>(27).unwrap_or(None),
+            content_hash: row.get::<Option<String>>(33).unwrap_or(None),
             raw_score: 0.0, // Set later during normalization
             version: row.get::<i64>(28).unwrap_or(1),
             pending_revision,
@@ -7359,6 +7544,10 @@ impl MemoryDB {
             structured_fields: Option<String>,
             retrieval_cue: Option<String>,
             source_text: Option<String>,
+            // Provenance: content hash of the source file (folder / multi-format
+            // ingest, decision-6). Shared by every chunk of one file; None for rows
+            // with no file provenance.
+            content_hash: Option<String>,
             // T2: parent fact source_id for a verbatim `source='episode'` row;
             // None for every ordinary memory row.
             episode_of: Option<String>,
@@ -7465,6 +7654,8 @@ impl MemoryDB {
                     source_text: derived_source_text
                         .clone()
                         .or_else(|| doc.source_text.clone()),
+                    // Provenance: every chunk of one file shares the file's content_hash.
+                    content_hash: doc.content_hash.clone(),
                     // Ordinary memory rows are never episodes.
                     episode_of: None,
                 });
@@ -7535,6 +7726,8 @@ impl MemoryDB {
                     structured_fields: None,
                     retrieval_cue: None,
                     source_text: None,
+                    // Episodes are a derived retrieval channel, not file provenance.
+                    content_hash: None,
                     episode_of: Some(doc.source_id.clone()),
                 });
             }
@@ -7737,6 +7930,10 @@ impl MemoryDB {
                 .episode_of
                 .map(|s| s.into())
                 .unwrap_or(libsql::Value::Null);
+            let content_hash_val: libsql::Value = row
+                .content_hash
+                .map(|s| s.into())
+                .unwrap_or(libsql::Value::Null);
 
             conn.execute(
                 "INSERT INTO memories (id, content, source, source_id, title, summary, url,
@@ -7745,12 +7942,12 @@ impl MemoryDB {
                     stability, supersedes, pending_revision, word_count,
                     entity_id, enrichment_status, quality, is_recap, supersede_mode,
                     structured_fields, retrieval_cue, source_text,
-                    embedding, created_at, importance, episode_of)
+                    embedding, created_at, importance, episode_of, content_hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                     ?24, ?25, ?26, ?27, ?28,
                     ?29, ?30, ?31,
-                    vector32(?32), ?33, ?34, ?35)",
+                    vector32(?32), ?33, ?34, ?35, ?36)",
                 libsql::params![
                     row.id,
                     row.content,
@@ -7786,7 +7983,8 @@ impl MemoryDB {
                     vec_str,
                     row.last_modified, // created_at = last_modified at insert time
                     importance_val,
-                    episode_of_val
+                    episode_of_val,
+                    content_hash_val
                 ],
             )
             .await
@@ -7902,7 +8100,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -7972,7 +8170,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         fts.rank,
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -8057,6 +8255,7 @@ impl MemoryDB {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        final_results = cap_per_document(final_results, DEFAULT_PER_DOCUMENT_CAP);
         final_results.truncate(limit);
 
         Ok(final_results)
@@ -8265,7 +8464,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -8326,7 +8525,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         fts.rank,
-                        c.importance, c.event_date
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -8758,6 +8957,7 @@ impl MemoryDB {
         // boosting via RRF merge, not user-facing content. Without this filter, low-value
         // observations like "Settings" consume result slots and push real memories out.
         final_results.retain(|r| r.source != "knowledge_graph");
+        final_results = cap_per_document(final_results, DEFAULT_PER_DOCUMENT_CAP);
 
         log::warn!(
             "[memory_db] timing: db_queries={}ms",
@@ -8983,7 +9183,7 @@ impl MemoryDB {
             let sql =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.source = 'episode'";
@@ -9011,7 +9211,7 @@ impl MemoryDB {
             let fts_sql =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         fts.rank,
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 AND c.source = 'episode'
@@ -9142,7 +9342,7 @@ impl MemoryDB {
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
-                    0.0, c.importance
+                    0.0, c.importance, c.event_date, c.content_hash
              FROM memories c
              WHERE c.source = 'memory' AND c.chunk_index = 0 AND c.source_id IN ({placeholders})",
             placeholders = placeholders
@@ -9661,6 +9861,12 @@ impl MemoryDB {
         let (page_results, mem_results): (Vec<_>, Vec<_>) =
             results.into_iter().partition(|r| r.source == "page");
         let mut results = mem_results;
+        // Per-document cap on the deep path is a backstop: the reranker pool
+        // came through search_memory_with_cue, which already capped per
+        // document, so the CE only ever sees the RRF-best <=N chunks per doc.
+        // Survivor selection is therefore by RRF rank, not CE rank — intended
+        // (spec: post-RRF, keep best-ranked).
+        results = cap_per_document(results, DEFAULT_PER_DOCUMENT_CAP);
         // T20: per-session diversification cap (opt-in, default OFF).
         // Runs on the full reranked memory pool (pre-truncate) so backfill
         // has demoted-but-valid hits to pull from.  Pages are excluded
@@ -9859,6 +10065,7 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -10021,6 +10228,7 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -10113,6 +10321,7 @@ impl MemoryDB {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -10555,8 +10764,8 @@ impl MemoryDB {
         let placeholders: Vec<String> = (1..=ranked_anchor_ids.len())
             .map(|i| format!("?{i}"))
             .collect();
-        // Projection mirrors row_to_search_result cols 0..32 (event_date at 32),
-        // then appends me.entity_id at col 33 so we can map each edge to its anchor.
+        // Projection mirrors row_to_search_result cols 0..33 (content_hash at 33),
+        // then appends me.entity_id at col 34 so we can map each edge to its anchor.
         let sql = format!(
             "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                     c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
@@ -10565,7 +10774,7 @@ impl MemoryDB {
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
-                    0.0, c.importance, c.event_date, me.entity_id
+                    0.0, c.importance, c.event_date, c.content_hash, me.entity_id
              FROM memories c
              JOIN memory_entities me ON me.memory_id = c.source_id
              WHERE me.entity_id IN ({ph})
@@ -10583,7 +10792,7 @@ impl MemoryDB {
         // Per memory, keep the best (lowest) anchor rank across its edges.
         let mut best: HashMap<String, (usize, SearchResult)> = HashMap::new();
         while let Ok(Some(row)) = rows.next().await {
-            let ent: String = row.get(33).unwrap_or_default();
+            let ent: String = row.get(34).unwrap_or_default();
             let rank = anchor_rank.get(ent.as_str()).copied().unwrap_or(usize::MAX);
             let res = match Self::row_to_search_result(&row, 0.0) {
                 Ok(r) => r,
@@ -10824,7 +11033,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0 AND c.space = ?3"
@@ -10845,7 +11054,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0"
@@ -10918,7 +11127,7 @@ impl MemoryDB {
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
                     fts.rank,
-                    c.importance
+                    c.importance, c.event_date, c.content_hash
              FROM memories_fts fts
              JOIN memories c ON fts.rowid = c.rowid
              WHERE memories_fts MATCH ?1
@@ -11222,6 +11431,7 @@ impl MemoryDB {
                 structured_fields: None,
                 retrieval_cue: None,
                 source_text: None,
+                content_hash: None,
                 raw_score: 0.0,
                 version: 0,
                 pending_revision: false,
@@ -11289,6 +11499,7 @@ impl MemoryDB {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: page.relevance_score,
             version: page.version,
             pending_revision: false,
@@ -11614,6 +11825,7 @@ impl MemoryDB {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 1,
             pending_revision: false,
@@ -11676,6 +11888,37 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Rebind chunks from one source_id to another. Used for rename optimization:
+    /// when a file is renamed (old vanishes, new appears with same content_hash),
+    /// rebind the old document's chunks to the new doc_source_id instead of
+    /// delete+enqueue. Updates enrichment_steps to point to the new source_id.
+    pub async fn rebind_source_id(
+        &self,
+        source: &str,
+        old_source_id: &str,
+        new_source_id: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
+            libsql::params![
+                new_source_id.to_string(),
+                source.to_string(),
+                old_source_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id: {}", e)))?;
+        // Also update enrichment_steps to point to the new source_id.
+        conn.execute(
+            "UPDATE enrichment_steps SET source_id = ?1 WHERE source_id = ?2",
+            libsql::params![new_source_id.to_string(), old_source_id.to_string()],
+        )
+        .await
+        .ok();
+        Ok(())
+    }
+
     /// Update summary for all rows of a document.
     pub async fn update_document_summary(
         &self,
@@ -11690,6 +11933,30 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("update_summary: {}", e)))?;
+        Ok(())
+    }
+
+    /// Persist a single chunk's summary, keyed by `(source_id, chunk_index)`.
+    ///
+    /// The document-enrichment map-fold (`document_enrichment::run_document_enrichment`)
+    /// writes each chunk's per-chunk analysis here as a DURABLE checkpoint: on a
+    /// resumed run the already-analyzed chunks carry their summary, so the rolling
+    /// digest is rebuilt from stored summaries and no chunk is re-sent to the LLM.
+    /// Distinct from [`update_document_summary`], which overwrites EVERY chunk of a
+    /// document with the same value.
+    pub async fn set_chunk_summary(
+        &self,
+        source_id: &str,
+        chunk_index: i64,
+        summary: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET summary = ?1 WHERE source_id = ?2 AND chunk_index = ?3",
+            libsql::params![summary.to_string(), source_id.to_string(), chunk_index],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_chunk_summary: {}", e)))?;
         Ok(())
     }
 
@@ -11851,6 +12118,33 @@ impl MemoryDB {
             });
         }
         Ok(results)
+    }
+
+    /// Count chunks under `(source, source_id)` whose vector `embedding` column
+    /// is NULL — rows that were stored but never embedded. Zero means every
+    /// chunk of the document carries an embedding. Enumerates matching ids
+    /// rather than issuing `COUNT(*)` so it stays clear of the libSQL
+    /// COUNT-on-vector-table quirk. Used by the folder-ingest e2e test to assert
+    /// full embedding coverage after `upsert_documents`.
+    pub async fn count_unembedded_chunks(
+        &self,
+        source: &str,
+        source_id: &str,
+    ) -> Result<usize, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM memories \
+                 WHERE source = ?1 AND source_id = ?2 AND embedding IS NULL",
+                libsql::params![source.to_string(), source_id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_unembedded_chunks: {}", e)))?;
+        let mut missing = 0usize;
+        while let Ok(Some(_)) = rows.next().await {
+            missing += 1;
+        }
+        Ok(missing)
     }
 
     /// Delete memories within a time range. Returns the number deleted.
@@ -23018,6 +23312,335 @@ impl MemoryDB {
         Ok(())
     }
 
+    // ===== Document Enrichment Queue Methods =====
+
+    /// Enqueue a document for enrichment. Idempotent upsert: re-enqueuing a
+    /// live row (pending / in_progress / paused) or a `done` row with the SAME
+    /// content hash is a no-op — it never resets an in-progress checkpoint. A
+    /// `done` row with a DIFFERENT hash is reset to a fresh `pending` (changed
+    /// file → re-enrich; the chunk upsert replaces the stale chunks). A new row
+    /// starts `pending` with no completed chunk (`last_completed_chunk = -1`).
+    pub async fn enqueue_document(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        content_hash: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO document_enrichment_queue
+                (source_id, file_path, status, content_hash, last_completed_chunk,
+                 attempt_count, next_retry_at, error_detail, enqueued_at, updated_at)
+             VALUES (?1, ?2, 'pending', ?3, -1, 0, NULL, NULL, ?4, ?4)
+             ON CONFLICT(source_id, file_path) DO UPDATE SET
+                status = 'pending',
+                content_hash = excluded.content_hash,
+                last_completed_chunk = -1,
+                attempt_count = 0,
+                next_retry_at = NULL,
+                error_detail = NULL,
+                updated_at = excluded.updated_at
+             WHERE document_enrichment_queue.status = 'done'
+               AND document_enrichment_queue.content_hash IS NOT excluded.content_hash",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                content_hash.map(|s| s.to_string()),
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("enqueue_document: {}", e)))?;
+        Ok(())
+    }
+
+    /// Claim the next claimable document for enrichment (serial: at most one
+    /// row). Claimable = `pending`, or `paused` whose `next_retry_at` has
+    /// elapsed (NULL retry time = immediately eligible). Transitions the claimed
+    /// row to `in_progress` and returns it; its `last_completed_chunk` is the
+    /// resume point (start at the next chunk). Oldest-enqueued first. Returns
+    /// `None` when nothing is claimable.
+    pub async fn claim_next_pending(&self) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
+        let now = chrono::Utc::now().timestamp();
+        let (source_id, file_path) = {
+            // Hold the connection lock across SELECT + UPDATE so the claim is
+            // atomic against other claimers (single-writer daemon, serialized by
+            // the connection Mutex).
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, file_path FROM document_enrichment_queue
+                     WHERE status = 'pending'
+                        OR (status = 'paused' AND (next_retry_at IS NULL OR next_retry_at <= ?1))
+                     ORDER BY enqueued_at ASC, rowid ASC
+                     LIMIT 1",
+                    libsql::params![now],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending select: {}", e)))?;
+            let picked = match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending row: {}", e)))?
+            {
+                Some(row) => (
+                    row.get::<String>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("claim source_id: {e}")))?,
+                    row.get::<String>(1)
+                        .map_err(|e| WenlanError::VectorDb(format!("claim file_path: {e}")))?,
+                ),
+                None => return Ok(None),
+            };
+            drop(rows);
+            conn.execute(
+                "UPDATE document_enrichment_queue
+                 SET status = 'in_progress', updated_at = ?3
+                 WHERE source_id = ?1 AND file_path = ?2",
+                libsql::params![picked.0.clone(), picked.1.clone(), now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending update: {}", e)))?;
+            picked
+        };
+        self.get_queue_entry(&source_id, &file_path).await
+    }
+
+    /// Persist enrichment progress for an in-progress document after committing
+    /// a map-fold chunk. `chunk_index` is the index of the last completed chunk
+    /// (the resume point). Leaves the row `in_progress`.
+    pub async fn checkpoint_chunk(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        chunk_index: i64,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET last_completed_chunk = ?3, updated_at = ?4
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                chunk_index,
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("checkpoint_chunk: {}", e)))?;
+        Ok(())
+    }
+
+    /// Mark a document enrichment complete. Clears any retry schedule and error.
+    pub async fn mark_done(&self, source_id: &str, file_path: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET status = 'done', next_retry_at = NULL, error_detail = NULL, updated_at = ?3
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![source_id.to_string(), file_path.to_string(), now],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("mark_done: {}", e)))?;
+        Ok(())
+    }
+
+    /// Pause an interrupted / failed document enrichment, recording the reason
+    /// and when it becomes eligible for retry. Increments the attempt counter.
+    /// The checkpoint (`last_completed_chunk`) is left intact so the next claim
+    /// resumes from it.
+    pub async fn mark_paused(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        reason: &str,
+        next_retry_at: Option<i64>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET status = 'paused',
+                 error_detail = ?3,
+                 next_retry_at = ?4,
+                 attempt_count = attempt_count + 1,
+                 updated_at = ?5
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                reason.to_string(),
+                next_retry_at,
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("mark_paused: {}", e)))?;
+        Ok(())
+    }
+
+    /// Cancel all queued enrichment for a source by deleting its rows. This is
+    /// the cancellation path: removing a source cancels its pending work.
+    pub async fn dequeue_by_source(&self, source_id: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM document_enrichment_queue WHERE source_id = ?1",
+            libsql::params![source_id.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dequeue_by_source: {}", e)))?;
+        Ok(())
+    }
+
+    /// Cancel a single document's queued enrichment. Used by folder-sync
+    /// deletion propagation: when a file vanishes from a live source root, any
+    /// still-pending enrichment for it must be dequeued so the worker never
+    /// re-materializes the deleted file's chunks. No-op if the row is absent.
+    pub async fn dequeue_document(
+        &self,
+        source_id: &str,
+        file_path: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM document_enrichment_queue WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![source_id.to_string(), file_path.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dequeue_document: {}", e)))?;
+        Ok(())
+    }
+
+    /// Fetch the current queue entry for a document, if present.
+    pub async fn get_queue_entry(
+        &self,
+        source_id: &str,
+        file_path: &str,
+    ) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, file_path, status, content_hash, last_completed_chunk,
+                        attempt_count, next_retry_at, error_detail, enqueued_at, updated_at
+                 FROM document_enrichment_queue
+                 WHERE source_id = ?1 AND file_path = ?2",
+                libsql::params![source_id.to_string(), file_path.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_queue_entry: {}", e)))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_queue_entry row: {}", e)))?
+        {
+            Ok(Some(DocEnrichmentQueueEntry {
+                source_id: row
+                    .get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue source_id: {e}")))?,
+                file_path: row
+                    .get::<String>(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue file_path: {e}")))?,
+                status: row
+                    .get::<String>(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue status: {e}")))?,
+                content_hash: row.get::<Option<String>>(3).unwrap_or(None),
+                last_completed_chunk: row.get::<i64>(4).map_err(|e| {
+                    WenlanError::VectorDb(format!("queue last_completed_chunk: {e}"))
+                })?,
+                attempt_count: row
+                    .get::<i64>(5)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue attempt_count: {e}")))?,
+                next_retry_at: row.get::<Option<i64>>(6).unwrap_or(None),
+                error_detail: row.get::<Option<String>>(7).unwrap_or(None),
+                enqueued_at: row
+                    .get::<i64>(8)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue enqueued_at: {e}")))?,
+                updated_at: row
+                    .get::<i64>(9)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue updated_at: {e}")))?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Summarize the document-enrichment queue for `/api/status`. `pending` is
+    /// the count of not-`done` rows; the paused fields describe the
+    /// soonest-to-retry paused row (a NULL `next_retry_at` — immediately
+    /// eligible — sorts first), or are `None` when nothing is paused.
+    pub async fn document_enrichment_queue_status(
+        &self,
+    ) -> Result<DocEnrichmentQueueStatus, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut pending_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM document_enrichment_queue WHERE status != 'done'",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status pending: {e}")))?;
+        let pending = pending_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status pending row: {e}")))?
+            .and_then(|r| r.get::<i64>(0).ok())
+            .unwrap_or(0)
+            .max(0) as u64;
+        drop(pending_rows);
+
+        let mut paused_rows = conn
+            .query(
+                "SELECT error_detail, next_retry_at FROM document_enrichment_queue
+                 WHERE status = 'paused'
+                 ORDER BY next_retry_at ASC, rowid ASC
+                 LIMIT 1",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status paused: {e}")))?;
+        let (paused_reason, next_retry_at) = match paused_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status paused row: {e}")))?
+        {
+            Some(row) => (
+                row.get::<Option<String>>(0).unwrap_or(None),
+                row.get::<Option<i64>>(1).unwrap_or(None),
+            ),
+            None => (None, None),
+        };
+
+        Ok(DocEnrichmentQueueStatus {
+            pending,
+            paused_reason,
+            next_retry_at,
+        })
+    }
+
+    /// On daemon startup, requeue any rows left `in_progress` by a previous run
+    /// (a crash / restart mid-enrichment). The per-chunk checkpoint
+    /// (`last_completed_chunk`) is preserved so the next claim resumes from it
+    /// instead of re-analyzing the document from scratch; the retry schedule is
+    /// cleared so the row is immediately claimable. Returns the number of rows
+    /// requeued.
+    pub async fn reset_in_progress_documents(&self) -> Result<u64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        let changed = conn
+            .execute(
+                "UPDATE document_enrichment_queue
+                 SET status = 'pending', next_retry_at = NULL, updated_at = ?1
+                 WHERE status = 'in_progress'",
+                libsql::params![now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reset_in_progress_documents: {e}")))?;
+        Ok(changed)
+    }
+
     /// Check which of the given source_ids already exist in the memories
     /// table. Used for skip-existing dedup during bulk chat import.
     ///
@@ -24375,7 +24998,9 @@ pub(crate) mod tests {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder: shared_embedder(),
-            chunker: ChunkingEngine::new(),
+            // Token-aware chunker matching production; falls back to char-based
+            // when the BGE tokenizer isn't in the resolved cache.
+            chunker: build_chunker(std::path::Path::new(".nonexistent")),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
         memory_db
@@ -25843,12 +26468,12 @@ pub(crate) mod tests {
         doc.quality = Some("high".to_string());
         doc.source_text = Some("ORIGINAL SOURCE TEXT MARKER".to_string());
         db.upsert_documents(vec![doc]).await.unwrap();
-        // Also set importance + event_date so the trailing columns carry non-NULL
-        // values (event_date is the last projected column, idx 32).
+        // Also set importance + event_date + content_hash so the trailing columns
+        // carry non-NULL values (content_hash is the last projected column, idx 33).
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "UPDATE memories SET importance = 9, event_date = 1779602400 WHERE source_id = 'corrupt_net'",
+                "UPDATE memories SET importance = 9, event_date = 1779602400, content_hash = 'cafebabe_corrupt_net' WHERE source_id = 'corrupt_net'",
                 libsql::params![],
             )
             .await
@@ -25902,11 +26527,18 @@ pub(crate) mod tests {
         );
         // importance (idx 31) round-trips — completes the corruption net.
         assert_eq!(r.importance, Some(9), "importance (idx 31)");
-        // event_date (idx 32) round-trips — pins the trailing-column alignment.
+        // event_date (idx 32) round-trips.
         assert_eq!(
             r.event_date,
             Some(1_779_602_400),
             "event_date (idx 32) round-trips"
+        );
+        // content_hash (idx 33) round-trips — pins the trailing-column alignment
+        // (the per-document retrieval cap keys on this exact column).
+        assert_eq!(
+            r.content_hash.as_deref(),
+            Some("cafebabe_corrupt_net"),
+            "content_hash (idx 33) round-trips"
         );
     }
 
@@ -31949,6 +32581,7 @@ pub(crate) mod tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 0,
             pending_revision: false,
@@ -34846,6 +35479,161 @@ pub(crate) mod tests {
         db.delete_all_sync_state("obsidian-main").await.unwrap();
         let empty = db.list_sync_state_paths("obsidian-main").await.unwrap();
         assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_document_enrichment_queue_state() {
+        let (db, _dir) = test_db().await;
+
+        // ── enqueue two docs; claim returns them one at a time ──────────────
+        db.enqueue_document("folder-notes", "/notes/a.md", Some("hashA"))
+            .await
+            .unwrap();
+        db.enqueue_document("folder-notes", "/notes/b.md", Some("hashB"))
+            .await
+            .unwrap();
+
+        let first = db.claim_next_pending().await.unwrap().expect("first claim");
+        let second = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("second claim");
+        // Oldest-enqueued first (serial claim).
+        assert_eq!(first.file_path, "/notes/a.md");
+        assert_eq!(second.file_path, "/notes/b.md");
+        // A freshly claimed doc has no completed chunk yet and is in_progress.
+        assert_eq!(first.last_completed_chunk, -1);
+        assert_eq!(first.status, "in_progress");
+        // Both are now in_progress → nothing else claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // ── checkpoint then resume from the saved chunk ─────────────────────
+        db.checkpoint_chunk("folder-notes", "/notes/a.md", 3)
+            .await
+            .unwrap();
+        // Pause it (interrupted attempt, retry available now) so it is claimable.
+        db.mark_paused(
+            "folder-notes",
+            "/notes/a.md",
+            "interrupted",
+            Some(chrono::Utc::now().timestamp()),
+        )
+        .await
+        .unwrap();
+        let resumed = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("resumed claim");
+        assert_eq!(resumed.file_path, "/notes/a.md");
+        assert_eq!(
+            resumed.last_completed_chunk, 3,
+            "claim resumes from the checkpointed chunk"
+        );
+        assert_eq!(resumed.attempt_count, 1, "pause bumped the retry attempt");
+        assert_eq!(resumed.error_detail.as_deref(), Some("interrupted"));
+
+        // ── enqueue same doc twice inserts one row (idempotent no-op) ───────
+        // Re-enqueue the in-progress doc; it must NOT reset the checkpoint.
+        db.enqueue_document("folder-notes", "/notes/a.md", Some("hashA"))
+            .await
+            .unwrap();
+        let after_reenqueue = db
+            .get_queue_entry("folder-notes", "/notes/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_reenqueue.status, "in_progress",
+            "re-enqueue of an existing doc is a no-op"
+        );
+        assert_eq!(
+            after_reenqueue.last_completed_chunk, 3,
+            "re-enqueue preserves the checkpoint"
+        );
+        let row_count: i64 = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM document_enrichment_queue
+                     WHERE source_id = ?1 AND file_path = ?2",
+                    libsql::params!["folder-notes", "/notes/a.md"],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+        };
+        assert_eq!(row_count, 1, "enqueue twice inserts one row");
+
+        // ── mark_done removes it from the claimable set ─────────────────────
+        db.mark_done("folder-notes", "/notes/a.md").await.unwrap();
+        let done = db
+            .get_queue_entry("folder-notes", "/notes/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(done.status, "done");
+        // a.md done, b.md still in_progress → nothing claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // ── dequeue_by_source cancels only that source's rows ───────────────
+        db.enqueue_document("folder-other", "/other/c.md", None)
+            .await
+            .unwrap();
+        db.dequeue_by_source("folder-notes").await.unwrap();
+        assert!(
+            db.get_queue_entry("folder-notes", "/notes/a.md")
+                .await
+                .unwrap()
+                .is_none(),
+            "dequeue_by_source removed the done row"
+        );
+        assert!(
+            db.get_queue_entry("folder-notes", "/notes/b.md")
+                .await
+                .unwrap()
+                .is_none(),
+            "dequeue_by_source removed the in_progress row"
+        );
+        // The other source's row survives and is still claimable.
+        let survivor = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("other source's row survives dequeue");
+        assert_eq!(survivor.source_id, "folder-other");
+        assert_eq!(survivor.file_path, "/other/c.md");
+        assert_eq!(survivor.content_hash, None);
+    }
+
+    #[tokio::test]
+    async fn migration_66_idempotent() {
+        let (db, _dir) = test_db().await;
+        // Roll user_version back to 65 and re-run migrations: the queue table's
+        // CREATE ... IF NOT EXISTS must replay without error.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 65", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        // Table still present.
+        let mut trows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='document_enrichment_queue'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = trows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "document_enrichment_queue table must exist");
+        // user_version restored to current SCHEMA_VERSION.
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
     }
 
     #[tokio::test]
@@ -43336,8 +44124,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (64 after P3 memories.last_distilled_at).
-        assert_eq!(uv, 64);
+        // the current SCHEMA_VERSION (67 after the pages.creation_kind='source' widen).
+        assert_eq!(uv, 67);
     }
 
     #[tokio::test]
@@ -43354,7 +44142,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43388,7 +44176,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 64);
+        assert_eq!(uv, 67);
     }
 
     #[tokio::test]
@@ -43405,7 +44193,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43454,8 +44242,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 64,
-            "terminal version is 64 after P3 memories.last_distilled_at"
+            uv, 67,
+            "terminal version is 67 after the pages.creation_kind='source' widen"
         );
     }
 
@@ -43473,7 +44261,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -45289,5 +46077,63 @@ pub(crate) mod tests {
             .unwrap();
         let got: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(got, Some(now));
+    }
+
+    /// decision-6 provenance: a folder-ingested document upserted with a file
+    /// `content_hash` + `source_agent='folder'` stamps that hash and agent onto
+    /// EVERY chunk row of the file, and the chunker's byte offsets persist.
+    #[tokio::test]
+    async fn provenance_content_hash_stamps_all_document_chunks() {
+        let (db, _dir) = test_db().await;
+
+        // Multi-paragraph content large enough to split into >1 chunk under both
+        // the char-fallback (512) and token-aware (~512 tok) chunker modes.
+        let para = "Wenlan is a local-first personal agent memory layer where \
+            agents write what they learn and humans curate the knowledge base. \
+            The daemon owns all business logic and data while thin clients talk HTTP. ";
+        let content = para.repeat(40);
+
+        let doc = RawDocument {
+            source: "memory".into(),
+            source_id: "src_a::/notes/wenlan.txt".into(),
+            title: "wenlan.txt".into(),
+            content,
+            source_agent: Some("folder".into()),
+            content_hash: Some("abc".into()),
+            last_modified: 1_700_000_000,
+            ..Default::default()
+        };
+
+        let n = db.upsert_documents(vec![doc]).await.unwrap();
+        assert!(n >= 2, "content should split into multiple chunks, got {n}");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content_hash, source_agent, byte_start FROM memories \
+                 WHERE source = 'memory' AND source_id = 'src_a::/notes/wenlan.txt'",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut seen = 0;
+        while let Some(r) = rows.next().await.unwrap() {
+            seen += 1;
+            assert_eq!(
+                r.get::<Option<String>>(0).unwrap().as_deref(),
+                Some("abc"),
+                "every chunk row must carry the file content_hash"
+            );
+            assert_eq!(
+                r.get::<Option<String>>(1).unwrap().as_deref(),
+                Some("folder"),
+                "every chunk row must carry source_agent='folder'"
+            );
+            assert!(
+                r.get::<Option<i64>>(2).unwrap().is_some(),
+                "document chunks must persist non-null byte_start"
+            );
+        }
+        assert_eq!(seen, n, "every upserted chunk row should be returned");
     }
 }

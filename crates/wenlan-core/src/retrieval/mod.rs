@@ -9,6 +9,7 @@ pub mod blend;
 pub(crate) mod compress;
 pub(crate) mod decompose;
 pub(crate) mod dedup;
+pub(crate) mod document_cap;
 pub(crate) mod fact_channel;
 pub(crate) mod fts_query;
 pub(crate) mod hard_filters;

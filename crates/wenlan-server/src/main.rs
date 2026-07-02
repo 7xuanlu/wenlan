@@ -152,6 +152,16 @@ async fn run_daemon() -> anyhow::Result<()> {
         m55.entity_links_inserted
     );
 
+    // Requeue any document-enrichment rows left `in_progress` by a previous run
+    // (a crash / restart mid-enrichment). Their per-chunk checkpoint is
+    // preserved, so the scheduler resumes them from where they stopped rather
+    // than re-analyzing from scratch — restart-from-checkpoint, no manual step.
+    match db_arc.reset_in_progress_documents().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("[doc-enrich] requeued {n} in-progress document(s) for resume"),
+        Err(e) => tracing::warn!("[doc-enrich] reset_in_progress_documents failed: {e}"),
+    }
+
     // Consolidate user-facing assets under ~/.wenlan/.
     // - Ensure ~/.wenlan/{pages, sessions, sessions/_status} exist
     // - Symlink ~/.wenlan/db -> <data_dir> (cosmetic alias; DB stays at

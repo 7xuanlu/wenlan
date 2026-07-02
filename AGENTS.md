@@ -112,7 +112,7 @@ Wenlan runs across several layers. The split is driven by three questions: **(1)
 | **L1 dev loop** | rust-analyzer / IDE | Local | Every save | <1s | No |
 | **L2 pre-commit** | `cargo fmt --all`, clippy on staged crates | Local | `git commit` | ~5s | Yes |
 | **L3 pre-push** | `cargo clippy --workspace --all-targets`, `cargo test --workspace --lib` | Local | `git push` | ~60-90s | Yes |
-| **L4 CI on PR** | Same checks workspace-wide; tests for types + server + CLI; core lib tests + chat_import_e2e + distillation_quality | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
+| **L4 CI on PR** | Same checks workspace-wide; tests for types + server + CLI; core lib tests + chat_import_e2e + distillation_quality + folder_ingest_e2e; live-daemon HTTP acceptance suite — black-box tests against the running daemon; first member `scripts/smoke-folder-ingest.sh` (ingest → search sentinel → delete → reap), new user-facing flows add a script here as they land | GitHub (`ci.yml`) | Every PR | ~10min | Yes (required) |
 | **L5 coverage on PR** | `cargo llvm-cov` on wenlan-core + wenlan-server only | GitHub (`coverage.yml`) | Every PR | ~10min | **No (informational)** |
 | **L6 main canary** | Embedding-only eval (`cargo test -p wenlan-core --lib eval::retrieval -- --ignored`) | GitHub (`ci.yml`) | Push to `main` | ~10min | No (post-merge) |
 | **L7 manual local** | `bash scripts/coverage.sh` (HTML coverage), GPU eval suite (`cargo test -- --ignored`), Anthropic batch judge (`ANTHROPIC_API_KEY=... cargo test ...`) | Your laptop | On demand | minutes-hours | No |

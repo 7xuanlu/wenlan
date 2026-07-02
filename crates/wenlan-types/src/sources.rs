@@ -195,6 +195,10 @@ pub struct RawDocument {
     /// Original prose content, preserved when structured_fields are promoted to primary content
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_text: Option<String>,
+    /// Provenance: content hash of the source file this document came from.
+    /// All chunks of one file share this hash (folder / multi-format ingest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 fn default_enrichment_status() -> String {
@@ -233,6 +237,7 @@ impl Default for RawDocument {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
         }
     }
 }
@@ -260,6 +265,12 @@ pub enum SyncStatus {
     Active,
     Paused,
     Error(String),
+    /// The source root (directory or single file) is missing or unreadable.
+    /// Distinct from `Error` (a sync that ran but hit per-file failures) and
+    /// `Paused` (user-initiated): "root-gone != file-gone", so while a source
+    /// is `Unavailable` the sync deletes nothing. Auto-recovers -- the next
+    /// sync that finds the root live flips it back to `Active`.
+    Unavailable(String),
 }
 
 /// Status of a connected source.
