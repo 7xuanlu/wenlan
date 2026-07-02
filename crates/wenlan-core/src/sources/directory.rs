@@ -72,19 +72,20 @@ fn walk_recursive(dir: &Path, results: &mut Vec<PathBuf>) {
             }
         }
 
+        // Skip symlinks entirely — they don't follow links at all.
+        if fs::symlink_metadata(&path)
+            .map(|m| m.is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
         // If it's a directory, recurse (but skip known non-indexable dirs).
         if path.is_dir() {
             if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
                 if SKIP_DIRS.contains(&dir_name) {
                     continue;
                 }
-            }
-            // Do NOT follow symlinks to avoid cycles.
-            if fs::symlink_metadata(&path)
-                .map(|m| m.is_symlink())
-                .unwrap_or(false)
-            {
-                continue;
             }
             walk_recursive(&path, results);
         }
@@ -303,6 +304,40 @@ mod tests {
         let results = scan_directory(tmp.path());
         assert_eq!(results.len(), 1);
         assert!(results[0].file_name().unwrap().to_str().unwrap() == "file.md");
+    }
+
+    #[test]
+    fn test_scan_ignores_file_symlinks() {
+        let tmp = TempDir::new().unwrap();
+        let external_tmp = TempDir::new().unwrap();
+
+        // Create a file OUTSIDE the scan root
+        let external_file = external_tmp.path().join("external.md");
+        fs::File::create(&external_file)
+            .unwrap()
+            .write_all(b"# External")
+            .unwrap();
+
+        // Create a symlink INSIDE the scan root pointing to the external file
+        let symlink_path = tmp.path().join("symlink.md");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs as unix_fs;
+            let _ = unix_fs::symlink(&external_file, &symlink_path);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs as win_fs;
+            let _ = win_fs::symlink_file(&external_file, &symlink_path);
+        }
+
+        // Scan should NOT include the symlink to the external file
+        let results = scan_directory(tmp.path());
+        assert_eq!(
+            results.len(),
+            0,
+            "symlink to external file should not be scanned"
+        );
     }
 
     #[test]
