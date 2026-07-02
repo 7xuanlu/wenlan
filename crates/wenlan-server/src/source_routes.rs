@@ -196,6 +196,75 @@ fn content_hash_bytes(content: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Finalize a sync by categorizing errors, updating source metadata in config,
+/// fetching paused status, and building the response.
+/// Extracted to avoid duplication between Directory and Obsidian sync branches.
+#[allow(clippy::too_many_arguments)]
+async fn finalize_sync(
+    db: Arc<wenlan_core::db::MemoryDB>,
+    config_id: &str,
+    files_found: usize,
+    ingested: usize,
+    skipped: usize,
+    errors: usize,
+    file_errors: usize,
+    gdrive_errors: usize,
+) -> Result<SyncStatsResponse, ServerError> {
+    // Categorize errors for user-facing display. If most of the per-file
+    // errors came from Google Drive online-only files, surface that
+    // specifically so the user knows the fix is "make files available
+    // offline in Finder". We compare per-file counts (not the mixed
+    // files+chunks `errors` total) so a single upsert failure on a
+    // multi-chunk file doesn't skew the threshold.
+    let error_detail: Option<String> = if errors == 0 {
+        None
+    } else if file_errors > 0 && gdrive_errors * 2 >= file_errors {
+        Some("google_drive_offline".to_string())
+    } else {
+        Some("file_read_errors".to_string())
+    };
+
+    tracing::info!(
+        "[sync] {} complete: {} files, {} ingested, {} skipped, {} errors ({:?})",
+        config_id,
+        files_found,
+        ingested,
+        skipped,
+        errors,
+        error_detail
+    );
+
+    // Update source metadata in config. This is the canonical write path —
+    // the Tauri-side `sync_registered_source` command used to also write here
+    // which double-counted `memory_count`; it now skips the write.
+    let mut config = wenlan_core::config::load_config();
+    if let Some(src) = config.sources.iter_mut().find(|s| s.id == config_id) {
+        src.last_sync = Some(chrono::Utc::now().timestamp());
+        src.file_count = files_found as u64;
+        src.memory_count = src.memory_count.saturating_add(ingested as u64);
+        src.last_sync_errors = errors as u64;
+        src.last_sync_error_detail = error_detail.clone();
+    }
+    let _ = wenlan_core::config::save_config(&config);
+
+    // Surface any paused background document-enrichment so a sync caller sees
+    // the queue is stalled on an LLM failure (waiting for a backoff retry).
+    let paused = db
+        .document_enrichment_queue_status()
+        .await
+        .ok()
+        .and_then(|q| q.paused_reason);
+
+    Ok(SyncStatsResponse {
+        files_found,
+        ingested,
+        skipped,
+        errors,
+        error_detail,
+        paused,
+    })
+}
+
 /// POST /api/sources/{id}/sync — Trigger a sync for a source.
 ///
 /// Scans the source directory for markdown files, compares mtime and content
@@ -291,48 +360,18 @@ pub async fn handle_sync_source(
             }
         }
 
-        let error_detail: Option<String> = if errors == 0 {
-            None
-        } else if file_errors > 0 && gdrive_errors * 2 >= file_errors {
-            Some("google_drive_offline".to_string())
-        } else {
-            Some("file_read_errors".to_string())
-        };
-
-        tracing::info!(
-            "[sync] {} complete: {} files, {} enqueued, {} skipped, {} errors ({:?})",
-            id,
+        return finalize_sync(
+            db,
+            &id,
             files.len(),
             ingested,
             skipped,
             errors,
-            error_detail
-        );
-
-        let mut config = wenlan_core::config::load_config();
-        if let Some(src) = config.sources.iter_mut().find(|s| s.id == id) {
-            src.last_sync = Some(chrono::Utc::now().timestamp());
-            src.file_count = files.len() as u64;
-            src.memory_count = src.memory_count.saturating_add(ingested as u64);
-            src.last_sync_errors = errors as u64;
-            src.last_sync_error_detail = error_detail.clone();
-        }
-        let _ = wenlan_core::config::save_config(&config);
-
-        let paused = db
-            .document_enrichment_queue_status()
-            .await
-            .ok()
-            .and_then(|q| q.paused_reason);
-
-        return Ok(Json(SyncStatsResponse {
-            files_found: files.len(),
-            ingested,
-            skipped,
-            errors,
-            error_detail,
-            paused,
-        }));
+            file_errors,
+            gdrive_errors,
+        )
+        .await
+        .map(Json);
     }
 
     let md_files = scan_vault(&source.path);
@@ -444,59 +483,18 @@ pub async fn handle_sync_source(
         }
     }
 
-    // Categorize errors for user-facing display. If most of the per-file
-    // errors came from Google Drive online-only files, surface that
-    // specifically so the user knows the fix is "make files available
-    // offline in Finder". We compare per-file counts (not the mixed
-    // files+chunks `errors` total) so a single upsert failure on a
-    // multi-chunk file doesn't skew the threshold.
-    let error_detail: Option<String> = if errors == 0 {
-        None
-    } else if file_errors > 0 && gdrive_errors * 2 >= file_errors {
-        Some("google_drive_offline".to_string())
-    } else {
-        Some("file_read_errors".to_string())
-    };
-
-    tracing::info!(
-        "[sync] {} complete: {} files, {} ingested, {} skipped, {} errors ({:?})",
-        id,
+    finalize_sync(
+        db,
+        &id,
         md_files.len(),
         ingested,
         skipped,
         errors,
-        error_detail
-    );
-
-    // Update source metadata in config. This is the canonical write path —
-    // the Tauri-side `sync_registered_source` command used to also write here
-    // which double-counted `memory_count`; it now skips the write.
-    let mut config = wenlan_core::config::load_config();
-    if let Some(src) = config.sources.iter_mut().find(|s| s.id == id) {
-        src.last_sync = Some(chrono::Utc::now().timestamp());
-        src.file_count = md_files.len() as u64;
-        src.memory_count = src.memory_count.saturating_add(ingested as u64);
-        src.last_sync_errors = errors as u64;
-        src.last_sync_error_detail = error_detail.clone();
-    }
-    let _ = wenlan_core::config::save_config(&config);
-
-    // Surface any paused background document-enrichment so a sync caller sees
-    // the queue is stalled on an LLM failure (waiting for a backoff retry).
-    let paused = db
-        .document_enrichment_queue_status()
-        .await
-        .ok()
-        .and_then(|q| q.paused_reason);
-
-    Ok(Json(SyncStatsResponse {
-        files_found: md_files.len(),
-        ingested,
-        skipped,
-        errors,
-        error_detail,
-        paused,
-    }))
+        file_errors,
+        gdrive_errors,
+    )
+    .await
+    .map(Json)
 }
 
 #[cfg(test)]
