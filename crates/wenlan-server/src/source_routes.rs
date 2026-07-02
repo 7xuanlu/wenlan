@@ -298,6 +298,209 @@ async fn finalize_sync(
     })
 }
 
+/// Core Directory-source sync: root-guard + cheap mtime/hash diff + deletion
+/// propagation + rename optimization, enqueueing changed files for background
+/// document enrichment. This is the ONE shared routine so the HTTP handler
+/// (`handle_sync_source`) and the background scheduler (§4) never re-implement
+/// the diff. The caller guarantees `source.source_type == SourceType::Directory`.
+///
+/// Unlike the Obsidian branch, this path needs no `ServerState` (no quality
+/// gate): it depends only on the DB, the source, and the resolved
+/// `knowledge_path` from config, so it stays framework-light and testable.
+pub(crate) async fn sync_directory_source(
+    db: Arc<wenlan_core::db::MemoryDB>,
+    source: &Source,
+    config: &wenlan_core::config::Config,
+) -> Result<SyncStatsResponse, ServerError> {
+    let id = source.id.clone();
+
+    // Root-guard (§4/§5): a missing/unreadable root means "source
+    // unavailable", NOT "every file deleted". Mark it unavailable, diff
+    // nothing, delete zero rows, and return early — a later sync that finds
+    // the root live auto-recovers it. For a single-file source the root IS
+    // the file, so a deleted file lands here too: never auto-deleted, the
+    // user removes the source explicitly.
+    if !directory_root_is_live(&source.path) {
+        mark_source_unavailable(&id, "source path is missing or unreadable");
+        return Ok(SyncStatsResponse {
+            files_found: 0,
+            ingested: 0,
+            skipped: 0,
+            errors: 0,
+            error_detail: None,
+            paused: None,
+        });
+    }
+
+    let files = scan_directory(&source.path);
+    let knowledge_path = config.knowledge_path_or_default();
+    let scanned: std::collections::HashSet<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+
+    // Deletion propagation & rename optimization setup (§4/§5):
+    // - The root is live, so any tracked file NOT in the current scan vanished.
+    // - Capture content_hash of vanished files for rename optimization.
+    // - If a new file's hash matches a vanished file's, rebind chunks instead of
+    //   delete+enqueue (pure-DB op: UPDATE memories.source_id old→new).
+    // - For non-matching files, delete normally and enqueue for re-enrichment.
+    //
+    // Build a hash->vanished_file map first, before enqueuing new files.
+    let mut vanished_by_hash: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new(); // hash -> (old_doc_source_id, old_path)
+    let mut files_to_delete: Vec<(String, String)> = Vec::new(); // (path, doc_source_id)
+
+    if let Ok(tracked) = db.list_sync_state_paths(&id).await {
+        for tracked_path in tracked {
+            if scanned.contains(&tracked_path) {
+                continue;
+            }
+            // Fetch the vanished file's sync state to get its content_hash.
+            if let Ok(Some(sync_state)) = db.get_sync_state(&id, &tracked_path).await {
+                let doc_source_id = wenlan_core::sources::directory::document_source_id(
+                    &id,
+                    std::path::Path::new(&tracked_path),
+                    Some(&knowledge_path),
+                );
+                // Record this vanished file's hash for the optimization.
+                vanished_by_hash.insert(
+                    sync_state.content_hash.clone(),
+                    (doc_source_id.clone(), tracked_path.clone()),
+                );
+                files_to_delete.push((tracked_path.clone(), doc_source_id));
+            }
+        }
+    }
+
+    let mut ingested: usize = 0;
+    let mut skipped: usize = 0;
+    let mut errors: usize = 0;
+    let mut file_errors: usize = 0;
+    let mut gdrive_errors: usize = 0;
+    let mut renamed_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for file_path in &files {
+        let file_key = file_path.to_string_lossy().to_string();
+        let is_gdrive = is_google_drive_path(file_path);
+
+        let metadata = match std::fs::metadata(file_path) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("[sync] stat failed for {}: {}", file_path.display(), e);
+                errors += 1;
+                file_errors += 1;
+                if is_gdrive {
+                    gdrive_errors += 1;
+                }
+                continue;
+            }
+        };
+        let mtime_ns = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+
+        let existing = db.get_sync_state(&id, &file_key).await.ok().flatten();
+        if let Some(ref ss) = existing {
+            if ss.mtime_ns == mtime_ns {
+                skipped += 1;
+                continue;
+            }
+        }
+
+        let bytes = match std::fs::read(file_path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::warn!("[sync] read failed for {}: {}", file_path.display(), e);
+                errors += 1;
+                file_errors += 1;
+                if is_gdrive {
+                    gdrive_errors += 1;
+                }
+                continue;
+            }
+        };
+        let hash = content_hash_bytes(&bytes);
+        if let Some(ref ss) = existing {
+            if ss.content_hash == hash {
+                let _ = db.upsert_sync_state(&id, &file_key, mtime_ns, &hash).await;
+                skipped += 1;
+                continue;
+            }
+        }
+
+        // Rename optimization: check if this file's hash matches a vanished file's.
+        if let Some((old_doc_source_id, old_path)) = vanished_by_hash.get(&hash) {
+            // This file has the same content as a vanished file — rebind instead of re-enqueue.
+            let new_doc_source_id = wenlan_core::sources::directory::document_source_id(
+                &id,
+                file_path,
+                Some(&knowledge_path),
+            );
+
+            // UPDATE memories: rebind chunks from old_doc_source_id to new_doc_source_id.
+            if let Err(e) = db
+                .rebind_source_id("memory", old_doc_source_id.as_str(), &new_doc_source_id)
+                .await
+            {
+                tracing::warn!(
+                    "[sync] rebind failed for {} (renamed from {}): {}",
+                    file_path.display(),
+                    old_path,
+                    e
+                );
+                errors += 1;
+                continue;
+            }
+
+            // Delete old sync_state, create new sync_state for the new path.
+            let _ = db.delete_sync_state(&id, old_path).await;
+            let _ = db.upsert_sync_state(&id, &file_key, mtime_ns, &hash).await;
+
+            // Mark this file as renamed (don't delete it later).
+            renamed_files.insert(old_path.clone());
+            // Skipped instead of ingested: chunks reused, not re-enriched.
+            skipped += 1;
+            continue;
+        }
+
+        // Normal enqueue (no rename match).
+        match db.enqueue_document(&id, &file_key, Some(&hash)).await {
+            Ok(_) => {
+                ingested += 1;
+            }
+            Err(e) => {
+                tracing::error!("[sync] enqueue failed for {}: {}", file_path.display(), e);
+                errors += 1;
+            }
+        }
+    }
+
+    // Clean up vanished files that were not renamed (sources matched earlier).
+    for (path, doc_source_id) in files_to_delete {
+        if !renamed_files.contains(&path) {
+            let _ = db.delete_by_source_id("memory", &doc_source_id).await;
+            let _ = db.delete_sync_state(&id, &path).await;
+            let _ = db.dequeue_document(&id, &path).await;
+        }
+    }
+
+    finalize_sync(
+        db,
+        &id,
+        files.len(),
+        ingested,
+        skipped,
+        errors,
+        file_errors,
+        gdrive_errors,
+    )
+    .await
+}
+
 /// POST /api/sources/{id}/sync — Trigger a sync for a source.
 ///
 /// Scans the source directory for markdown files, compares mtime and content
@@ -323,192 +526,7 @@ pub async fn handle_sync_source(
     };
 
     if source.source_type == SourceType::Directory {
-        // Root-guard (§4/§5): a missing/unreadable root means "source
-        // unavailable", NOT "every file deleted". Mark it unavailable, diff
-        // nothing, delete zero rows, and return early — a later sync that finds
-        // the root live auto-recovers it. For a single-file source the root IS
-        // the file, so a deleted file lands here too: never auto-deleted, the
-        // user removes the source explicitly.
-        if !directory_root_is_live(&source.path) {
-            mark_source_unavailable(&id, "source path is missing or unreadable");
-            return Ok(Json(SyncStatsResponse {
-                files_found: 0,
-                ingested: 0,
-                skipped: 0,
-                errors: 0,
-                error_detail: None,
-                paused: None,
-            }));
-        }
-
-        let files = scan_directory(&source.path);
-        let knowledge_path = config.knowledge_path_or_default();
-        let scanned: std::collections::HashSet<String> = files
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
-
-        // Deletion propagation & rename optimization setup (§4/§5):
-        // - The root is live, so any tracked file NOT in the current scan vanished.
-        // - Capture content_hash of vanished files for rename optimization.
-        // - If a new file's hash matches a vanished file's, rebind chunks instead of
-        //   delete+enqueue (pure-DB op: UPDATE memories.source_id old→new).
-        // - For non-matching files, delete normally and enqueue for re-enrichment.
-        //
-        // Build a hash->vanished_file map first, before enqueuing new files.
-        let mut vanished_by_hash: std::collections::HashMap<String, (String, String)> =
-            std::collections::HashMap::new(); // hash -> (old_doc_source_id, old_path)
-        let mut files_to_delete: Vec<(String, String)> = Vec::new(); // (path, doc_source_id)
-
-        if let Ok(tracked) = db.list_sync_state_paths(&id).await {
-            for tracked_path in tracked {
-                if scanned.contains(&tracked_path) {
-                    continue;
-                }
-                // Fetch the vanished file's sync state to get its content_hash.
-                if let Ok(Some(sync_state)) = db.get_sync_state(&id, &tracked_path).await {
-                    let doc_source_id = wenlan_core::sources::directory::document_source_id(
-                        &id,
-                        std::path::Path::new(&tracked_path),
-                        Some(&knowledge_path),
-                    );
-                    // Record this vanished file's hash for the optimization.
-                    vanished_by_hash.insert(
-                        sync_state.content_hash.clone(),
-                        (doc_source_id.clone(), tracked_path.clone()),
-                    );
-                    files_to_delete.push((tracked_path.clone(), doc_source_id));
-                }
-            }
-        }
-
-        let mut ingested: usize = 0;
-        let mut skipped: usize = 0;
-        let mut errors: usize = 0;
-        let mut file_errors: usize = 0;
-        let mut gdrive_errors: usize = 0;
-        let mut renamed_files: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        for file_path in &files {
-            let file_key = file_path.to_string_lossy().to_string();
-            let is_gdrive = is_google_drive_path(file_path);
-
-            let metadata = match std::fs::metadata(file_path) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!("[sync] stat failed for {}: {}", file_path.display(), e);
-                    errors += 1;
-                    file_errors += 1;
-                    if is_gdrive {
-                        gdrive_errors += 1;
-                    }
-                    continue;
-                }
-            };
-            let mtime_ns = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos() as i64)
-                .unwrap_or(0);
-
-            let existing = db.get_sync_state(&id, &file_key).await.ok().flatten();
-            if let Some(ref ss) = existing {
-                if ss.mtime_ns == mtime_ns {
-                    skipped += 1;
-                    continue;
-                }
-            }
-
-            let bytes = match std::fs::read(file_path) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    tracing::warn!("[sync] read failed for {}: {}", file_path.display(), e);
-                    errors += 1;
-                    file_errors += 1;
-                    if is_gdrive {
-                        gdrive_errors += 1;
-                    }
-                    continue;
-                }
-            };
-            let hash = content_hash_bytes(&bytes);
-            if let Some(ref ss) = existing {
-                if ss.content_hash == hash {
-                    let _ = db.upsert_sync_state(&id, &file_key, mtime_ns, &hash).await;
-                    skipped += 1;
-                    continue;
-                }
-            }
-
-            // Rename optimization: check if this file's hash matches a vanished file's.
-            if let Some((old_doc_source_id, old_path)) = vanished_by_hash.get(&hash) {
-                // This file has the same content as a vanished file — rebind instead of re-enqueue.
-                let new_doc_source_id = wenlan_core::sources::directory::document_source_id(
-                    &id,
-                    file_path,
-                    Some(&knowledge_path),
-                );
-
-                // UPDATE memories: rebind chunks from old_doc_source_id to new_doc_source_id.
-                if let Err(e) = db
-                    .rebind_source_id("memory", old_doc_source_id.as_str(), &new_doc_source_id)
-                    .await
-                {
-                    tracing::warn!(
-                        "[sync] rebind failed for {} (renamed from {}): {}",
-                        file_path.display(),
-                        old_path,
-                        e
-                    );
-                    errors += 1;
-                    continue;
-                }
-
-                // Delete old sync_state, create new sync_state for the new path.
-                let _ = db.delete_sync_state(&id, old_path).await;
-                let _ = db.upsert_sync_state(&id, &file_key, mtime_ns, &hash).await;
-
-                // Mark this file as renamed (don't delete it later).
-                renamed_files.insert(old_path.clone());
-                // Skipped instead of ingested: chunks reused, not re-enriched.
-                skipped += 1;
-                continue;
-            }
-
-            // Normal enqueue (no rename match).
-            match db.enqueue_document(&id, &file_key, Some(&hash)).await {
-                Ok(_) => {
-                    ingested += 1;
-                }
-                Err(e) => {
-                    tracing::error!("[sync] enqueue failed for {}: {}", file_path.display(), e);
-                    errors += 1;
-                }
-            }
-        }
-
-        // Clean up vanished files that were not renamed (sources matched earlier).
-        for (path, doc_source_id) in files_to_delete {
-            if !renamed_files.contains(&path) {
-                let _ = db.delete_by_source_id("memory", &doc_source_id).await;
-                let _ = db.delete_sync_state(&id, &path).await;
-                let _ = db.dequeue_document(&id, &path).await;
-            }
-        }
-
-        return finalize_sync(
-            db,
-            &id,
-            files.len(),
-            ingested,
-            skipped,
-            errors,
-            file_errors,
-            gdrive_errors,
-        )
-        .await
-        .map(Json);
+        return sync_directory_source(db, &source, &config).await.map(Json);
     }
 
     let md_files = scan_vault(&source.path);

@@ -25,6 +25,11 @@ const BACKSTOP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// Initial delay — lets on-device model warm up before first backstop.
 const INITIAL_DELAY: Duration = Duration::from_secs(60);
+/// Bounded per-poll drain of the document-enrichment queue. Serial (one doc at a
+/// time); caps how many queued documents a single poll processes so a large
+/// backlog can't monopolize the poll loop (steeps, page-watcher). Per-chunk
+/// checkpointing means the remainder is simply picked up on the next poll.
+const MAX_DOC_ENRICH_PER_POLL: usize = 4;
 
 /// Lightweight write-event tracker shared between store handlers and the scheduler.
 ///
@@ -224,6 +229,24 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 Err(e) => tracing::warn!("[scheduler] page-watcher error: {e}"),
             }
 
+            // --- 0b. Directory sources: mtime/hash sync + document-enrichment
+            //         queue drive (§4). ---
+            //
+            // Mirrors the page-watcher Step-0 as a cheap per-poll pass: run the
+            // SAME sync routine the HTTP handler runs over each registered
+            // Directory source (mtime+hash diff, deletion propagation — no LLM),
+            // then advance the enrichment queue by claiming and processing the
+            // next pending document(s) serially through run_document_enrichment.
+            // A paused queue backing off is skipped by claim_next_pending until
+            // its next_retry_at elapses (backoff auto-resume). `db`/`llm`/`prompts`
+            // are already snapshotted out of the read guard above.
+            let doc_llm = api_llm.as_ref().or(llm.as_ref());
+            let processed =
+                run_directory_sync_tick(&db, doc_llm, &prompts, MAX_DOC_ENRICH_PER_POLL).await;
+            if processed > 0 {
+                tracing::info!("[scheduler] document enrichment processed {processed} doc(s)");
+            }
+
             // --- 1. BurstEnd: per-agent adaptive gap detection ---
             let snap = write_signal.snapshot();
             for (agent, timestamps) in &snap {
@@ -365,6 +388,74 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             }
         }
     });
+}
+
+/// One Directory-source sync + document-enrichment-queue-drive pass (§4).
+/// Factored out of the 30s poll loop so it is unit-testable without the timer.
+///
+/// Each call:
+/// 1. syncs every registered Directory source via the SHARED
+///    [`crate::source_routes::sync_directory_source`] (cheap mtime/hash diff +
+///    deletion propagation — no LLM, no network), enqueueing changed files, then
+/// 2. drains up to `max_docs` claimable documents through
+///    [`wenlan_core::document_enrichment::run_document_enrichment`] serially (one
+///    at a time — the daemon is the single writer).
+///
+/// Backoff is honored for free: [`wenlan_core::db::MemoryDB::claim_next_pending`]
+/// returns only `pending` rows or `paused` rows whose `next_retry_at` has
+/// elapsed, so a paused queue waiting on its backoff is skipped. A pause during
+/// the drain stops this cycle (don't hammer a down provider); the next poll
+/// resumes once the backoff clears. Returns the number of documents processed.
+async fn run_directory_sync_tick(
+    db: &Arc<wenlan_core::db::MemoryDB>,
+    llm: Option<&Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+    prompts: &wenlan_core::prompts::PromptRegistry,
+    max_docs: usize,
+) -> usize {
+    let config = wenlan_core::config::load_config();
+    let knowledge_path = config.knowledge_path_or_default();
+
+    // 1. Sync every Directory source (log-and-continue on error).
+    for source in config
+        .sources
+        .iter()
+        .filter(|s| s.source_type == wenlan_types::sources::SourceType::Directory)
+    {
+        if let Err(e) =
+            crate::source_routes::sync_directory_source(db.clone(), source, &config).await
+        {
+            tracing::warn!("[scheduler] directory sync '{}' failed: {e}", source.id);
+        }
+    }
+
+    // 2. Drive the enrichment queue serially (bounded drain).
+    let mut processed = 0usize;
+    for _ in 0..max_docs {
+        match db.claim_next_pending().await {
+            Ok(Some(entry)) => {
+                let outcome = wenlan_core::document_enrichment::run_document_enrichment(
+                    db,
+                    &entry,
+                    Some(&knowledge_path),
+                    llm,
+                    prompts,
+                )
+                .await;
+                processed += 1;
+                if outcome.paused {
+                    // Provider/DB is failing; stop draining this cycle. The row is
+                    // paused with a backoff and auto-resumes on a later poll.
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!("[scheduler] claim_next_pending failed: {e}");
+                break;
+            }
+        }
+    }
+    processed
 }
 
 /// Load the persisted last_daily_steep_ts from DB. Returns epoch seconds or 0.
@@ -653,5 +744,206 @@ mod tests {
         let snap = ws.snapshot();
         assert!(!snap.contains_key("claude"));
         assert_eq!(snap["obsidian"].len(), 3);
+    }
+
+    // ── §4 Directory-source sync + enrichment-queue-drive tick ───────────────
+
+    /// Isolate `WENLAN_DATA_DIR` (config lives there) to a tempdir for the
+    /// duration of a test; restore the prior value on drop.
+    struct DataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
+            }
+        }
+    }
+
+    fn register_directory_source(id: &str, path: &std::path::Path) {
+        wenlan_core::config::save_config(&wenlan_core::config::Config {
+            sources: vec![wenlan_types::sources::Source {
+                id: id.to_string(),
+                source_type: wenlan_types::sources::SourceType::Directory,
+                path: path.to_path_buf(),
+                status: wenlan_types::sources::SyncStatus::Active,
+                last_sync: None,
+                file_count: 0,
+                memory_count: 0,
+                last_sync_errors: 0,
+                last_sync_error_detail: None,
+            }],
+            ..wenlan_core::config::Config::default()
+        })
+        .unwrap();
+    }
+
+    async fn new_test_db() -> (Arc<wenlan_core::db::MemoryDB>, tempfile::TempDir) {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(
+                db_dir.path(),
+                Arc::new(wenlan_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap(),
+        );
+        (db, db_dir)
+    }
+
+    /// One poll tick over a Directory source with a fresh file must enqueue AND
+    /// process it into searchable chunks plus a SOURCE page. With no LLM, the
+    /// enrichment route still embeds every chunk (searchable) and writes the
+    /// deterministic stub SOURCE page — exactly what the page-watcher Step-0
+    /// precedent does for its own cheap per-poll pass.
+    #[tokio::test]
+    async fn directory_sync_tick_processes_new_file_into_chunks_and_source_page() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+
+        let source_root = tempfile::tempdir().unwrap();
+        let file_path = source_root.path().join("note.txt");
+        let mut body =
+            String::from("Wenlanborg is the code name for the folder ingestion subsystem.\n\n");
+        for i in 0..40 {
+            body.push_str(&format!(
+                "Paragraph {i} describes the document ingestion pipeline in concrete detail so the \
+                 chunker splits it into multiple sections rather than a single chunk.\n\n"
+            ));
+        }
+        std::fs::write(&file_path, &body).unwrap();
+
+        let source_id = "directory-notes".to_string();
+        register_directory_source(&source_id, source_root.path());
+
+        let (db, _db_dir) = new_test_db().await;
+        let prompts = wenlan_core::prompts::PromptRegistry::default();
+
+        // One tick: sync (enqueue the file) + drive the queue (process it).
+        let processed = run_directory_sync_tick(&db, None, &prompts, 10).await;
+        assert_eq!(processed, 1, "the one new file is claimed and processed");
+
+        // The file's chunks are stored + searchable.
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+        let doc_source_id = wenlan_core::sources::directory::document_source_id(
+            &source_id,
+            &file_path,
+            Some(&knowledge_path),
+        );
+        let chunks = db
+            .get_memories_by_source_id("memory", &doc_source_id)
+            .await
+            .unwrap();
+        assert!(
+            !chunks.is_empty(),
+            "the new file must produce stored chunks"
+        );
+
+        let results = db
+            .search_memory("Wenlanborg", 30, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            results.iter().any(|r| r.source_id == doc_source_id),
+            "the new file's chunks must be searchable"
+        );
+
+        // A SOURCE page was written for the document.
+        let pages = db.list_pages("active", 100, 0).await.unwrap();
+        assert!(
+            pages.iter().any(|p| p.creation_kind == "source"),
+            "a source page must be written for the document"
+        );
+
+        // Queue row marked done.
+        let q = db
+            .get_queue_entry(&source_id, &file_path.to_string_lossy())
+            .await
+            .unwrap()
+            .expect("queue entry exists after processing");
+        assert_eq!(q.status, "done");
+    }
+
+    /// A paused queue row whose backoff has not elapsed must be SKIPPED by the
+    /// tick (backoff auto-resume): `claim_next_pending` never returns it, so it
+    /// is not processed and no chunks materialize.
+    #[tokio::test]
+    async fn directory_sync_tick_skips_paused_queue_with_future_retry() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+
+        // Registered but empty source: sync finds nothing to enqueue.
+        let source_root = tempfile::tempdir().unwrap();
+        let source_id = "directory-notes".to_string();
+        register_directory_source(&source_id, source_root.path());
+
+        let (db, _db_dir) = new_test_db().await;
+        let prompts = wenlan_core::prompts::PromptRegistry::default();
+
+        // A paused document whose retry is an hour out.
+        let paused_path = source_root
+            .path()
+            .join("paused.txt")
+            .to_string_lossy()
+            .to_string();
+        db.enqueue_document(&source_id, &paused_path, Some("hash-paused"))
+            .await
+            .unwrap();
+        let future_retry = chrono::Utc::now().timestamp() + 3600;
+        db.mark_paused(
+            &source_id,
+            &paused_path,
+            "analysis LLM failed",
+            Some(future_retry),
+        )
+        .await
+        .unwrap();
+
+        let processed = run_directory_sync_tick(&db, None, &prompts, 10).await;
+        assert_eq!(processed, 0, "a paused row with a future retry is skipped");
+
+        let q = db
+            .get_queue_entry(&source_id, &paused_path)
+            .await
+            .unwrap()
+            .expect("paused entry remains");
+        assert_eq!(q.status, "paused", "the row is still paused, not processed");
+
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+        let doc_source_id = wenlan_core::sources::directory::document_source_id(
+            &source_id,
+            std::path::Path::new(&paused_path),
+            Some(&knowledge_path),
+        );
+        let chunks = db
+            .get_memories_by_source_id("memory", &doc_source_id)
+            .await
+            .unwrap();
+        assert!(
+            chunks.is_empty(),
+            "a skipped paused document must not be processed into chunks"
+        );
     }
 }
