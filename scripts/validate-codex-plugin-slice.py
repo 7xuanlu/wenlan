@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Validate the hand-authored Codex plugin vertical slice.
+"""Validate the hand-authored Codex plugin surface.
 
 This is intentionally narrower than the Codex plugin validator. It checks the
-Wenlan-specific slice contract for the first manual Codex port before any shared
-generator exists.
+Wenlan-specific surface contract before any shared generator exists.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugin-codex"
-REQUIRED_SKILLS = ("init", "capture", "brief")
 REQUIRED_SKILL_INTERFACE = {
     "brief": {
         "display_name": "Wenlan Brief",
@@ -25,10 +23,66 @@ REQUIRED_SKILL_INTERFACE = {
         "display_name": "Wenlan Capture",
         "short_description": "Save a durable memory to Wenlan from the current conversation",
     },
+    "curate": {
+        "display_name": "Wenlan Curate",
+        "short_description": "Review pending Wenlan captures or revisions from Codex",
+    },
+    "debrief": {
+        "display_name": "Wenlan Debrief",
+        "short_description": "End a Codex session using the brief/debrief naming pair",
+    },
+    "distill": {
+        "display_name": "Wenlan Distill",
+        "short_description": "Synthesize or refresh source-backed Wenlan pages",
+    },
+    "forget": {
+        "display_name": "Wenlan Forget",
+        "short_description": "Delete a Wenlan memory by exact id with confirmation",
+    },
+    "handoff": {
+        "display_name": "Wenlan Handoff",
+        "short_description": "End a Codex session with Wenlan captures and session status",
+    },
+    "help": {
+        "display_name": "Wenlan Help",
+        "short_description": "Show the Codex Wenlan command reference",
+    },
     "init": {
         "display_name": "Wenlan Init",
         "short_description": "Set up and verify the local Wenlan daemon and MCP bridge",
     },
+    "pages": {
+        "display_name": "Wenlan Pages",
+        "short_description": "List or open distilled Wenlan pages from Codex",
+    },
+    "recall": {
+        "display_name": "Wenlan Recall",
+        "short_description": "Search Wenlan memories from Codex",
+    },
+}
+SKILLS_WITHOUT_MCP_REFERENCE = {"help", "pages"}
+SKILLS_USING_RESOLVER = {"brief", "capture", "debrief", "distill", "handoff", "recall"}
+REQUIRED_GUARDRAILS = {
+    "forget": [
+        "cannot be undone",
+        "delete <id>",
+        "Always confirm with the user before calling forget",
+    ],
+    "distill": [
+        "rebuild <page-id>",
+        "force=true",
+        "user-edited page prose is wiped",
+    ],
+    "curate": [
+        "revision_source_id",
+        "Perform no mutation until the user replies",
+        "Ambiguous replies do not mutate",
+    ],
+    "debrief": [
+        "Pending-captures preview",
+        "MCP captures",
+        "Write session log",
+    ],
 }
 CLAUDE_ONLY_TOKENS = (
     "CLAUDE_PLUGIN_ROOT",
@@ -64,6 +118,24 @@ def assert_no_claude_tokens(path: Path) -> None:
     for token in CLAUDE_ONLY_TOKENS:
         if token in text:
             fail(f"{path.relative_to(ROOT)} contains Claude-only token {token!r}")
+
+
+def shared_codex_skills() -> tuple[str, ...]:
+    contract = read_json(ROOT / "plugin-contract.json")
+    skills: list[str] = []
+    for item in contract.get("skills", []):
+        if not isinstance(item, dict):
+            fail("plugin-contract.json skills entries must be objects")
+        if item.get("status") == "shared_now":
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                fail("shared plugin-contract skill entries must have names")
+            if item.get("codex_user_invocable") is not True:
+                fail(f"shared skill {name} must set codex_user_invocable true")
+            if item.get("codex_openai_interface") is not True:
+                fail(f"shared skill {name} must set codex_openai_interface true")
+            skills.append(name)
+    return tuple(sorted(skills))
 
 
 def validate_manifest() -> None:
@@ -104,8 +176,20 @@ def validate_runner() -> None:
         fail("Codex MCP runner must pass an explicit codex agent name")
 
 
+def validate_resolver() -> None:
+    resolver = PLUGIN / "bin" / "resolve-space.sh"
+    assert_file(resolver)
+    assert_no_claude_tokens(resolver)
+
+
 def validate_skills() -> None:
-    for skill in REQUIRED_SKILLS:
+    required_skills = shared_codex_skills()
+    if set(REQUIRED_SKILL_INTERFACE) != set(required_skills):
+        fail(
+            "REQUIRED_SKILL_INTERFACE must exactly match shared Codex skills: "
+            f"{sorted(required_skills)}"
+        )
+    for skill in required_skills:
         path = PLUGIN / "skills" / skill / "SKILL.md"
         metadata_path = PLUGIN / "skills" / skill / "agents" / "openai.yaml"
         assert_file(path)
@@ -117,8 +201,13 @@ def validate_skills() -> None:
             fail(f"{path.relative_to(ROOT)} frontmatter must name {skill}")
         if "user-invocable: true" not in text:
             fail(f"{path.relative_to(ROOT)} must be marked user-invocable for slash autocomplete")
-        if "mcp__wenlan__" not in text:
+        if skill not in SKILLS_WITHOUT_MCP_REFERENCE and "mcp__wenlan__" not in text:
             fail(f"{path.relative_to(ROOT)} must use Codex wenlan MCP tool names")
+        if skill in SKILLS_USING_RESOLVER and "plugin-codex/bin/resolve-space.sh" not in text:
+            fail(f"{path.relative_to(ROOT)} must use plugin-codex/bin/resolve-space.sh")
+        for needle in REQUIRED_GUARDRAILS.get(skill, []):
+            if needle not in text:
+                fail(f"{path.relative_to(ROOT)} must contain guardrail {needle!r}")
         metadata = metadata_path.read_text(encoding="utf-8")
         expected = REQUIRED_SKILL_INTERFACE[skill]
         if "interface:" not in metadata:
@@ -129,11 +218,37 @@ def validate_skills() -> None:
                 fail(f"{metadata_path.relative_to(ROOT)} must contain {expected_line}")
 
 
+def validate_pages_skill() -> None:
+    path = PLUGIN / "skills" / "pages" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    required = [
+        "wenlan pages",
+        "Never read a page body",
+        "Do not use a picker",
+        "If several pages match, print the CLI output",
+        "If `wenlan` is not found, tell the user to run `/init`",
+    ]
+    for needle in required:
+        if needle not in text:
+            fail(f"{path.relative_to(ROOT)} must contain {needle!r}")
+    forbidden = [
+        "AskUserQuestion",
+        "native picker",
+        "command sandbox DISABLED",
+        "mcp__plugin_wenlan_wenlan__",
+    ]
+    for needle in forbidden:
+        if needle in text:
+            fail(f"{path.relative_to(ROOT)} must not contain {needle!r}")
+
+
 def main() -> None:
     validate_manifest()
     validate_mcp()
     validate_runner()
+    validate_resolver()
     validate_skills()
+    validate_pages_skill()
     print("Codex plugin slice validation passed")
 
 
