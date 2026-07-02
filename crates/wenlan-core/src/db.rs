@@ -34,7 +34,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 65;
+pub const SCHEMA_VERSION: u32 = 66;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -1371,6 +1371,28 @@ pub struct FileSyncState {
     pub mtime_ns: i64,
     pub content_hash: String,
     pub last_synced_at: i64,
+}
+
+/// A document queued for enrichment: the persisted state machine for per-file
+/// map-fold document enrichment with checkpoint/resume. Keyed by
+/// `(source_id, file_path)`, where `source_id` is the knowledge-source id and
+/// `file_path` identifies the file within it. Cancellation is source removal
+/// (`dequeue_by_source`), so there is no per-doc cancel API.
+#[derive(Debug, Clone)]
+pub struct DocEnrichmentQueueEntry {
+    pub source_id: String,
+    pub file_path: String,
+    /// `pending` | `in_progress` | `paused` | `done`.
+    pub status: String,
+    pub content_hash: Option<String>,
+    /// Index of the last chunk whose enrichment was committed. `-1` = none yet
+    /// (resume starts at chunk 0).
+    pub last_completed_chunk: i64,
+    pub attempt_count: i64,
+    pub next_retry_at: Option<i64>,
+    pub error_detail: Option<String>,
+    pub enqueued_at: i64,
+    pub updated_at: i64,
 }
 
 // ===== Schema =====
@@ -6019,6 +6041,45 @@ impl MemoryDB {
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m65 bump: {e}")))?;
                 log::info!("[migration] Migration 65 applied: memories.content_hash column (folder-ingest provenance)");
+            }
+
+            // Migration 66 (folder-ingest): document_enrichment_queue — persisted
+            // state machine for per-file map-fold document enrichment. Keyed by
+            // (source_id, file_path): status (pending/in_progress/paused/done),
+            // content_hash, last_completed_chunk (resume point; -1 = none),
+            // attempt_count + next_retry_at (retry backoff), error_detail.
+            // Cancellation is source removal (dequeue_by_source); there is no
+            // per-doc cancel API. Idempotent + replay-safe via CREATE ... IF NOT
+            // EXISTS.
+            if version < 66 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS document_enrichment_queue (
+                        source_id TEXT NOT NULL,
+                        file_path TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        content_hash TEXT,
+                        last_completed_chunk INTEGER NOT NULL DEFAULT -1,
+                        attempt_count INTEGER NOT NULL DEFAULT 0,
+                        next_retry_at INTEGER,
+                        error_detail TEXT,
+                        enqueued_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        PRIMARY KEY (source_id, file_path)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_doc_enrich_queue_claim
+                        ON document_enrichment_queue(status, enqueued_at);
+                    CREATE INDEX IF NOT EXISTS idx_doc_enrich_queue_source
+                        ON document_enrichment_queue(source_id);",
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("m66 document_enrichment_queue: {e}"))
+                })?;
+                conn.execute("PRAGMA user_version = 66", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m66 bump: {e}")))?;
+                log::info!("[migration] Migration 66 applied: document_enrichment_queue table (folder-ingest enrichment state)");
             }
         }
 
@@ -23075,6 +23136,231 @@ impl MemoryDB {
         Ok(())
     }
 
+    // ===== Document Enrichment Queue Methods =====
+
+    /// Enqueue a document for enrichment. Idempotent upsert: re-enqueuing a row
+    /// that already exists (in ANY status) is a no-op — it never resets an
+    /// in-progress checkpoint or a completed row. A new row starts `pending`
+    /// with no completed chunk (`last_completed_chunk = -1`).
+    pub async fn enqueue_document(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        content_hash: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO document_enrichment_queue
+                (source_id, file_path, status, content_hash, last_completed_chunk,
+                 attempt_count, next_retry_at, error_detail, enqueued_at, updated_at)
+             VALUES (?1, ?2, 'pending', ?3, -1, 0, NULL, NULL, ?4, ?4)
+             ON CONFLICT(source_id, file_path) DO NOTHING",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                content_hash.map(|s| s.to_string()),
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("enqueue_document: {}", e)))?;
+        Ok(())
+    }
+
+    /// Claim the next claimable document for enrichment (serial: at most one
+    /// row). Claimable = `pending`, or `paused` whose `next_retry_at` has
+    /// elapsed (NULL retry time = immediately eligible). Transitions the claimed
+    /// row to `in_progress` and returns it; its `last_completed_chunk` is the
+    /// resume point (start at the next chunk). Oldest-enqueued first. Returns
+    /// `None` when nothing is claimable.
+    pub async fn claim_next_pending(&self) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
+        let now = chrono::Utc::now().timestamp();
+        let (source_id, file_path) = {
+            // Hold the connection lock across SELECT + UPDATE so the claim is
+            // atomic against other claimers (single-writer daemon, serialized by
+            // the connection Mutex).
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, file_path FROM document_enrichment_queue
+                     WHERE status = 'pending'
+                        OR (status = 'paused' AND (next_retry_at IS NULL OR next_retry_at <= ?1))
+                     ORDER BY enqueued_at ASC, rowid ASC
+                     LIMIT 1",
+                    libsql::params![now],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending select: {}", e)))?;
+            let picked = match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending row: {}", e)))?
+            {
+                Some(row) => (
+                    row.get::<String>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("claim source_id: {e}")))?,
+                    row.get::<String>(1)
+                        .map_err(|e| WenlanError::VectorDb(format!("claim file_path: {e}")))?,
+                ),
+                None => return Ok(None),
+            };
+            drop(rows);
+            conn.execute(
+                "UPDATE document_enrichment_queue
+                 SET status = 'in_progress', updated_at = ?3
+                 WHERE source_id = ?1 AND file_path = ?2",
+                libsql::params![picked.0.clone(), picked.1.clone(), now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending update: {}", e)))?;
+            picked
+        };
+        self.get_queue_entry(&source_id, &file_path).await
+    }
+
+    /// Persist enrichment progress for an in-progress document after committing
+    /// a map-fold chunk. `chunk_index` is the index of the last completed chunk
+    /// (the resume point). Leaves the row `in_progress`.
+    pub async fn checkpoint_chunk(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        chunk_index: i64,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET last_completed_chunk = ?3, updated_at = ?4
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                chunk_index,
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("checkpoint_chunk: {}", e)))?;
+        Ok(())
+    }
+
+    /// Mark a document enrichment complete. Clears any retry schedule and error.
+    pub async fn mark_done(&self, source_id: &str, file_path: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET status = 'done', next_retry_at = NULL, error_detail = NULL, updated_at = ?3
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![source_id.to_string(), file_path.to_string(), now],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("mark_done: {}", e)))?;
+        Ok(())
+    }
+
+    /// Pause an interrupted / failed document enrichment, recording the reason
+    /// and when it becomes eligible for retry. Increments the attempt counter.
+    /// The checkpoint (`last_completed_chunk`) is left intact so the next claim
+    /// resumes from it.
+    pub async fn mark_paused(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        reason: &str,
+        next_retry_at: Option<i64>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET status = 'paused',
+                 error_detail = ?3,
+                 next_retry_at = ?4,
+                 attempt_count = attempt_count + 1,
+                 updated_at = ?5
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                reason.to_string(),
+                next_retry_at,
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("mark_paused: {}", e)))?;
+        Ok(())
+    }
+
+    /// Cancel all queued enrichment for a source by deleting its rows. This is
+    /// the cancellation path: removing a source cancels its pending work.
+    pub async fn dequeue_by_source(&self, source_id: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM document_enrichment_queue WHERE source_id = ?1",
+            libsql::params![source_id.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dequeue_by_source: {}", e)))?;
+        Ok(())
+    }
+
+    /// Fetch the current queue entry for a document, if present.
+    pub async fn get_queue_entry(
+        &self,
+        source_id: &str,
+        file_path: &str,
+    ) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, file_path, status, content_hash, last_completed_chunk,
+                        attempt_count, next_retry_at, error_detail, enqueued_at, updated_at
+                 FROM document_enrichment_queue
+                 WHERE source_id = ?1 AND file_path = ?2",
+                libsql::params![source_id.to_string(), file_path.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_queue_entry: {}", e)))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_queue_entry row: {}", e)))?
+        {
+            Ok(Some(DocEnrichmentQueueEntry {
+                source_id: row
+                    .get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue source_id: {e}")))?,
+                file_path: row
+                    .get::<String>(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue file_path: {e}")))?,
+                status: row
+                    .get::<String>(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue status: {e}")))?,
+                content_hash: row.get::<Option<String>>(3).unwrap_or(None),
+                last_completed_chunk: row.get::<i64>(4).map_err(|e| {
+                    WenlanError::VectorDb(format!("queue last_completed_chunk: {e}"))
+                })?,
+                attempt_count: row
+                    .get::<i64>(5)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue attempt_count: {e}")))?,
+                next_retry_at: row.get::<Option<i64>>(6).unwrap_or(None),
+                error_detail: row.get::<Option<String>>(7).unwrap_or(None),
+                enqueued_at: row
+                    .get::<i64>(8)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue enqueued_at: {e}")))?,
+                updated_at: row
+                    .get::<i64>(9)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue updated_at: {e}")))?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Check which of the given source_ids already exist in the memories
     /// table. Used for skip-existing dedup during bulk chat import.
     ///
@@ -34908,6 +35194,161 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_document_enrichment_queue_state() {
+        let (db, _dir) = test_db().await;
+
+        // ── enqueue two docs; claim returns them one at a time ──────────────
+        db.enqueue_document("folder-notes", "/notes/a.md", Some("hashA"))
+            .await
+            .unwrap();
+        db.enqueue_document("folder-notes", "/notes/b.md", Some("hashB"))
+            .await
+            .unwrap();
+
+        let first = db.claim_next_pending().await.unwrap().expect("first claim");
+        let second = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("second claim");
+        // Oldest-enqueued first (serial claim).
+        assert_eq!(first.file_path, "/notes/a.md");
+        assert_eq!(second.file_path, "/notes/b.md");
+        // A freshly claimed doc has no completed chunk yet and is in_progress.
+        assert_eq!(first.last_completed_chunk, -1);
+        assert_eq!(first.status, "in_progress");
+        // Both are now in_progress → nothing else claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // ── checkpoint then resume from the saved chunk ─────────────────────
+        db.checkpoint_chunk("folder-notes", "/notes/a.md", 3)
+            .await
+            .unwrap();
+        // Pause it (interrupted attempt, retry available now) so it is claimable.
+        db.mark_paused(
+            "folder-notes",
+            "/notes/a.md",
+            "interrupted",
+            Some(chrono::Utc::now().timestamp()),
+        )
+        .await
+        .unwrap();
+        let resumed = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("resumed claim");
+        assert_eq!(resumed.file_path, "/notes/a.md");
+        assert_eq!(
+            resumed.last_completed_chunk, 3,
+            "claim resumes from the checkpointed chunk"
+        );
+        assert_eq!(resumed.attempt_count, 1, "pause bumped the retry attempt");
+        assert_eq!(resumed.error_detail.as_deref(), Some("interrupted"));
+
+        // ── enqueue same doc twice inserts one row (idempotent no-op) ───────
+        // Re-enqueue the in-progress doc; it must NOT reset the checkpoint.
+        db.enqueue_document("folder-notes", "/notes/a.md", Some("hashA"))
+            .await
+            .unwrap();
+        let after_reenqueue = db
+            .get_queue_entry("folder-notes", "/notes/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_reenqueue.status, "in_progress",
+            "re-enqueue of an existing doc is a no-op"
+        );
+        assert_eq!(
+            after_reenqueue.last_completed_chunk, 3,
+            "re-enqueue preserves the checkpoint"
+        );
+        let row_count: i64 = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM document_enrichment_queue
+                     WHERE source_id = ?1 AND file_path = ?2",
+                    libsql::params!["folder-notes", "/notes/a.md"],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+        };
+        assert_eq!(row_count, 1, "enqueue twice inserts one row");
+
+        // ── mark_done removes it from the claimable set ─────────────────────
+        db.mark_done("folder-notes", "/notes/a.md").await.unwrap();
+        let done = db
+            .get_queue_entry("folder-notes", "/notes/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(done.status, "done");
+        // a.md done, b.md still in_progress → nothing claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // ── dequeue_by_source cancels only that source's rows ───────────────
+        db.enqueue_document("folder-other", "/other/c.md", None)
+            .await
+            .unwrap();
+        db.dequeue_by_source("folder-notes").await.unwrap();
+        assert!(
+            db.get_queue_entry("folder-notes", "/notes/a.md")
+                .await
+                .unwrap()
+                .is_none(),
+            "dequeue_by_source removed the done row"
+        );
+        assert!(
+            db.get_queue_entry("folder-notes", "/notes/b.md")
+                .await
+                .unwrap()
+                .is_none(),
+            "dequeue_by_source removed the in_progress row"
+        );
+        // The other source's row survives and is still claimable.
+        let survivor = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("other source's row survives dequeue");
+        assert_eq!(survivor.source_id, "folder-other");
+        assert_eq!(survivor.file_path, "/other/c.md");
+        assert_eq!(survivor.content_hash, None);
+    }
+
+    #[tokio::test]
+    async fn migration_66_idempotent() {
+        let (db, _dir) = test_db().await;
+        // Roll user_version back to 65 and re-run migrations: the queue table's
+        // CREATE ... IF NOT EXISTS must replay without error.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 65", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        // Table still present.
+        let mut trows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='document_enrichment_queue'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = trows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "document_enrichment_queue table must exist");
+        // user_version restored to current SCHEMA_VERSION.
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
     async fn test_find_concept_by_source_memory_no_substring_false_positive() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
@@ -43395,8 +43836,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (65 after folder-ingest memories.content_hash).
-        assert_eq!(uv, 65);
+        // the current SCHEMA_VERSION (66 after the document_enrichment_queue table).
+        assert_eq!(uv, 66);
     }
 
     #[tokio::test]
@@ -43413,7 +43854,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 65,
+            uv, 66,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43447,7 +43888,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 65);
+        assert_eq!(uv, 66);
     }
 
     #[tokio::test]
@@ -43464,7 +43905,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 65,
+            uv, 66,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -43513,8 +43954,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 65,
-            "terminal version is 65 after folder-ingest memories.content_hash"
+            uv, 66,
+            "terminal version is 66 after the document_enrichment_queue table"
         );
     }
 
@@ -43532,7 +43973,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 65,
+            uv, 66,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
