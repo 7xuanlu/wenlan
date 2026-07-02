@@ -190,6 +190,33 @@ fn content_hash(content: &str) -> String {
     content_hash_bytes(content.as_bytes())
 }
 
+/// A Directory source root is "live" when it exists and is reachable: a
+/// directory we can actually enumerate, or a present single file. An
+/// unreadable directory (`read_dir` errors) is deliberately NOT live —
+/// otherwise `scan_directory` would return an empty set and the deletion diff
+/// would reap every tracked file, i.e. a gone-root masquerading as gone-files
+/// (§4/§5). Symlinks resolve through `metadata`.
+fn directory_root_is_live(path: &std::path::Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => std::fs::read_dir(path).is_ok(),
+        Ok(m) => m.is_file(),
+        Err(_) => false,
+    }
+}
+
+/// Mark a source `Unavailable` in config because its root is missing/unreadable.
+/// Deletes nothing (root-gone != file-gone) and stamps `last_sync` so the UI
+/// shows the check happened. Auto-recovers: the next sync against a live root
+/// flips it back to `Active` in `finalize_sync`.
+fn mark_source_unavailable(id: &str, reason: &str) {
+    let mut config = wenlan_core::config::load_config();
+    if let Some(src) = config.sources.iter_mut().find(|s| s.id == id) {
+        src.status = SyncStatus::Unavailable(reason.to_string());
+        src.last_sync = Some(chrono::Utc::now().timestamp());
+    }
+    let _ = wenlan_core::config::save_config(&config);
+}
+
 fn content_hash_bytes(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
@@ -244,6 +271,12 @@ async fn finalize_sync(
         src.memory_count = src.memory_count.saturating_add(ingested as u64);
         src.last_sync_errors = errors as u64;
         src.last_sync_error_detail = error_detail.clone();
+        // Recovery: a source that had gone Unavailable (missing/unreadable root)
+        // flips back to Active once a sync completes against a live root. Only
+        // touch Unavailable — never clobber a user's explicit Paused state.
+        if matches!(src.status, SyncStatus::Unavailable(_)) {
+            src.status = SyncStatus::Active;
+        }
     }
     let _ = wenlan_core::config::save_config(&config);
 
@@ -290,6 +323,24 @@ pub async fn handle_sync_source(
     };
 
     if source.source_type == SourceType::Directory {
+        // Root-guard (§4/§5): a missing/unreadable root means "source
+        // unavailable", NOT "every file deleted". Mark it unavailable, diff
+        // nothing, delete zero rows, and return early — a later sync that finds
+        // the root live auto-recovers it. For a single-file source the root IS
+        // the file, so a deleted file lands here too: never auto-deleted, the
+        // user removes the source explicitly.
+        if !directory_root_is_live(&source.path) {
+            mark_source_unavailable(&id, "source path is missing or unreadable");
+            return Ok(Json(SyncStatsResponse {
+                files_found: 0,
+                ingested: 0,
+                skipped: 0,
+                errors: 0,
+                error_detail: None,
+                paused: None,
+            }));
+        }
+
         let files = scan_directory(&source.path);
         let mut ingested: usize = 0;
         let mut skipped: usize = 0;
@@ -357,6 +408,33 @@ pub async fn handle_sync_source(
                     tracing::error!("[sync] enqueue failed for {}: {}", file_path.display(), e);
                     errors += 1;
                 }
+            }
+        }
+
+        // Deletion propagation (§4): the root is live, so any tracked file NOT
+        // in the current scan genuinely vanished. Reap its chunks, its sync
+        // state, and any still-pending enrichment. The SOURCE page is left to
+        // the existing fail-closed page-visibility rule (a page whose chunks
+        // are all gone stops being reachable). Best-effort per file — one
+        // failed delete never aborts the rest of the diff.
+        let scanned: std::collections::HashSet<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let knowledge_path = config.knowledge_path_or_default();
+        if let Ok(tracked) = db.list_sync_state_paths(&id).await {
+            for tracked_path in tracked {
+                if scanned.contains(&tracked_path) {
+                    continue;
+                }
+                let doc_source_id = wenlan_core::sources::directory::document_source_id(
+                    &id,
+                    std::path::Path::new(&tracked_path),
+                    Some(&knowledge_path),
+                );
+                let _ = db.delete_by_source_id("memory", &doc_source_id).await;
+                let _ = db.delete_sync_state(&id, &tracked_path).await;
+                let _ = db.dequeue_document(&id, &tracked_path).await;
             }
         }
 
@@ -661,6 +739,362 @@ mod tests {
             }
             other => panic!("expected reserved-root ValidationError, got {other:?}"),
         }
+    }
+
+    /// Seed a fully-enriched folder document: its chunks under the canonical
+    /// `document_source_id` plus a matching `source_sync_state` row (mtime +
+    /// content hash), exactly as the write path leaves them. Returns the
+    /// `doc_source_id` so callers can assert chunk presence/absence.
+    async fn seed_document(
+        db: &wenlan_core::db::MemoryDB,
+        source_id: &str,
+        file_path: &std::path::Path,
+        knowledge_path: &std::path::Path,
+        content: &str,
+    ) -> String {
+        let doc_source_id = wenlan_core::sources::directory::document_source_id(
+            source_id,
+            file_path,
+            Some(knowledge_path),
+        );
+        let doc = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: doc_source_id.clone(),
+            title: file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("doc")
+                .to_string(),
+            content: content.to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            source_agent: Some("folder".to_string()),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc]).await.unwrap();
+        let file_key = file_path.to_string_lossy().to_string();
+        db.upsert_sync_state(
+            source_id,
+            &file_key,
+            mtime_ns(file_path),
+            &content_hash(content),
+        )
+        .await
+        .unwrap();
+        doc_source_id
+    }
+
+    fn register_directory_source(id: &str, path: &std::path::Path) {
+        let source = Source {
+            id: id.to_string(),
+            source_type: SourceType::Directory,
+            path: path.to_path_buf(),
+            status: SyncStatus::Active,
+            last_sync: None,
+            file_count: 0,
+            memory_count: 0,
+            last_sync_errors: 0,
+            last_sync_error_detail: None,
+        };
+        wenlan_core::config::save_config(&Config {
+            sources: vec![source],
+            ..Config::default()
+        })
+        .unwrap();
+    }
+
+    async fn new_test_db() -> (Arc<wenlan_core::db::MemoryDB>, tempfile::TempDir) {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(db_dir.path(), Arc::new(NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        (db, db_dir)
+    }
+
+    fn loaded_source_status(id: &str) -> SyncStatus {
+        wenlan_core::config::load_config()
+            .sources
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("source in config")
+            .status
+    }
+
+    #[tokio::test]
+    async fn handle_sync_source_deletes_vanished_file_under_live_root() {
+        let _lock = TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+
+        let source_root = tempfile::tempdir().unwrap();
+        let kept_path = source_root.path().join("kept.txt");
+        let gone_path = source_root.path().join("gone.txt");
+        std::fs::write(&kept_path, "This file stays put on the live root.").unwrap();
+        std::fs::write(&gone_path, "This file will vanish from the live root.").unwrap();
+
+        let source_id = "directory-notes".to_string();
+        register_directory_source(&source_id, source_root.path());
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+
+        let (db, _db_dir) = new_test_db().await;
+        let kept_doc = seed_document(
+            &db,
+            &source_id,
+            &kept_path,
+            &knowledge_path,
+            "This file stays put on the live root.",
+        )
+        .await;
+        let gone_doc = seed_document(
+            &db,
+            &source_id,
+            &gone_path,
+            &knowledge_path,
+            "This file will vanish from the live root.",
+        )
+        .await;
+        // A still-pending enrichment for the vanished file must be dequeued so
+        // the worker can never re-materialize its chunks after deletion.
+        db.enqueue_document(&source_id, &gone_path.to_string_lossy(), Some("hash-gone"))
+            .await
+            .unwrap();
+
+        // The file disappears from a LIVE root -> its chunks must be reaped.
+        std::fs::remove_file(&gone_path).unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..ServerState::default()
+        }));
+        let _ = handle_sync_source(State(state), Path(source_id.clone()))
+            .await
+            .expect("directory sync should succeed on a live root");
+
+        assert!(
+            db.get_memories_by_source_id("memory", &gone_doc)
+                .await
+                .unwrap()
+                .is_empty(),
+            "vanished file's chunks must be deleted"
+        );
+        assert!(
+            !db.get_memories_by_source_id("memory", &kept_doc)
+                .await
+                .unwrap()
+                .is_empty(),
+            "surviving file's chunks must be retained"
+        );
+        assert!(
+            db.get_sync_state(&source_id, &gone_path.to_string_lossy())
+                .await
+                .unwrap()
+                .is_none(),
+            "vanished file's sync_state must be cleared"
+        );
+        assert!(
+            db.get_sync_state(&source_id, &kept_path.to_string_lossy())
+                .await
+                .unwrap()
+                .is_some(),
+            "surviving file's sync_state must remain"
+        );
+        assert!(
+            db.get_queue_entry(&source_id, &gone_path.to_string_lossy())
+                .await
+                .unwrap()
+                .is_none(),
+            "vanished file's pending enrichment must be dequeued"
+        );
+        assert!(
+            matches!(loaded_source_status(&source_id), SyncStatus::Active),
+            "a live-root sync leaves the source Active"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_sync_source_missing_root_marks_unavailable_and_deletes_nothing() {
+        let _lock = TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("live_root");
+        std::fs::create_dir(&root).unwrap();
+        let file_path = root.join("note.txt");
+        std::fs::write(&file_path, "Chunks that must survive a missing root.").unwrap();
+
+        let source_id = "directory-notes".to_string();
+        register_directory_source(&source_id, &root);
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+
+        let (db, _db_dir) = new_test_db().await;
+        let doc = seed_document(
+            &db,
+            &source_id,
+            &file_path,
+            &knowledge_path,
+            "Chunks that must survive a missing root.",
+        )
+        .await;
+
+        // Root vanishes (renamed/removed). root-gone != file-gone.
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..ServerState::default()
+        }));
+        let Json(stats) = handle_sync_source(State(state), Path(source_id.clone()))
+            .await
+            .expect("sync against a missing root should not error");
+
+        assert_eq!(
+            stats.files_found, 0,
+            "no files scanned under a missing root"
+        );
+        assert_eq!(stats.ingested, 0);
+        assert!(
+            !db.get_memories_by_source_id("memory", &doc)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a missing root must delete ZERO chunks"
+        );
+        assert!(
+            db.get_sync_state(&source_id, &file_path.to_string_lossy())
+                .await
+                .unwrap()
+                .is_some(),
+            "a missing root must leave sync_state intact"
+        );
+        assert!(
+            matches!(loaded_source_status(&source_id), SyncStatus::Unavailable(_)),
+            "a missing root marks the source Unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_sync_source_single_file_root_missing_marks_unavailable_no_delete() {
+        let _lock = TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+
+        let parent = tempfile::tempdir().unwrap();
+        let file_path = parent.path().join("paper.txt");
+        std::fs::write(&file_path, "A single-file source's only document.").unwrap();
+
+        let source_id = "directory-paper".to_string();
+        register_directory_source(&source_id, &file_path);
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+
+        let (db, _db_dir) = new_test_db().await;
+        let doc = seed_document(
+            &db,
+            &source_id,
+            &file_path,
+            &knowledge_path,
+            "A single-file source's only document.",
+        )
+        .await;
+
+        // For a single-file source the root IS the file: a deleted file is a
+        // missing root, which must be treated as "unavailable", never auto-deleted.
+        std::fs::remove_file(&file_path).unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..ServerState::default()
+        }));
+        let _ = handle_sync_source(State(state), Path(source_id.clone()))
+            .await
+            .expect("single-file sync against a missing file should not error");
+
+        assert!(
+            !db.get_memories_by_source_id("memory", &doc)
+                .await
+                .unwrap()
+                .is_empty(),
+            "single-file source must never auto-delete on a missing root"
+        );
+        assert!(
+            matches!(loaded_source_status(&source_id), SyncStatus::Unavailable(_)),
+            "single-file missing root marks the source Unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_sync_source_recovers_when_root_reappears() {
+        let _lock = TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("live_root");
+        std::fs::create_dir(&root).unwrap();
+        let orig_path = root.join("orig.txt");
+        std::fs::write(&orig_path, "Original document before the root vanished.").unwrap();
+
+        let source_id = "directory-notes".to_string();
+        register_directory_source(&source_id, &root);
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+
+        let (db, _db_dir) = new_test_db().await;
+        seed_document(
+            &db,
+            &source_id,
+            &orig_path,
+            &knowledge_path,
+            "Original document before the root vanished.",
+        )
+        .await;
+
+        // Root vanishes -> unavailable, deletes nothing.
+        std::fs::remove_dir_all(&root).unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..ServerState::default()
+        }));
+        let _ = handle_sync_source(State(state.clone()), Path(source_id.clone()))
+            .await
+            .expect("sync against a missing root should not error");
+        assert!(
+            matches!(loaded_source_status(&source_id), SyncStatus::Unavailable(_)),
+            "root removal marks the source Unavailable"
+        );
+
+        // Root reappears with a fresh file -> next sync resyncs and recovers.
+        std::fs::create_dir(&root).unwrap();
+        let fresh_path = root.join("fresh.txt");
+        std::fs::write(&fresh_path, "A fresh file after the root came back online.").unwrap();
+
+        let Json(stats) = handle_sync_source(State(state), Path(source_id.clone()))
+            .await
+            .expect("sync after the root reappears should succeed");
+
+        assert!(
+            matches!(loaded_source_status(&source_id), SyncStatus::Active),
+            "a completed sync on a live root flips Unavailable back to Active"
+        );
+        assert_eq!(
+            stats.ingested, 1,
+            "the fresh file is enqueued on the recovering sync"
+        );
+        assert!(
+            db.get_queue_entry(&source_id, &fresh_path.to_string_lossy())
+                .await
+                .unwrap()
+                .is_some(),
+            "the fresh file is queued for enrichment"
+        );
     }
 
     #[tokio::test]

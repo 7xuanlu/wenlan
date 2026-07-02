@@ -39,7 +39,9 @@ use crate::db::{DocEnrichmentQueueEntry, MemoryDB, MemoryDetail};
 use crate::error::WenlanError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
-use crate::sources::directory::{file_to_documents, provenance_path, FileOutcome};
+use crate::sources::directory::{
+    document_source_id, file_to_documents, provenance_path, FileOutcome,
+};
 
 /// Rolling-digest character cap (~15K).
 const DIGEST_CHAR_CAP: usize = 15_000;
@@ -115,9 +117,11 @@ pub async fn run_document_enrichment(
     let file_path = entry.file_path.clone();
 
     // Canonical document source_id — recomputed from provenance (a pure path op)
-    // so a resumed run finds the file's chunks WITHOUT re-parsing.
+    // so a resumed run finds the file's chunks WITHOUT re-parsing. Shares the
+    // ONE key authority (`document_source_id`) with folder-sync deletion so the
+    // write-side id and the delete-side id can never drift apart.
     let provenance = provenance_path(Path::new(&file_path), knowledge_path);
-    let doc_source_id = format!("{}::{}", source_id, provenance);
+    let doc_source_id = document_source_id(&source_id, Path::new(&file_path), knowledge_path);
 
     let is_fresh = entry.last_completed_chunk < 0;
     let mut title = Path::new(&file_path)

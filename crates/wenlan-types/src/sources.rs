@@ -265,6 +265,12 @@ pub enum SyncStatus {
     Active,
     Paused,
     Error(String),
+    /// The source root (directory or single file) is missing or unreadable.
+    /// Distinct from `Error` (a sync that ran but hit per-file failures) and
+    /// `Paused` (user-initiated): "root-gone != file-gone", so while a source
+    /// is `Unavailable` the sync deletes nothing. Auto-recovers -- the next
+    /// sync that finds the root live flips it back to `Active`.
+    Unavailable(String),
 }
 
 /// Status of a connected source.

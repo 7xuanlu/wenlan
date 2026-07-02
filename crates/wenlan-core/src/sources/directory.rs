@@ -356,6 +356,26 @@ pub(crate) fn provenance_path(path: &Path, knowledge_path: Option<&Path>) -> Str
     path.to_string_lossy().to_string()
 }
 
+/// The canonical document `source_id` under which a file's chunks live in
+/// `memories`: `{source_id}::{provenance}`.
+///
+/// This is the ONE authority for that key derivation. The enrichment worker
+/// (write side, `document_enrichment::run_document_enrichment`) and folder-sync
+/// deletion propagation (delete side, the daemon's `handle_sync_source`) both
+/// call it, so the write-vs-delete key can never drift out of sync -- deletion
+/// must target exactly the id the write side stamped.
+pub fn document_source_id(
+    source_id: &str,
+    file_path: &Path,
+    knowledge_path: Option<&Path>,
+) -> String {
+    format!(
+        "{}::{}",
+        source_id,
+        provenance_path(file_path, knowledge_path)
+    )
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);

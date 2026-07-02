@@ -23410,6 +23410,25 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Cancel a single document's queued enrichment. Used by folder-sync
+    /// deletion propagation: when a file vanishes from a live source root, any
+    /// still-pending enrichment for it must be dequeued so the worker never
+    /// re-materializes the deleted file's chunks. No-op if the row is absent.
+    pub async fn dequeue_document(
+        &self,
+        source_id: &str,
+        file_path: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM document_enrichment_queue WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![source_id.to_string(), file_path.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dequeue_document: {}", e)))?;
+        Ok(())
+    }
+
     /// Fetch the current queue entry for a document, if present.
     pub async fn get_queue_entry(
         &self,
