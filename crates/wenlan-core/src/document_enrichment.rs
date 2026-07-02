@@ -751,20 +751,36 @@ mod tests {
         let entry = db.claim_next_pending().await.unwrap().expect("claim");
 
         let run1_responses = analysis_responses();
-        let hang: Arc<dyn LlmProvider> = Arc::new(HangAfterProvider {
+        let provider = Arc::new(HangAfterProvider {
             responses: run1_responses.clone(),
             hang_after: 2, // serve chunks 0 and 1, hang on chunk 2 (index 2)
             calls: AtomicUsize::new(0),
         });
+        let hang: Arc<dyn LlmProvider> = provider.clone();
         let prompts = PromptRegistry::default();
 
-        // Drive the future until it hangs on chunk 2, then DROP it (simulated kill).
-        let killed = tokio::time::timeout(
-            std::time::Duration::from_millis(400),
-            run_document_enrichment(&db, &entry, None, Some(&hang), &prompts),
-        )
-        .await;
-        assert!(killed.is_err(), "run should hang on chunk 2 and be dropped");
+        // Drive the future until chunk 2's LLM call has STARTED (calls == 3 — the
+        // loop awaits checkpoint_chunk(1) before generate(chunk 2), so this
+        // guarantees chunks 0+1 are checkpointed), then DROP it (simulated kill).
+        // Condition-based, not wall-clock: a fixed delay flakes under
+        // parallel-test CPU contention.
+        {
+            let enrich = run_document_enrichment(&db, &entry, None, Some(&hang), &prompts);
+            tokio::pin!(enrich);
+            let reached_hang = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+                tokio::select! {
+                    _ = &mut enrich => false,
+                    _ = async {
+                        while provider.calls.load(Ordering::SeqCst) < 3 {
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                    } => true,
+                }
+            })
+            .await
+            .expect("enrichment should reach chunk 2 within 60s");
+            assert!(reached_hang, "run should hang on chunk 2 and be dropped");
+        }
 
         // Checkpoint committed chunks 0 and 1 (resume point = 1); row still in_progress.
         let mid = db
