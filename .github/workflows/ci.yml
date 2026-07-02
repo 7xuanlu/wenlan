@@ -72,3 +72,26 @@ jobs:
 
       - name: Run frontend tests
         run: pnpm test
+
+  download-smoke:
+    name: Download Smoke
+    # macos-14 is Apple Silicon (arm64) -- required because the pinned
+    # daemon release asset (Task 2's --download mode) ships darwin-arm64
+    # binaries only, and this job execs them directly (`--help`) rather than
+    # just checking bytes on disk.
+    runs-on: macos-14
+    if: >-
+      !startsWith(github.event.head_commit.message, 'chore(main): release')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download pinned daemon sidecars
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/prepare-sidecars.sh --download
+
+      - name: Smoke test downloaded binaries
+        run: |
+          ./app/binaries/wenlan-server-aarch64-apple-darwin --help
+          ./app/binaries/wenlan-aarch64-apple-darwin --help

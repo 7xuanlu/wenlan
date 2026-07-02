@@ -82,26 +82,6 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "Building $RELEASE_TAG (event: ${{ github.event_name }})"
 
-      # ponytail: pin to wenlan's latest published release, not main --
-      # a floating main could break the app build out from under a tagged
-      # app release. Bump the resolution logic if per-release pinning is
-      # ever needed.
-      - name: Resolve wenlan backend release tag
-        id: backend
-        run: |
-          BACKEND_TAG=$(gh release view --repo 7xuanlu/wenlan --json tagName -q .tagName)
-          echo "tag=$BACKEND_TAG" >> "$GITHUB_OUTPUT"
-          echo "Building against wenlan backend $BACKEND_TAG"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Checkout wenlan backend
-        uses: actions/checkout@v4
-        with:
-          repository: 7xuanlu/wenlan
-          path: wenlan
-          ref: ${{ steps.backend.outputs.tag }}
-
       - name: Validate version consistency
         run: |
           TAG="${RELEASE_TAG#v}"
@@ -140,7 +120,6 @@ jobs:
         with:
           workspaces: |
             wenlan-app/app
-            wenlan
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -238,8 +217,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_DIR: app
           CXXFLAGS: "-std=c++17"
-          WENLAN_BACKEND_DIR: ${{ github.workspace }}/wenlan
           CLOUDFLARED_BIN: ${{ env.CLOUDFLARED_BIN }}
+          # Daemon sidecars come from the pinned RELEASED asset: tauri's
+          # beforeBuildCommand runs prepare-tauri-build-sidecars.sh, which honors
+          # WENLAN_DOWNLOAD_SIDECARS=1 to download instead of compiling from a
+          # backend checkout. GH_TOKEN authenticates the cross-repo gh download.
+          WENLAN_DOWNLOAD_SIDECARS: '1'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Ad-hoc sign ("-") when no Apple Developer cert is configured.
           # APPLE_ID/PASSWORD/TEAM_ID must be omitted (not empty) or Tauri
           # attempts notarization and fails on "Team ID must be at least 3 characters".

@@ -1,0 +1,170 @@
+name: Backend pin bump
+
+# Polls the sibling daemon repo (7xuanlu/wenlan) for a newer release. When a
+# newer release's arm64 asset downloads, checksums, extracts, and runs clean,
+# this opens an adopt-only PR bumping .wenlan-backend-version (tag + sha256)
+# and nothing else. A human reviews and merges that PR.
+#
+# Why the download+sha+extract+--help smoke lives HERE instead of relying on
+# ci.yml: GitHub does NOT fire `pull_request` workflows for PRs opened by
+# GITHUB_TOKEN, so ci.yml's download-smoke will NOT run on the bump PR this
+# workflow opens. That's exactly why step "Smoke test extracted daemon
+# binaries" below runs inside this poll -- the poll IS the gate for the pin
+# change, not the PR's own CI. If branch protection requires status checks
+# on that PR, the maintainer merges via admin override or re-runs checks
+# manually.
+
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    name: Check daemon release and bump pin
+    # macos-14 (Apple Silicon / arm64) is REQUIRED here, not a style choice:
+    # the "Smoke test extracted daemon binaries" step below actually
+    # executes the downloaded darwin-arm64 wenlan-server/wenlan binaries via
+    # `--help`. An x86_64/Linux runner can't exec that Mach-O arm64 binary at
+    # all (false-fail on exec format), so only an arm64 macOS runner can
+    # prove the asset is real and runnable.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pinned tag
+        id: pinned
+        run: |
+          PINNED="$(sed -n '1p' .wenlan-backend-version | tr -d '[:space:]')"
+          if [ -z "$PINNED" ]; then
+            echo "error: .wenlan-backend-version has no tag on line 1" >&2
+            exit 1
+          fi
+          echo "tag=$PINNED" >> "$GITHUB_OUTPUT"
+          echo "Pinned tag: $PINNED"
+
+      - name: Get latest daemon release tag
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Cross-repo read of the PUBLIC 7xuanlu/wenlan repo, authenticated
+          # by this workflow's own GITHUB_TOKEN. This works only because
+          # that repo is public; if it ever goes private this 404s and
+          # fails loud here (no silent continue-on-error), same contract as
+          # scripts/prepare-sidecars.sh's --download mode.
+          LATEST="$(gh release view --repo 7xuanlu/wenlan --json tagName -q .tagName)"
+          if [ -z "$LATEST" ]; then
+            echo "error: could not resolve latest release tag for 7xuanlu/wenlan" >&2
+            exit 1
+          fi
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest daemon release: $LATEST"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          PINNED="${{ steps.pinned.outputs.tag }}"
+          LATEST="${{ steps.latest.outputs.tag }}"
+          if [ "$LATEST" = "$PINNED" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "up to date: pinned $PINNED already matches latest $LATEST"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "new release available: $PINNED -> $LATEST"
+          fi
+
+      # Steps below only run when a newer tag was found above. A complete
+      # download + sha256 + extract + run is the real proof the asset
+      # finished uploading -- this replaces a weak size-only check and
+      # closes the race where a release tag is published before its asset
+      # upload completes.
+      - name: Download candidate asset
+        if: steps.compare.outputs.up_to_date != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ steps.latest.outputs.tag }}"
+          mkdir -p "$RUNNER_TEMP/pin"
+          if ! gh release download "$LATEST" --repo 7xuanlu/wenlan \
+              --pattern 'wenlan-darwin-arm64.tar.gz' \
+              --dir "$RUNNER_TEMP/pin" --clobber; then
+            echo "error: failed to download wenlan-darwin-arm64.tar.gz from 7xuanlu/wenlan release $LATEST (tag-without-asset race?)" >&2
+            exit 1
+          fi
+
+      - name: Compute checksum
+        if: steps.compare.outputs.up_to_date != 'true'
+        id: sha
+        run: |
+          SHA="$(shasum -a 256 "$RUNNER_TEMP/pin/wenlan-darwin-arm64.tar.gz" | awk '{print $1}')"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "sha256: $SHA"
+
+      - name: Extract asset
+        if: steps.compare.outputs.up_to_date != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/pin/x"
+          tar xzf "$RUNNER_TEMP/pin/wenlan-darwin-arm64.tar.gz" -C "$RUNNER_TEMP/pin/x"
+
+      # Extraction succeeding already proves the tarball is a complete,
+      # non-truncated download. Running --help on both binaries is the
+      # final proof this is a real, executable arm64 daemon build.
+      - name: Smoke test extracted daemon binaries
+        if: steps.compare.outputs.up_to_date != 'true'
+        run: |
+          cd "$RUNNER_TEMP/pin/x"
+          chmod +x wenlan-server wenlan
+          xattr -cr wenlan-server wenlan
+          ./wenlan-server --help
+          ./wenlan --help
+          echo "smoke test passed: both binaries ran --help and exited 0"
+
+      - name: Check for existing bump PR
+        if: steps.compare.outputs.up_to_date != 'true'
+        id: idempotency
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ steps.latest.outputs.tag }}"
+          BRANCH="backend-pin/$LATEST"
+          EXISTING="$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')"
+          if [ -n "$EXISTING" ]; then
+            echo "pr_exists=true" >> "$GITHUB_OUTPUT"
+            echo "PR #$EXISTING already open from $BRANCH, skipping"
+          else
+            echo "pr_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open adopt-only pin bump PR
+        if: steps.compare.outputs.up_to_date != 'true' && steps.idempotency.outputs.pr_exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ steps.latest.outputs.tag }}"
+          SHA="${{ steps.sha.outputs.sha256 }}"
+          BRANCH="backend-pin/$LATEST"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          printf '%s\n%s\n' "$LATEST" "$SHA" > .wenlan-backend-version
+
+          git add .wenlan-backend-version
+          git commit -m "chore: bump daemon pin to $LATEST"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: bump daemon pin to $LATEST" \
+            --body "Bumps \`.wenlan-backend-version\` to \`$LATEST\` (sha256 \`$SHA\`).
+
+          This workflow already downloaded \`wenlan-darwin-arm64.tar.gz\` from the \`$LATEST\` release, verified its sha256, extracted it, and ran \`wenlan-server --help\` and \`wenlan --help\` successfully on an arm64 runner before opening this PR (see the run that opened this PR).
+
+          Note: GitHub does not run \`pull_request\` workflows for PRs opened by \`GITHUB_TOKEN\`, so ci.yml's download-smoke will not run here -- the in-workflow smoke above is the gate for this pin change. Adopt-only: only \`.wenlan-backend-version\` changes." \
+            --head "$BRANCH" \
+            --base main
