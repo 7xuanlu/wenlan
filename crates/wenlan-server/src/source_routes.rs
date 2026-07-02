@@ -417,6 +417,21 @@ pub async fn handle_sync_source(
         // the existing fail-closed page-visibility rule (a page whose chunks
         // are all gone stops being reachable). Best-effort per file — one
         // failed delete never aborts the rest of the diff.
+        //
+        // DESCOPE NOTE: Rename optimization (spec §WHAT) is NOT implemented here.
+        // When a file is renamed (old file vanishes, new file appears with identical
+        // content_hash), the current code deletes the old file's chunks and enqueues
+        // the new file for full re-enrichment. An optimized version would:
+        //   1. Capture content_hash of vanished files
+        //   2. Before enqueuing new files, check if a new file's hash matches a
+        //      vanished file's
+        //   3. If yes, rebind/reuse enrichment instead of re-enqueueing
+        // However, this requires the enrichment worker (document_enrichment_queue
+        // consumer) to support a "reuse" mode that rebinds enrichment to a new
+        // source_id or directly restores chunks. Since the worker is not yet wired
+        // in this branch, the optimization is deferred. Current behavior is correct
+        // (chunks are re-created with the new path) but redundant (content unchanged).
+        // See test: handle_sync_source_rename_optimization_descoped_awaiting_enrichment_worker
         let scanned: std::collections::HashSet<String> = files
             .iter()
             .map(|p| p.to_string_lossy().to_string())
@@ -1183,5 +1198,99 @@ mod tests {
                 .is_none(),
             "sync_state must not be written at enqueue time"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_sync_source_rename_optimization_descoped_awaiting_enrichment_worker() {
+        // Rename optimization (spec §WHAT): if a new file's content_hash equals a
+        // just-deleted doc's, reuse enrichment instead of re-running.
+        //
+        // DESCOPED: The production enrichment worker is not wired in this branch
+        // yet. Implementing the optimization would require capturing deleted files'
+        // content_hashes, building a map, and when enqueuing new files, checking
+        // against the map to detect renames. However, "reusing enrichment" means
+        // rebinding the document's source_id or directly restoring chunks from the
+        // deleted enrichment, which requires the enrichment worker on the
+        // consumer side to support a "reuse" mode (bypassing the full inference
+        // pipeline). Since the enrichment worker is not yet active in this branch,
+        // we defer the optimization to a follow-up task when the worker is
+        // available. For now, a renamed file triggers delete-old + full-re-enrich,
+        // which is safe (not wrong, just redundant). This test documents the
+        // current (unoptimized) behavior: a renamed file queues for enrichment.
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+
+        let source_root = tempfile::tempdir().unwrap();
+        let orig_path = source_root.path().join("document.txt");
+        let renamed_path = source_root.path().join("document_renamed.txt");
+        let content =
+            "This is the original document content that will be preserved despite the rename.";
+        std::fs::write(&orig_path, content).unwrap();
+
+        let source_id = "directory-notes".to_string();
+        register_directory_source(&source_id, source_root.path());
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+
+        let (db, _db_dir) = new_test_db().await;
+        let orig_doc = seed_document(&db, &source_id, &orig_path, &knowledge_path, content).await;
+
+        // BEFORE rename: original file exists with its enriched chunks.
+        assert!(
+            !db.get_memories_by_source_id("memory", &orig_doc)
+                .await
+                .unwrap()
+                .is_empty(),
+            "original file should have enriched chunks"
+        );
+
+        // Rename the file: old vanishes, new appears with identical content.
+        std::fs::remove_file(&orig_path).unwrap();
+        std::fs::write(&renamed_path, content).unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..ServerState::default()
+        }));
+        let Json(stats) = handle_sync_source(State(state), Path(source_id.clone()))
+            .await
+            .expect("directory sync should succeed");
+
+        // CURRENT BEHAVIOR (unoptimized):
+        // - Original file is deleted (chunks + sync_state removed).
+        // - New (renamed) file is enqueued for FULL re-enrichment.
+        // This is correct (chunks will be re-created with the new path) but
+        // redundant (content unchanged). The optimization would skip re-enqueueing
+        // when a new file's hash matches a vanished file's, but that requires the
+        // enrichment worker support a reuse/rebind mode.
+
+        assert_eq!(
+            stats.ingested, 1,
+            "renamed file should be enqueued for enrichment"
+        );
+        assert!(
+            db.get_memories_by_source_id("memory", &orig_doc)
+                .await
+                .unwrap()
+                .is_empty(),
+            "original file's chunks must be deleted (old path gone)"
+        );
+        let renamed_key = renamed_path.to_string_lossy().to_string();
+        let queued = db
+            .get_queue_entry(&source_id, &renamed_key)
+            .await
+            .unwrap()
+            .expect("renamed file should be queued for enrichment (not optimized yet)");
+        assert_eq!(queued.status, "pending");
+        assert_eq!(
+            queued.content_hash.as_deref(),
+            Some(content_hash(content).as_str()),
+            "queued entry should carry the (same) content_hash"
+        );
+
+        // TODO: When the enrichment worker is wired, detect content_hash match
+        // between vanished and new files, rebind enrichment instead of re-enqueue.
     }
 }
