@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use wenlan_core::sources::directory::{is_reserved_ingest_root, scan_directory};
 use wenlan_core::sources::obsidian::{has_any_markdown, note_to_documents, scan_vault};
 use wenlan_core::sources::Source;
 use wenlan_types::sources::{SourceType, SyncStatus};
@@ -70,14 +71,15 @@ pub async fn handle_add_source(
             path.display()
         )));
     }
-    if !path.is_dir() {
-        return Err(ServerError::ValidationError(
-            "Path is not a directory".to_string(),
-        ));
-    }
 
+    let mut config = wenlan_core::config::load_config();
     let st = match body.source_type.as_str() {
         "obsidian" => {
+            if !path.is_dir() {
+                return Err(ServerError::ValidationError(
+                    "Path is not a directory".to_string(),
+                ));
+            }
             // Accept any folder of markdown files, Obsidian vault or not.
             // Frontend detects .obsidian/ for cosmetic badge purposes.
             // `has_any_markdown` short-circuits on the first match instead
@@ -91,7 +93,21 @@ pub async fn handle_add_source(
             }
             SourceType::Obsidian
         }
-        "directory" => SourceType::Directory,
+        "directory" => {
+            if !path.is_dir() && !path.is_file() {
+                return Err(ServerError::ValidationError(
+                    "Path is not a file or directory".to_string(),
+                ));
+            }
+            let knowledge_path = config.knowledge_path_or_default();
+            if is_reserved_ingest_root(&path, &knowledge_path) {
+                return Err(ServerError::ValidationError(format!(
+                    "Path is a reserved ingest root and cannot be registered: {}",
+                    path.display()
+                )));
+            }
+            SourceType::Directory
+        }
         other => {
             return Err(ServerError::ValidationError(format!(
                 "Unknown source type: {}",
@@ -107,7 +123,6 @@ pub async fn handle_add_source(
     let slug = wenlan_core::export::obsidian::slugify(&dirname);
     let id = format!("{}-{}", st.as_str(), slug);
 
-    let mut config = wenlan_core::config::load_config();
     if config.sources.iter().any(|s| s.path == path) {
         return Err(ServerError::ValidationError(format!(
             "Source already registered for path: {}",
@@ -172,8 +187,12 @@ pub async fn handle_remove_source(
 // ===== Helpers =====
 
 fn content_hash(content: &str) -> String {
+    content_hash_bytes(content.as_bytes())
+}
+
+fn content_hash_bytes(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
+    hasher.update(content);
     format!("{:x}", hasher.finalize())
 }
 
@@ -195,18 +214,126 @@ pub async fn handle_sync_source(
         .cloned()
         .ok_or_else(|| ServerError::NotFound(format!("Source not found: {}", id)))?;
 
-    if source.source_type != SourceType::Obsidian {
-        return Err(ServerError::ValidationError(format!(
-            "Sync is only supported for Obsidian sources, got: {:?}",
-            source.source_type
-        )));
-    }
-
     // Clone the DB Arc out of the state guard, then drop the guard.
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+
+    if source.source_type == SourceType::Directory {
+        let files = scan_directory(&source.path);
+        let mut ingested: usize = 0;
+        let mut skipped: usize = 0;
+        let mut errors: usize = 0;
+        let mut file_errors: usize = 0;
+        let mut gdrive_errors: usize = 0;
+
+        for file_path in &files {
+            let file_key = file_path.to_string_lossy().to_string();
+            let is_gdrive = is_google_drive_path(file_path);
+
+            let metadata = match std::fs::metadata(file_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("[sync] stat failed for {}: {}", file_path.display(), e);
+                    errors += 1;
+                    file_errors += 1;
+                    if is_gdrive {
+                        gdrive_errors += 1;
+                    }
+                    continue;
+                }
+            };
+            let mtime_ns = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0);
+
+            let existing = db.get_sync_state(&id, &file_key).await.ok().flatten();
+            if let Some(ref ss) = existing {
+                if ss.mtime_ns == mtime_ns {
+                    skipped += 1;
+                    continue;
+                }
+            }
+
+            let bytes = match std::fs::read(file_path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!("[sync] read failed for {}: {}", file_path.display(), e);
+                    errors += 1;
+                    file_errors += 1;
+                    if is_gdrive {
+                        gdrive_errors += 1;
+                    }
+                    continue;
+                }
+            };
+            let hash = content_hash_bytes(&bytes);
+            if let Some(ref ss) = existing {
+                if ss.content_hash == hash {
+                    let _ = db.upsert_sync_state(&id, &file_key, mtime_ns, &hash).await;
+                    skipped += 1;
+                    continue;
+                }
+            }
+
+            match db.enqueue_document(&id, &file_key, Some(&hash)).await {
+                Ok(_) => {
+                    ingested += 1;
+                }
+                Err(e) => {
+                    tracing::error!("[sync] enqueue failed for {}: {}", file_path.display(), e);
+                    errors += 1;
+                }
+            }
+        }
+
+        let error_detail: Option<String> = if errors == 0 {
+            None
+        } else if file_errors > 0 && gdrive_errors * 2 >= file_errors {
+            Some("google_drive_offline".to_string())
+        } else {
+            Some("file_read_errors".to_string())
+        };
+
+        tracing::info!(
+            "[sync] {} complete: {} files, {} enqueued, {} skipped, {} errors ({:?})",
+            id,
+            files.len(),
+            ingested,
+            skipped,
+            errors,
+            error_detail
+        );
+
+        let mut config = wenlan_core::config::load_config();
+        if let Some(src) = config.sources.iter_mut().find(|s| s.id == id) {
+            src.last_sync = Some(chrono::Utc::now().timestamp());
+            src.file_count = files.len() as u64;
+            src.memory_count = src.memory_count.saturating_add(ingested as u64);
+            src.last_sync_errors = errors as u64;
+            src.last_sync_error_detail = error_detail.clone();
+        }
+        let _ = wenlan_core::config::save_config(&config);
+
+        let paused = db
+            .document_enrichment_queue_status()
+            .await
+            .ok()
+            .and_then(|q| q.paused_reason);
+
+        return Ok(Json(SyncStatsResponse {
+            files_found: files.len(),
+            ingested,
+            skipped,
+            errors,
+            error_detail,
+            paused,
+        }));
+    }
 
     let md_files = scan_vault(&source.path);
     let mut ingested: usize = 0;
@@ -375,6 +502,48 @@ pub async fn handle_sync_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wenlan_core::config::Config;
+    use wenlan_core::events::NoopEmitter;
+    use wenlan_core::sources::SyncStatus;
+
+    static TEST_DATA_DIR_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    struct DataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
+            }
+        }
+    }
+
+    fn mtime_ns(path: &std::path::Path) -> i64 {
+        std::fs::metadata(path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64
+    }
 
     #[test]
     fn content_hash_is_deterministic() {
@@ -427,5 +596,163 @@ mod tests {
             }
             _ => panic!("Expected NotFound error"),
         }
+    }
+
+    #[tokio::test]
+    async fn handle_add_source_accepts_single_file_directory_source() {
+        let _lock = TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let source_root = tempfile::tempdir().unwrap();
+        let file_path = source_root.path().join("paper.txt");
+        std::fs::write(
+            &file_path,
+            "folder source registration can point at one file",
+        )
+        .unwrap();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+
+        let Json(source) = handle_add_source(
+            State(state.clone()),
+            Json(AddSourceRequest {
+                source_type: "directory".to_string(),
+                path: file_path.to_string_lossy().to_string(),
+            }),
+        )
+        .await
+        .expect("single-file directory source should register");
+
+        assert_eq!(source.source_type, SourceType::Directory);
+        assert_eq!(source.path, file_path);
+        assert!(state.read().await.watch_paths.contains(&file_path));
+    }
+
+    #[tokio::test]
+    async fn handle_add_source_rejects_reserved_pages_directory() {
+        let _lock = TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let env = DataDirGuard::new();
+        let pages_path = env._tmp.path().join("pages");
+        std::fs::create_dir(&pages_path).unwrap();
+        let config = Config {
+            knowledge_path: Some(pages_path.clone()),
+            ..Config::default()
+        };
+        wenlan_core::config::save_config(&config).unwrap();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+
+        let result = handle_add_source(
+            State(state),
+            Json(AddSourceRequest {
+                source_type: "directory".to_string(),
+                path: pages_path.to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+
+        match result {
+            Err(ServerError::ValidationError(msg)) => {
+                assert!(
+                    msg.contains("reserved"),
+                    "reserved-root rejection should explain the guard: {msg}"
+                );
+            }
+            other => panic!("expected reserved-root ValidationError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_sync_source_enqueues_changed_directory_files_and_skips_unchanged() {
+        let _lock = TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let source_root = tempfile::tempdir().unwrap();
+        let changed_path = source_root.path().join("changed.txt");
+        let unchanged_path = source_root.path().join("unchanged.txt");
+        std::fs::write(
+            &changed_path,
+            "This changed file has enough text for folder sync queueing.",
+        )
+        .unwrap();
+        let unchanged_content = "This unchanged file already has matching sync state.";
+        std::fs::write(&unchanged_path, unchanged_content).unwrap();
+
+        let source_id = "directory-notes".to_string();
+        let source = Source {
+            id: source_id.clone(),
+            source_type: SourceType::Directory,
+            path: source_root.path().to_path_buf(),
+            status: SyncStatus::Active,
+            last_sync: None,
+            file_count: 0,
+            memory_count: 0,
+            last_sync_errors: 0,
+            last_sync_error_detail: None,
+        };
+        wenlan_core::config::save_config(&Config {
+            sources: vec![source],
+            ..Config::default()
+        })
+        .unwrap();
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(db_dir.path(), Arc::new(NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let unchanged_key = unchanged_path.to_string_lossy().to_string();
+        db.upsert_sync_state(
+            &source_id,
+            &unchanged_key,
+            mtime_ns(&unchanged_path),
+            &content_hash(unchanged_content),
+        )
+        .await
+        .unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..ServerState::default()
+        }));
+
+        let Json(stats) = handle_sync_source(State(state), Path(source_id.clone()))
+            .await
+            .expect("directory sync should succeed");
+
+        assert_eq!(stats.files_found, 2);
+        assert_eq!(stats.ingested, 1);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.errors, 0);
+
+        let changed_key = changed_path.to_string_lossy().to_string();
+        let queued = db
+            .get_queue_entry(&source_id, &changed_key)
+            .await
+            .unwrap()
+            .expect("changed file should be enqueued");
+        assert_eq!(queued.status, "pending");
+        assert_eq!(queued.source_id, source_id);
+        assert_eq!(queued.file_path, changed_key);
+        assert!(queued.content_hash.is_some());
+        assert!(
+            db.get_queue_entry("directory-notes", &unchanged_key)
+                .await
+                .unwrap()
+                .is_none(),
+            "unchanged file should not be enqueued"
+        );
+        assert!(
+            db.get_sync_state("directory-notes", &queued.file_path)
+                .await
+                .unwrap()
+                .is_none(),
+            "sync_state must not be written at enqueue time"
+        );
     }
 }
