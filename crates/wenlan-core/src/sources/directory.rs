@@ -396,7 +396,7 @@ fn modified_unix_seconds(metadata: &fs::Metadata) -> i64 {
 /// `pdf_extract` (via `lopdf`) can panic on malformed/truncated input; wrapping
 /// in `catch_unwind` upholds the "one bad file never aborts" contract. This is
 /// a sync CPU function — callers on async paths wrap it in `spawn_blocking`.
-fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
+pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
     let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         pdf_extract::extract_text_from_mem(bytes)
     }));
