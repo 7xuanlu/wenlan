@@ -2425,4 +2425,125 @@ mod tests {
             "no rows deleted -- soft-suppress only"
         );
     }
+
+    #[tokio::test]
+    async fn test_document_chunks_excluded_from_resolution_pools() {
+        let (db, _tmp) = test_db().await;
+
+        // Ingest a folder document with multiple chunks (unconfirmed).
+        let doc_body = std::iter::repeat(
+            "Folder imports are immutable source evidence for backend \
+             services, including tokio workers, libsql persistence, and \
+             local memory operations.",
+        )
+        .take(50)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "folder_doc_1".to_string(),
+            title: "Folder Decision Notes".to_string(),
+            content: doc_body,
+            memory_type: Some("fact".to_string()),
+            space: Some("engineering".to_string()),
+            source_agent: Some("folder".to_string()),
+            confirmed: None,
+            content_hash: Some("folder-hash-1".to_string()),
+            last_modified: 1_710_000_000,
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        // Insert a confirmed capture memory.
+        seed_memory(
+            &db,
+            "mem_capture",
+            "I use Rust for backend services, tokio workers, and libsql persistence",
+            "fact",
+            Some("engineering"),
+            None,
+            None,
+            1_710_000_100,
+            None,
+            false,
+            "confirmed",
+        )
+        .await;
+
+        // Verify that document chunks exist and ALL are unconfirmed.
+        // The invariant: folder documents (confirmed: None) store ALL chunks unconfirmed.
+        // build_resolution_pools filters on chunk_index = 0 AND confirmed = 1,
+        // which excludes all chunks of unconfirmed folder documents.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND source_id = ?1",
+                libsql::params!["folder_doc_1"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let chunk_count: i64 = row.get(0).unwrap();
+        drop(rows);
+
+        // Verify all chunks are unconfirmed (confirmed IS NULL).
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND source_id = ?1 AND confirmed IS NULL",
+                libsql::params!["folder_doc_1"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let unconfirmed_count: i64 = row.get(0).unwrap();
+        drop(rows);
+        drop(conn);
+
+        // Precondition: folder document exists and is chunked.
+        assert!(
+            chunk_count > 0,
+            "folder document must exist in memories, got {chunk_count} rows"
+        );
+
+        // Precondition: all folder document chunks are unconfirmed.
+        assert_eq!(
+            unconfirmed_count, chunk_count,
+            "all folder document chunks must be unconfirmed (confirmed IS NULL), \
+             got {unconfirmed_count}/{chunk_count}"
+        );
+
+        // Get incoming memory for resolution.
+        let incoming = db
+            .get_incoming_for_resolution("mem_capture")
+            .await
+            .unwrap()
+            .expect("capture memory must be resolvable");
+
+        // Build resolution pools with the incoming capture.
+        // The key invariant: build_resolution_pools filters on:
+        //   chunk_index = 0 AND confirmed = 1
+        // Unconfirmed folder documents (all chunks with confirmed IS NULL) are excluded.
+        let (pool_a, pool_b) = db
+            .build_resolution_pools(
+                &incoming,
+                crate::retrieval::resolve::ResolutionConfig::default(),
+            )
+            .await
+            .unwrap();
+
+        // Assert: folder document chunks do NOT appear in either pool.
+        let pool_a_ids: Vec<&str> = pool_a.iter().map(|c| c.source_id.as_str()).collect();
+        let pool_b_ids: Vec<&str> = pool_b.iter().map(|c| c.source_id.as_str()).collect();
+
+        assert!(
+            !pool_a_ids.contains(&"folder_doc_1"),
+            "unconfirmed folder document must not appear in Pool A (chunk_index=0 AND confirmed=1 filter excludes it)"
+        );
+        assert!(
+            !pool_b_ids.contains(&"folder_doc_1"),
+            "unconfirmed folder document must not appear in Pool B (chunk_index=0 AND confirmed=1 filter excludes it)"
+        );
+    }
 }
