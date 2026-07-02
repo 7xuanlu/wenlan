@@ -57,34 +57,24 @@ space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head 
 topic_arg="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
 ```
 
-Use this simple Codex resolver:
+Call the Codex resolver:
 
 ```bash
-if [ -n "${space_arg:-}" ]; then
-  space="$space_arg"
-  source_layer="arg"
-elif [ -n "${WENLAN_SPACE:-}" ]; then
-  space="$WENLAN_SPACE"
-  source_layer="env"
-else
-  repo_root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -n "$repo_root" ]; then
-    space="$(basename "$repo_root")"
-    source_layer="cwd-repo"
-  else
-    space="personal"
-    source_layer="default"
-  fi
-fi
-printf 'Resolved space: %s (from %s)\n' "$space" "$source_layer"
+resolved="$(plugin-codex/bin/resolve-space.sh --cwd "$PWD" ${space_arg:+--arg "$space_arg"} ${topic_arg:+--topic "$topic_arg"} 2>/dev/null)"
+space="$(printf '%s\n' "$resolved" | cut -f1)"
+source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 ```
+
+If `space` is non-empty, print `Resolved space: <space> (from <source-layer>)`
+and pass it to the `context` MCP call. If it is empty, print
+`Resolved space: none (unscoped)` and omit the `space` parameter.
 
 ## 3. Call context
 
 Call the Wenlan MCP `context` tool:
 
 ```text
-context(topic="<topic_arg or inferred topic>", space="<resolved>")
+context(topic="<topic_arg or inferred topic>", space="<resolved if non-empty>")
 ```
 
 If the user omitted a topic, infer it from the working directory and recent

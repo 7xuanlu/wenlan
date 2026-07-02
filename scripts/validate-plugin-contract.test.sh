@@ -37,9 +37,26 @@ assert_rejects "codex skill autocomplete drift" \
     perl -0pi -e 's/user-invocable: true/user-invocable: false/' \
     "$TMPDIR_TEST/root/plugin-codex/skills/brief/SKILL.md"
 
-assert_rejects "untracked codex skill port" \
-    cp -R "$TMPDIR_TEST/root/plugin/skills/handoff" \
-    "$TMPDIR_TEST/root/plugin-codex/skills/handoff"
+assert_rejects "claude skill copied into codex" \
+    bash -c 'rm -rf "$1"; cp -R "$2" "$1"' _ \
+    "$TMPDIR_TEST/root/plugin-codex/skills/handoff" \
+    "$TMPDIR_TEST/root/plugin/skills/handoff"
+
+assert_rejects "missing destructive confirmation wording" \
+    perl -0pi -e 's/cannot be undone/cannot be reversed/' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/forget/SKILL.md"
+
+assert_rejects "missing curate ambiguity guardrail" \
+    perl -0pi -e 's/Ambiguous replies do not mutate/Ambiguous replies are clarified/' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/curate/SKILL.md"
+
+assert_rejects "debrief thin alias drift" \
+    perl -0pi -e 's/Pending-captures preview/Pending review/g' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/debrief/SKILL.md"
+
+assert_rejects "codex resolver parity drift" \
+    perl -0pi -e 's/cwd-config-default/codex-default/' \
+    "$TMPDIR_TEST/root/plugin-codex/bin/resolve-space.sh"
 
 assert_rejects "marketplace source drift" \
     perl -0pi -e 's|"path": "./plugin-codex"|"path": "./plugin"|' \

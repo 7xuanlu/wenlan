@@ -65,33 +65,39 @@
     },
     {
       "name": "curate",
-      "status": "claude_only_until_ported",
-      "reason": "Needs a Codex-native review and pending-item interaction design before porting."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     },
     {
       "name": "debrief",
-      "status": "claude_only_until_ported",
-      "reason": "Alias to handoff; port after the Codex handoff workflow is proven."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     },
     {
       "name": "distill",
-      "status": "claude_only_until_ported",
-      "reason": "Depends on page and distillation review flows that need separate Codex validation."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     },
     {
       "name": "forget",
-      "status": "claude_only_until_ported",
-      "reason": "Destructive verb; requires an explicit Codex confirmation UX decision."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     },
     {
       "name": "handoff",
-      "status": "claude_only_until_ported",
-      "reason": "Session log and pending-capture preview flow needs a dedicated Codex port."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     },
     {
       "name": "help",
-      "status": "claude_only_until_ported",
-      "reason": "Menu text should be rewritten after Codex command coverage is wider."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     },
     {
       "name": "pages",
@@ -101,8 +107,9 @@
     },
     {
       "name": "recall",
-      "status": "claude_only_until_ported",
-      "reason": "Needs a small Codex-specific search/result presentation pass."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     }
   ]
 }
