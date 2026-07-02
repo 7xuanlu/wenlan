@@ -113,7 +113,7 @@ Inline verbs map to:
 If there are more than three, end with:
 
 ```text
-Run /curate revisions after the Codex slice includes that workflow.
+Run /curate revisions to walk the full queue.
 ```
 
 Do not auto-action revisions.

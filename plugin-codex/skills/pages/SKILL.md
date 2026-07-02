@@ -84,7 +84,5 @@ to run `/pages <query>` to open one.
 
 ## When not to use
 
-- Raw memory lookup: use `/recall` when that Codex skill exists, or the MCP
-  recall/context tools until then.
-- Synthesize a new page: use `/distill` when that Codex skill exists, or ask
-  the user before doing manual distillation work.
+- Raw memory lookup: use `/recall`.
+- Synthesize a new page: use `/distill`.

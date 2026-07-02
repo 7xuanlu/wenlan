@@ -111,7 +111,7 @@ npx -y wenlan setup
 ~/.wenlan/bin/wenlan mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
+MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install plugin slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
 
 ### Terminal runtime setup
 
@@ -163,7 +163,7 @@ These five verbs drive it:
 2. **During work.** `/capture <thing>` saves a decision, lesson, gotcha, or project fact in flow. `/recall <query>` looks anything up.
 3. **Session ends.** `/handoff` writes what changed, what's still open, and where to continue, so the next run picks up cleanly.
 4. **Between sessions.** The daemon deduplicates overlapping captures and links related ideas in the background. `/distill` synthesizes wiki pages from clusters of related memories when you want a deliberate pass.
-5. **Next session.** `/brief` brings it back in the Claude Code plugin; MCP-only clients call the `context` tool for the same memory. Recall pulls the relevant slice, not your whole history, so the context window goes to the work.
+5. **Next session.** `/brief` brings it back in the Claude Code and Codex plugins; MCP-only clients call the `context` tool for the same memory. Recall pulls the relevant slice, not your whole history, so the context window goes to the work.
 
 Full skill reference: [plugin/skills](plugin/skills/README.md).
 
@@ -231,6 +231,7 @@ Wenlan is daemon-first. `wenlan-server` owns the local database, embeddings, dis
 | [crates/wenlan-mcp](crates/wenlan-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
 | [crates/wenlan-cli](crates/wenlan-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
 | [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`).                                                                                                                                           |
+| [plugin-codex/](plugin-codex/)                         | Codex plugin (`.codex-plugin/plugin.json`, skills, `agents/openai.yaml`, `.mcp.json`).                                                                                                                     |
 | [docs/eval](docs/eval/README.md)                       | Benchmark workflow and methodology.                                                                                                                                                                        |
 
 
@@ -293,7 +294,7 @@ Bug fixes, eval cases, docs, and features are welcome. Start with [CONTRIBUTING.
 
 ## License
 
-Wenlan is licensed under **Apache-2.0**. This includes the local runtime, CLI, MCP server, shared types, and Claude Code plugin files in this repo.
+Wenlan is licensed under **Apache-2.0**. This includes the local runtime, CLI, MCP server, shared types, and Claude Code/Codex plugin files in this repo.
 
 The permissive license keeps the daemon boundary usable for MCP clients and downstream local tools.
 
