@@ -18,6 +18,30 @@ from typing import Any
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_SKILL_STATUSES = {"shared_now", "claude_only_until_ported"}
+CODEX_SKILLS_WITHOUT_MCP_REFERENCE = {"help", "pages"}
+CODEX_SKILLS_USING_RESOLVER = {"brief", "capture", "debrief", "distill", "handoff", "recall"}
+CODEX_REQUIRED_GUARDRAILS = {
+    "forget": [
+        "cannot be undone",
+        "delete <id>",
+        "Always confirm with the user before calling forget",
+    ],
+    "distill": [
+        "rebuild <page-id>",
+        "force=true",
+        "user-edited page prose is wiped",
+    ],
+    "curate": [
+        "revision_source_id",
+        "Perform no mutation until the user replies",
+        "Ambiguous replies do not mutate",
+    ],
+    "debrief": [
+        "Pending-captures preview",
+        "MCP captures",
+        "Write session log",
+    ],
+}
 
 
 def fail(message: str) -> None:
@@ -93,6 +117,10 @@ def contract_skill_sets(contract: dict[str, Any]) -> tuple[set[str], set[str]]:
         if status not in ALLOWED_SKILL_STATUSES:
             fail(f"skill {name} has unsupported status {status!r}")
         if status == "shared_now":
+            if item.get("codex_user_invocable") is not True:
+                fail(f"shared skill {name} must set codex_user_invocable true")
+            if item.get("codex_openai_interface") is not True:
+                fail(f"shared skill {name} must set codex_openai_interface true")
             shared_now.add(name)
         elif status == "claude_only_until_ported":
             claude_only.add(name)
@@ -189,6 +217,13 @@ def validate_runner(root: Path, surface: str, config: dict[str, Any]) -> None:
         fail(f"{surface} has unsupported agent mode {agent['mode']!r}")
 
 
+def validate_resolver_parity(root: Path) -> None:
+    claude_resolver = read_text(root, root / "plugin" / "bin" / "resolve-space.sh")
+    codex_resolver = read_text(root, root / "plugin-codex" / "bin" / "resolve-space.sh")
+    if claude_resolver != codex_resolver:
+        fail("plugin-codex/bin/resolve-space.sh must match plugin/bin/resolve-space.sh")
+
+
 def iter_matching_plugin(plugins: list[Any], plugin_name: str):
     for item in plugins:
         if isinstance(item, dict) and item.get("name") == plugin_name:
@@ -281,6 +316,13 @@ def validate_skill_surface(
                 frontmatter.get("user-invocable"),
                 "true",
             )
+            if name not in CODEX_SKILLS_WITHOUT_MCP_REFERENCE and expected_prefix not in text:
+                fail(f"{rel(root, skill_path)} must use MCP prefix {expected_prefix!r}")
+            if name in CODEX_SKILLS_USING_RESOLVER and "plugin-codex/bin/resolve-space.sh" not in text:
+                fail(f"{rel(root, skill_path)} must use plugin-codex/bin/resolve-space.sh")
+            for needle in CODEX_REQUIRED_GUARDRAILS.get(name, []):
+                if needle not in text:
+                    fail(f"{rel(root, skill_path)} must contain guardrail {needle!r}")
             metadata_path = plugin_root / "skills" / name / "agents" / "openai.yaml"
             require_file(root, metadata_path)
             metadata = read_text(root, metadata_path)
@@ -298,6 +340,7 @@ def validate_contract(root: Path) -> None:
         validate_mcp_config(root, surface, config)
         validate_runner(root, surface, config)
 
+    validate_resolver_parity(root)
     validate_marketplace(root, surfaces["codex"])
 
     validate_skill_surface(

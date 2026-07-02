@@ -29,30 +29,19 @@ If `content` is empty, ask the user what they want to capture.
 
 ## Resolve the active space
 
-Use this simple Codex resolver until the shared resolver boundary is proven:
+Call the Codex resolver:
 
 ```bash
-if [ -n "${space_arg:-}" ]; then
-  space="$space_arg"
-  source_layer="arg"
-elif [ -n "${WENLAN_SPACE:-}" ]; then
-  space="$WENLAN_SPACE"
-  source_layer="env"
-else
-  repo_root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -n "$repo_root" ]; then
-    space="$(basename "$repo_root")"
-    source_layer="cwd-repo"
-  else
-    space="personal"
-    source_layer="default"
-  fi
-fi
-printf 'Resolved space: %s (from %s)\n' "$space" "$source_layer"
+resolved="$(plugin-codex/bin/resolve-space.sh --cwd "$PWD" ${space_arg:+--arg "$space_arg"} --topic "$content" 2>/dev/null)"
+space="$(printf '%s\n' "$resolved" | cut -f1)"
+source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 ```
 
-Pass `space="$space"` to the `capture` MCP tool. If `source_layer` is `arg`,
-also print:
+If `space` is non-empty, print `Resolved space: <space> (from <source-layer>)`
+and pass it to the `capture` MCP tool. If `space` is empty, print
+`Resolved space: none (unscoped)` and omit the `space` parameter.
+
+If `source_layer` is `arg`, also print:
 
 ```text
 Created new space '<space>' from arg. Register it later if you want it pinned.
@@ -68,7 +57,7 @@ capture(
   content="<content, written as a full sentence with WHY>",
   memory_type="<picked from the 6 types>",
   entity="<primary entity name, if any>",
-  space="<resolved>"
+  space="<resolved if non-empty>"
 )
 ```
 

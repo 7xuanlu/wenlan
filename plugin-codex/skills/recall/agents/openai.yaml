@@ -1,0 +1,3 @@
+interface:
+  display_name: "Wenlan Recall"
+  short_description: "Search Wenlan memories from Codex"

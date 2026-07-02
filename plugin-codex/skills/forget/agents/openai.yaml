@@ -1,0 +1,3 @@
+interface:
+  display_name: "Wenlan Forget"
+  short_description: "Delete a Wenlan memory by exact id with confirmation"
