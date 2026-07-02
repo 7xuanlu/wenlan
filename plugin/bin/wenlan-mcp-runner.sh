@@ -14,7 +14,7 @@
 #      failures when ~/.npm/_cacache contains root-owned files left over
 #      from older npm versions (npx exits before responding to initialize,
 #      MCP host then waits 30s and times out).
-#   4. npx -y wenlan-mcp@^0.9.5 — fallback for users who installed the
+#   4. npx -y wenlan-mcp@^0.9.6 — fallback for users who installed the
 #      plugin without running install.sh.
 
 # Don't enable `set -u` here: if Claude Code (or any MCP host) invokes the
@@ -37,4 +37,4 @@ if [ -x "${installed_bin}" ]; then
   exec "${installed_bin}" "$@"
 fi
 
-exec npx -y wenlan-mcp@^0.9.5 "$@"
+exec npx -y wenlan-mcp@^0.9.6 "$@"
