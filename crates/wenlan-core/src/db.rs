@@ -11872,6 +11872,37 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Rebind chunks from one source_id to another. Used for rename optimization:
+    /// when a file is renamed (old vanishes, new appears with same content_hash),
+    /// rebind the old document's chunks to the new doc_source_id instead of
+    /// delete+enqueue. Updates enrichment_steps to point to the new source_id.
+    pub async fn rebind_source_id(
+        &self,
+        source: &str,
+        old_source_id: &str,
+        new_source_id: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
+            libsql::params![
+                new_source_id.to_string(),
+                source.to_string(),
+                old_source_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id: {}", e)))?;
+        // Also update enrichment_steps to point to the new source_id.
+        conn.execute(
+            "UPDATE enrichment_steps SET source_id = ?1 WHERE source_id = ?2",
+            libsql::params![new_source_id.to_string(), old_source_id.to_string()],
+        )
+        .await
+        .ok();
+        Ok(())
+    }
+
     /// Update summary for all rows of a document.
     pub async fn update_document_summary(
         &self,

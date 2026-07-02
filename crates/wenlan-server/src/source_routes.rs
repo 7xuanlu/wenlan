@@ -342,11 +342,52 @@ pub async fn handle_sync_source(
         }
 
         let files = scan_directory(&source.path);
+        let knowledge_path = config.knowledge_path_or_default();
+        let scanned: std::collections::HashSet<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        // Deletion propagation & rename optimization setup (§4/§5):
+        // - The root is live, so any tracked file NOT in the current scan vanished.
+        // - Capture content_hash of vanished files for rename optimization.
+        // - If a new file's hash matches a vanished file's, rebind chunks instead of
+        //   delete+enqueue (pure-DB op: UPDATE memories.source_id old→new).
+        // - For non-matching files, delete normally and enqueue for re-enrichment.
+        //
+        // Build a hash->vanished_file map first, before enqueuing new files.
+        let mut vanished_by_hash: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new(); // hash -> (old_doc_source_id, old_path)
+        let mut files_to_delete: Vec<(String, String)> = Vec::new(); // (path, doc_source_id)
+
+        if let Ok(tracked) = db.list_sync_state_paths(&id).await {
+            for tracked_path in tracked {
+                if scanned.contains(&tracked_path) {
+                    continue;
+                }
+                // Fetch the vanished file's sync state to get its content_hash.
+                if let Ok(Some(sync_state)) = db.get_sync_state(&id, &tracked_path).await {
+                    let doc_source_id = wenlan_core::sources::directory::document_source_id(
+                        &id,
+                        std::path::Path::new(&tracked_path),
+                        Some(&knowledge_path),
+                    );
+                    // Record this vanished file's hash for the optimization.
+                    vanished_by_hash.insert(
+                        sync_state.content_hash.clone(),
+                        (doc_source_id.clone(), tracked_path.clone()),
+                    );
+                    files_to_delete.push((tracked_path.clone(), doc_source_id));
+                }
+            }
+        }
+
         let mut ingested: usize = 0;
         let mut skipped: usize = 0;
         let mut errors: usize = 0;
         let mut file_errors: usize = 0;
         let mut gdrive_errors: usize = 0;
+        let mut renamed_files: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for file_path in &files {
             let file_key = file_path.to_string_lossy().to_string();
@@ -400,6 +441,42 @@ pub async fn handle_sync_source(
                 }
             }
 
+            // Rename optimization: check if this file's hash matches a vanished file's.
+            if let Some((old_doc_source_id, old_path)) = vanished_by_hash.get(&hash) {
+                // This file has the same content as a vanished file — rebind instead of re-enqueue.
+                let new_doc_source_id = wenlan_core::sources::directory::document_source_id(
+                    &id,
+                    file_path,
+                    Some(&knowledge_path),
+                );
+
+                // UPDATE memories: rebind chunks from old_doc_source_id to new_doc_source_id.
+                if let Err(e) = db
+                    .rebind_source_id("memory", old_doc_source_id.as_str(), &new_doc_source_id)
+                    .await
+                {
+                    tracing::warn!(
+                        "[sync] rebind failed for {} (renamed from {}): {}",
+                        file_path.display(),
+                        old_path,
+                        e
+                    );
+                    errors += 1;
+                    continue;
+                }
+
+                // Delete old sync_state, create new sync_state for the new path.
+                let _ = db.delete_sync_state(&id, old_path).await;
+                let _ = db.upsert_sync_state(&id, &file_key, mtime_ns, &hash).await;
+
+                // Mark this file as renamed (don't delete it later).
+                renamed_files.insert(old_path.clone());
+                // Skipped instead of ingested: chunks reused, not re-enriched.
+                skipped += 1;
+                continue;
+            }
+
+            // Normal enqueue (no rename match).
             match db.enqueue_document(&id, &file_key, Some(&hash)).await {
                 Ok(_) => {
                     ingested += 1;
@@ -411,45 +488,12 @@ pub async fn handle_sync_source(
             }
         }
 
-        // Deletion propagation (§4): the root is live, so any tracked file NOT
-        // in the current scan genuinely vanished. Reap its chunks, its sync
-        // state, and any still-pending enrichment. The SOURCE page is left to
-        // the existing fail-closed page-visibility rule (a page whose chunks
-        // are all gone stops being reachable). Best-effort per file — one
-        // failed delete never aborts the rest of the diff.
-        //
-        // DESCOPE NOTE: Rename optimization (spec §WHAT) is NOT implemented here.
-        // When a file is renamed (old file vanishes, new file appears with identical
-        // content_hash), the current code deletes the old file's chunks and enqueues
-        // the new file for full re-enrichment. An optimized version would:
-        //   1. Capture content_hash of vanished files
-        //   2. Before enqueuing new files, check if a new file's hash matches a
-        //      vanished file's
-        //   3. If yes, rebind/reuse enrichment instead of re-enqueueing
-        // However, this requires the enrichment worker (document_enrichment_queue
-        // consumer) to support a "reuse" mode that rebinds enrichment to a new
-        // source_id or directly restores chunks. Since the worker is not yet wired
-        // in this branch, the optimization is deferred. Current behavior is correct
-        // (chunks are re-created with the new path) but redundant (content unchanged).
-        // See test: handle_sync_source_rename_optimization_descoped_awaiting_enrichment_worker
-        let scanned: std::collections::HashSet<String> = files
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
-        let knowledge_path = config.knowledge_path_or_default();
-        if let Ok(tracked) = db.list_sync_state_paths(&id).await {
-            for tracked_path in tracked {
-                if scanned.contains(&tracked_path) {
-                    continue;
-                }
-                let doc_source_id = wenlan_core::sources::directory::document_source_id(
-                    &id,
-                    std::path::Path::new(&tracked_path),
-                    Some(&knowledge_path),
-                );
+        // Clean up vanished files that were not renamed (sources matched earlier).
+        for (path, doc_source_id) in files_to_delete {
+            if !renamed_files.contains(&path) {
                 let _ = db.delete_by_source_id("memory", &doc_source_id).await;
-                let _ = db.delete_sync_state(&id, &tracked_path).await;
-                let _ = db.dequeue_document(&id, &tracked_path).await;
+                let _ = db.delete_sync_state(&id, &path).await;
+                let _ = db.dequeue_document(&id, &path).await;
             }
         }
 
@@ -1201,22 +1245,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_sync_source_rename_optimization_descoped_awaiting_enrichment_worker() {
-        // Rename optimization (spec §WHAT): if a new file's content_hash equals a
-        // just-deleted doc's, reuse enrichment instead of re-running.
-        //
-        // DESCOPED: The production enrichment worker is not wired in this branch
-        // yet. Implementing the optimization would require capturing deleted files'
-        // content_hashes, building a map, and when enqueuing new files, checking
-        // against the map to detect renames. However, "reusing enrichment" means
-        // rebinding the document's source_id or directly restoring chunks from the
-        // deleted enrichment, which requires the enrichment worker on the
-        // consumer side to support a "reuse" mode (bypassing the full inference
-        // pipeline). Since the enrichment worker is not yet active in this branch,
-        // we defer the optimization to a follow-up task when the worker is
-        // available. For now, a renamed file triggers delete-old + full-re-enrich,
-        // which is safe (not wrong, just redundant). This test documents the
-        // current (unoptimized) behavior: a renamed file queues for enrichment.
+    async fn handle_sync_source_rename_optimization_rebinds_chunks_on_content_match() {
+        // Rename optimization: if a new file's content_hash equals a just-deleted
+        // doc's, reuse enrichment (rebind chunks to the new path) instead of
+        // re-running. This test verifies the OPTIMIZED behavior: a renamed file
+        // with identical content should NOT be re-enqueued, and chunks should be
+        // re-pointed to the new path by updating memories.source_id.
         let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
@@ -1235,20 +1269,34 @@ mod tests {
         let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
 
         let (db, _db_dir) = new_test_db().await;
+        let orig_doc_source_id = wenlan_core::sources::directory::document_source_id(
+            &source_id,
+            &orig_path,
+            Some(&knowledge_path),
+        );
         let orig_doc = seed_document(&db, &source_id, &orig_path, &knowledge_path, content).await;
 
         // BEFORE rename: original file exists with its enriched chunks.
+        let orig_chunks = db
+            .get_memories_by_source_id("memory", &orig_doc)
+            .await
+            .unwrap();
         assert!(
-            !db.get_memories_by_source_id("memory", &orig_doc)
-                .await
-                .unwrap()
-                .is_empty(),
+            !orig_chunks.is_empty(),
             "original file should have enriched chunks"
         );
+        let orig_chunk_count = orig_chunks.len();
 
         // Rename the file: old vanishes, new appears with identical content.
         std::fs::remove_file(&orig_path).unwrap();
         std::fs::write(&renamed_path, content).unwrap();
+
+        let renamed_key = renamed_path.to_string_lossy().to_string();
+        let new_doc_source_id = wenlan_core::sources::directory::document_source_id(
+            &source_id,
+            &renamed_path,
+            Some(&knowledge_path),
+        );
 
         let state = Arc::new(RwLock::new(ServerState {
             db: Some(db.clone()),
@@ -1258,39 +1306,53 @@ mod tests {
             .await
             .expect("directory sync should succeed");
 
-        // CURRENT BEHAVIOR (unoptimized):
-        // - Original file is deleted (chunks + sync_state removed).
-        // - New (renamed) file is enqueued for FULL re-enrichment.
-        // This is correct (chunks will be re-created with the new path) but
-        // redundant (content unchanged). The optimization would skip re-enqueueing
-        // when a new file's hash matches a vanished file's, but that requires the
-        // enrichment worker support a reuse/rebind mode.
+        // OPTIMIZED BEHAVIOR:
+        // - Renamed file is NOT enqueued (chunks are reused, not re-enriched).
+        // - Original doc's chunks are deleted (old path cleaned up).
+        // - New doc_source_id has the chunks (re-pointed via UPDATE memories.source_id).
+        // - sync_state is updated to the new path.
 
         assert_eq!(
-            stats.ingested, 1,
-            "renamed file should be enqueued for enrichment"
+            stats.ingested, 0,
+            "renamed file should NOT be enqueued (optimization: chunks reused)"
         );
+
+        // Original doc_source_id has no chunks (they were transferred/re-pointed).
         assert!(
-            db.get_memories_by_source_id("memory", &orig_doc)
+            db.get_memories_by_source_id("memory", &orig_doc_source_id)
                 .await
                 .unwrap()
                 .is_empty(),
-            "original file's chunks must be deleted (old path gone)"
-        );
-        let renamed_key = renamed_path.to_string_lossy().to_string();
-        let queued = db
-            .get_queue_entry(&source_id, &renamed_key)
-            .await
-            .unwrap()
-            .expect("renamed file should be queued for enrichment (not optimized yet)");
-        assert_eq!(queued.status, "pending");
-        assert_eq!(
-            queued.content_hash.as_deref(),
-            Some(content_hash(content).as_str()),
-            "queued entry should carry the (same) content_hash"
+            "original doc_source_id should have no chunks (re-pointed to new path)"
         );
 
-        // TODO: When the enrichment worker is wired, detect content_hash match
-        // between vanished and new files, rebind enrichment instead of re-enqueue.
+        // New doc_source_id has the chunks (re-pointed from the old path).
+        let new_chunks = db
+            .get_memories_by_source_id("memory", &new_doc_source_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            new_chunks.len(),
+            orig_chunk_count,
+            "renamed file should have same chunks re-pointed to the new path"
+        );
+
+        // New sync_state exists with the new path.
+        assert!(
+            db.get_sync_state(&source_id, &renamed_key)
+                .await
+                .unwrap()
+                .is_some(),
+            "renamed file's sync_state should be created"
+        );
+
+        // Renamed file should NOT be in the queue (optimization: not re-enqueued).
+        assert!(
+            db.get_queue_entry(&source_id, &renamed_key)
+                .await
+                .unwrap()
+                .is_none(),
+            "renamed file should NOT be queued (chunks reused, not re-enriched)"
+        );
     }
 }
