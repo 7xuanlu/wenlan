@@ -207,6 +207,13 @@ pub async fn run_document_enrichment(
         let _ = db.mark_done(&source_id, &file_path).await;
         return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
     }
+    if let Some(stored_title) = chunks
+        .iter()
+        .map(|c| c.title.trim())
+        .find(|title| !title.is_empty())
+    {
+        title = stored_title.to_string();
+    }
 
     // ── (3) map-fold: rebuild the digest from checkpointed summaries, then
     // analyze only the not-yet-completed chunks. ──
@@ -539,6 +546,26 @@ mod tests {
         path
     }
 
+    /// Markdown fixture whose parsed chunk title differs from the file stem.
+    /// This exposes resume-title drift: a resumed run should reuse the stored
+    /// parsed title from chunks instead of falling back to `file_stem`.
+    fn write_markdown_doc(dir: &Path) -> PathBuf {
+        let path = dir.join("resume-title.md");
+        let mut body = String::new();
+        body.push_str("# Canonical Parsed Heading\n\n");
+        body.push_str("Wenlanborg is the code name for the folder ingestion subsystem.\n\n");
+        for i in 0..80 {
+            body.push_str(&format!(
+                "Paragraph {i} describes an aspect of the document ingestion pipeline in careful, \
+                 concrete detail so that the markdown chunker splits this note into multiple \
+                 sections rather than a single chunk. It keeps going for a while.\n\n"
+            ));
+        }
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        path
+    }
+
     fn analysis_responses() -> Vec<String> {
         (0..128)
             .map(|i| format!("SECTION_ANALYSIS_{i:03}"))
@@ -712,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn resumes_from_checkpoint_without_reanalyzing() {
         let (db, dir) = test_db().await;
-        let path = write_doc(dir.path());
+        let path = write_markdown_doc(dir.path());
         let file_path = path.to_string_lossy().to_string();
         db.enqueue_document("folder-notes", &file_path, Some("hashA"))
             .await
@@ -759,6 +786,16 @@ mod tests {
             Some("SECTION_ANALYSIS_001")
         );
         assert_eq!(mid_chunks[2].summary, None, "chunk 2 not yet analyzed");
+        let stored_title = mid_chunks[0].title.clone();
+        let file_stem_title = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap()
+            .to_string();
+        assert_ne!(
+            stored_title, file_stem_title,
+            "fixture must expose parsed-title vs file-stem drift"
+        );
         let n = mid_chunks.len();
 
         // Re-run with a FRESH provider — it must be asked to analyze only chunks
@@ -800,6 +837,11 @@ mod tests {
 
         // One SOURCE page, done.
         assert_eq!(count_source_pages(&db).await, 1);
+        let page = db.get_page(&outcome.page_id).await.unwrap().expect("page");
+        assert_eq!(
+            page.title, stored_title,
+            "resumed completion should reuse the parsed title stored on chunks"
+        );
         let q = db
             .get_queue_entry("folder-notes", &file_path)
             .await
