@@ -1395,6 +1395,17 @@ pub struct DocEnrichmentQueueEntry {
     pub updated_at: i64,
 }
 
+/// Aggregate state of the document-enrichment queue, for `/api/status`
+/// observability. `pending` counts rows not yet `done` (pending + in_progress +
+/// paused); `paused_reason` / `next_retry_at` describe the soonest-to-retry
+/// paused row (present only when at least one row is paused).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DocEnrichmentQueueStatus {
+    pub pending: u64,
+    pub paused_reason: Option<String>,
+    pub next_retry_at: Option<i64>,
+}
+
 // ===== Schema =====
 
 const SCHEMA: &str = "
@@ -23450,6 +23461,80 @@ impl MemoryDB {
         } else {
             Ok(None)
         }
+    }
+
+    /// Summarize the document-enrichment queue for `/api/status`. `pending` is
+    /// the count of not-`done` rows; the paused fields describe the
+    /// soonest-to-retry paused row (a NULL `next_retry_at` — immediately
+    /// eligible — sorts first), or are `None` when nothing is paused.
+    pub async fn document_enrichment_queue_status(
+        &self,
+    ) -> Result<DocEnrichmentQueueStatus, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut pending_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM document_enrichment_queue WHERE status != 'done'",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status pending: {e}")))?;
+        let pending = pending_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status pending row: {e}")))?
+            .and_then(|r| r.get::<i64>(0).ok())
+            .unwrap_or(0)
+            .max(0) as u64;
+        drop(pending_rows);
+
+        let mut paused_rows = conn
+            .query(
+                "SELECT error_detail, next_retry_at FROM document_enrichment_queue
+                 WHERE status = 'paused'
+                 ORDER BY next_retry_at ASC, rowid ASC
+                 LIMIT 1",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status paused: {e}")))?;
+        let (paused_reason, next_retry_at) = match paused_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status paused row: {e}")))?
+        {
+            Some(row) => (
+                row.get::<Option<String>>(0).unwrap_or(None),
+                row.get::<Option<i64>>(1).unwrap_or(None),
+            ),
+            None => (None, None),
+        };
+
+        Ok(DocEnrichmentQueueStatus {
+            pending,
+            paused_reason,
+            next_retry_at,
+        })
+    }
+
+    /// On daemon startup, requeue any rows left `in_progress` by a previous run
+    /// (a crash / restart mid-enrichment). The per-chunk checkpoint
+    /// (`last_completed_chunk`) is preserved so the next claim resumes from it
+    /// instead of re-analyzing the document from scratch; the retry schedule is
+    /// cleared so the row is immediately claimable. Returns the number of rows
+    /// requeued.
+    pub async fn reset_in_progress_documents(&self) -> Result<u64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        let changed = conn
+            .execute(
+                "UPDATE document_enrichment_queue
+                 SET status = 'pending', next_retry_at = NULL, updated_at = ?1
+                 WHERE status = 'in_progress'",
+                libsql::params![now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reset_in_progress_documents: {e}")))?;
+        Ok(changed)
     }
 
     /// Check which of the given source_ids already exist in the memories

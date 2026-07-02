@@ -35,6 +35,11 @@ pub struct SyncStatsResponse {
     /// "google_drive_offline", "file_read_errors".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_detail: Option<String>,
+    /// Set when background document enrichment is paused (LLM failure, awaiting
+    /// a backoff retry): the pause reason. Additive + optional so older clients
+    /// deserialize cleanly and a `None` is omitted from the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<String>,
 }
 
 /// Detect Google Drive File Provider paths on macOS. Files at these paths are
@@ -349,12 +354,21 @@ pub async fn handle_sync_source(
     }
     let _ = wenlan_core::config::save_config(&config);
 
+    // Surface any paused background document-enrichment so a sync caller sees
+    // the queue is stalled on an LLM failure (waiting for a backoff retry).
+    let paused = db
+        .document_enrichment_queue_status()
+        .await
+        .ok()
+        .and_then(|q| q.paused_reason);
+
     Ok(Json(SyncStatsResponse {
         files_found: md_files.len(),
         ingested,
         skipped,
         errors,
         error_detail,
+        paused,
     }))
 }
 
@@ -366,6 +380,37 @@ mod tests {
     fn content_hash_is_deterministic() {
         assert_eq!(content_hash("hello"), content_hash("hello"));
         assert_ne!(content_hash("hello"), content_hash("world"));
+    }
+
+    #[test]
+    fn sync_stats_response_defaults_and_skips_paused_when_absent() {
+        // Older responses omit `paused` entirely → deserializes to None.
+        let json = r#"{"files_found":1,"ingested":1,"skipped":0,"errors":0}"#;
+        let parsed: SyncStatsResponse = serde_json::from_str(json).unwrap();
+        assert!(parsed.paused.is_none());
+        // A None paused detail is omitted from the wire.
+        let out = serde_json::to_string(&parsed).unwrap();
+        assert!(
+            !out.contains("paused"),
+            "None paused must be omitted: {out}"
+        );
+
+        // A paused detail round-trips.
+        let with = SyncStatsResponse {
+            files_found: 0,
+            ingested: 0,
+            skipped: 0,
+            errors: 0,
+            error_detail: None,
+            paused: Some("analysis LLM failed".to_string()),
+        };
+        let s = serde_json::to_string(&with).unwrap();
+        assert!(
+            s.contains("\"paused\":\"analysis LLM failed\""),
+            "paused detail must serialize: {s}"
+        );
+        let back: SyncStatsResponse = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.paused.as_deref(), Some("analysis LLM failed"));
     }
 
     #[tokio::test]

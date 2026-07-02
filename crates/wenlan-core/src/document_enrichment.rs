@@ -898,6 +898,142 @@ mod tests {
         assert!(q.next_retry_at.is_some());
     }
 
+    // ── self-healing loop: LLM failure pauses with backoff, then re-claims ────
+
+    #[tokio::test]
+    async fn llm_failure_pauses_with_backoff_then_reclaims_after_retry_elapses() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(FailingProvider);
+        let prompts = PromptRegistry::default();
+        let outcome = run_document_enrichment(&db, &entry, None, Some(&llm), &prompts).await;
+        assert!(outcome.paused, "LLM failure pauses (no in-loop retry burn)");
+
+        // Paused: attempt bumped, a FUTURE retry scheduled → not yet claimable.
+        let paused = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(paused.status, "paused");
+        assert_eq!(paused.attempt_count, 1);
+        let retry_at = paused.next_retry_at.expect("backoff sets next_retry_at");
+        assert!(
+            retry_at > chrono::Utc::now().timestamp(),
+            "backoff schedules the retry in the future"
+        );
+        assert!(
+            db.claim_next_pending().await.unwrap().is_none(),
+            "not claimable before backoff elapses"
+        );
+
+        // Advance time past next_retry_at (simulate elapsed backoff) → claimable
+        // again, so the scheduler auto-resumes with no daemon restart.
+        db.mark_paused(
+            "folder-notes",
+            &file_path,
+            "analysis LLM failed",
+            Some(chrono::Utc::now().timestamp() - 1),
+        )
+        .await
+        .unwrap();
+        let reclaimed = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("claimable after backoff elapses");
+        assert_eq!(reclaimed.file_path, file_path);
+        assert_eq!(
+            reclaimed.attempt_count, 2,
+            "attempts keep incrementing across retries"
+        );
+    }
+
+    // ── queue observability: status summary reflects pending + paused ─────────
+
+    #[tokio::test]
+    async fn queue_status_summarizes_pending_and_paused() {
+        let (db, _dir) = test_db().await;
+
+        // Empty queue → nothing pending, no pause.
+        let empty = db.document_enrichment_queue_status().await.unwrap();
+        assert_eq!(empty.pending, 0);
+        assert!(empty.paused_reason.is_none());
+        assert!(empty.next_retry_at.is_none());
+
+        // Two enqueued, one paused with a reason + retry time.
+        db.enqueue_document("folder", "/a.md", Some("h"))
+            .await
+            .unwrap();
+        db.enqueue_document("folder", "/b.md", Some("h"))
+            .await
+            .unwrap();
+        db.mark_paused(
+            "folder",
+            "/a.md",
+            "analysis LLM failed",
+            Some(1_712_678_400),
+        )
+        .await
+        .unwrap();
+
+        let status = db.document_enrichment_queue_status().await.unwrap();
+        assert_eq!(status.pending, 2, "pending counts all not-done rows");
+        assert_eq!(status.paused_reason.as_deref(), Some("analysis LLM failed"));
+        assert_eq!(status.next_retry_at, Some(1_712_678_400));
+
+        // Once done, rows drop out of the pending count and the pause clears.
+        db.mark_done("folder", "/a.md").await.unwrap();
+        db.mark_done("folder", "/b.md").await.unwrap();
+        let drained = db.document_enrichment_queue_status().await.unwrap();
+        assert_eq!(drained.pending, 0);
+        assert!(drained.paused_reason.is_none());
+        assert!(drained.next_retry_at.is_none());
+    }
+
+    // ── restart resume: in_progress rows are requeued (checkpoint preserved) ──
+
+    #[tokio::test]
+    async fn reset_in_progress_requeues_orphaned_docs_preserving_checkpoint() {
+        let (db, _dir) = test_db().await;
+        db.enqueue_document("folder", "/a.md", Some("h"))
+            .await
+            .unwrap();
+        let claimed = db.claim_next_pending().await.unwrap().expect("claim");
+        assert_eq!(claimed.status, "in_progress");
+        db.checkpoint_chunk("folder", "/a.md", 4).await.unwrap();
+        // Simulate a crash: the row is stuck in_progress and NOT claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // A fresh daemon start requeues orphaned in_progress rows.
+        let requeued = db.reset_in_progress_documents().await.unwrap();
+        assert_eq!(requeued, 1, "one orphaned in_progress row requeued");
+        let entry = db
+            .get_queue_entry("folder", "/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.status, "pending");
+        assert_eq!(
+            entry.last_completed_chunk, 4,
+            "checkpoint preserved so the resume skips analyzed chunks"
+        );
+
+        // Claimable again, resuming from the checkpoint.
+        let resumed = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("claimable after reset");
+        assert_eq!(resumed.last_completed_chunk, 4);
+    }
+
     /// Count active `creation_kind='source'` pages.
     async fn count_source_pages(db: &MemoryDB) -> i64 {
         let conn = db.conn.lock().await;
