@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.7](https://github.com/7xuanlu/wenlan/compare/v0.9.6...v0.9.7) (2026-07-02)
+
+
+### Bug Fixes
+
+* port pages skill to Codex plugin ([#318](https://github.com/7xuanlu/wenlan/issues/318)) ([1d869cd](https://github.com/7xuanlu/wenlan/commit/1d869cda53c14a4b14c38cafd6f0ffa1900cc897))
+
 ## [0.9.6](https://github.com/7xuanlu/wenlan/compare/v0.9.5...v0.9.6) (2026-07-01)
 
 
