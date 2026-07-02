@@ -73,7 +73,7 @@ Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
 ### Codex plugin (local development)
 
-The Codex plugin lives in [plugin-codex](plugin-codex/) and is exposed through the repo-local marketplace at [.agents/plugins/marketplace.json](.agents/plugins/marketplace.json). It adds `/init`, `/brief`, and `/capture` skills plus a `wenlan` MCP server.
+The Codex plugin lives in [plugin-codex](plugin-codex/) and is exposed through the repo-local marketplace at [.agents/plugins/marketplace.json](.agents/plugins/marketplace.json). It adds `/init`, `/brief`, `/capture`, and `/pages` skills plus a `wenlan` MCP server.
 
 From this repo:
 
@@ -83,7 +83,7 @@ codex plugin marketplace add .
 codex plugin add wenlan@wenlan-local
 ```
 
-Start a new Codex thread after installing so the skills and MCP server load. Then try `/init`, `/brief`, or `/capture <memory>`.
+Start a new Codex thread after installing so the skills and MCP server load. Then try `/init`, `/brief`, `/capture <memory>`, or `/pages <query>`.
 
 For plugin development, reinstall after plugin edits:
 

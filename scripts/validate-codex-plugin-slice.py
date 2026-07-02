@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugin-codex"
-REQUIRED_SKILLS = ("init", "capture", "brief")
+REQUIRED_SKILLS = ("init", "capture", "brief", "pages")
 REQUIRED_SKILL_INTERFACE = {
     "brief": {
         "display_name": "Wenlan Brief",
@@ -28,6 +28,10 @@ REQUIRED_SKILL_INTERFACE = {
     "init": {
         "display_name": "Wenlan Init",
         "short_description": "Set up and verify the local Wenlan daemon and MCP bridge",
+    },
+    "pages": {
+        "display_name": "Wenlan Pages",
+        "short_description": "List or open distilled Wenlan pages from Codex",
     },
 }
 CLAUDE_ONLY_TOKENS = (
@@ -117,7 +121,7 @@ def validate_skills() -> None:
             fail(f"{path.relative_to(ROOT)} frontmatter must name {skill}")
         if "user-invocable: true" not in text:
             fail(f"{path.relative_to(ROOT)} must be marked user-invocable for slash autocomplete")
-        if "mcp__wenlan__" not in text:
+        if skill != "pages" and "mcp__wenlan__" not in text:
             fail(f"{path.relative_to(ROOT)} must use Codex wenlan MCP tool names")
         metadata = metadata_path.read_text(encoding="utf-8")
         expected = REQUIRED_SKILL_INTERFACE[skill]
@@ -129,11 +133,36 @@ def validate_skills() -> None:
                 fail(f"{metadata_path.relative_to(ROOT)} must contain {expected_line}")
 
 
+def validate_pages_skill() -> None:
+    path = PLUGIN / "skills" / "pages" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    required = [
+        "wenlan pages",
+        "Never read a page body",
+        "Do not use a picker",
+        "If several pages match, print the CLI output",
+        "If `wenlan` is not found, tell the user to run `/init`",
+    ]
+    for needle in required:
+        if needle not in text:
+            fail(f"{path.relative_to(ROOT)} must contain {needle!r}")
+    forbidden = [
+        "AskUserQuestion",
+        "native picker",
+        "command sandbox DISABLED",
+        "mcp__plugin_wenlan_wenlan__",
+    ]
+    for needle in forbidden:
+        if needle in text:
+            fail(f"{path.relative_to(ROOT)} must not contain {needle!r}")
+
+
 def main() -> None:
     validate_manifest()
     validate_mcp()
     validate_runner()
     validate_skills()
+    validate_pages_skill()
     print("Codex plugin slice validation passed")
 
 

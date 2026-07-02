@@ -95,8 +95,9 @@
     },
     {
       "name": "pages",
-      "status": "claude_only_until_ported",
-      "reason": "Uses native picker assumptions; keep editor-first Codex design separate."
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
     },
     {
       "name": "recall",
