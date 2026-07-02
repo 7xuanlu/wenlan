@@ -582,9 +582,6 @@ mod tests {
     use wenlan_core::events::NoopEmitter;
     use wenlan_core::sources::SyncStatus;
 
-    static TEST_DATA_DIR_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
-        std::sync::OnceLock::new();
-
     struct DataDirGuard {
         previous: Option<std::ffi::OsString>,
         _tmp: tempfile::TempDir,
@@ -676,7 +673,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_add_source_accepts_single_file_directory_source() {
-        let _lock = TEST_DATA_DIR_LOCK
+        let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
@@ -707,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_add_source_rejects_reserved_pages_directory() {
-        let _lock = TEST_DATA_DIR_LOCK
+        let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
@@ -823,7 +820,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_sync_source_deletes_vanished_file_under_live_root() {
-        let _lock = TEST_DATA_DIR_LOCK
+        let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
@@ -916,7 +913,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_sync_source_missing_root_marks_unavailable_and_deletes_nothing() {
-        let _lock = TEST_DATA_DIR_LOCK
+        let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
@@ -980,7 +977,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_sync_source_single_file_root_missing_marks_unavailable_no_delete() {
-        let _lock = TEST_DATA_DIR_LOCK
+        let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
@@ -1031,7 +1028,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_sync_source_recovers_when_root_reappears() {
-        let _lock = TEST_DATA_DIR_LOCK
+        let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
@@ -1099,7 +1096,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_sync_source_enqueues_changed_directory_files_and_skips_unchanged() {
-        let _lock = TEST_DATA_DIR_LOCK
+        let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
