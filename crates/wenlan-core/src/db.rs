@@ -5,6 +5,7 @@ use crate::error::WenlanError;
 use crate::events::EventEmitter;
 use crate::pages::Page;
 use crate::privacy::redact_pii;
+use crate::retrieval::document_cap::{cap_per_document, DEFAULT_PER_DOCUMENT_CAP};
 use crate::sources::{stability_tier, RawDocument};
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
@@ -7431,8 +7432,8 @@ impl MemoryDB {
     /// 21=entity_id, 22=quality, 23=is_recap, 24=supersede_mode,
     /// 25=structured_fields, 26=retrieval_cue, 27=source_text,
     /// 28=version, 29=pending_revision, 30=score/distance/rank,
-    /// 31=importance (T8 salience prior — APPENDED LAST so indices 0-30 and every
-    ///   `row.get(30)` score read stay byte-identical; never insert before 30).
+    /// 31=importance, 32=event_date, 33=content_hash. Append-only after 30 so
+    /// every `row.get(30)` score read stays byte-identical; never insert before 30.
     fn row_to_search_result(row: &libsql::Row, score: f32) -> Result<SearchResult, WenlanError> {
         let source_id: String = row
             .get::<String>(3)
@@ -7488,6 +7489,7 @@ impl MemoryDB {
             structured_fields: row.get::<Option<String>>(25).unwrap_or(None),
             retrieval_cue: row.get::<Option<String>>(26).unwrap_or(None),
             source_text: row.get::<Option<String>>(27).unwrap_or(None),
+            content_hash: row.get::<Option<String>>(33).unwrap_or(None),
             raw_score: 0.0, // Set later during normalization
             version: row.get::<i64>(28).unwrap_or(1),
             pending_revision,
@@ -8098,7 +8100,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -8168,7 +8170,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         fts.rank,
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -8253,6 +8255,7 @@ impl MemoryDB {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        final_results = cap_per_document(final_results, DEFAULT_PER_DOCUMENT_CAP);
         final_results.truncate(limit);
 
         Ok(final_results)
@@ -8461,7 +8464,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -8522,7 +8525,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         fts.rank,
-                        c.importance, c.event_date
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -8954,6 +8957,7 @@ impl MemoryDB {
         // boosting via RRF merge, not user-facing content. Without this filter, low-value
         // observations like "Settings" consume result slots and push real memories out.
         final_results.retain(|r| r.source != "knowledge_graph");
+        final_results = cap_per_document(final_results, DEFAULT_PER_DOCUMENT_CAP);
 
         log::warn!(
             "[memory_db] timing: db_queries={}ms",
@@ -9179,7 +9183,7 @@ impl MemoryDB {
             let sql =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.source = 'episode'";
@@ -9207,7 +9211,7 @@ impl MemoryDB {
             let fts_sql =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         fts.rank,
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 AND c.source = 'episode'
@@ -9338,7 +9342,7 @@ impl MemoryDB {
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
-                    0.0, c.importance
+                    0.0, c.importance, c.event_date, c.content_hash
              FROM memories c
              WHERE c.source = 'memory' AND c.chunk_index = 0 AND c.source_id IN ({placeholders})",
             placeholders = placeholders
@@ -9861,6 +9865,7 @@ impl MemoryDB {
         // Runs on the full reranked memory pool (pre-truncate) so backfill
         // has demoted-but-valid hits to pull from.  Pages are excluded
         // (already partitioned out above).  Byte-identical when flag unset.
+        results = cap_per_document(results, DEFAULT_PER_DOCUMENT_CAP);
         if session_diversity_enabled() {
             crate::retrieval::session_diversity::cap_per_session(
                 &mut results,
@@ -10055,6 +10060,7 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -10217,6 +10223,7 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -10309,6 +10316,7 @@ impl MemoryDB {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -10751,8 +10759,8 @@ impl MemoryDB {
         let placeholders: Vec<String> = (1..=ranked_anchor_ids.len())
             .map(|i| format!("?{i}"))
             .collect();
-        // Projection mirrors row_to_search_result cols 0..32 (event_date at 32),
-        // then appends me.entity_id at col 33 so we can map each edge to its anchor.
+        // Projection mirrors row_to_search_result cols 0..33 (content_hash at 33),
+        // then appends me.entity_id at col 34 so we can map each edge to its anchor.
         let sql = format!(
             "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                     c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
@@ -10761,7 +10769,7 @@ impl MemoryDB {
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
-                    0.0, c.importance, c.event_date, me.entity_id
+                    0.0, c.importance, c.event_date, c.content_hash, me.entity_id
              FROM memories c
              JOIN memory_entities me ON me.memory_id = c.source_id
              WHERE me.entity_id IN ({ph})
@@ -10779,7 +10787,7 @@ impl MemoryDB {
         // Per memory, keep the best (lowest) anchor rank across its edges.
         let mut best: HashMap<String, (usize, SearchResult)> = HashMap::new();
         while let Ok(Some(row)) = rows.next().await {
-            let ent: String = row.get(33).unwrap_or_default();
+            let ent: String = row.get(34).unwrap_or_default();
             let rank = anchor_rank.get(ent.as_str()).copied().unwrap_or(usize::MAX);
             let res = match Self::row_to_search_result(&row, 0.0) {
                 Ok(r) => r,
@@ -11020,7 +11028,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0 AND c.space = ?3"
@@ -11041,7 +11049,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0"
@@ -11114,7 +11122,7 @@ impl MemoryDB {
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
                     fts.rank,
-                    c.importance
+                    c.importance, c.event_date, c.content_hash
              FROM memories_fts fts
              JOIN memories c ON fts.rowid = c.rowid
              WHERE memories_fts MATCH ?1
@@ -11418,6 +11426,7 @@ impl MemoryDB {
                 structured_fields: None,
                 retrieval_cue: None,
                 source_text: None,
+                content_hash: None,
                 raw_score: 0.0,
                 version: 0,
                 pending_revision: false,
@@ -11485,6 +11494,7 @@ impl MemoryDB {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: page.relevance_score,
             version: page.version,
             pending_revision: false,
@@ -11810,6 +11820,7 @@ impl MemoryDB {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 1,
             pending_revision: false,
@@ -32520,6 +32531,7 @@ pub(crate) mod tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 0,
             pending_revision: false,

@@ -62,6 +62,10 @@ pub struct SearchResult {
     pub retrieval_cue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_text: Option<String>,
+    /// Stable hash of the source document/file when a row comes from multi-chunk
+    /// document ingest. Capture memories and legacy rows leave this unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
     /// Raw RRF score before normalization -- for absolute relevance gating.
     #[serde(default)]
     pub raw_score: f32,
