@@ -54,6 +54,12 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
+              # Release PRs must run the drift guard: 0.10.1 merged with
+              # version drift precisely because these two files don't match
+              # any glob above, so the rust tests (incl. drift_guard) skipped
+              # on the one PR class most likely to introduce drift.
+              - 'version.txt'
+              - '.release-please-manifest.json'
             plugin:
               - 'plugin/**'
               - 'plugin-codex/**'

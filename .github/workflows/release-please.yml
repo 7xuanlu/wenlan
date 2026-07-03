@@ -47,7 +47,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock crates/wenlan-mcp/npm/package.json crates/wenlan-cli/npm/package.json plugin/.claude-plugin/plugin.json plugin/bin/wenlan-mcp-runner.sh plugin/skills/init/SKILL.md
+          # -u stages whatever bump-version.sh actually modified. A hardcoded
+          # path list rots when files move: the 0.10.1 release merged with
+          # version drift because `git add ... plugin/skills/init/SKILL.md`
+          # crashed (exit 128) after that skill was renamed to setup/.
+          git add -u
           if ! git diff --cached --quiet; then
             git commit -m "chore: sync versions to $(cat version.txt | tr -d '[:space:]')"
             git push origin HEAD
