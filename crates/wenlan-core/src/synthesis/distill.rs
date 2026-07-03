@@ -1323,13 +1323,8 @@ pub(crate) async fn recompile_single_page(
                 .to_string();
             if !content.is_empty() {
                 // Verify [N] markers against the numbered sources; out-of-range
-                // markers are stripped from the body before it is saved. The
-                // citation records themselves are not yet persisted here —
-                // `update_page` (post_write.rs) resets `citations` to '[]' on
-                // any content change without a fresh citation map (Task 6
-                // threads real citations through the growth path); the
-                // annotate-only backfill sweep (Task 7) re-derives them.
-                let (content, _cites, stats) =
+                // markers are stripped from the body before it is saved.
+                let (content, cites, stats) =
                     crate::citations::process_citation_output(&content, &numbered);
                 log::info!(
                     "[re-distill] page '{}' citations: {}",
@@ -1349,6 +1344,15 @@ pub(crate) async fn recompile_single_page(
                 )
                 .await?;
                 if result.wrote {
+                    // `update_page` (post_write.rs) has no `citations` param
+                    // until Task 6 wires the growth path, so a content write
+                    // resets the column to '[]'; persist the real citation
+                    // map computed from this same body as a follow-up write.
+                    let citations_json =
+                        serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
+                    if let Err(e) = db.set_page_citations(&page.id, &citations_json).await {
+                        log::warn!("[re-distill] persist citations failed: {e}");
+                    }
                     log::info!("[re-distill] refreshed page '{}'", page.title);
                     return Ok(true);
                 } else {
@@ -1448,9 +1452,9 @@ pub async fn deep_distill_single(
         return Ok(false);
     }
 
-    // Verify [N] markers against the numbered sources; the citation records
-    // themselves are not yet persisted here (see recompile_single_page above).
-    let (content, _cites, stats) = crate::citations::process_citation_output(&content, &numbered);
+    // Verify [N] markers against the numbered sources; out-of-range markers
+    // are stripped from the body before it is saved.
+    let (content, cites, stats) = crate::citations::process_citation_output(&content, &numbered);
     log::info!(
         "[distill] page '{}' citations: {}",
         page.title,
@@ -1471,6 +1475,14 @@ pub async fn deep_distill_single(
     .await?;
 
     if result.wrote {
+        // See recompile_single_page above: `update_page` has no `citations`
+        // param until Task 6, so persist the real citation map as a
+        // follow-up write rather than let the content write's '[]' reset
+        // stick (which the backfill sweep, IS NULL only, would never re-visit).
+        let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
+        if let Err(e) = db.set_page_citations(page_id, &citations_json).await {
+            log::warn!("[distill] persist citations failed: {e}");
+        }
         log::info!(
             "[distill] re-distilled page '{}' (v{}->v{})",
             page.title,

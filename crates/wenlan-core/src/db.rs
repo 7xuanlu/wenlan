@@ -22618,6 +22618,27 @@ impl MemoryDB {
         Ok(ids)
     }
 
+    /// Overwrite a page's `citations` column directly with a freshly computed
+    /// citation map. Used by re-distill paths that save through
+    /// `post_write::update_page` (which has no `citations` param until Task 6
+    /// wires the growth path) — the content write resets the column to `'[]'`
+    /// first, and this follow-up call persists the real `Vec<PageCitation>`
+    /// computed from the SAME body by `citations::process_citation_output`.
+    pub async fn set_page_citations(
+        &self,
+        page_id: &str,
+        citations_json: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET citations = ?1 WHERE id = ?2",
+            libsql::params![citations_json, page_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_page_citations: {e}")))?;
+        Ok(())
+    }
+
     /// Test-only: overwrite a page's `citations` column directly, bypassing the
     /// content-update reset rule. Used to seed a "has stale citations" fixture
     /// state that a subsequent content update must clear back to `'[]'`.
