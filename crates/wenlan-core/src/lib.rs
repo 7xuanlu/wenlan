@@ -48,6 +48,7 @@ pub mod post_write;
 pub mod privacy;
 pub mod prompts;
 pub mod quality_gate;
+pub mod reconcile;
 pub mod refinery;
 pub mod reranker;
 pub(crate) mod retrieval;
