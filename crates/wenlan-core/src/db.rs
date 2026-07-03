@@ -17232,6 +17232,106 @@ impl MemoryDB {
         Ok(n > cap)
     }
 
+    /// Vector top-k candidates on the opposite side of a frontier item, same space
+    /// (NULL matches only NULL), cosine similarity >= min_cosine.
+    /// toward_docs=true: candidates are doc chunks; false: live captures.
+    pub async fn reconcile_candidates(
+        &self,
+        item_source_id: &str,
+        item_chunk_index: i64,
+        space: Option<&str>,
+        toward_docs: bool,
+        k: usize,
+        min_cosine: f64,
+    ) -> Result<Vec<crate::reconcile::ReconcileCandidate>, WenlanError> {
+        // 1. Fetch the frontier item's stored embedding.
+        let embedding: Vec<f32> =
+            {
+                let conn = self.conn.lock().await;
+                let mut rows = conn
+                    .query(
+                        "SELECT embedding FROM memories WHERE source_id = ?1 AND chunk_index = ?2",
+                        libsql::params![item_source_id, item_chunk_index],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("reconcile_candidates emb: {e}")))?;
+                match rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("reconcile_candidates emb row: {e}"))
+                })? {
+                    Some(row) => row
+                        .get::<Vec<u8>>(0)
+                        .unwrap_or_default()
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                        .collect(),
+                    None => return Ok(Vec::new()),
+                }
+            };
+        if embedding.is_empty() {
+            return Ok(Vec::new());
+        }
+        let vec_str = Self::vec_to_sql(&embedding);
+
+        // 2. ANN probe with over-fetch; predicates cut after the probe.
+        let side_predicate = if toward_docs {
+            "c.source_agent = 'folder'"
+        } else {
+            "c.source = 'memory' AND c.chunk_index = 0 AND c.confirmed = 1 \
+             AND c.pending_revision = 0 \
+             AND (c.source_agent IS NULL OR c.source_agent != 'folder')"
+        };
+        let sql = format!(
+            "SELECT c.source_id, c.chunk_index, c.content, c.last_modified, c.created_at, \
+                    c.content_hash, c.source_agent, \
+                    vector_distance_cos(c.embedding, vector32(?1)) AS dist \
+             FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt \
+             JOIN memories c ON c.rowid = vt.id \
+             WHERE {side_predicate} \
+               AND ((?3 IS NULL AND c.space IS NULL) OR c.space = ?3) \
+               AND c.source_id != ?4 \
+             ORDER BY dist ASC"
+        );
+        let overfetch = (k * 20).max(100) as i64;
+        let space_val: libsql::Value = match space {
+            Some(s) => s.into(),
+            None => libsql::Value::Null,
+        };
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                &sql,
+                libsql::params![vec_str, overfetch, space_val, item_source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_candidates: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_candidates row: {e}")))?
+        {
+            let dist = row.get::<f64>(7).unwrap_or(1.0);
+            let cosine = 1.0 - dist;
+            if cosine < min_cosine {
+                continue;
+            }
+            out.push(crate::reconcile::ReconcileCandidate {
+                source_id: row.get::<String>(0).unwrap_or_default(),
+                chunk_index: row.get::<i64>(1).unwrap_or(0),
+                content: row.get::<String>(2).unwrap_or_default(),
+                last_modified: row.get::<i64>(3).unwrap_or(0),
+                created_at: row.get::<Option<i64>>(4).unwrap_or(None).unwrap_or(0),
+                content_hash: row.get::<Option<String>>(5).unwrap_or(None),
+                source_agent: row.get::<Option<String>>(6).unwrap_or(None),
+                cosine,
+            });
+            if out.len() >= k {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     // ==================== Session / Activity Methods ====================
 
     /// Insert or update an activity record.

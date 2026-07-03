@@ -180,3 +180,64 @@ async fn pair_and_pending_guards() {
         "1 pending, cap 0: over cap"
     );
 }
+
+#[tokio::test]
+async fn candidates_match_same_space_opposite_side_above_gate() {
+    let (_dir, db) = temp_db().await;
+    db.upsert_documents(vec![
+        capture(
+            "mem_cap1",
+            "The daemon listens on port 9999 for HTTP requests.",
+            None,
+            100,
+        ),
+        capture(
+            "mem_other_space",
+            "The daemon listens on port 9999 for HTTP requests.",
+            Some("work"),
+            100,
+        ),
+        capture(
+            "mem_unrelated",
+            "Favorite hiking trail is the coastal ridge loop.",
+            None,
+            100,
+        ),
+        doc(
+            "src_f1::net.md",
+            "The daemon listens on port 7878 for HTTP requests.",
+            "h1",
+            150,
+        ),
+    ])
+    .await
+    .unwrap();
+
+    // Doc frontier item -> capture candidates, NULL space only.
+    let cands = db
+        .reconcile_candidates("src_f1::net.md", 0, None, false, 5, 0.70)
+        .await
+        .unwrap();
+    let ids: Vec<&str> = cands.iter().map(|c| c.source_id.as_str()).collect();
+    assert!(
+        ids.contains(&"mem_cap1"),
+        "near-identical same-space capture matches"
+    );
+    assert!(
+        !ids.contains(&"mem_other_space"),
+        "space='work' never matches NULL space"
+    );
+    assert!(!ids.contains(&"src_f1::net.md"), "item itself excluded");
+    for c in &cands {
+        assert!(c.cosine >= 0.70, "gate enforced, got {}", c.cosine);
+    }
+
+    // Capture frontier item -> doc candidates.
+    let doc_cands = db
+        .reconcile_candidates("mem_cap1", 0, None, true, 5, 0.70)
+        .await
+        .unwrap();
+    assert_eq!(doc_cands.len(), 1);
+    assert_eq!(doc_cands[0].source_id, "src_f1::net.md");
+    assert_eq!(doc_cands[0].content_hash.as_deref(), Some("h1"));
+}
