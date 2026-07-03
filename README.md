@@ -168,9 +168,7 @@ Works fully local with no API key, cloud account, or signup. Capture, recall, hy
 
 ## Evaluation
 
-**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The retrieval table is not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/wenlan-core/src/eval/`](crates/wenlan-core/src/eval/). Run it yourself.
-
-Update workflow and answer-quality snapshots live in [docs/eval](docs/eval/README.md).
+Retrieval-only snapshot, not end-to-end answer quality. Method and update workflow live in [docs/eval](docs/eval/README.md).
 
 
 <!-- EVAL_SNAPSHOT_START -->

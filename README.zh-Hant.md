@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=0483668367fa7927d6237eb4271d1a3c4bdab652ed0ab696babacd89ca7306ee -->
+<!-- README_SYNC: source=README.md sha256=eaee5e63b9b0afb95343fdae5dc4dad0eabdfb5d3ab0e6934e63a24dce4e1a48 -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -178,9 +178,7 @@ npx -y wenlan setup   # 安裝並啟動本地 daemon
 
 ## Evaluation
 
-**Hybrid retrieval，透明 eval。** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion；啟用 rerank 時，本地 BGE-Reranker-Base cross-encoder rerank 是預設路徑，BGE-Reranker-V2-M3 則是更高品質選項。下表是 retrieval 指標，不是端到端 answer quality。每次 recall query 約 168 tokens。Eval harness 位於 [`crates/wenlan-core/src/eval/`](crates/wenlan-core/src/eval/)。你可以自己執行。
-
-更新流程和 answer-quality snapshots 位於 [docs/eval](docs/eval/README.md)。
+下表是 retrieval-only snapshot，不是端到端 answer quality。方法和更新流程見 [docs/eval](docs/eval/README.md)。
 
 
 <!-- EVAL_SNAPSHOT_START -->
