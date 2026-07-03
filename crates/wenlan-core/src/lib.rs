@@ -30,6 +30,7 @@ pub mod eval;
 pub mod events;
 pub mod export;
 pub mod extract;
+pub mod faithfulness;
 pub mod importer;
 pub mod ingest;
 pub mod kg;
