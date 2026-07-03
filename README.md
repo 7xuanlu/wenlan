@@ -26,9 +26,7 @@ Unlike a normal llm-wiki that generates pages from a fixed document set, Wenlan 
 
 Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections: a copy of the 四庫全書.
 
-Each session opens with a brief and closes with a handoff, so the thread carries forward instead of restarting.
-
-Unlike a black-box memory, every page shows its sources, so you can read, trust, or correct it.
+Each new thread starts from that updated wiki: a brief brings the relevant context forward, and a handoff records where the work should continue.
 
 [![Watch the Wenlan demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
@@ -37,7 +35,7 @@ Unlike a black-box memory, every page shows its sources, so you can read, trust,
 ## What makes Wenlan distinct
 
 1. **Trustworthy sources.** Every page cites the memories behind it, and Wenlan refuses unsourced pages rather than letting hallucinated summaries in. It dedupes facts and supersedes old versions when facts change, so the wiki stays clean without turning daily capture into an approval queue.
-2. **Current between sessions.** Wenlan clusters new captures into source-cited pages between sessions, and feeds retrieval with both the pages and the atomic notes behind them. The next thread starts from updated context instead of a stale snapshot.
+2. **Current between sessions.** Wenlan clusters new captures into source-cited pages between sessions, and feeds retrieval with both the pages and the atomic notes behind them. The wiki reflects your latest work instead of a stale snapshot.
 3. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
 4. **Real git versioning.** Memory, page, and session writes commit into `~/.wenlan/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
