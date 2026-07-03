@@ -107,13 +107,15 @@ CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 ### Desktop app
 
-The desktop app is a native UI over the same local daemon. To use it, install both pieces:
+[wenlan-app](https://github.com/7xuanlu/wenlan-app) is Wenlan's native desktop UI. It shares the local daemon and memory store with the CLI and MCP clients; product details live at [wenlan.app](https://wenlan.app).
+
+Set up Wenlan first:
 
 ```bash
 npx -y wenlan setup   # installs and starts the local daemon
 ```
 
-Then download and install the current macOS Apple Silicon app: [wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg). The app connects to the daemon on your machine and reads the same local memory store as the CLI and MCP clients.
+Then download the current macOS Apple Silicon build: [wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg).
 
 ---
 

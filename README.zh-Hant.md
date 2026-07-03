@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=41d442719f41cc5abb978bebf9ab3951adda58f5bfa4180ea8767d91ad89439c -->
+<!-- README_SYNC: source=README.md sha256=024f0e48b18bf40c680a7edc690807beff6363dbfabdd60314dfaad0c1a08044 -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -113,13 +113,15 @@ CLI 細節見：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
 
 ### 桌面應用
 
-桌面應用是執行在同一本地 daemon 之上的原生 UI。要使用它，需要同時安裝兩部分：
+[wenlan-app](https://github.com/7xuanlu/wenlan-app) 是 Wenlan 的原生桌面 UI。它和 CLI、MCP clients 共用本地 daemon 與記憶庫；產品詳情見 [wenlan.app](https://wenlan.app)。
+
+先設定 Wenlan：
 
 ```bash
 npx -y wenlan setup   # 安裝並啟動本地 daemon
 ```
 
-然後下載並安裝目前 macOS Apple Silicon 應用：[wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg)。應用會連接到你機器上的 daemon，並讀取和 CLI、MCP clients 相同的本地記憶庫。
+然後下載目前 macOS Apple Silicon build：[wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg)。
 
 ---
 
