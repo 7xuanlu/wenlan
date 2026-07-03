@@ -11,7 +11,7 @@
 <p align="center">
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
   <a href="#codex-plugin"><img alt="Codex" src="https://img.shields.io/badge/Codex-plugin-111827"></a>
-  <a href="#mcp-only-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
+  <a href="#mcp-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
   <a href="#desktop-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
   <a href="#what-you-get"><img alt="Markdown pages" src="https://img.shields.io/badge/Markdown-pages-7C3AED"></a>
 </p>
@@ -72,20 +72,20 @@ Start a new Codex thread after installing so the plugin and MCP server load.
 
 Plugin details and development notes: [plugin-codex/](plugin-codex/README.md).
 
-### MCP layer
+<a id="mcp-setup"></a>
 
-Both plugins call the same local MCP server under the hood. The core tools are `context`, `capture`, `recall`, `pages`, and `doctor`; MCP-only clients use those tools directly.
+### MCP setup
 
-### MCP-only setup
+Both plugins call the same local MCP server under the hood. The core tools are `context`, `capture`, `recall`, `pages`, and `doctor`.
 
-Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
+Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI:
 
 ```bash
 npx -y wenlan setup
 wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-MCP-only gives agents the same core tools for context, capture, recall, doctor checks, and page distillation.
+MCP-only clients use the same core tools for context, capture, recall, doctor checks, and page distillation.
 
 ### CLI
 

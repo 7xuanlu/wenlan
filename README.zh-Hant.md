@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=eaee5e63b9b0afb95343fdae5dc4dad0eabdfb5d3ab0e6934e63a24dce4e1a48 -->
+<!-- README_SYNC: source=README.md sha256=41d442719f41cc5abb978bebf9ab3951adda58f5bfa4180ea8767d91ad89439c -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -13,7 +13,7 @@
 <p align="center">
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
   <a href="#codex-plugin"><img alt="Codex" src="https://img.shields.io/badge/Codex-plugin-111827"></a>
-  <a href="#mcp-only-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
+  <a href="#mcp-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
   <a href="#desktop-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
   <a href="#what-you-get"><img alt="Markdown pages" src="https://img.shields.io/badge/Markdown-pages-7C3AED"></a>
 </p>
@@ -76,22 +76,20 @@ codex plugin add wenlan@wenlan-local
 
 Plugin 細節和開發說明見：[plugin-codex/](plugin-codex/README.md)。
 
-### MCP layer
+<a id="mcp-setup"></a>
 
-兩個插件底層都會調用同一個本地 MCP server。核心工具是 `context`、`capture`、`recall`、`pages` 和 `doctor`；僅 MCP 的 clients 會直接使用這些工具。
+### MCP 設定
 
-<a id="mcp-only-setup"></a>
+兩個插件底層都會調用同一個本地 MCP server。核心工具是 `context`、`capture`、`recall`、`pages` 和 `doctor`。
 
-### 僅 MCP 設定
-
-如果你想在不安裝插件的情況下把 Wenlan tools 接入 Claude Code，或接入 Codex、Cursor、Claude Desktop、VS Code、Gemini CLI，請使用這種方式。
+如果你想在不安裝插件的情況下把 Wenlan tools 接入 Claude Code，或接入 Codex、Cursor、Claude Desktop、VS Code、Gemini CLI，請使用這種方式：
 
 ```bash
 npx -y wenlan setup
 wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-僅 MCP 模式會給 agents 提供相同的核心工具，用於 context、capture、recall、doctor checks 和 page distillation。
+僅 MCP clients 會直接使用相同的核心工具，用於 context、capture、recall、doctor checks 和 page distillation。
 
 ### CLI
 
