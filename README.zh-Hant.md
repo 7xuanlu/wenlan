@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=73622d0240d7fb5f75687e9e0f59d369f6970a1c50b5efd70be77f48c9cd40e6 -->
+<!-- README_SYNC: source=README.md sha256=d10dc90ab3f1c53f63140d4f3d881355e36203a2c4b10dac349fdc5c3f464d8f -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -65,6 +65,12 @@ App 原始碼：[wenlan-app](https://github.com/7xuanlu/wenlan-app)。產品詳�
    9f8e7d6 session: handoff embedding-work
    5a4b3c2 capture: decision mem_abc123
    ```
+
+下面這段短 reel 展示完整產品循環：帶來源支撐的頁面、source cards、graph structure、agent capture，以及進入召回前的整理。
+
+<p align="center">
+  <img src="./docs/assets/feature-reel.gif" alt="Wenlan 五段式 feature reel，展示帶來源支撐的頁面、source cards、graph structure、agent capture 和整理 review。" width="100%">
+</p>
 
 ---
 

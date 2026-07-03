@@ -64,6 +64,12 @@ App source: [wenlan-app](https://github.com/7xuanlu/wenlan-app). Product details
    5a4b3c2 capture: decision mem_abc123
    ```
 
+The short reel below shows the product loop: source-backed pages, source cards, graph structure, agent capture, and curation before recall.
+
+<p align="center">
+  <img src="./docs/assets/feature-reel.gif" alt="Wenlan five-scene feature reel showing source-backed pages, source cards, graph structure, agent capture, and curation review." width="100%">
+</p>
+
 ---
 
 ## Quickstart
