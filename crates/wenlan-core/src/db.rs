@@ -17283,6 +17283,12 @@ impl MemoryDB {
         let vec_str = Self::vec_to_sql(&embedding);
 
         // 2. ANN probe with over-fetch; predicates cut after the probe.
+        // Deliberate asymmetry vs reconcile_capture_frontier: accepted
+        // revision rows (source_agent='reconcile') are excluded as frontier
+        // FOCUS items (no self-churn) but admitted here as CANDIDATE captures,
+        // so a doc that changes later can still propose a revision to an
+        // already-accepted revision. reconcile_pair_exists keys on doc_hash,
+        // so the unchanged doc can never re-propose (no treadmill).
         let side_predicate = if toward_docs {
             "c.source_agent = 'folder'"
         } else {

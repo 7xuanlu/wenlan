@@ -90,7 +90,9 @@ or more specific phrasing, stylistic tension, or staleness without direct\n\
 contradiction.\n\
 For each flagged candidate, write revised_content: the CAPTURE side's text\n\
 rewritten so its facts match the DOCUMENT side. Keep the capture's voice and\n\
-scope; change only what the document contradicts.\n\
+scope; change only what the document contradicts. revised_content must NOT\n\
+repeat the capture's current text unchanged - if no rewrite is needed, omit\n\
+the candidate.\n\
 Weigh the dates: when the document is OLDER than the capture, flag only if you\n\
 are confident the document is still the correct account.\n\
 Rules: use ONLY the integer indices shown. Never invent an index. If unsure,\n\

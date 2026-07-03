@@ -27,12 +27,8 @@ pub const RECONCILE_PENDING_CAP: usize = 20;
 /// Max frontier rows fetched per frontier per tick.
 pub const RECONCILE_BATCH_PER_FRONTIER: usize = 50;
 /// Vector top-k candidates per frontier item.
-// Consumed by the candidate-matching step landing in a later task.
-#[allow(dead_code)]
 pub(crate) const RECONCILE_TOP_K: usize = 5;
 /// Consecutive failed ticks on the same head item before poison-pill ejection.
-// Consumed by the poison-pill ejection step landing in a later task.
-#[allow(dead_code)]
 pub(crate) const RECONCILE_POISON_TICKS: u32 = 3;
 
 /// Inputs for staging one doc-grounded revision row.
@@ -146,8 +142,6 @@ pub struct ReconcileCandidate {
 }
 
 /// One judge-confirmed conflict: candidate index + the corrected capture text.
-// Consumed by the judge-call wiring step landing in a later task.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ConflictProposal {
     pub idx: usize,
@@ -157,8 +151,6 @@ pub(crate) struct ConflictProposal {
 /// Defensively parse the judge's response. Mirrors `parse_dual_pool`'s
 /// silent-zero guard: ANY parse failure returns empty (the sweep must never
 /// act on garbage). Out-of-range indices and blank rewrites are dropped.
-// Consumed by the judge-call wiring step landing in a later task.
-#[allow(dead_code)]
 pub(crate) fn parse_doc_reconcile(raw: &str, total_len: usize) -> Vec<ConflictProposal> {
     let stripped = crate::llm_provider::strip_think_tags(raw);
     let (start, end) = match (stripped.find('{'), stripped.rfind('}')) {
@@ -196,8 +188,6 @@ pub(crate) fn parse_doc_reconcile(raw: &str, total_len: usize) -> Vec<ConflictPr
         .collect()
 }
 
-// Consumed by the judge-call wiring step landing in a later task.
-#[allow(dead_code)]
 fn date_label(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|d| d.format("%Y-%m-%d").to_string())
@@ -206,8 +196,6 @@ fn date_label(ts: i64) -> String {
 
 /// Render the judge user-prompt: focus text + numbered candidates, both sides
 /// dated so a stale doc can be weighed against a newer confirmed capture.
-// Consumed by the judge-call wiring step landing in a later task.
-#[allow(dead_code)]
 pub(crate) fn build_reconcile_prompt(
     focus_is_doc: bool,
     focus_content: &str,
@@ -231,6 +219,13 @@ pub(crate) fn build_reconcile_prompt(
             c.content
         ));
     }
+    // Direction-explicit rewrite target: small judges fumble the "CAPTURE
+    // side" indirection and echo the capture text back (seen live).
+    p.push_str(if focus_is_doc {
+        "\nRewrite target: the flagged candidate's text (the CAPTURE), updated with the FOCUS document's facts. revised_content must differ from the candidate's current text.\n"
+    } else {
+        "\nRewrite target: the FOCUS text (the CAPTURE), updated with the flagged candidate document's facts. revised_content must differ from the FOCUS's current text.\n"
+    });
     p
 }
 
@@ -392,8 +387,9 @@ async fn run_frontier(
             continue;
         }
 
+        // Budget counts LLM attempts (a failing provider gets no free
+        // retries within a tick); judged counts only successful calls.
         *budget -= 1;
-        report.judged += 1;
         let user_prompt =
             build_reconcile_prompt(focus_is_doc, &item.content, item.last_modified, &candidates);
         let raw = match tokio::time::timeout(
@@ -421,6 +417,7 @@ async fn run_frontier(
                 break; // hold watermark; retry this head item next tick
             }
         };
+        report.judged += 1;
         // Successful judge call on the previously stuck item: clear the strike.
         if st.stuck_id.as_deref() == Some(item_key.as_str()) {
             st.stuck_id = None;
@@ -451,9 +448,27 @@ async fn run_frontier(
                     )
                 };
             // Direction assert: only a strictly-higher-precedence source may
-            // ground a revision (defense-in-depth over the SQL predicates).
+            // ground a revision. Defense-in-depth only — the SQL side
+            // predicates already pin the doc side to 'folder' and exclude it
+            // from the capture side, so this cannot fire today. The capture
+            // side is conservatively ranked as a plain capture (frontier rows
+            // don't carry source_agent), which those predicates make accurate.
             use crate::retrieval::resolve::source_precedence;
             if source_precedence(doc_agent) <= source_precedence(capture_agent) {
+                continue;
+            }
+            // A "revision" that leaves the capture's text unchanged is a
+            // no-op — small judges sometimes echo the capture instead of
+            // rewriting it toward the document. Never queue it for review.
+            let capture_content = if focus_is_doc {
+                cand.content.as_str()
+            } else {
+                item.content.as_str()
+            };
+            if p.revised_content.trim() == capture_content.trim() {
+                log::info!(
+                    "[reconcile] judge echoed capture text for {capture_id}; skipping no-op proposal"
+                );
                 continue;
             }
             let Some(doc_hash) = doc_hash else {
@@ -545,9 +560,17 @@ mod tests {
             p.contains("2023-11-14"),
             "epoch 1700000000 renders as its UTC date"
         );
+        assert!(
+            p.contains("Rewrite target: the flagged candidate's text (the CAPTURE)"),
+            "doc-focus prompt names the candidate as rewrite target"
+        );
         let p2 = build_reconcile_prompt(false, "capture text", 1_700_000_000, &cands);
         assert!(p2.contains("FOCUS (CAPTURE"));
         assert!(p2.contains("CANDIDATES (DOCUMENT side)"));
+        assert!(
+            p2.contains("Rewrite target: the FOCUS text (the CAPTURE)"),
+            "capture-focus prompt names the focus as rewrite target"
+        );
     }
 
     #[test]

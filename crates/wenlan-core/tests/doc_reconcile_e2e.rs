@@ -459,3 +459,67 @@ async fn back_pressure_holds_sweep_at_pending_cap() {
     assert!(r.skipped_backpressure);
     assert_eq!(r.judged, 0, "watermarks hold, nothing judged");
 }
+
+/// A judge that returns the capture's text unchanged — observed live with
+/// small on-device models. A no-op "revision" must never reach the human
+/// queue.
+struct EchoJudge;
+
+#[async_trait::async_trait]
+impl LlmProvider for EchoJudge {
+    async fn generate(&self, req: LlmRequest) -> Result<String, LlmError> {
+        if req.label.as_deref() == Some("doc_reconcile") {
+            Ok(
+                r#"{"conflicts":[{"idx":0,"revised_content":"The daemon listens on port 9999."}]}"#
+                    .to_string(),
+            )
+        } else {
+            Ok("{}".to_string())
+        }
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn name(&self) -> &str {
+        "echo-judge"
+    }
+    fn backend(&self) -> LlmBackend {
+        LlmBackend::Api
+    }
+}
+
+#[tokio::test]
+async fn echoed_capture_text_is_not_staged() {
+    let (_dir, db) = temp_db().await;
+    let llm: Arc<dyn LlmProvider> = Arc::new(EchoJudge);
+    let prompts = PromptRegistry::default();
+    let refinery = RefineryConfig::default();
+    let distillation = DistillationConfig::default();
+
+    db.upsert_documents(vec![capture(
+        "mem_wrong",
+        "The daemon listens on port 9999.",
+        None,
+        100,
+    )])
+    .await
+    .unwrap();
+    db.upsert_documents(vec![doc(
+        "src_f1::notes/net.md",
+        "The daemon listens on port 7878.",
+        "hash_v1",
+        200,
+    )])
+    .await
+    .unwrap();
+
+    let r = run_reconcile_tick(&db, &llm, &prompts, &refinery, &distillation)
+        .await
+        .unwrap();
+    assert!(r.judged >= 1, "the pair is judged");
+    assert_eq!(
+        r.proposed, 0,
+        "echoed capture text is a no-op, never staged"
+    );
+    assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+}
