@@ -82,31 +82,28 @@ Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex
 
 ```bash
 npx -y wenlan setup
-~/.wenlan/bin/wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
 MCP-only gives agents the same core tools for context, capture, recall, doctor checks, and page distillation.
 
-### Terminal runtime setup
+### CLI
 
-Set up the local Wenlan runtime:
+Set up Wenlan once:
 
 ```bash
 npx -y wenlan setup
 ```
 
-Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan capture <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
-
-Runtime control:
+Then use the CLI directly:
 
 ```bash
-wenlan background on      # start or restart the background runtime
-wenlan restart            # reload after upgrades made outside setup
 wenlan status
-wenlan background off
+wenlan recall <query>
+wenlan capture <text>
 ```
 
-Most users only need `npx -y wenlan setup`. Use the runtime commands when you want Wenlan to keep running in the background or after upgrading outside setup.
+CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 ### Desktop app
 

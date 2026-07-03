@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=ac2108c358e3aef4f47249eeff0d0eaa7ac61e25977cc03b6a32cd284d7f2336 -->
+<!-- README_SYNC: source=README.md sha256=fab5992443330c0229a601d14761072d9ff230e3fa66929459f40af59af5a914 -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -88,31 +88,28 @@ Plugin 細節和開發說明見：[plugin-codex/](plugin-codex/README.md)。
 
 ```bash
 npx -y wenlan setup
-~/.wenlan/bin/wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
 僅 MCP 模式會給 agents 提供相同的核心工具，用於 context、capture、recall、doctor checks 和 page distillation。
 
-### 終端執行環境設定
+### CLI
 
-設定本地 Wenlan runtime：
+先設定一次 Wenlan：
 
 ```bash
 npx -y wenlan setup
 ```
 
-然後從 `~/.wenlan/bin/wenlan status`、`~/.wenlan/bin/wenlan recall <query>` 或 `~/.wenlan/bin/wenlan capture <text>` 開始。CLI 細節見：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
-
-執行環境控制：
+然後直接使用 CLI：
 
 ```bash
-wenlan background on      # 啟動或重啟後台 runtime
-wenlan restart            # 在 setup 之外升級後重新載入
 wenlan status
-wenlan background off
+wenlan recall <query>
+wenlan capture <text>
 ```
 
-大多數使用者只需要 `npx -y wenlan setup`。當你希望 Wenlan 持續在後台執行，或在 setup 之外升級後，再使用這些 runtime 命令。
+CLI 細節見：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
 
 <a id="desktop-app"></a>
 
