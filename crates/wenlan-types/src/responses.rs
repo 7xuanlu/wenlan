@@ -925,6 +925,10 @@ pub struct PendingRevisionItem {
     pub revision_content: String,
     pub source_agent: Option<String>,
     pub last_modified: i64,
+    /// Doc file source_id that grounds a doc-grounded revision (L3); None for
+    /// other revision producers. Read from structured_fields.grounded_in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grounded_in: Option<String>,
 }
 
 /// Response returned by `POST /api/memory/revision/{id}/accept`.
@@ -1188,6 +1192,7 @@ mod tests {
             revision_content: "new body".into(),
             source_agent: Some("claude-code".into()),
             last_modified: 1_715_000_000,
+            grounded_in: None,
         };
         let json = serde_json::to_value(&item).unwrap();
         assert_eq!(json["target_source_id"], "mem_target");

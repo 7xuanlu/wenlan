@@ -17044,7 +17044,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT supersedes, source_id, content, source_agent, last_modified \
+                "SELECT supersedes, source_id, content, source_agent, last_modified, structured_fields \
                  FROM memories \
                  WHERE pending_revision = 1 \
                    AND supersedes IS NOT NULL \
@@ -17062,6 +17062,15 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_pending_revisions row: {e}")))?
         {
+            let grounded_in = row
+                .get::<Option<String>>(5)
+                .unwrap_or(None)
+                .and_then(|sf| serde_json::from_str::<serde_json::Value>(&sf).ok())
+                .and_then(|v| {
+                    v.get("grounded_in")
+                        .and_then(|g| g.as_str())
+                        .map(str::to_string)
+                });
             out.push(wenlan_types::responses::PendingRevisionItem {
                 target_source_id: row
                     .get::<String>(0)
@@ -17076,6 +17085,7 @@ impl MemoryDB {
                 last_modified: row
                     .get::<i64>(4)
                     .map_err(|e| WenlanError::VectorDb(format!("col 4: {e}")))?,
+                grounded_in,
             });
         }
         Ok(out)

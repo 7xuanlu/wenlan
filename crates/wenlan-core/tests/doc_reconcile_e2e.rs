@@ -289,6 +289,11 @@ async fn write_revision_stages_embedded_pending_row_with_provenance() {
     assert_eq!(pending[0].target_source_id, "mem_cap1");
     assert_eq!(pending[0].revision_source_id, rev_id);
     assert_eq!(pending[0].source_agent.as_deref(), Some("reconcile"));
+    assert_eq!(
+        pending[0].grounded_in.as_deref(),
+        Some("src_f1::net.md"),
+        "revision card carries its grounding doc"
+    );
 
     // Canonical-path contract: the revision row is embedded (never a dead row).
     let missing = db.count_unembedded_chunks("memory", &rev_id).await.unwrap();

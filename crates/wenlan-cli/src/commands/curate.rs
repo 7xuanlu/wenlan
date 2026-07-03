@@ -32,6 +32,9 @@ pub struct GroupedRevision {
     /// drop straight into an `AskUserQuestion` option preview. `None` when the
     /// original is unavailable (the card falls back to showing `content`).
     pub diff: Option<String>,
+    /// Doc file source_id that grounds a doc-grounded revision (L3); None for
+    /// other revision producers.
+    pub grounded_in: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -156,6 +159,11 @@ fn print_table(groups: &[GroupedRevision]) {
         };
         let agent = g.source_agent.as_deref().unwrap_or("daemon");
         println!("  {}  ·  ({})  {}", g.revision_source_id, agent, snippet);
+        if let Some(g) = &g.grounded_in {
+            // "{source_id}::{path}" -> show the file path; fall back to raw.
+            let path = g.split_once("::").map(|(_, p)| p).unwrap_or(g);
+            println!("      grounded in {path}");
+        }
     }
     println!("accept/dismiss: wenlan curate accept|dismiss <revision_source_id>");
 }
@@ -192,6 +200,7 @@ fn group_revisions(items: Vec<PendingRevisionItem>) -> Vec<GroupedRevision> {
                         source_agent: it.source_agent,
                         original: None,
                         diff: None,
+                        grounded_in: it.grounded_in,
                     },
                 );
             }
@@ -244,6 +253,7 @@ mod tests {
             revision_content: content.to_string(),
             source_agent: None,
             last_modified: 0,
+            grounded_in: None,
         }
     }
 
