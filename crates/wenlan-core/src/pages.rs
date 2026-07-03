@@ -157,6 +157,7 @@ mod tests {
             creation_kind: "distilled".to_string(),
             review_status: review_status.to_string(),
             workspace: None,
+            citations: Vec::new(),
         }
     }
 

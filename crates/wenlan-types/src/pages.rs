@@ -55,6 +55,10 @@ pub struct Page {
     /// Distilled pages start confirmed; authored/research pages start unconfirmed.
     #[serde(default = "default_review_status")]
     pub review_status: String,
+    /// Per-occurrence [N] citation records for this page's body (spec §3).
+    /// Empty for pages never citation-distilled or citation-backfilled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub citations: Vec<PageCitation>,
 }
 
 fn default_creation_kind() -> String {
@@ -80,4 +84,52 @@ pub struct PageEvidence {
     pub title: Option<String>,
     pub linked_at: i64,
     pub link_reason: Option<String>,
+}
+
+/// One [N] marker occurrence in a page body, in body order (per-occurrence,
+/// NOT per marker number: the same [1] reused in two sentences gets two
+/// records with independent statuses). Renderer join rule: the k-th [N]
+/// instance scanning the body left-to-right joins the record with
+/// occurrence == k.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageCitation {
+    pub occurrence: u32,
+    pub marker: u32,
+    pub source_kind: String,
+    pub locator: String,
+    /// claim-vs-this-source-alone content-token overlap (0..=1), audit only.
+    pub score: f64,
+    /// "verified" | "unverified" — decided claim-level vs the UNION of the
+    /// claim's cited sources (spec §5).
+    pub status: String,
+}
+
+#[cfg(test)]
+mod citation_tests {
+    use super::*;
+
+    #[test]
+    fn old_page_json_deserializes_with_empty_citations() {
+        let json = r#"{"id":"p1","title":"T","content":"body","source_memory_ids":[],
+            "version":1,"status":"active","created_at":"x","last_compiled":"x",
+            "last_modified":"x","sources_updated_count":0,"user_edited":false}"#;
+        let p: Page = serde_json::from_str(json).unwrap();
+        assert!(p.citations.is_empty());
+    }
+
+    #[test]
+    fn citation_roundtrip() {
+        let c = PageCitation {
+            occurrence: 2,
+            marker: 1,
+            source_kind: "memory".into(),
+            locator: "mem_a".into(),
+            score: 0.31,
+            status: "unverified".into(),
+        };
+        let s = serde_json::to_string(&vec![c]).unwrap();
+        let back: Vec<PageCitation> = serde_json::from_str(&s).unwrap();
+        assert_eq!(back[0].occurrence, 2);
+        assert_eq!(back[0].status, "unverified");
+    }
 }

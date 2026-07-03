@@ -22341,6 +22341,7 @@ impl MemoryDB {
                 .get::<String>(17)
                 .unwrap_or_else(|_| "confirmed".to_string()),
             workspace: row.get::<Option<String>>(18).unwrap_or(None),
+            citations: Vec::new(),
         })
     }
 
@@ -25536,6 +25537,7 @@ pub(crate) mod tests {
             creation_kind: "distilled".to_string(),
             review_status: "confirmed".to_string(),
             workspace: workspace.map(|w| w.to_string()),
+            citations: Vec::new(),
         }
     }
 
@@ -41788,6 +41790,7 @@ pub(crate) mod tests {
             creation_kind: "distilled".to_string(),
             review_status: "confirmed".to_string(),
             workspace: None,
+            citations: Vec::new(),
         };
         let r = MemoryDB::search_result_from_page(page);
         assert_eq!(r.source, "page");

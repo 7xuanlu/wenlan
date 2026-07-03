@@ -499,6 +499,7 @@ pub async fn create_page(
         creation_kind: creation_kind.to_string(),
         review_status: review_status.to_string(),
         workspace: req.workspace.clone(),
+        citations: Vec::new(),
     };
 
     // md-first write (only if a knowledge_path was provided)

@@ -612,6 +612,11 @@ pub struct PageChangelogEntry {
     pub delta_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incoming_source_ids: Option<Vec<String>>,
+    /// Human-readable summary of citation verification for this revision
+    /// (e.g. "3 verified, 1 unverified, 2 stripped"). None for revisions that
+    /// didn't touch citations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citations_summary: Option<String>,
 }
 
 /// Response envelope for `/api/pages/{id}/revisions`.
