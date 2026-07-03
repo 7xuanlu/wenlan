@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/7xuanlu/wenlan/compare/v0.10.1...v0.11.0) (2026-07-03)
+
+
+### Features
+
+* doc-grounded revisions — documents propose rewrites to conflicting captures (L3) ([#330](https://github.com/7xuanlu/wenlan/issues/330)) ([7267699](https://github.com/7xuanlu/wenlan/commit/7267699ce5423a76875f149492fe839f843b1960))
+
 ## [0.10.1](https://github.com/7xuanlu/wenlan/compare/v0.10.0...v0.10.1) (2026-07-03)
 
 
