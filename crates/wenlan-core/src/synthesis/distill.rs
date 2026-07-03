@@ -1341,6 +1341,7 @@ pub(crate) async fn recompile_single_page(
                     "re_distill",
                     true,
                     knowledge_path,
+                    None,
                 )
                 .await?;
                 if result.wrote {
@@ -1480,6 +1481,7 @@ pub async fn deep_distill_single(
         "distill",
         true,
         knowledge_path,
+        None,
     )
     .await?;
 

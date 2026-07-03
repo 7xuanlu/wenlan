@@ -202,7 +202,7 @@ Integrate new facts into the existing prose naturally — don't just append bull
 If the new information contradicts existing content, note it in Open Questions.\n\
 Do not remove existing content unless it is explicitly superseded.\n\
 Do NOT include a title heading (# Title) -- the title is displayed separately by the UI.\n\
-Do not add a sources or citations section, and do not cite source ids — the system attaches provenance automatically.\n\
+Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
 Do not write HTML comments (the <!-- ... --> form) anywhere in the page.\n\
 Output the complete updated page in the same format (TLDR, prose paragraphs, Open Questions).";
 
@@ -285,6 +285,7 @@ mod tests {
     #[test]
     fn update_page_does_not_require_sources_section() {
         assert!(!UPDATE_PAGE.contains("Open Questions, Sources"));
+        assert!(UPDATE_PAGE.contains("appending [N]"));
         assert!(UPDATE_PAGE.contains("HTML comment"));
     }
 }

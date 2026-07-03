@@ -933,6 +933,7 @@ pub(crate) async fn re_distill_stale_pages(
                         "re_distill",
                         true,
                         knowledge_path,
+                        None,
                     )
                     .await?;
                     if result.wrote {

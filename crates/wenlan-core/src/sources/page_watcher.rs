@@ -207,8 +207,16 @@ async fn sync_one_file(
     // require_stale=false: user edits are unconditional.
     // knowledge_path=Some: page_watcher IS the fs writer; update_page
     //   re-projects rather than skipping the write.
-    crate::post_write::update_page(db, &page_id, req, "fs_edit", false, Some(knowledge_path))
-        .await?;
+    crate::post_write::update_page(
+        db,
+        &page_id,
+        req,
+        "fs_edit",
+        false,
+        Some(knowledge_path),
+        None,
+    )
+    .await?;
 
     Ok(Outcome::Applied { page_id })
 }

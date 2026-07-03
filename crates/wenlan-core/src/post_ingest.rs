@@ -502,6 +502,7 @@ pub(crate) async fn check_page_contradiction(
                 "page_growth",
                 false,
                 None,
+                None,
             )
             .await;
             log::info!("[post_ingest] page '{}' flagged for re-distill due to potential contradiction from {}",
@@ -599,10 +600,45 @@ pub(crate) async fn grow_page(
         None => return Ok(false),
     };
 
+    // (a) Input hygiene — strip stale [N] markers from the current body before
+    // it goes into the prompt (⚖ §4). The old markers pointed at a numbered
+    // list that no longer exists once we rebuild it below.
+    let clean_current = crate::citations::strip_markers(&page.content);
+
+    // (b) Numbered source list = this page's memory-kind evidence (linked
+    // order), with the triggering new memory appended last.
+    let evidence = db.get_page_evidence(&page.id).await.unwrap_or_default();
+    let mut locators: Vec<String> = evidence
+        .iter()
+        .filter(|e| e.source_kind == "memory")
+        .filter_map(|e| e.locator.clone())
+        .collect();
+    locators.push(source_id.to_string());
+    locators.dedup();
+    let mems = db.get_memories_by_source_ids(&locators).await?;
+    let numbered: Vec<crate::citations::NumberedSource> = mems
+        .iter()
+        .enumerate()
+        .map(|(i, m)| crate::citations::NumberedSource {
+            index: (i + 1) as u32,
+            source_kind: "memory".to_string(),
+            locator: m.source_id.clone(),
+            text: m.content.chars().take(800).collect(),
+        })
+        .collect();
+    if numbered.is_empty() {
+        // The triggering memory failed to resolve — nothing to cite against.
+        return Ok(false);
+    }
+    let existing_sources = &numbered[..numbered.len() - 1];
+
     // LLM: update page with new memory
     let user_prompt = format!(
-        "## Current Concept\n{}\n\n## New Memory\n[{}] {}",
-        page.content, source_id, content
+        "## Current Concept\n{}\n\n## Numbered Sources\n{}\n\n## New Memory\n[{}] {}",
+        clean_current,
+        crate::citations::build_numbered_block(existing_sources),
+        numbered.len(),
+        content
     );
 
     let response = llm
@@ -611,7 +647,7 @@ pub(crate) async fn grow_page(
             user_prompt,
             max_tokens: 1024,
             temperature: 0.1,
-            label: None,
+            label: Some("update_page".to_string()),
             timeout_secs: None,
         })
         .await
@@ -624,16 +660,26 @@ pub(crate) async fn grow_page(
         return Ok(false);
     }
 
+    // (c) Verify [N] markers against the numbered sources; out-of-range
+    // markers are stripped from the body before it is saved.
+    let (updated_body, cites, stats) =
+        crate::citations::process_citation_output(updated, &numbered);
+    log::info!(
+        "[grow_page] page '{}' citations: {}",
+        page.title,
+        stats.summary()
+    );
+
     // Shrink-guard pre-check (T17): early-exit before calling update_page.
     // update_page has its own shrink-guard backstop, but this early-exit
     // preserves the Ok(false) contract (skipped-growth) rather than Err.
     // Matches the is_empty() early-return contract at line 572.
     if let Some(threshold) = crate::post_write::merge_shrink_threshold() {
-        if !crate::retrieval::integrity::body_shrink_ok(&page.content, updated, threshold) {
+        if !crate::retrieval::integrity::body_shrink_ok(&page.content, &updated_body, threshold) {
             log::warn!(
                 "[grow_page] shrink-guard skipped growth for page {}: new body ({} chars) < {}% of old ({} chars)",
                 page.id,
-                updated.chars().count(),
+                updated_body.chars().count(),
                 (threshold * 100.0) as u32,
                 page.content.chars().count(),
             );
@@ -646,16 +692,18 @@ pub(crate) async fn grow_page(
     if !source_ids.contains(&source_id.to_string()) {
         source_ids.push(source_id.to_string());
     }
+    let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
     let _ = crate::post_write::update_page(
         db,
         &page.id,
         UpdatePageRequest {
-            content: updated.to_string(),
+            content: updated_body,
             source_memory_ids: source_ids,
         },
         "page_growth",
         false,
         None,
+        Some((citations_json, stats.summary())),
     )
     .await?;
 
@@ -1346,5 +1394,108 @@ mod tests {
             name_b, "Alice",
             "arm B entity name must be Alice, got: {name_b}"
         );
+    }
+
+    // ── grow_page (Task 6: citation-numbered growth path) ──────────────────
+
+    /// Stub LLM provider that captures the exact prompt it received, so
+    /// tests can assert on input hygiene (e.g. that a stale marker never
+    /// reached the LLM) as well as the fixed output it returns.
+    struct CapturingStubProvider {
+        response: String,
+        captured_prompt: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for CapturingStubProvider {
+        async fn generate(
+            &self,
+            request: crate::llm_provider::LlmRequest,
+        ) -> Result<String, crate::llm_provider::LlmError> {
+            *self.captured_prompt.lock().unwrap() = Some(request.user_prompt.clone());
+            Ok(self.response.clone())
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            "capturing-stub"
+        }
+        fn backend(&self) -> crate::llm_provider::LlmBackend {
+            crate::llm_provider::LlmBackend::OnDevice
+        }
+    }
+
+    #[tokio::test]
+    async fn grow_page_strips_stale_markers_and_persists_citations() {
+        let (db, _dir) = test_db().await;
+
+        // Seed the source memory behind the existing page, then create the
+        // page with a STALE [3] marker in its content (pointing at a
+        // numbered list that no longer exists).
+        let mem_v1 = "mem_grow_v1";
+        let v1_content = "Rust is a systems programming language with memory safety guarantees";
+        db.upsert_documents(vec![make_doc(mem_v1, v1_content)])
+            .await
+            .unwrap();
+
+        let page_req = wenlan_types::requests::CreateConceptRequest {
+            title: "Rust".to_string(),
+            content: format!("{v1_content}.[3]"),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![mem_v1.to_string()],
+            creation_kind: None,
+            workspace: None,
+        };
+        let page_id = crate::post_write::create_page(&db, page_req, "test", None)
+            .await
+            .unwrap()
+            .id;
+
+        // Seed the NEW memory that triggers growth.
+        let mem_new = "mem_grow_new";
+        let new_content =
+            "Rust also provides zero-cost abstractions for high-performance systems programming";
+        db.upsert_documents(vec![make_doc(mem_new, new_content)])
+            .await
+            .unwrap();
+
+        let stub = std::sync::Arc::new(CapturingStubProvider {
+            response: format!(
+                "{v1_content}.[1] It also provides zero-cost abstractions for high-performance systems programming.[2]"
+            ),
+            captured_prompt: std::sync::Mutex::new(None),
+        });
+        let llm: std::sync::Arc<dyn LlmProvider> = stub.clone();
+
+        let grew = grow_page(
+            &db,
+            mem_new,
+            new_content,
+            None,
+            Some(&llm),
+            &crate::prompts::PromptRegistry::default(),
+            0.0,
+        )
+        .await
+        .unwrap();
+        assert!(grew, "grow_page should report growth");
+
+        // Input hygiene: the stale [3] marker must never reach the prompt.
+        let captured = stub.captured_prompt.lock().unwrap().clone().unwrap();
+        assert!(
+            !captured.contains("[3]"),
+            "stale marker leaked into prompt: {captured}"
+        );
+
+        // Output: page.citations populated, changelog carries a citations_summary.
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert!(!page.citations.is_empty(), "citations should be populated");
+
+        let log: Vec<wenlan_types::responses::PageChangelogEntry> =
+            serde_json::from_str(&db.get_page_changelog(&page_id).await.unwrap()).unwrap();
+        assert!(log.last().unwrap().citations_summary.is_some());
     }
 }

@@ -132,6 +132,7 @@ pub(crate) async fn assign_orphan_memories(
                                     "page_growth",
                                     false,
                                     knowledge_path,
+                                    None,
                                 )
                                 .await;
                                 assigned += 1;
@@ -294,6 +295,7 @@ pub(crate) async fn global_page_review(
                             "refinery_merge",
                             true,
                             knowledge_path,
+                            None,
                         )
                         .await;
 
