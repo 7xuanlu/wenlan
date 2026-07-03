@@ -254,8 +254,8 @@ The repo is a Cargo workspace with 5 crates:
 |---|---|---|
 | `crates/wenlan-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `wenlan-mcp`, `wenlan-app` (separate repo, via crates.io), and any other downstream tool. | serde |
 | `crates/wenlan-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, distill cycles, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
-| `crates/wenlan-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `wenlan-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
-| `crates/wenlan-cli` | CLI binary `wenlan`. Talks to daemon HTTP via `wenlan-types` and owns setup/service commands. Subcommands: status/search/recall/store/list/agents/install/setup/model/key/doctor. | reqwest, clap |
+| `crates/wenlan-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `wenlan-core`. Provides the runtime process used by CLI background management. | axum, tower, clap |
+| `crates/wenlan-cli` | CLI binary `wenlan`. Talks to daemon HTTP via `wenlan-types` and owns setup/service commands. Subcommands include `status`, `setup`, `background`, `restart`, `doctor`, `models`, `keys`, `connect`, `sources`, `capture`, `memories`, and `spaces`. | reqwest, clap |
 | `crates/wenlan-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y wenlan-mcp`). | rmcp, reqwest, schemars |
 
 The daemon (`wenlan-server`) is the single source of truth. External tools (the desktop app, MCP clients via `wenlan-mcp`, `wenlan` CLI, curl) all talk HTTP to the same daemon. `wenlan-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
@@ -316,7 +316,7 @@ Per-crate module tables live in subtree `AGENTS.md` files (loaded when an agent 
 
 ## Key Modules — wenlan (CLI, `crates/wenlan-cli/src/`)
 
-The `wenlan` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subcommands cover `setup`, `install`, `status`, `search`, `recall`, `store`, `list`, `agents`, `model`, `key`, `doctor`. The CLI does not touch the database directly: every command is an HTTP call.
+The `wenlan` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subcommands cover `setup`, `background`, `restart`, `status`, `doctor`, `models`, `keys`, `connect`, `sources`, `capture`, `memories`, and `spaces`. The CLI does not touch the database directly: every command is an HTTP call.
 
 ## Conventions
 
