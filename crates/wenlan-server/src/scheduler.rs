@@ -140,6 +140,11 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_enrichment_sweep = Instant::now()
             .checked_sub(ENRICHMENT_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
+        // Fire the doc-reconcile sweep every 30 min when an LLM provider is available.
+        const RECONCILE_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
+        let mut last_reconcile_sweep = Instant::now()
+            .checked_sub(RECONCILE_SWEEP_INTERVAL)
+            .unwrap_or_else(Instant::now);
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -384,6 +389,43 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                         }
                     });
                     last_enrichment_sweep = now;
+                }
+            }
+
+            // --- 6. Doc-reconcile sweep: propose doc-grounded revisions for captures
+            //        that contradict ingested documents (L3). Human-gated; never silent. ---
+            if wenlan_core::db::doc_reconcile_enabled()
+                && now.duration_since(last_reconcile_sweep) >= RECONCILE_SWEEP_INTERVAL
+            {
+                let sweep_llm = api_llm.as_ref().or(llm.as_ref()).cloned();
+                if let Some(provider) = sweep_llm {
+                    let db_ref = db.clone();
+                    let prompts_ref = prompts.clone();
+                    let refinery_ref = refinery_cfg.clone();
+                    let distillation_ref = distillation_cfg.clone();
+                    tokio::spawn(async move {
+                        match wenlan_core::reconcile::run_reconcile_tick(
+                            &db_ref,
+                            &provider,
+                            &prompts_ref,
+                            &refinery_ref,
+                            &distillation_ref,
+                        )
+                        .await
+                        {
+                            Ok(r) if r.skipped_backpressure => tracing::info!(
+                                "[scheduler] reconcile sweep held: pending queue at cap"
+                            ),
+                            Ok(r) if r.judged > 0 => tracing::info!(
+                                "[scheduler] reconcile sweep judged {} item(s), proposed {} revision(s)",
+                                r.judged,
+                                r.proposed
+                            ),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!("[scheduler] reconcile sweep error: {e}"),
+                        }
+                    });
+                    last_reconcile_sweep = now;
                 }
             }
         }
