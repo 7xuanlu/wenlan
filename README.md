@@ -164,24 +164,6 @@ Works fully local with no API key, cloud account, or signup. Capture, recall, hy
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
 - **You own the data**: everything is plain Markdown under `~/.wenlan/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
 
-### Spaces
-
-Memories belong to a **space** like `wenlan`, `career`, or
-`ideas`. Set the active space per shell:
-
-    WENLAN_SPACE=career claude
-
-Or declaratively via `~/.wenlan/spaces.toml` (see
-`plugin/examples/spaces.toml`). To manage spaces from the CLI:
-
-    wenlan spaces list
-    wenlan spaces add ideas --default
-    wenlan spaces show ideas
-    wenlan spaces move scratch career
-
-`wenlan doctor` prints the current resolver state so you can see exactly
-which layer chose the active space.
-
 ---
 
 ## Evaluation

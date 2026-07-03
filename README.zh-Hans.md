@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c3b98e142eef7cfc0296c80d4c3fecb4b8d2b683a414cb9b1e06b13c34dae90e -->
+<!-- README_SYNC: source=README.md sha256=0483668367fa7927d6237eb4271d1a3c4bdab652ed0ab696babacd89ca7306ee -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生时代的、会生长的个人知识库。" width="100%">
@@ -173,21 +173,6 @@ npx -y wenlan setup   # 安装并启动本地 daemon
 - **先 review，再 trust**：低置信度 captures、pending revisions、contradictions 和 supersessions 可以浮现出来，而不是静默进入 context。
 - **Explicit spaces**：用 `space=work | personal | client-X` 给 memories、pages 和 recalls 打标签，避免日常工作捕获流入副项目 brief。未设置时会从当前 repo 或 workspace 自动检测；也始终可以覆盖。
 - **数据归你**：所有内容都是 `~/.wenlan/` 下的 plain Markdown，并由 git 版本管理。可以 grep、symlink 到 Obsidian，或随时带走文件。无 lock-in。
-
-### Spaces
-
-Memories 属于某个 **space**，例如 `wenlan`、`career` 或 `ideas`。可在每个 shell 中设置 active space：
-
-    WENLAN_SPACE=career claude
-
-也可以通过 `~/.wenlan/spaces.toml` 声明式配置（见 `plugin/examples/spaces.toml`）。使用 CLI 管理 spaces：
-
-    wenlan spaces list
-    wenlan spaces add ideas --default
-    wenlan spaces show ideas
-    wenlan spaces move scratch career
-
-`wenlan doctor` 会打印当前 resolver state，让你精确看到是哪一层选择了 active space。
 
 ---
 
