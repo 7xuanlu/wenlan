@@ -23,6 +23,7 @@
   <a href="#mcp-only-setup"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
   <a href="#mcp-only-setup"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
   <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
+  <a href="#desktop-app"><img alt="Desktop App" src="https://img.shields.io/badge/Desktop%20App-Tauri-24C8DB"></a>
 </p>
 
 <p align="center">
@@ -71,11 +72,7 @@ Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
-### Codex plugin (local development)
-
-The Codex plugin lives in [plugin-codex](plugin-codex/) and is exposed through the repo-local marketplace at [.agents/plugins/marketplace.json](.agents/plugins/marketplace.json). It adds `/setup`, `/brief`, `/capture`, `/recall`, `/distill`, `/pages`, `/curate`, `/forget`, `/handoff`, and `/help` skills plus a `wenlan` MCP server.
-
-From this repo:
+### Codex plugin
 
 ```bash
 npx -y wenlan setup
@@ -85,22 +82,7 @@ codex plugin add wenlan@wenlan-local
 
 Start a new Codex thread after installing so the skills and MCP server load. Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`, `/pages <query>`, or `/handoff`.
 
-For plugin development, reinstall after plugin edits:
-
-```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py plugin-codex
-codex plugin add wenlan@wenlan-local
-```
-
-The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back to `npx -y wenlan-mcp@^0.10.0`. It passes `--agent-name codex` so captures are labeled as Codex writes.
-
-The shared Claude/Codex plugin inventory lives in [plugin-contract.json](plugin-contract.json). Before changing plugin skills, manifests, MCP runner wiring, or the local marketplace, run:
-
-```bash
-python3 scripts/validate-codex-plugin-slice.py
-python3 scripts/validate-plugin-contract.py
-bash scripts/validate-plugin-contract.test.sh
-```
+Plugin details and development notes: [plugin-codex/](plugin-codex/README.md).
 
 ### MCP-only setup
 
@@ -133,6 +115,16 @@ wenlan background off
 ```
 
 After upgrading Wenlan (`npx -y wenlan setup` or `install.sh`), the new binary is on disk but the already-running runtime keeps serving the old code until you restart it. `wenlan background on` restarts automatically; if you upgraded another way, run `wenlan restart`.
+
+### Desktop app
+
+The desktop app is a native UI over the same local daemon. To use it, install both pieces:
+
+```bash
+npx -y wenlan setup   # installs and starts the local daemon
+```
+
+Then download and install the current macOS Apple Silicon app: [Wenlan_0.3.1_aarch64.dmg](https://github.com/7xuanlu/wenlan-app/releases/download/v0.3.1/Wenlan_0.3.1_aarch64.dmg). The app connects to the daemon on your machine and reads the same local memory store as the CLI and MCP clients.
 
 ---
 

@@ -204,6 +204,7 @@ wenlan sources add ~/Notes/project.md
 - [useorigin.app/docs/commands](https://useorigin.app/docs/commands) — Claude Code commands and MCP tools reference
 - [useorigin.app/docs/troubleshooting](https://useorigin.app/docs/troubleshooting) — common failure modes
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
+- [github.com/7xuanlu/wenlan-app/releases/latest](https://github.com/7xuanlu/wenlan-app/releases/latest) — desktop app downloads
 
 ## License
 
