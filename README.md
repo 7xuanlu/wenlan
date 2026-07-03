@@ -22,11 +22,13 @@
 
 **A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections: a copy of the 四庫全書. Your agents capture what they learn as they work, and you can add pages and sources you already trust. Wenlan turns both into source-cited wiki pages and keeps the library current on its own.
+Unlike a normal llm-wiki that generates pages from a fixed document set, Wenlan keeps a source-cited wiki current with live agent work and trusted sources. Your agents capture what they learn during sessions, you add pages and sources you already trust, and Wenlan distills both into Markdown pages that refresh between sessions.
+
+Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections: a copy of the 四庫全書.
 
 Each session opens with a brief and closes with a handoff, so the thread carries forward instead of restarting.
 
-Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box memory, every page shows its sources, so you can read, trust, or correct it.
+Unlike a black-box memory, every page shows its sources, so you can read, trust, or correct it.
 
 [![Watch the Wenlan demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
@@ -34,8 +36,8 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
 
 ## What makes Wenlan distinct
 
-1. **Trustworthy on its own.** Every page cites the memories it came from, and the daemon refuses unsourced pages rather than letting hallucinated summaries in. It dedupes facts and supersedes the old version when one changes, so you read a clean, current wiki instead of a pile of duplicates. The everyday flow never stops for approval; a capture only surfaces for you when something genuinely conflicts.
-2. **Evolves on its own.** Most memory tools just hand back what you put in. Wenlan keeps working between sessions, clustering your captures into source-cited wiki pages that feed retrieval alongside the atomic notes they came from. Unlike a static llm-wiki, it stays current without you maintaining it.
+1. **Trustworthy sources.** Every page cites the memories behind it, and Wenlan refuses unsourced pages rather than letting hallucinated summaries in. It dedupes facts and supersedes old versions when facts change, so the wiki stays clean without turning daily capture into an approval queue.
+2. **Current between sessions.** Wenlan clusters new captures into source-cited pages between sessions, and feeds retrieval with both the pages and the atomic notes behind them. The next thread starts from updated context instead of a stale snapshot.
 3. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
 4. **Real git versioning.** Memory, page, and session writes commit into `~/.wenlan/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
@@ -156,12 +158,12 @@ Works fully local with no API key, cloud account, or signup. Capture, recall, hy
 
 ## What you get
 
-- **Atomic memory layer**: every capture is stored first as a typed memory with source agent, confidence, stability, and supersession metadata.
+- **Typed captures**: every capture is stored with source agent, confidence, stability, and supersession metadata.
 - **Source-backed pages**: pages keep source memory IDs, stale reasons, and revision state so distillation can refresh them without losing provenance.
 - **Hybrid retrieval on libSQL**: memories, pages, FTS5 text, vector embeddings, and graph context in one local store your MCP clients can query, fused with reciprocal-rank fusion. An optional local cross-encoder reranker sharpens the top results.
 - **Connected recall**: people, projects, tools, and decisions come back linked, so a memory arrives with the context around it instead of alone.
 - **Distill cycles**: run `/distill` manually today, or add a local model/API key for background extraction, page refreshes, recaps, and richer graph links.
-- **Stays fresh on its own**: background passes link entities, grow matching pages, and update each memory's effective confidence from type, access, and age, so recent and load-bearing memories surface while stale ones fade.
+- **Refreshes between sessions**: background passes link entities, grow matching pages, and update each memory's effective confidence from type, access, and age, so recent and load-bearing memories surface while stale ones fade.
 - **Review before trust**: low-confidence captures, pending revisions, contradictions, and supersessions can surface instead of silently entering context.
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
 - **You own the data**: everything is plain Markdown under `~/.wenlan/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
