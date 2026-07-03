@@ -22806,7 +22806,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
-                        c.workspace
+                        c.workspace, c.citations
                  FROM pages c
                  INNER JOIN page_sources cs ON c.id = cs.page_id
                  WHERE cs.memory_source_id = ?1 AND c.status = 'active'",
