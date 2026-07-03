@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration tests for `origin space` subcommands.
+//! Integration tests for `wenlan spaces` subcommands.
 //!
 //! Decision: toml-only approach (no throwaway daemon).
 //! Spawning a process-level daemon requires port management, wait-for-ready
 //! polling, and drop-based cleanup — well over 30 lines of scaffolding with no
-//! existing harness in origin-cli tests.  The unit tests in `origin-core` and
-//! the origin-server HTTP integration tests already cover the server-side space
+//! existing harness in wenlan CLI tests.  The unit tests in `wenlan-core` and
+//! the wenlan-server HTTP integration tests already cover the server-side space
 //! logic.  These tests cover the CLI surface that does NOT require a live
-//! daemon: argument parsing (--help flags) and the toml-backed `space default`
+//! daemon: argument parsing (--help flags) and the toml-backed `spaces default`
 //! round-trip.
 
 use assert_cmd::Command;
@@ -18,54 +18,54 @@ fn cli() -> Command {
 }
 
 // ---------------------------------------------------------------------------
-// Argument parsing — all `space` subcommands must accept --help
+// Argument parsing — all `spaces` subcommands must accept --help
 // ---------------------------------------------------------------------------
 
 #[test]
-fn space_subcommands_help_exits_zero() {
+fn spaces_subcommands_help_exits_zero() {
     for args in [
-        &["space", "--help"][..],
-        &["space", "list", "--help"][..],
-        &["space", "add", "--help"][..],
-        &["space", "default", "--help"][..],
-        &["space", "move", "--help"][..],
-        &["space", "show", "--help"][..],
+        &["spaces", "--help"][..],
+        &["spaces", "list", "--help"][..],
+        &["spaces", "add", "--help"][..],
+        &["spaces", "default", "--help"][..],
+        &["spaces", "move", "--help"][..],
+        &["spaces", "show", "--help"][..],
     ] {
         cli().args(args).assert().success();
     }
 }
 
 // ---------------------------------------------------------------------------
-// `space default` toml round-trip — no daemon required
+// `spaces default` toml round-trip — no daemon required
 // ---------------------------------------------------------------------------
 
 #[test]
-fn space_default_set_and_read_back() {
+fn spaces_default_set_and_read_back() {
     let tmp = tempfile::tempdir().expect("mktempdir");
 
     // Set the default.
     cli()
         .env("HOME", tmp.path())
-        .args(["space", "default", "work"])
+        .args(["spaces", "default", "work"])
         .assert()
         .success();
 
     // Read it back — output should be exactly "work".
     cli()
         .env("HOME", tmp.path())
-        .args(["space", "default"])
+        .args(["spaces", "default"])
         .assert()
         .success()
         .stdout(predicates::str::contains("work"));
 }
 
 #[test]
-fn space_default_toml_file_written_correctly() {
+fn spaces_default_toml_file_written_correctly() {
     let tmp = tempfile::tempdir().expect("mktempdir");
 
     cli()
         .env("HOME", tmp.path())
-        .args(["space", "default", "personal"])
+        .args(["spaces", "default", "personal"])
         .assert()
         .success();
 
@@ -79,20 +79,20 @@ fn space_default_toml_file_written_correctly() {
 }
 
 #[test]
-fn space_default_overwrite_existing_entry() {
+fn spaces_default_overwrite_existing_entry() {
     let tmp = tempfile::tempdir().expect("mktempdir");
 
     // First write.
     cli()
         .env("HOME", tmp.path())
-        .args(["space", "default", "first"])
+        .args(["spaces", "default", "first"])
         .assert()
         .success();
 
     // Overwrite.
     cli()
         .env("HOME", tmp.path())
-        .args(["space", "default", "second"])
+        .args(["spaces", "default", "second"])
         .assert()
         .success();
 
@@ -112,13 +112,13 @@ fn space_default_overwrite_existing_entry() {
 }
 
 #[test]
-fn space_default_no_default_set_prints_fallback_message() {
+fn spaces_default_no_default_set_prints_fallback_message() {
     let tmp = tempfile::tempdir().expect("mktempdir");
 
     // No default has been set — CLI should print the unscoped fallback note.
     cli()
         .env("HOME", tmp.path())
-        .args(["space", "default"])
+        .args(["spaces", "default"])
         .assert()
         .success()
         .stdout(predicates::str::contains("unscoped"));

@@ -46,12 +46,6 @@
   },
   "skills": [
     {
-      "name": "init",
-      "status": "shared_now",
-      "codex_user_invocable": true,
-      "codex_openai_interface": true
-    },
-    {
       "name": "brief",
       "status": "shared_now",
       "codex_user_invocable": true,
@@ -65,12 +59,6 @@
     },
     {
       "name": "curate",
-      "status": "shared_now",
-      "codex_user_invocable": true,
-      "codex_openai_interface": true
-    },
-    {
-      "name": "debrief",
       "status": "shared_now",
       "codex_user_invocable": true,
       "codex_openai_interface": true
@@ -107,6 +95,12 @@
     },
     {
       "name": "recall",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "setup",
       "status": "shared_now",
       "codex_user_invocable": true,
       "codex_openai_interface": true

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration tests for `wenlan ingest <path>`.
+//! Integration tests for `wenlan sources add <path>`.
 //!
-//! The CLI is a thin HTTP client: `ingest` must POST /api/sources to register a
-//! Directory source, then POST /api/sources/{id}/sync, then render the stats.
+//! The CLI is a thin HTTP client: `sources add` must POST /api/sources to
+//! register a Directory source, then POST /api/sources/{id}/sync, then render the stats.
 //! These tests drive the real `wenlan` binary against a tiny in-process stub
 //! daemon (there is no HTTP-mock crate in dev-deps) and assert on the recorded
 //! requests plus rendered output.
@@ -143,7 +143,7 @@ fn ingest_registers_source_then_syncs_and_renders_stats() {
 
     cli()
         .env("WENLAN_HOST", &base)
-        .args(["ingest", dir.path().to_str().unwrap()])
+        .args(["sources", "add", dir.path().to_str().unwrap()])
         .assert()
         .success()
         // Default (piped stdout) format is JSON — the stats must render.
@@ -188,7 +188,7 @@ fn ingest_accepts_a_single_file_path() {
 
     cli()
         .env("WENLAN_HOST", &base)
-        .args(["ingest", file.to_str().unwrap()])
+        .args(["sources", "add", file.to_str().unwrap()])
         .assert()
         .success();
 
@@ -216,13 +216,19 @@ fn ingest_table_format_renders_human_summary() {
 
     cli()
         .env("WENLAN_HOST", &base)
-        .args(["ingest", dir.path().to_str().unwrap(), "--format", "table"])
+        .args([
+            "sources",
+            "add",
+            dir.path().to_str().unwrap(),
+            "--format",
+            "table",
+        ])
         .assert()
         .success()
         .stdout(predicates::str::contains("file(s) found"));
 }
 
 #[test]
-fn ingest_help_exits_zero() {
-    cli().args(["ingest", "--help"]).assert().success();
+fn sources_add_help_exits_zero() {
+    cli().args(["sources", "add", "--help"]).assert().success();
 }

@@ -1,6 +1,6 @@
 # wenlan-cli
 
-Wenlan's product CLI. Use it to set up the local runtime, manage the daemon service, search and recall memory, store new memories, configure models/API keys, and run doctor checks.
+Wenlan's product CLI. Use it to set up the local runtime, manage the background service, search and recall memory, capture new memories, configure models/API keys, and run doctor checks.
 
 License: Apache-2.0.
 
@@ -12,7 +12,7 @@ Recommended user setup:
 npx -y wenlan setup
 ```
 
-The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, registers the daemon with the host's native service manager (launchd on macOS, systemd-user on Linux), and verifies status. On Windows, `wenlan install` is not supported in v1 (daemon does not yet speak the Windows Service Control Protocol); run `wenlan-server.exe` manually or via Task Scheduler.
+The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, registers the background runtime with the host's native service manager (launchd on macOS, systemd-user on Linux, Task Scheduler on Windows), and verifies status.
 
 For local development:
 
@@ -39,7 +39,7 @@ export WENLAN_HOST=http://127.0.0.1:7878  # default
 
 ### `wenlan status`
 
-Show daemon, native service (launchd / systemd-user / sc.exe), model, and API key state.
+Show background process, native service (launchd / systemd-user / sc.exe), model, and API key state.
 
 ```bash
 wenlan status
@@ -57,55 +57,57 @@ wenlan setup --model qwen3-4b # download/select a local model
 wenlan setup --anthropic-api-key-env ANTHROPIC_API_KEY
 ```
 
-### `wenlan install` / `wenlan uninstall`
+### `wenlan background <on|off>`
 
-Register or remove the daemon with the host's native service manager. The service runs the sibling `wenlan-server` binary next to `wenlan`.
+Register or remove the background runtime with the host's native service manager. The service runs the sibling `wenlan-server` binary next to `wenlan`.
 
 - **macOS**: launchd user agent at `~/Library/LaunchAgents/com.wenlan.server.plist`.
 - **Linux**: systemd user unit at `~/.config/systemd/user/wenlan-server.service`. `loginctl enable-linger` if you want it alive after logout.
-- **Windows**: not yet supported in v1. The console-app daemon does not implement the Windows Service Control Protocol; sc.exe start times out. Run `wenlan-server.exe` manually or register a Task Scheduler logon task. Tracked follow-up.
+- **Windows**: per-user Task Scheduler ONLOGON task.
 
 ```bash
-wenlan install
-wenlan uninstall
+wenlan background on
+wenlan background off
+wenlan restart
 ```
 
 ### `wenlan doctor`
 
-Diagnose daemon reachability, native service state (launchd / systemd-user / sc.exe), model setup, and API key setup.
+Diagnose runtime reachability, native service state (launchd / systemd-user / sc.exe), model setup, and API key setup.
 
 ```bash
 wenlan doctor
 ```
 
-### `wenlan model`
+### `wenlan models`
 
 Manage opt-in local models.
 
 ```bash
-wenlan model list
-wenlan model status
-wenlan model install qwen3-4b
+wenlan models list
+wenlan models status
+wenlan models install qwen3-4b
+wenlan models reranker lite
 ```
 
-### `wenlan key`
+### `wenlan keys`
 
 Manage provider API keys.
 
 ```bash
-wenlan key status
-wenlan key set anthropic --env ANTHROPIC_API_KEY
-wenlan key clear anthropic
+wenlan keys status
+wenlan keys set anthropic --env ANTHROPIC_API_KEY
+wenlan keys clear anthropic
 ```
 
-### `wenlan mcp add <client>`
+### `wenlan connect <client>`
 
 Configure Wenlan MCP for a supported client. This is the MCP-only path for Claude Code users who do not want the plugin, and for Codex, Cursor, Claude Desktop, VS Code, and Gemini CLI.
 
 ```bash
-wenlan mcp add claude-code
-wenlan mcp add codex
-wenlan mcp add cursor --dry-run
+wenlan connect claude-code
+wenlan connect codex
+wenlan connect cursor --dry-run
 ```
 
 Supported clients: `claude-code`, `codex`, `gemini`, `cursor`, `claude-desktop`, `vscode`.
@@ -115,7 +117,7 @@ When `wenlan-mcp` is installed next to the `wenlan` CLI, the generated config po
 Use `--dry-run` to preview JSON config edits before writing them:
 
 ```bash
-wenlan mcp add cursor --dry-run
+wenlan connect cursor --dry-run
 ```
 
 ### `wenlan search <query>`
@@ -137,24 +139,24 @@ wenlan recall "what we agreed on for the API"
 wenlan recall "memory layer" --format json
 ```
 
-### `wenlan store [text] [--file <path>] [--type <type>]`
+### `wenlan capture [text] [--file <path>] [--type <type>]`
 
 Store a memory. Provide content positionally, via `--file`, or pipe via stdin.
 
 ```bash
-wenlan store "remember this insight" --type fact
-wenlan store --file notes.md --type page
-echo "stdin pipe content" | wenlan store --type quick_thought
+wenlan capture "remember this insight" --type fact
+wenlan capture --file notes.md --type page
+echo "stdin pipe content" | wenlan capture --type quick_thought
 ```
 
-### `wenlan list [--limit N] [--type X]`
+### `wenlan memories [--limit N] [--type X]`
 
 List recent memories.
 
 ```bash
-wenlan list
-wenlan list --limit 5
-wenlan list --type fact --format json
+wenlan memories
+wenlan memories --limit 5
+wenlan memories --type fact --format json
 ```
 
 ### `wenlan agents list/show/edit`
@@ -167,16 +169,25 @@ wenlan agents show claude-code
 wenlan agents edit claude-code --trust trusted --enabled true
 ```
 
-### `wenlan space <list|add|default|move|show>`
+### `wenlan spaces <list|add|default|move|show>`
 
 Manage memory spaces (buckets).
 
 ```bash
-wenlan space list
-wenlan space add ideas --default
-wenlan space show career
-wenlan space default work
-wenlan space move scratch career
+wenlan spaces list
+wenlan spaces add ideas --default
+wenlan spaces show career
+wenlan spaces default work
+wenlan spaces move scratch career
+```
+
+### `wenlan sources add <path>`
+
+Register or resync a file or folder source.
+
+```bash
+wenlan sources add ~/Notes
+wenlan sources add ~/Notes/project.md
 ```
 
 ## Output formats

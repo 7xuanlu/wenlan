@@ -26,9 +26,9 @@ cargo run -p wenlan-server                # listens on 127.0.0.1:7878
 # Or start the daemon as a managed launchd service:
 cargo build -p wenlan -p wenlan-server
 ./target/debug/wenlan setup --basic       # configure local memory
-./target/debug/wenlan install             # writes plist, launchctl load
+./target/debug/wenlan background on       # writes plist, launchctl load
 ./target/debug/wenlan status
-./target/debug/wenlan uninstall           # when done
+./target/debug/wenlan background off      # when done
 
 # Workspace-level builds
 cargo check --workspace
@@ -75,9 +75,9 @@ Wenlan runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows
 |---|---|---|
 | macOS | `~/Library/Application Support/wenlan/` | launchd via `~/Library/LaunchAgents/com.wenlan.server.plist` (user-level) |
 | Linux | `~/.local/share/wenlan/` (or `$XDG_DATA_HOME/origin`) | systemd user unit at `~/.config/systemd/user/wenlan-server.service` (qualifier dropped per `ServiceLabel::to_script_name()`). Enable lingering with `loginctl enable-linger` if you want the service alive after logout. |
-| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `wenlan install` short-circuits before service-manager and drives schtasks directly (wenlan-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `wenlan uninstall` calls `schtasks /delete /tn OriginServer /f`. |
+| Windows | `%LOCALAPPDATA%\origin\` | Per-user Task Scheduler ONLOGON task registered via `schtasks.exe /create /tn OriginServer /sc ONLOGON /tr <exe> /f`. `wenlan background on` short-circuits before service-manager and drives schtasks directly (wenlan-server is a plain console app and would otherwise time out at 30s under sc.exe + the Windows Service Control Protocol). `wenlan background off` calls `schtasks /delete /tn OriginServer /f`. |
 
-`wenlan install` / `wenlan uninstall` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
+`wenlan background on` / `wenlan background off` work on macOS, Linux, and Windows. macOS + Linux go through the `service-manager` crate (launchd / systemd-user); Windows takes the schtasks path described above so the daemon does not need a service dispatcher.
 
 ### llama-cpp-2 backend
 
@@ -254,8 +254,8 @@ The repo is a Cargo workspace with 5 crates:
 |---|---|---|
 | `crates/wenlan-types` | Shared API boundary types (request/response, memory, entities). Lightweight: serde + serde_json + anyhow only. Consumed by `wenlan-mcp`, `wenlan-app` (separate repo, via crates.io), and any other downstream tool. | serde |
 | `crates/wenlan-core` | All business logic: DB, embeddings, LLM engine, search, classification, knowledge graph, distill cycles, pages, export, eval. **Must have NO axum or tauri dependencies.** | libSQL, FastEmbed, llama-cpp-2, hf-hub |
-| `crates/wenlan-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `wenlan-core`. Provides `install/uninstall/status` subcommands for launchd management. | axum, tower, clap |
-| `crates/wenlan-cli` | CLI binary `wenlan`. Talks to daemon HTTP via `wenlan-types` and owns setup/service commands. Subcommands: status/search/recall/store/list/agents/install/setup/model/key/doctor. | reqwest, clap |
+| `crates/wenlan-server` | Headless HTTP daemon on `127.0.0.1:7878`. Depends on `wenlan-core`. Provides the runtime process used by CLI background management. | axum, tower, clap |
+| `crates/wenlan-cli` | CLI binary `wenlan`. Talks to daemon HTTP via `wenlan-types` and owns setup/service commands. Subcommands include `status`, `setup`, `background`, `restart`, `doctor`, `models`, `keys`, `connect`, `sources`, `capture`, `memories`, and `spaces`. | reqwest, clap |
 | `crates/wenlan-mcp` | MCP server binary that bridges MCP clients (Claude Code, Cursor, Codex, Claude Desktop, etc.) to the daemon HTTP API. Stdio + streamable-HTTP transports via the `rmcp` crate. Ships as a standalone binary + npm package (`npx -y wenlan-mcp`). | rmcp, reqwest, schemars |
 
 The daemon (`wenlan-server`) is the single source of truth. External tools (the desktop app, MCP clients via `wenlan-mcp`, `wenlan` CLI, curl) all talk HTTP to the same daemon. `wenlan-mcp` source lives in this monorepo; at runtime it's a separate process the MCP client spawns.
@@ -316,7 +316,7 @@ Per-crate module tables live in subtree `AGENTS.md` files (loaded when an agent 
 
 ## Key Modules — wenlan (CLI, `crates/wenlan-cli/src/`)
 
-The `wenlan` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subcommands cover `setup`, `install`, `status`, `search`, `recall`, `store`, `list`, `agents`, `model`, `key`, `doctor`. The CLI does not touch the database directly: every command is an HTTP call.
+The `wenlan` binary — a thin reqwest-based CLI for the daemon's HTTP API. Subcommands cover `setup`, `background`, `restart`, `status`, `doctor`, `models`, `keys`, `connect`, `sources`, `capture`, `memories`, and `spaces`. The CLI does not touch the database directly: every command is an HTTP call.
 
 ## Conventions
 
@@ -365,7 +365,7 @@ The recurring failure mode was not any single missing artifact — it was that s
 - **Stale binary after merge/pull**: `cargo build -p wenlan-server` may report "0.64s Finished" without recompiling if the source timestamps haven't changed (e.g., after `git pull` fast-forward). Touch a source file to force recompilation: `touch crates/wenlan-server/src/router.rs && cargo build -p wenlan-server`. Verify the binary timestamp matches: `ls -la target/debug/wenlan-server`.
 - **kill vs kill -9**: `kill <PID>` may not terminate the daemon cleanly. Always use `kill -9 <PID>` and verify with `lsof -ti :7878` afterward. If the port is still in use, another process took over.
 - **Worktree target directories are per-worktree**: Each `.worktrees/<name>` checkout has its own `target/`. Building inside a worktree writes to that worktree's `target/`, not the main repo's. Verify a binary's source with `lsof -p <PID> | grep wenlan-server` so you don't run a stale binary from a different worktree.
-- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`wenlan-server/src/main.rs`). `wenlan install` now stops the running service before reinstalling, and `wenlan restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `wenlan restart`. Enabling the cross-encoder (`WENLAN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
+- **Upgrading the daemon requires a restart**: installing a new binary does NOT replace an already-running daemon -- the new process detects the healthy incumbent on port 7878 and exits (`wenlan-server/src/main.rs`). `wenlan background on` stops the running service before reinstalling, and `wenlan restart` (stop then start) reloads it explicitly. The MCP version handshake surfaces a stale daemon (`VersionStatus::DaemonOutdated`) and points users at `wenlan restart`. Enabling the cross-encoder (`WENLAN_RERANKER_ENABLED=1`) blocks startup on a one-time ~1.1GB model download and, on failure, serves with no rerank -- `/api/status` now reports `reranker` as `disabled` / `active` / `failed` so the degraded state is visible.
 
 **Other:**
 - **Metal/ggml on macOS Tahoe 26.x**: `ggml_metal_init` may fail even though native Metal works. The daemon auto-degrades and continues without LLM. Not a code bug. Check for competing GPU processes: `pgrep -la wenlan`.

@@ -153,8 +153,8 @@ fn check_service_unit_absent(unit: &std::path::Path) -> Result<()> {
     if unit.exists() {
         Err(anyhow!(
             "The Wenlan service is registered with the platform service manager at:\n  {}\n\
-             Unload it first to prevent auto-restart:\n  wenlan uninstall\n\
-             Then re-run this command. (Reinstall after with `wenlan install`.)",
+             Turn it off first to prevent auto-restart:\n  wenlan background off\n\
+             Then re-run this command. (Restart after with `wenlan background on`.)",
             unit.display()
         ))
     } else {
@@ -178,8 +178,8 @@ fn check_service_unloaded() -> Result<()> {
             Err(anyhow!(
                 "The Wenlan service is registered with the Windows Service Control Manager as \
                  '{SERVICE_LABEL}'.\n\
-                 Unload it first to prevent auto-restart:\n  wenlan uninstall\n\
-                 Then re-run this command. (Reinstall after with `wenlan install`.)"
+                 Turn it off first to prevent auto-restart:\n  wenlan background off\n\
+                 Then re-run this command. (Restart after with `wenlan background on`.)"
             ))
         } else {
             Ok(())
@@ -207,7 +207,7 @@ async fn check_daemon_not_running() -> Result<()> {
     match client.get(&probe_url).send().await {
         Ok(_) => Err(anyhow!(
             "Daemon is running on :{port}. Stop it before running backfill:\n  \
-             wenlan uninstall\n  \
+             wenlan background off\n  \
              # or: kill -9 $(lsof -ti :{port})"
         )),
         // Truly refused (nothing listening): safe to proceed.
@@ -216,7 +216,7 @@ async fn check_daemon_not_running() -> Result<()> {
         Err(e) if e.is_timeout() => Err(anyhow!(
             "Daemon probe to :{port} timed out after {}ms. \
              Daemon may be busy. Stop it explicitly and retry:\n  \
-             wenlan uninstall\n  \
+             wenlan background off\n  \
              # or: kill -9 $(lsof -ti :{port})",
             DAEMON_PROBE_TIMEOUT.as_millis()
         )),

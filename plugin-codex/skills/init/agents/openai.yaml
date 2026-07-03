@@ -1,3 +1,0 @@
-interface:
-  display_name: "Wenlan Init"
-  short_description: "Set up and verify the local Wenlan daemon and MCP bridge"

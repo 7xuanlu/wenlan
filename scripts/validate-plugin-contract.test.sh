@@ -50,9 +50,9 @@ assert_rejects "missing curate ambiguity guardrail" \
     perl -0pi -e 's/Ambiguous replies do not mutate/Ambiguous replies are clarified/' \
     "$TMPDIR_TEST/root/plugin-codex/skills/curate/SKILL.md"
 
-assert_rejects "debrief thin alias drift" \
-    perl -0pi -e 's/Pending-captures preview/Pending review/g' \
-    "$TMPDIR_TEST/root/plugin-codex/skills/debrief/SKILL.md"
+assert_rejects "setup autocomplete drift" \
+    perl -0pi -e 's/user-invocable: true/user-invocable: false/' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
 
 assert_rejects "codex resolver parity drift" \
     perl -0pi -e 's/cwd-config-default/codex-default/' \

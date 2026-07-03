@@ -69,7 +69,7 @@ pub struct Config {
     pub external_llm_model: Option<String>,
     /// Persistent cross-encoder reranker mode (`off`/`lite`/`full`). Daemon-read
     /// at startup via `reranker_mode_resolved`; the `WENLAN_RERANKER_MODE` env
-    /// var overrides it. Set with `wenlan reranker <mode>`.
+    /// var overrides it. Set with `wenlan models reranker <mode>`.
     #[serde(default)]
     pub reranker_mode: Option<String>,
 }

@@ -44,7 +44,7 @@ If `space` is empty, print:
     Resolved space: none (unscoped)
 
 Unknown spaces are not auto-created. Register a new space first with
-`wenlan space add <space>`, or omit `space` to store uncategorized.
+`wenlan spaces add <space>`, or omit `space` to store uncategorized.
 
 ## How to invoke
 

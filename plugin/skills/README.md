@@ -5,7 +5,7 @@ Claude Code workflow skills installed by the Wenlan plugin.
 These skills keep the daily interface short:
 
 ```text
-/init        verify setup end-to-end
+/setup       verify setup end-to-end
 /help        one-screen reference
 /brief       load session context
 /capture     save one durable memory
@@ -15,7 +15,6 @@ These skills keep the daily interface short:
 /curate captures|revisions   power-user deep audit; daily flow is /brief
 /forget      delete a memory by ID
 /handoff     end-of-session debrief
-/debrief     alias for /handoff
 ```
 
 The skills do not store data themselves. They guide Claude Code to use the local `wenlan-mcp` tools, which talk to the Wenlan daemon on `127.0.0.1:7878`.
@@ -24,8 +23,8 @@ The skills do not store data themselves. They guide Claude Code to use the local
 
 | Skill | Purpose |
 | --- | --- |
-| `init` | End-to-end setup verifier (daemon + MCP + round-trip). |
-| `help` | One-screen quick reference of the 11 verbs and the daily flow. |
+| `setup` | End-to-end setup verifier (local runtime + MCP + round-trip). |
+| `help` | One-screen quick reference of the 10 verbs and the daily flow. |
 | `brief` | Load working context at session start or topic shifts. |
 | `capture` | Save one durable memory: decision, lesson, gotcha, preference, fact, or correction. |
 | `recall` | Query Wenlan for focused context. |
@@ -34,7 +33,6 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | `curate` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |
 | `forget` | Delete a memory by ID. |
 | `handoff` | End-session capture for decisions, lessons, gotchas, and open threads. |
-| `debrief` | Alias for `handoff` — symmetric with `brief`. |
 
 Plugin metadata lives in [`.claude-plugin`](../.claude-plugin/README.md).
 

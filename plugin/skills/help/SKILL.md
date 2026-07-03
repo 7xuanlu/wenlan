@@ -20,7 +20,7 @@ abbreviating, no embellishing. The user is asking for the menu.
 ```
 Wenlan plugin — daily verbs
 
-  /init         set up Wenlan (auto-installs daemon + local memory)
+  /setup        set up or repair Wenlan (auto-installs local runtime)
   /brief        load identity + topic context (start of session)
   /capture <x>  save one durable memory in flow
   /recall <q>   search local memory
@@ -29,12 +29,11 @@ Wenlan plugin — daily verbs
   /curate <surface>   deep audit (surface = captures|revisions); /brief handles daily
   /forget <id>  delete a memory by ID
   /handoff      end-of-session ritual (session log + captures)
-  /debrief      alias for /handoff (brief/debrief symmetry)
   /help         this card
 
 Daily flow (~1 min overhead per session):
 
-  1. start session  →  hook auto-checks daemon, silent if up
+  1. start session  →  hook auto-checks runtime, silent if up
   2. /brief         →  ~5 s, load context
   3. work normally  →  Claude proactively /captures durable facts
   4. /recall X      →  as needed for lookups
@@ -64,11 +63,11 @@ Three classes of artifact:
   - pages:    synthesized wikis, DB + ~/.wenlan/pages/*.md projection
   - sessions: chronological narrative, ~/.wenlan/sessions/*.md only
 
-Daemon must run at 127.0.0.1:7878. Hook prints "/wenlan:init" if down.
+The local runtime must run at 127.0.0.1:7878. Hook prints "/wenlan:setup" if down.
 
 Optional upgrades for richer distill cycles:
-  wenlan model install            local Qwen, no API cost
-  wenlan key set anthropic        Anthropic API, higher quality
+  wenlan models install           local Qwen, no API cost
+  wenlan keys set anthropic       Anthropic API, higher quality
 ```
 
 ## When to use
@@ -76,9 +75,9 @@ Optional upgrades for richer distill cycles:
 - User explicitly types `/help`.
 - User asks "what can I do with wenlan", "list wenlan commands", "how
   does this plugin work", "remind me what verbs are available".
-- First session after install — print this once on `/init` success too.
+- First session after install — print this once on `/setup` success too.
 
 ## When NOT to use
 
 - Specific factual lookup → use `/recall`.
-- Setup troubleshooting → use `/init` (it diagnoses + auto-installs).
+- Setup troubleshooting → use `/setup` (it diagnoses + auto-installs).

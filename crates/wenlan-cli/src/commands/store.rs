@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `wenlan store [text] [--file <path>] [--type <type>]` — POST /api/memory/store.
+//! `wenlan capture [text] [--file <path>] [--type <type>]` — POST /api/memory/store.
 
 use anyhow::{Context, Result};
 use std::io::{IsTerminal, Read};

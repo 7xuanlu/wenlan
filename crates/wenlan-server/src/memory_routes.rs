@@ -353,7 +353,7 @@ pub async fn handle_store_memory(
     );
     if let Some(space) = ignored_unregistered_space.as_deref() {
         warnings.push(format!(
-            "Space '{space}' is not registered; stored uncategorized. Run `wenlan space add {space}` before using it."
+            "Space '{space}' is not registered; stored uncategorized. Run `wenlan spaces add {space}` before using it."
         ));
     }
 

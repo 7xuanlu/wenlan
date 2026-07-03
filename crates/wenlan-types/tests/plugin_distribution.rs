@@ -18,34 +18,79 @@ fn read_text(relative: &str) -> String {
 }
 
 #[test]
-fn plugin_init_repairs_stale_daemon_versions() {
-    let init = read_text("plugin/skills/init/SKILL.md");
+fn plugin_setup_repairs_stale_daemon_versions() {
+    let setup = read_text("plugin/skills/setup/SKILL.md");
+    let codex_setup = read_text("plugin-codex/skills/setup/SKILL.md");
     let hook = read_text("plugin/hooks/check-daemon.sh");
 
-    for needle in [
-        "Compare daemon version vs plugin manifest version",
-        "If mismatch, repair the runtime",
-        "curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${EXPECTED_VER}/install.sh | bash",
-        "export PATH=\"$HOME/.wenlan/bin:$PATH\" && wenlan setup --basic && wenlan install",
-    ] {
+    for text in [&setup, &codex_setup] {
+        for needle in [
+            "Compare daemon version vs plugin manifest version",
+            "If mismatch, repair the runtime",
+            "curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash",
+            "wenlan setup --basic",
+            "wenlan background on",
+        ] {
+            assert!(
+                text.contains(needle),
+                "/setup missing stale-daemon repair contract: {needle}"
+            );
+        }
         assert!(
-            init.contains(needle),
-            "/init missing stale-daemon repair contract: {needle}"
+            !text.contains("wenlan install"),
+            "/setup should use `wenlan background on`, not `wenlan install`"
+        );
+        assert!(
+            !text.contains("EXPECTED_VER=\"0.9.5\""),
+            "/setup must not hardcode the old Codex plugin runtime version"
+        );
+        assert!(
+            !text.contains("/init"),
+            "/setup skill should not advertise the removed /init command"
         );
     }
 
     assert!(
-        hook.contains("Run /wenlan:init to repair"),
-        "SessionStart hook should direct version mismatches to the self-healing /init entrypoint"
+        hook.contains("Run /wenlan:setup to repair"),
+        "SessionStart hook should direct version mismatches to the self-healing /setup entrypoint"
+    );
+    assert!(
+        !hook.contains("/wenlan:init"),
+        "SessionStart hook should not mention the removed /init entrypoint"
     );
     assert!(
         !hook.contains("Otherwise upgrade: curl -fsSL"),
-        "SessionStart hook should not print raw upgrade commands when /init owns repair"
+        "SessionStart hook should not print raw upgrade commands when /setup owns repair"
     );
     assert!(
         hook.contains("for i in 1 2 3") && hook.contains("curl -fsS -m 3"),
         "SessionStart hook should retry daemon health checks to avoid false down reports"
     );
+}
+
+#[test]
+fn plugin_skill_inventory_uses_setup_and_no_deprecated_aliases() {
+    for path in [
+        "plugin/skills/setup/SKILL.md",
+        "plugin-codex/skills/setup/SKILL.md",
+    ] {
+        assert!(
+            repo_root().join(path).is_file(),
+            "missing setup skill: {path}"
+        );
+    }
+
+    for path in [
+        "plugin/skills/init/SKILL.md",
+        "plugin/skills/debrief/SKILL.md",
+        "plugin-codex/skills/init/SKILL.md",
+        "plugin-codex/skills/debrief/SKILL.md",
+    ] {
+        assert!(
+            !repo_root().join(path).exists(),
+            "removed skill should not remain as an alias: {path}"
+        );
+    }
 }
 
 #[test]

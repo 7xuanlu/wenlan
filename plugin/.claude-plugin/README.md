@@ -8,15 +8,15 @@ AI work memory for Claude Code. Wenlan carries sessions, decisions, lessons, and
 0s   /plugin marketplace add 7xuanlu/claude-plugins
      /plugin install wenlan@7xuanlu
 5s   restart Claude Code
-10s  /init   auto-installs daemon if missing, configures local memory,
-            verifies daemon + MCP + round-trip, prints "Wenlan ready"
+10s  /setup  auto-installs local runtime if missing, configures local memory,
+            verifies runtime + MCP + round-trip, prints "Wenlan ready"
 30s  /brief  (or /capture <something to remember>)
 ```
 
-`/init` is self-healing — if the daemon isn't running and the `wenlan`
+`/setup` is self-healing — if the local runtime isn't running and the `wenlan`
 CLI isn't on PATH, it runs the install one-liner for you. No copy/paste,
-no restart loop. The `SessionStart` hook only nudges you toward `/init`
-if the daemon ever stops.
+no restart loop. The `SessionStart` hook only nudges you toward `/setup`
+if the runtime ever stops.
 
 ## Install
 
@@ -47,20 +47,19 @@ Reload the plugin (`/reload-plugins`) and the wrapper picks the local binary on 
 ## Daily Commands
 
 ```text
-/init       set up + verify Wenlan works (run once, or to diagnose)
+/setup      set up + verify Wenlan works (run once, or to diagnose)
 /help       one-screen reference
 /brief      load identity + topic context (start of session)
 /capture    save one durable memory in flow
 /recall     search local memory
 /distill    synthesize pages from clusters (scoped to current repo)
 /pages      browse + open distilled pages (wenlan pages)
-/review     audit pending memories
+/curate     audit pending captures or revisions
 /forget     delete a memory by ID
 /handoff    end-of-session debrief
-/debrief    alias for /handoff (brief/debrief symmetry)
 ```
 
-A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local daemon at `127.0.0.1:7878`. If down, it prints a single line: `daemon not running. Run /wenlan:init to set up.` The skill owns the install logic — the hook is just a nudge. Hook never blocks the session.
+A `SessionStart` hook (`hooks/check-daemon.sh`) probes the local runtime at `127.0.0.1:7878`. If down, it prints a single line: `local runtime not running. Run /wenlan:setup to set up.` The skill owns the install logic — the hook is just a nudge. Hook never blocks the session.
 
 ## Where your data lives
 
@@ -76,7 +75,7 @@ Browse with `open ~/.wenlan/` (Finder), `code ~/.wenlan/` (VS Code), or symlink 
 
 ## Local memory and agent-side model phases
 
-By default `/init` configures **local memory**: no model download, no API
+By default `/setup` configures **local memory**: no model download, no API
 key, no prompts. The daemon stores, embeds, dedupes, and serves hybrid
 search. Model-backed work like classification, entity extraction, page
 synthesis, and reranking stays opt-in.
@@ -102,17 +101,16 @@ the agent path when needed.
 
 The actual skill instructions live in [`../skills`](../skills):
 
-- `init`: end-to-end setup verifier (daemon + MCP + round-trip)
+- `setup`: end-to-end setup verifier (local runtime + MCP + round-trip)
 - `help`: one-screen quick reference
 - `brief`: load session context
 - `capture`: save one durable memory
 - `recall`: targeted lookup
 - `distill`: refresh wiki pages
 - `pages`: browse + open distilled pages (wenlan pages)
-- `review`: audit pending memories
+- `curate`: audit pending captures or revisions
 - `forget`: delete a memory by ID
 - `handoff`: capture end-of-session decisions, lessons, gotchas, and open threads
-- `debrief`: alias for `handoff` (brief/debrief symmetry)
 
 ## Links
 

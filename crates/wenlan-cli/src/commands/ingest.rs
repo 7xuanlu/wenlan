@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `wenlan ingest <path>` — register a Directory source and sync it now.
+//! `wenlan sources add <path>` — register a Directory source and sync it now.
 //!
 //! Thin HTTP client: POST /api/sources to register the path as a Directory
 //! source (idempotent — an already-registered path is treated as success),
@@ -11,6 +11,26 @@ use std::path::PathBuf;
 
 use crate::client::{SyncStats, WenlanClient};
 use crate::output::{print_json, OutputFormat};
+
+#[derive(clap::Subcommand)]
+pub enum SourcesCommand {
+    /// Add a folder or file source and sync it now.
+    Add {
+        /// Path to a directory or file to add as a source.
+        path: PathBuf,
+    },
+}
+
+pub async fn run_sources(
+    client: &WenlanClient,
+    format: OutputFormat,
+    quiet: bool,
+    command: SourcesCommand,
+) -> Result<()> {
+    match command {
+        SourcesCommand::Add { path } => run(client, format, quiet, path).await,
+    }
+}
 
 pub async fn run(
     client: &WenlanClient,
