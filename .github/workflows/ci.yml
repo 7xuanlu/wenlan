@@ -233,7 +233,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
         # (ONNX atexit FFI race). No --test-threads=1 needed on ubuntu.
-        run: cargo nextest run -p wenlan-core --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e --test folder_ingest_e2e
+        run: cargo nextest run -p wenlan-core --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e --test folder_ingest_e2e --test doc_reconcile_e2e
       - name: Run embedding-only eval (main only, Linux)
         if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         env:
