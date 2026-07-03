@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/7xuanlu/wenlan/compare/v0.10.0...v0.10.1) (2026-07-03)
+
+
+### Bug Fixes
+
+* clean up Wenlan command surface ([bcd56e8](https://github.com/7xuanlu/wenlan/commit/bcd56e8d51c02fd27f7fd90bc20a0a19634453e0))
+
 ## [0.10.0](https://github.com/7xuanlu/wenlan/compare/v0.9.6...v0.10.0) (2026-07-02)
 
 
