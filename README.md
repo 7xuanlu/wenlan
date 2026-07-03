@@ -12,7 +12,7 @@
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
   <a href="#codex-plugin"><img alt="Codex" src="https://img.shields.io/badge/Codex-plugin-111827"></a>
   <a href="#mcp-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
-  <a href="#desktop-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
+  <a href="#start-with-the-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
   <a href="#what-you-get"><img alt="Markdown pages" src="https://img.shields.io/badge/Markdown-pages-7C3AED"></a>
 </p>
 
@@ -28,7 +28,27 @@ Your agents capture what they learn during sessions, you add pages and sources y
 
 Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections, including a copy of the 四庫全書.
 
-[![Watch the Wenlan demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
+<p align="center">
+  <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan desktop app showing a source-cited wiki page with a source memory hover card." width="100%">
+</p>
+
+---
+
+<a id="start-with-the-app"></a>
+
+## Start with the app
+
+The desktop app is the fastest way to read and curate your source-cited wiki. Agents keep capturing and recalling context in Claude Code, Codex, Cursor, VS Code, Claude Desktop, or any MCP client, and every path talks to the same local daemon and Markdown store.
+
+Set up Wenlan once:
+
+```bash
+npx -y wenlan setup
+```
+
+Then download the current macOS Apple Silicon build: [wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg).
+
+App source: [wenlan-app](https://github.com/7xuanlu/wenlan-app). Product details: [wenlan.app](https://wenlan.app).
 
 ---
 
@@ -104,20 +124,6 @@ wenlan capture <text>
 ```
 
 CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
-
-### Desktop app
-
-[wenlan-app](https://github.com/7xuanlu/wenlan-app) is Wenlan's native desktop UI. It shares the local daemon and memory store with the CLI and MCP clients; product details live at [wenlan.app](https://wenlan.app).
-
-Set up Wenlan first:
-
-```bash
-npx -y wenlan setup   # installs and starts the local daemon
-```
-
-Then download the current macOS Apple Silicon build: [wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg).
-
----
 
 ## How Wenlan works
 

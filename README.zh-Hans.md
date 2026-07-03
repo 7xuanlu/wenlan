@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=1801030fd89db734d92bf3762877d682576b28e10dc80917b0e9172ce60d9333 -->
+<!-- README_SYNC: source=README.md sha256=73622d0240d7fb5f75687e9e0f59d369f6970a1c50b5efd70be77f48c9cd40e6 -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生时代的、会生长的个人知识库。" width="100%">
@@ -14,7 +14,7 @@
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
   <a href="#codex-plugin"><img alt="Codex" src="https://img.shields.io/badge/Codex-plugin-111827"></a>
   <a href="#mcp-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
-  <a href="#desktop-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
+  <a href="#start-with-the-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
   <a href="#what-you-get"><img alt="Markdown pages" src="https://img.shields.io/badge/Markdown-pages-7C3AED"></a>
 </p>
 
@@ -30,7 +30,27 @@
 
 Wenlan（文澜）的名字来自文澜阁，一座皇家藏书楼，它曾收藏中国规模最大的典籍之一，包括《四库全书》。
 
-[![观看 Wenlan 演示](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
+<p align="center">
+  <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan 桌面 app，展示带来源引用的 wiki 页面和 source memory 悬浮卡片。" width="100%">
+</p>
+
+---
+
+<a id="start-with-the-app"></a>
+
+## 先从桌面 app 开始
+
+桌面 app 是阅读和整理这套带来源引用 wiki 的最快入口。Agents 仍然可以在 Claude Code、Codex、Cursor、VS Code、Claude Desktop 或任何 MCP client 中捕获和召回上下文；所有路径都连接同一个本地 daemon 和 Markdown store。
+
+先设置一次 Wenlan：
+
+```bash
+npx -y wenlan setup
+```
+
+然后下载当前 macOS Apple Silicon build：[wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg)。
+
+App 源码：[wenlan-app](https://github.com/7xuanlu/wenlan-app)。产品详情：[wenlan.app](https://wenlan.app)。
 
 ---
 
@@ -108,22 +128,6 @@ wenlan capture <text>
 ```
 
 CLI 细节见：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
-
-<a id="desktop-app"></a>
-
-### 桌面应用
-
-[wenlan-app](https://github.com/7xuanlu/wenlan-app) 是 Wenlan 的原生桌面 UI。它和 CLI、MCP clients 共用本地 daemon 与记忆库；产品详情见 [wenlan.app](https://wenlan.app)。
-
-先设置 Wenlan：
-
-```bash
-npx -y wenlan setup   # 安装并启动本地 daemon
-```
-
-然后下载当前 macOS Apple Silicon build：[wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg)。
-
----
 
 ## Wenlan 如何工作
 
