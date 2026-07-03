@@ -62,7 +62,6 @@ jobs:
               - 'scripts/validate-codex-plugin-slice.py'
               - 'scripts/validate-plugin-contract.py'
               - 'scripts/validate-plugin-contract.test.sh'
-              - '.claude-plugin/**'
             npm:
               - 'crates/*/npm/**'
             windows:
@@ -412,10 +411,13 @@ jobs:
   # detect-changes.result is checked explicitly: if the path filter itself
   # fails, downstream jobs would be skipped silently and this gate would
   # have passed pre-fix. fmt + lint always run now, so `skipped` on them
-  # only occurs on release-please bot pushes (acceptable).
+  # only occurs on release-please bot pushes (acceptable). plugin + npm are
+  # path-filtered, so `skipped` is their normal state on PRs not touching
+  # those surfaces — before they were added here, a broken plugin.json or
+  # npm package could go red without blocking the merge.
   conclusion:
     name: conclusion
-    needs: [detect-changes, fmt, lint, test]
+    needs: [detect-changes, fmt, lint, test, plugin, npm]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -426,7 +428,7 @@ jobs:
             echo "detect-changes did not succeed: $dc"
             exit 1
           fi
-          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}'; do
+          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}'; do
             case "$r" in
               success|skipped) ;;
               *) echo "Upstream job failed: $r"; exit 1 ;;
