@@ -4,7 +4,13 @@
 set -euo pipefail
 
 INPUT="$(cat)"
-CMD="$(printf '%s' "$INPUT" | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("command",""))' 2>/dev/null || true)"
+# Fail CLOSED: if extraction fails (python3 missing, malformed JSON) we cannot
+# prove the command is safe — block instead of silently allowing. The old
+# `|| true` swallowed the error and let `git commit --no-verify` through.
+CMD="$(printf '%s' "$INPUT" | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("command",""))' 2>/dev/null)" || {
+  echo "🛑 block-no-verify hook: could not parse tool input — failing closed." >&2
+  exit 2
+}
 
 # Only gate actual git invocations — otherwise an innocent grep/heredoc that merely
 # mentions "--no-verify" gets blocked.
