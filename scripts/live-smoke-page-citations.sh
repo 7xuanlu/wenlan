@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Smoke test: per-claim verified citations in wiki pages — a LIVE daemon with
-# a REAL on-device model on both the distill leg (fresh page, [N] markers +
+# Live smoke test: per-claim verified citations in wiki pages — a LIVE daemon
+# with a REAL on-device model on both the distill leg (fresh page, [N] markers +
 # verified tiers) and the annotate-only backfill leg (legacy page,
 # prose-unchanged guard). L7 manual: needs the qwen3-4b GGUF already in the
 # HF cache (~2.5GB; `wenlan model install`), so it cannot run in CI. Isolated
