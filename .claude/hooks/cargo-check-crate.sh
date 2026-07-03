@@ -7,7 +7,12 @@ set -euo pipefail
 export CARGO_TARGET_DIR="${HOME}/.cache/origin-hook-target"
 
 input="$(cat)"
-file_path="$(echo "$input" | jq -r '.tool_input.file_path // empty')"
+# Loud, not silent: jq failure surfaces to Claude (PostToolUse exit 2 shows
+# stderr) instead of a fail-open crash vanishing the compile check.
+file_path="$(echo "$input" | jq -r '.tool_input.file_path // empty')" || {
+  echo "cargo-check hook: could not parse tool input (jq missing?) — compile check skipped." >&2
+  exit 2
+}
 
 # Only .rs files under crates/<name>/
 [[ "$file_path" == *.rs ]] || exit 0
