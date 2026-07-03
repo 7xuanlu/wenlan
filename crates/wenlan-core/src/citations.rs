@@ -63,6 +63,21 @@ impl CitationStats {
     }
 }
 
+/// Bidirectional lexical support between a claim span and source text: the
+/// max of (a) fraction of the SPAN's content tokens found in the source —
+/// right direction for terse claims — and (b) fraction of the SOURCE's
+/// content tokens found in the span — right direction for verbose synthesis,
+/// where elaboration vocabulary dilutes direction (a) below the floor on
+/// clearly-supported paragraphs (live smoke 2026-07-03: true claims at
+/// 0.11-0.44 one run, 0.65-0.71 the next, purely on output verbosity).
+/// A claim citing an unrelated source fails BOTH directions. Uses the shared
+/// `faithfulness::overlap_fraction` scorer in both directions — the bench
+/// itself is untouched.
+fn bidirectional_support(span: &str, source: &str) -> f64 {
+    crate::faithfulness::overlap_fraction(span, source)
+        .max(crate::faithfulness::overlap_fraction(source, span))
+}
+
 /// Normalize raw LLM marker output: `[ 1 ]` -> `[1]`, `[1,3]` -> `[1][3]`.
 fn normalize_markers(body: &str) -> String {
     let spaced_re = regex::Regex::new(r"\[\s*(\d+)\s*\]").expect("static regex");
@@ -194,7 +209,7 @@ pub fn process_citation_output(
         // Tier 1: the marker's own sentence. Tier 2 (fallback): the
         // enclosing paragraph — see the para_spans comment above.
         let marker_pos = group[0].1;
-        let sentence_verified = crate::faithfulness::overlap_fraction(sentence, &union) >= 0.5;
+        let sentence_verified = bidirectional_support(sentence, &union) >= 0.5;
         let (claim_verified, scope, claim_text) = if sentence_verified {
             (true, "sentence", sentence)
         } else {
@@ -205,7 +220,7 @@ pub fn process_citation_output(
                 .copied()
                 .unwrap_or((0, bare_body.len()));
             let paragraph = bare_body[p_start..p_end].trim();
-            let para_verified = crate::faithfulness::overlap_fraction(paragraph, &union) >= 0.5;
+            let para_verified = bidirectional_support(paragraph, &union) >= 0.5;
             (para_verified, "paragraph", paragraph)
         };
         if claim_verified {
@@ -218,7 +233,7 @@ pub fn process_citation_output(
             occurrence += 1;
             if let Some(src) = sources.get((n - 1) as usize) {
                 // Audit score at the scope that decided the status.
-                let score = crate::faithfulness::overlap_fraction(claim_text, &src.text);
+                let score = bidirectional_support(claim_text, &src.text);
                 citations.push(PageCitation {
                     occurrence,
                     marker: n,
@@ -526,6 +541,21 @@ mod tests {
     }
 
     #[test]
+    fn verbose_claim_verifies_via_source_coverage() {
+        // Verbose synthesis: the sentence contains the WHOLE source fact plus
+        // elaboration vocabulary that dilutes the claim-token direction below
+        // the floor. The source-coverage direction (all source tokens present
+        // in the span) verifies it.
+        let body = "Specifically, the daemon binds to port 7878 by default, \
+                    which reviewers consider a sensible hardening choice overall.[1]";
+        let (_o, cites, _s) = process_citation_output(body, &srcs());
+        assert_eq!(cites.len(), 1);
+        assert_eq!(cites[0].status, "verified");
+        assert_eq!(cites[0].scope, "sentence");
+        assert!(cites[0].score >= 0.5);
+    }
+
+    #[test]
     fn elaboration_sentence_verifies_at_paragraph_scope() {
         // Small models attach the marker to a paragraph's closing
         // elaboration sentence; the fact lives in the preceding sentence.
@@ -541,11 +571,12 @@ mod tests {
 
     #[test]
     fn multi_marker_claim_verified_against_union() {
-        // Claim draws half its tokens from each source: fails each alone, passes the union.
+        // Claim draws half its tokens from each source: the claim-token
+        // direction fails each source alone but passes the union.
         let body = "The daemon port 7878 uses BGE-Base embeddings with 768 dimensions.[1][2]";
         let (_o, cites, _s) = process_citation_output(body, &srcs());
         assert!(cites.iter().all(|c| c.status == "verified"));
-        assert!(cites[0].score < 0.5 || cites[1].score < 0.5); // per-source audit scores can sit below the floor
+        assert!(cites.iter().all(|c| c.score > 0.0)); // per-source audit scores populated
     }
 
     #[test]
