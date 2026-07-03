@@ -43,6 +43,10 @@ lru = { workspace = true }
 
 # Markdown chunking (PR #57, re-hosted from app to wenlan-core via PR #58 merge)
 text-splitter = { version = "0.29.3", features = ["markdown", "tokenizers"] }
+# BGE tokenizer for token-aware chunk sizing (loaded from FastEmbed's cache).
+# Matches text-splitter's own tokenizers feature (0.22, onig) so no new crates
+# are pulled into the resolved graph — it's already present transitively.
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 
 # System detection
 sysinfo = { workspace = true }
@@ -87,3 +91,7 @@ temp-env = { version = "0.3", features = ["async_closure"] }
 # test-util enables tokio::test(start_paused) for deterministic timeout tests
 # (the `full` feature deliberately excludes test-util). Test-only.
 tokio = { workspace = true, features = ["test-util"] }
+# lopdf generates byte-valid PDF fixtures for sources::directory tests (the same
+# lopdf pdf-extract parses with). default-features=false keeps it to the writer
+# path only, so no new crates enter the graph (mirrors the tokenizers/tempfile note).
+lopdf = { version = "0.38", default-features = false }

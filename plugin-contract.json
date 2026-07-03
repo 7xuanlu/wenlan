@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "description": "Shared Wenlan plugin contract for the Claude Code and Codex plugin surfaces. This is an inventory and drift guard, not a generator.",
+  "surfaces": {
+    "claude": {
+      "plugin_root": "plugin",
+      "manifest_path": "plugin/.claude-plugin/plugin.json",
+      "manifest_name": "wenlan",
+      "mcp_config_path": "plugin/.mcp.json",
+      "mcp_server_name": "wenlan",
+      "mcp_command": "${CLAUDE_PLUGIN_ROOT}/bin/wenlan-mcp-runner.sh",
+      "skill_mcp_tool_prefix": "mcp__plugin_wenlan_wenlan__",
+      "runner_path": "plugin/bin/wenlan-mcp-runner.sh",
+      "agent_name": {
+        "mode": "wenlan_mcp_stdio_default",
+        "value": "claude-code"
+      }
+    },
+    "codex": {
+      "plugin_root": "plugin-codex",
+      "manifest_path": "plugin-codex/.codex-plugin/plugin.json",
+      "manifest_name": "wenlan",
+      "manifest_skills": "./skills/",
+      "manifest_mcp_servers": "./.mcp.json",
+      "mcp_config_path": "plugin-codex/.mcp.json",
+      "mcp_server_name": "wenlan",
+      "mcp_command": "./bin/wenlan-mcp-runner.sh",
+      "skill_mcp_tool_prefix": "mcp__wenlan__",
+      "runner_path": "plugin-codex/bin/wenlan-mcp-runner.sh",
+      "agent_name": {
+        "mode": "runner_argument_default",
+        "env": "WENLAN_MCP_AGENT_NAME",
+        "value": "codex"
+      },
+      "marketplace": {
+        "path": ".agents/plugins/marketplace.json",
+        "name": "wenlan-local",
+        "plugin_name": "wenlan",
+        "source": "local",
+        "source_path": "./plugin-codex",
+        "policy_installation": "AVAILABLE",
+        "policy_authentication": "ON_INSTALL",
+        "category": "Productivity"
+      }
+    }
+  },
+  "skills": [
+    {
+      "name": "init",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "brief",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "capture",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "curate",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "debrief",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "distill",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "forget",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "handoff",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "help",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "pages",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
+      "name": "recall",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    }
+  ]
+}

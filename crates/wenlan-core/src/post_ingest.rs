@@ -738,6 +738,7 @@ mod tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
         }
     }
 

@@ -60,7 +60,7 @@ where
 
 /// Return the effective space for a tool call: when locked, always the
 /// locked value (warns if model attempted to override); otherwise the
-/// inbound value passed by the model.
+/// non-empty inbound value passed by the model.
 pub fn effective_space(inbound: &Option<String>) -> Option<String> {
     if let Some(locked) = crate::lock_state::locked_space() {
         if let Some(passed) = inbound.as_ref() {
@@ -74,7 +74,11 @@ pub fn effective_space(inbound: &Option<String>) -> Option<String> {
         }
         Some(locked)
     } else {
-        inbound.clone()
+        inbound
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
     }
 }
 
@@ -4679,6 +4683,28 @@ mod tests {
         crate::lock_state::init_from_env();
 
         let inbound: Option<String> = None;
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn unlocked_empty_inbound_yields_none() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("WENLAN_SPACE");
+        crate::lock_state::init_from_env();
+
+        let inbound = Some(String::new());
+        let resolved = effective_space(&inbound);
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn unlocked_whitespace_inbound_yields_none() {
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("WENLAN_SPACE");
+        crate::lock_state::init_from_env();
+
+        let inbound = Some("   ".to_string());
         let resolved = effective_space(&inbound);
         assert_eq!(resolved, None);
     }

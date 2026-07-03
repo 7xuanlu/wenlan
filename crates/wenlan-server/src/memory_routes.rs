@@ -23,6 +23,42 @@ use wenlan_types::responses::{
 };
 use wenlan_types::sources::{stability_tier, MemoryType, RawDocument, StabilityTier};
 
+pub(crate) async fn registered_request_space(
+    db: &wenlan_core::db::MemoryDB,
+    requested: &Option<String>,
+    context: &str,
+) -> Result<Option<String>, ServerError> {
+    let proposed = requested
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let registered = db
+        .registered_space_or_none(requested.as_deref())
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    if registered.is_none() {
+        if let Some(space) = proposed {
+            tracing::warn!(
+                "[memory] ignoring unregistered space {:?} for {}; using unscoped fallback",
+                space,
+                context
+            );
+        }
+    }
+    Ok(registered)
+}
+
+pub(crate) async fn registered_read_space(
+    db: &wenlan_core::db::MemoryDB,
+    requested: &Option<String>,
+    context: &str,
+) -> Result<Option<String>, ServerError> {
+    if requested.as_deref().map(str::trim) == Some("uncategorized") {
+        return Ok(Some("uncategorized".to_string()));
+    }
+    registered_request_space(db, requested, context).await
+}
+
 // ===== Profile Types =====
 
 #[derive(Debug, Serialize)]
@@ -176,6 +212,36 @@ pub async fn handle_store_memory(
     if req.space.is_none() {
         req.space = header_space;
     }
+    let requested_space = req
+        .space
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let ignored_unregistered_space = if let Some(space) = requested_space {
+        let db = {
+            let s = state.read().await;
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        };
+        if let Some(registered_space) = db
+            .registered_space_or_none(Some(&space))
+            .await
+            .map_err(|e| ServerError::Internal(e.to_string()))?
+        {
+            req.space = Some(registered_space);
+            None
+        } else {
+            tracing::warn!(
+                "[memory] ignoring unregistered space {:?}; storing memory uncategorized",
+                space
+            );
+            req.space = None;
+            Some(space)
+        }
+    } else {
+        req.space = None;
+        None
+    };
     let trimmed_content = req.content.trim();
     if trimmed_content.len() < 10 {
         return Err(ServerError::ValidationError(
@@ -280,11 +346,16 @@ pub async fn handle_store_memory(
     let caller_supplied_structured_fields = req.structured_fields.is_some();
 
     // Phase 2b-validate: split into warnings (schema-validation only) and extraction_method (status label).
-    let (warnings, extraction_method) = compute_warnings_and_extraction(
+    let (mut warnings, extraction_method) = compute_warnings_and_extraction(
         extracted_fields.as_deref(),
         req.structured_fields.as_ref(),
         &memory_type_str,
     );
+    if let Some(space) = ignored_unregistered_space.as_deref() {
+        warnings.push(format!(
+            "Space '{space}' is not registered; stored uncategorized. Run `wenlan space add {space}` before using it."
+        ));
+    }
 
     // Phase 2c: Entity resolution
     let resolved_entity_id = if let Some(ref direct_id) = req.entity_id {
@@ -389,6 +460,7 @@ pub async fn handle_store_memory(
             .or(extracted_fields),
         retrieval_cue: req.retrieval_cue.clone().or(extracted_cue),
         source_text: None,
+        content_hash: None,
     };
 
     // Pre-chunk locally so we know chunks_created for the response even
@@ -565,14 +637,6 @@ pub async fn handle_store_memory(
             .map_err(|e| ServerError::IngestFailed(e.to_string()))?
     };
 
-    if let Some(ref domain) = final_domain {
-        if let Some(db) = db_fallback.as_ref() {
-            if let Err(e) = db.auto_create_space_if_needed(domain).await {
-                tracing::warn!("[memory] auto-create space failed: {e}");
-            }
-        }
-    }
-
     if chunks_created == 0 {
         return Err(ServerError::ValidationError(
             "Memory produced no indexable content after processing".into(),
@@ -650,6 +714,7 @@ pub async fn handle_store_memory(
         let entity_id_clone = resolved_entity_id.clone();
         let initial_memory_type = memory_type_str.clone();
         let initial_domain = final_domain.clone();
+        let rejected_explicit_domain = ignored_unregistered_space.is_some();
         // Already moved into the doc above — rebuild from the same formula
         // the RawDocument constructor used.
         let initial_supersede_mode = if memory_type_str == "decision" {
@@ -693,6 +758,7 @@ pub async fn handle_store_memory(
                 let opts = wenlan_core::ingest::EnrichmentOpts {
                     initial_memory_type: initial_memory_type.clone(),
                     initial_domain: initial_domain.clone(),
+                    rejected_explicit_domain,
                     initial_supersede_mode: initial_supersede_mode.clone(),
                     initial_structured_fields: initial_structured_fields.clone(),
                     agent_supplied_memory_type,
@@ -836,17 +902,18 @@ pub async fn handle_search_memory(
         req.space = header_space;
     }
     let start = std::time::Instant::now();
-
-    let results = {
+    let (db, reranker) = {
         // Snapshot the Arcs we need before any await so we never hold the
         // read guard across the search call (LLM reranker or model load can
         // be slow; see AGENTS.md "Async and locking" guidance).
-        let (db, reranker) = {
-            let s = state.read().await;
-            let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
-            let reranker = s.reranker.clone();
-            (db, reranker)
-        };
+        let s = state.read().await;
+        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
+        let reranker = s.reranker.clone();
+        (db, reranker)
+    };
+    req.space = registered_read_space(&db, &req.space, "search_memory").await?;
+
+    let results = {
         if req.rerank {
             if reranker.is_none() {
                 tracing::warn!(
@@ -1028,6 +1095,7 @@ pub async fn handle_list_memories(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     }; // guard dropped here
+    req.space = registered_read_space(&db, &req.space, "list_memories").await?;
     let memories = db
         .list_filtered_confirmed(
             Some("memory"),
@@ -1107,6 +1175,7 @@ pub async fn handle_create_entity(
             .cloned()
             .ok_or(ServerError::DbNotInitialized)?
     };
+    req.space = registered_request_space(&db, &req.space, "create_entity").await?;
     let result = wenlan_core::post_write::create_entity(&db, req, &agent).await?;
     Ok(Json(CreateEntityResponse {
         id: result.id,
@@ -1336,8 +1405,11 @@ pub async fn handle_list_entities(
     if req.space.is_none() {
         req.space = header_space;
     }
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    req.space = registered_read_space(&db, &req.space, "list_entities").await?;
     let entities = db
         .list_entities(req.entity_type.as_deref(), req.space.as_deref())
         .await
@@ -1754,8 +1826,9 @@ pub async fn handle_get_nurture_cards(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let space = registered_read_space(&db, &query.space, "nurture").await?;
     let cards = db
-        .get_nurture_cards(query.limit, query.space.as_deref())
+        .get_nurture_cards(query.limit, space.as_deref())
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(NurtureCardsResponse { cards }))
@@ -1790,7 +1863,7 @@ pub async fn handle_list_pages(
     let space = params
         .get("space")
         .or_else(|| params.get("domain"))
-        .map(|s| s.as_str());
+        .cloned();
     let limit: usize = params
         .get("limit")
         .and_then(|l| l.parse().ok())
@@ -1800,10 +1873,13 @@ pub async fn handle_list_pages(
         .and_then(|o| o.parse().ok())
         .unwrap_or(0);
 
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let space = registered_read_space(&db, &space, "list_pages").await?;
     let pages = db
-        .list_pages_by_space(status, space, limit, offset)
+        .list_pages_by_space(status, space.as_deref(), limit, offset)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "pages": pages })))
@@ -1944,16 +2020,6 @@ pub async fn handle_create_page(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
-    // Apply X-Origin-Space header as fallback only when body omits `space`.
-    // Clone before consuming so workspace fallback can use the same value.
-    if req.space.is_none() {
-        req.space = header_space.clone();
-    }
-    // Apply X-Origin-Space header as fallback for `workspace` as well.
-    // `workspace` is the P3 dedicated scope axis; `space` is the category column.
-    if req.workspace.is_none() {
-        req.workspace = header_space;
-    }
     let agent = extract_agent_name(&headers, None);
     let db = {
         let s = state.read().await;
@@ -1961,6 +2027,22 @@ pub async fn handle_create_page(
             .cloned()
             .ok_or(ServerError::DbNotInitialized)?
     };
+
+    // Apply X-Origin-Space header as fallback only when body omits `space`.
+    // Clone before consuming so workspace fallback can use the same value.
+    if req.space.is_none() {
+        req.space = header_space.clone();
+    }
+    // HTTP/MCP `space` remains the legacy scope input. Persist it only when it
+    // names a registered space, and mirror it to `workspace` for P3 scoping when
+    // no explicit workspace was supplied.
+    req.space = registered_request_space(&db, &req.space, "create_page space").await?;
+    if req.workspace.is_none() {
+        req.workspace = req.space.clone();
+    } else {
+        req.workspace =
+            registered_request_space(&db, &req.workspace, "create_page workspace").await?;
+    }
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
     let result =
         wenlan_core::post_write::create_page(&db, req, &agent, Some(knowledge_path.as_path()))
@@ -2339,7 +2421,10 @@ pub async fn handle_set_document_space(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    db.update_memory_space(&source_id, &req.space_name)
+    let requested_space = Some(req.space_name);
+    let registered_space =
+        registered_request_space(&db, &requested_space, "set_document_space").await?;
+    db.update_memory_space_opt(&source_id, registered_space.as_deref())
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
@@ -2620,7 +2705,9 @@ pub async fn handle_update_memory(
             .map_err(|e| ServerError::Internal(e.to_string()))?;
     }
     if let Some(space) = &req.space {
-        db.update_memory_space(&id, space)
+        let registered_space =
+            registered_request_space(&db, &Some(space.clone()), "update_memory").await?;
+        db.update_memory_space_opt(&id, registered_space.as_deref())
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?;
     }
@@ -2719,6 +2806,7 @@ pub async fn handle_list_decisions(
         .get("space")
         .or_else(|| params.get("domain"))
         .cloned();
+    let space = registered_read_space(&db, &space, "decisions").await?;
     let limit: usize = params
         .get("limit")
         .and_then(|v| v.parse().ok())
@@ -3772,6 +3860,7 @@ mod partition_pages_tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 0,
             pending_revision: false,

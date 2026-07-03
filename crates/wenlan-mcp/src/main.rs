@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use rmcp::{transport::stdio, ServiceExt};
 use wenlan_mcp::client::{discover_origin_url, WenlanClient};
 use wenlan_mcp::tools::{TransportMode, WenlanMcpServer};
-use wenlan_mcp::{auth, serve, token};
+use wenlan_mcp::{serve, token};
 
 #[derive(Parser)]
 #[command(
@@ -20,6 +20,10 @@ struct Cli {
     /// Wenlan server URL (e.g. http://127.0.0.1:7878). Auto-discovers if not set.
     #[arg(long, global = true)]
     origin_url: Option<String>,
+
+    /// Agent name for source_agent on writes.
+    #[arg(long, global = true)]
+    agent_name: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -51,10 +55,6 @@ struct ServeArgs {
     /// Disable authentication (only allowed on loopback)
     #[arg(long)]
     no_auth: bool,
-
-    /// Agent name for source_agent on writes
-    #[arg(long, default_value = "remote-mcp")]
-    agent_name: String,
 
     /// User ID for multi-user/cross-device support (optional)
     #[arg(long)]
@@ -110,17 +110,30 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        None => run_stdio(cli.origin_url).await,
-        Some(Commands::Serve(args)) => run_serve(args, cli.origin_url).await,
+        None => run_stdio(cli.origin_url, effective_agent_name(cli.agent_name, None)).await,
+        Some(Commands::Serve(args)) => {
+            let agent_name = effective_agent_name(cli.agent_name, Some(&args));
+            run_serve(args, cli.origin_url, agent_name).await
+        }
         Some(Commands::Token(args)) => run_token(args),
     }
 }
 
-async fn run_stdio(origin_url: Option<String>) -> anyhow::Result<()> {
+fn effective_agent_name(agent_name: Option<String>, serve_args: Option<&ServeArgs>) -> String {
+    agent_name.unwrap_or_else(|| {
+        if serve_args.is_some() {
+            "remote-mcp".into()
+        } else {
+            "claude-code".into()
+        }
+    })
+}
+
+async fn run_stdio(origin_url: Option<String>, agent_name: String) -> anyhow::Result<()> {
     let base_url = discover_origin_url(origin_url);
     tracing::info!("Connecting to Wenlan at {}", base_url);
 
-    let client = WenlanClient::new(base_url).with_agent_name("claude-code".into());
+    let client = WenlanClient::new(base_url).with_agent_name(agent_name.clone());
 
     if let Some(msg) = client.version_handshake().await {
         tracing::warn!("{msg}");
@@ -134,7 +147,7 @@ async fn run_stdio(origin_url: Option<String>) -> anyhow::Result<()> {
         }
     });
 
-    let server = WenlanMcpServer::new(client, TransportMode::Stdio, "claude-code".into(), None);
+    let server = WenlanMcpServer::new(client, TransportMode::Stdio, agent_name, None);
     let service = server
         .serve(stdio())
         .await
@@ -145,7 +158,11 @@ async fn run_stdio(origin_url: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_serve(args: ServeArgs, origin_url: Option<String>) -> anyhow::Result<()> {
+async fn run_serve(
+    args: ServeArgs,
+    origin_url: Option<String>,
+    agent_name: String,
+) -> anyhow::Result<()> {
     let resolved_token = resolve_token(&args)?;
 
     if resolved_token.is_none() && !args.no_auth {
@@ -159,7 +176,7 @@ async fn run_serve(args: ServeArgs, origin_url: Option<String>) -> anyhow::Resul
             .host
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid host address: {}", args.host))?;
-        if !auth::is_loopback(&host_addr) {
+        if !host_addr.is_loopback() {
             anyhow::bail!(
                 "--no-auth is only allowed on loopback addresses (127.0.0.1 or ::1), not {}",
                 args.host
@@ -196,7 +213,7 @@ async fn run_serve(args: ServeArgs, origin_url: Option<String>) -> anyhow::Resul
         host: args.host,
         origin_url: base_url,
         token: resolved_token,
-        agent_name: args.agent_name,
+        agent_name,
         user_id: args.user_id,
         allowed_origins,
     };
@@ -244,5 +261,53 @@ fn run_token(args: TokenArgs) -> anyhow::Result<()> {
             eprintln!("Use with: wenlan-mcp serve --token-file {}", path.display());
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_stdio_agent_name_override() {
+        let cli = Cli::try_parse_from(["wenlan-mcp", "--agent-name", "codex"])
+            .expect("parse stdio agent override");
+
+        assert_eq!(cli.agent_name.as_deref(), Some("codex"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn serve_default_agent_name_stays_remote_mcp() {
+        let cli = Cli::try_parse_from(["wenlan-mcp", "serve", "--no-auth"])
+            .expect("parse serve defaults");
+
+        let Some(Commands::Serve(args)) = cli.command else {
+            panic!("expected serve command");
+        };
+
+        assert_eq!(
+            effective_agent_name(cli.agent_name, Some(&args)),
+            "remote-mcp"
+        );
+    }
+
+    #[test]
+    fn serve_accepts_global_agent_name_override() {
+        let cli = Cli::try_parse_from([
+            "wenlan-mcp",
+            "serve",
+            "--no-auth",
+            "--agent-name",
+            "chatgpt",
+        ])
+        .expect("parse serve agent override");
+
+        let Some(Commands::Serve(args)) = cli.command else {
+            panic!("expected serve command");
+        };
+
+        assert_eq!(effective_agent_name(cli.agent_name, Some(&args)), "chatgpt");
     }
 }

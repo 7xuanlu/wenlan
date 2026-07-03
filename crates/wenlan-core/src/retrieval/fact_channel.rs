@@ -153,6 +153,7 @@ mod tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 1,
             pending_revision: false,

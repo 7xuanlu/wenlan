@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.10.0](https://github.com/7xuanlu/wenlan/compare/v0.9.6...v0.10.0) (2026-07-02)
+
+
+### Features
+
+* folder & multi-format document ingest (L1) ([#320](https://github.com/7xuanlu/wenlan/issues/320)) ([4cdc456](https://github.com/7xuanlu/wenlan/commit/4cdc45613fac42c51336b295c39295fdc859a569))
+
+
+### Bug Fixes
+
+* port pages skill to Codex plugin ([#318](https://github.com/7xuanlu/wenlan/issues/318)) ([1d869cd](https://github.com/7xuanlu/wenlan/commit/1d869cda53c14a4b14c38cafd6f0ffa1900cc897))
+
+## [0.9.6](https://github.com/7xuanlu/wenlan/compare/v0.9.5...v0.9.6) (2026-07-01)
+
+
+### Bug Fixes
+
+* add Codex plugin install path ([eac308e](https://github.com/7xuanlu/wenlan/commit/eac308e62d3bd2c81207b846c2790c421eb0e571))
+* add Wenlan plugin shared contract ([4e786e9](https://github.com/7xuanlu/wenlan/commit/4e786e91e1d122ba0b1db6ee8efda9519f72de68))
+* stop space auto-create and cascade space moves ([993a039](https://github.com/7xuanlu/wenlan/commit/993a039267e4a6cd938fe3e0eaaf92a67dfd5cc5))
+
 ## [0.9.5](https://github.com/7xuanlu/wenlan/compare/v0.9.4...v0.9.5) (2026-06-30)
 
 

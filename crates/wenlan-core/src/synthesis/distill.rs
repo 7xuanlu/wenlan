@@ -15,8 +15,12 @@ use crate::refinery::helpers::{
 };
 use crate::sources::StabilityTier;
 use crate::synthesis::refinement_queue::{resolve_proposal, ResolveStatus};
+use std::collections::HashMap;
 use std::sync::Arc;
 use wenlan_types::requests::UpdatePageRequest;
+
+const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_NUMERATOR: usize = 1;
+const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_DENOMINATOR: usize = 2;
 
 /// What a distillation pass is scoped to. Resolved from a free-form string
 /// supplied by the user (page id, entity name, or domain value).
@@ -35,7 +39,7 @@ pub enum DistillTarget {
 /// Resolution order:
 /// 1. Strings starting with `page_` or `concept_` are treated as page ids.
 /// 2. Exact entity name match (via `MemoryDB::resolve_entity_by_name`).
-/// 3. Exact domain match (any memory with that domain).
+/// 3. Exact registered space match.
 /// 4. Otherwise `None` — caller decides whether to fail loudly or fall through.
 pub async fn resolve_distill_target(
     db: &MemoryDB,
@@ -54,7 +58,7 @@ pub async fn resolve_distill_target(
             name: s.to_string(),
         }));
     }
-    if db.space_has_memories(s).await? {
+    if db.registered_space_or_none(Some(s)).await?.is_some() {
         return Ok(Some(DistillTarget::Domain(s.to_string())));
     }
     Ok(None)
@@ -258,6 +262,165 @@ pub(crate) async fn refine_clusters_with_llm(
     }
 
     result
+}
+
+async fn cap_document_majority_clusters(
+    db: &MemoryDB,
+    clusters: Vec<crate::db::DistillationCluster>,
+    min_cluster_size: usize,
+) -> Result<Vec<crate::db::DistillationCluster>, WenlanError> {
+    let hashes = load_cluster_content_hashes(db, &clusters).await?;
+    Ok(clusters
+        .into_iter()
+        .filter_map(|cluster| cap_one_document_majority(cluster, &hashes, min_cluster_size))
+        .collect())
+}
+
+async fn load_cluster_content_hashes(
+    db: &MemoryDB,
+    clusters: &[crate::db::DistillationCluster],
+) -> Result<HashMap<String, Option<String>>, WenlanError> {
+    let mut source_ids: Vec<String> = clusters
+        .iter()
+        .flat_map(|cluster| cluster.source_ids.iter().cloned())
+        .collect();
+    source_ids.sort();
+    source_ids.dedup();
+    if source_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let placeholders = source_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT source_id, content_hash FROM memories WHERE source = 'memory' AND chunk_index = 0 AND source_id IN ({placeholders})"
+    );
+    let params: Vec<libsql::Value> = source_ids.into_iter().map(libsql::Value::Text).collect();
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(&sql, libsql::params_from_iter(params))
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("distill content_hash fetch: {e}")))?;
+
+    let mut hashes = HashMap::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("distill content_hash row: {e}")))?
+    {
+        let source_id = row.get::<String>(0).unwrap_or_default();
+        let content_hash = row.get::<Option<String>>(1).unwrap_or(None);
+        hashes.insert(source_id, content_hash);
+    }
+    Ok(hashes)
+}
+
+fn cap_one_document_majority(
+    cluster: crate::db::DistillationCluster,
+    hashes: &HashMap<String, Option<String>>,
+    min_cluster_size: usize,
+) -> Option<crate::db::DistillationCluster> {
+    let original_len = cluster.source_ids.len();
+    let mut retained: Vec<usize> = (0..original_len).collect();
+
+    loop {
+        if retained.len() < min_cluster_size {
+            log::info!(
+                "[distill] dropping document-heavy cluster after cap: {} -> {} memories (< min {})",
+                original_len,
+                retained.len(),
+                min_cluster_size
+            );
+            return None;
+        }
+
+        let Some(offending_hash) = document_majority_hash(&cluster.source_ids, hashes, &retained)
+        else {
+            break;
+        };
+
+        if let Some(pos) = retained.iter().rposition(|&idx| {
+            hash_for_source_id(&cluster.source_ids[idx], hashes) == Some(offending_hash.as_str())
+        }) {
+            retained.remove(pos);
+        } else {
+            break;
+        }
+    }
+
+    if retained.len() == original_len {
+        return Some(cluster);
+    }
+
+    let source_ids: Vec<String> = retained
+        .iter()
+        .map(|&idx| cluster.source_ids[idx].clone())
+        .collect();
+    let contents: Vec<String> = retained
+        .iter()
+        .map(|&idx| cluster.contents.get(idx).cloned().unwrap_or_default())
+        .collect();
+    let estimated_tokens = estimate_cluster_tokens(&contents);
+    log::info!(
+        "[distill] capped document-heavy cluster: {} -> {} memories",
+        original_len,
+        source_ids.len()
+    );
+
+    Some(crate::db::DistillationCluster {
+        source_ids,
+        contents,
+        entity_id: cluster.entity_id,
+        entity_name: cluster.entity_name,
+        space: cluster.space,
+        estimated_tokens,
+        centroid_embedding: cluster.centroid_embedding,
+    })
+}
+
+fn document_majority_hash(
+    source_ids: &[String],
+    hashes: &HashMap<String, Option<String>>,
+    retained: &[usize],
+) -> Option<String> {
+    let total = retained.len();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for &idx in retained {
+        if let Some(hash) = hash_for_source_id(&source_ids[idx], hashes) {
+            *counts.entry(hash).or_insert(0) += 1;
+        }
+    }
+
+    counts
+        .into_iter()
+        .filter(|(_, count)| {
+            count * DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_DENOMINATOR
+                >= total * DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_NUMERATOR
+        })
+        .max_by_key(|(_, count)| *count)
+        .map(|(hash, _)| hash.to_string())
+}
+
+fn hash_for_source_id<'a>(
+    source_id: &str,
+    hashes: &'a HashMap<String, Option<String>>,
+) -> Option<&'a str> {
+    hashes
+        .get(source_id)
+        .and_then(|hash| hash.as_deref())
+        .filter(|hash| !hash.is_empty())
+}
+
+fn estimate_cluster_tokens(contents: &[String]) -> usize {
+    contents
+        .iter()
+        .map(|content| content.len() / 4 + 15)
+        .sum::<usize>()
+        + 100
 }
 
 /// Process a single distillation cluster.
@@ -658,7 +821,7 @@ pub async fn distill_pages_scoped(
         _ => {
             // Use a generous budget so candidate discovery isn't gated by
             // a tiny on-device window we don't have anyway.
-            let mut raw_clusters = db
+            let raw_clusters = db
                 .find_distillation_clusters_scoped(
                     tuning.similarity_threshold,
                     tuning.page_min_cluster_size,
@@ -670,6 +833,9 @@ pub async fn distill_pages_scoped(
                     domain_filter.as_deref(),
                 )
                 .await?;
+            let mut raw_clusters =
+                cap_document_majority_clusters(db, raw_clusters, tuning.page_min_cluster_size)
+                    .await?;
             // Cap each memory's content snippet so the caller-facing payload
             // doesn't balloon past practical HTTP/MCP response sizes. The
             // synthesis path uses the same cap when building prompts; doing
@@ -710,9 +876,13 @@ pub async fn distill_pages_scoped(
             domain_filter.as_deref(),
         )
         .await?;
+    let raw_clusters =
+        cap_document_majority_clusters(db, raw_clusters, tuning.page_min_cluster_size).await?;
 
     // LLM cluster refinement: let LLM merge/split/rename clusters per entity
     let clusters = refine_clusters_with_llm(llm, prompts, raw_clusters, token_limit).await;
+    let clusters =
+        cap_document_majority_clusters(db, clusters, tuning.page_min_cluster_size).await?;
 
     let cluster_concurrency: usize = std::env::var("DISTILL_CLUSTER_CONCURRENCY")
         .ok()
@@ -1331,8 +1501,32 @@ pub(crate) async fn apply_merge_by_tier(
 mod tests {
     use super::*;
     use crate::llm_provider::MockProvider;
+    use crate::sources::RawDocument;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn resolve_distill_target_ignores_unregistered_memory_space() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'orphaned unregistered space content', 0, 'text', 'fact', 'ghost', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_orphan_space".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        let target = resolve_distill_target(&db, "ghost").await.unwrap();
+        assert!(
+            target.is_none(),
+            "unregistered legacy memory labels must not resolve as distill space targets: {target:?}"
+        );
+    }
 
     #[tokio::test]
     async fn recompile_single_page_re_projects_md_when_path_passed() {
@@ -1388,6 +1582,86 @@ mod tests {
         assert!(
             content.contains("recompiled body"),
             "md body should reflect LLM output"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_distill_clusters_cap_one_document_below_majority() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        let topic = "Wenlan folder ingest distillation cluster cap";
+
+        for i in 0..4 {
+            db.upsert_documents(vec![RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("book_chunk_{i}"),
+                title: format!("Book chunk {i}"),
+                content: format!("{topic} repeated book excerpt section {i}"),
+                last_modified: now + i,
+                memory_type: Some("fact".to_string()),
+                space: Some("work".to_string()),
+                entity_id: Some("ent_folder_ingest".to_string()),
+                content_hash: Some("book-content-hash".to_string()),
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        }
+
+        for i in 0..3 {
+            db.upsert_documents(vec![RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("capture_note_{i}"),
+                title: format!("Capture note {i}"),
+                content: format!("{topic} supporting capture note {i}"),
+                last_modified: now + 10 + i,
+                memory_type: Some("fact".to_string()),
+                space: Some("work".to_string()),
+                entity_id: Some("ent_folder_ingest".to_string()),
+                content_hash: None,
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        }
+
+        let prompts = PromptRegistry::default();
+        let tuning = crate::tuning::DistillationConfig {
+            similarity_threshold: 0.2,
+            page_min_cluster_size: 3,
+            max_grouped_cluster_size: 20,
+            max_unlinked_cluster_size: 20,
+            ..Default::default()
+        };
+
+        let result = distill_pages_scoped(&db, None, &prompts, &tuning, None, None)
+            .await
+            .unwrap();
+        let cluster = result
+            .pending
+            .iter()
+            .find(|cluster| {
+                cluster
+                    .source_ids
+                    .iter()
+                    .any(|id| id.starts_with("book_chunk_"))
+            })
+            .expect("expected one pending cluster containing book chunks");
+
+        let book_count = cluster
+            .source_ids
+            .iter()
+            .filter(|id| id.starts_with("book_chunk_"))
+            .count();
+        assert!(
+            book_count * 2 < cluster.source_ids.len(),
+            "one document must be capped below half of the assembled cluster: book_count={book_count}, cluster={:?}",
+            cluster.source_ids
+        );
+        assert!(
+            cluster.source_ids.len() >= tuning.page_min_cluster_size,
+            "cluster should still form when enough non-document members remain: {:?}",
+            cluster.source_ids
         );
     }
 

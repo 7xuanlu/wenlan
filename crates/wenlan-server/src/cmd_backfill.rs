@@ -148,6 +148,20 @@ fn service_unit_path() -> Result<std::path::PathBuf> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn check_service_unit_absent(unit: &std::path::Path) -> Result<()> {
+    if unit.exists() {
+        Err(anyhow!(
+            "The Wenlan service is registered with the platform service manager at:\n  {}\n\
+             Unload it first to prevent auto-restart:\n  wenlan uninstall\n\
+             Then re-run this command. (Reinstall after with `wenlan install`.)",
+            unit.display()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Returns Ok if no service manager has the origin daemon registered.
 /// Returns Err with instructions if a service unit file is present.
 fn check_service_unloaded() -> Result<()> {
@@ -174,16 +188,7 @@ fn check_service_unloaded() -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     {
         let unit = service_unit_path()?;
-        if unit.exists() {
-            Err(anyhow!(
-                "The Wenlan service is registered with the platform service manager at:\n  {}\n\
-                 Unload it first to prevent auto-restart:\n  wenlan uninstall\n\
-                 Then re-run this command. (Reinstall after with `wenlan install`.)",
-                unit.display()
-            ))
-        } else {
-            Ok(())
-        }
+        check_service_unit_absent(&unit)
     }
 }
 
@@ -224,13 +229,13 @@ async fn check_daemon_not_running() -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn check_service_unloaded_returns_ok_when_no_service_installed() {
-        // In the test environment we are unlikely to have the production service
-        // unit file at the user's data dir. If a developer has previously run
-        // `wenlan install`, this test will fail locally — that is acceptable, the
-        // failure tells them to `wenlan uninstall` first.
-        check_service_unloaded().expect("expected Ok in clean test env");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let unit = tmp.path().join("com.wenlan.server.plist");
+
+        check_service_unit_absent(&unit).expect("expected Ok for absent test unit");
     }
 
     /// Pin both copies (CLI + server) to the on-disk paths `service-manager`

@@ -1,0 +1,41 @@
+{
+  "name": "wenlan",
+  "version": "0.9.5+codex.20260702051547",
+  "description": "Codex-native workflow layer for Wenlan, the local-first personal memory layer for AI agents.",
+  "author": {
+    "name": "Qi-Xuan Lu",
+    "url": "https://github.com/7xuanlu"
+  },
+  "homepage": "https://useorigin.app",
+  "repository": "https://github.com/7xuanlu/wenlan",
+  "license": "Apache-2.0",
+  "keywords": [
+    "codex",
+    "memory",
+    "wenlan",
+    "mcp",
+    "local-first"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Wenlan",
+    "shortDescription": "Local memory workflows for Codex",
+    "longDescription": "Adds Codex-native Wenlan workflows for session briefing, memory capture, and first-run setup on top of the existing wenlan-mcp server and local daemon.",
+    "developerName": "Qi-Xuan Lu",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://useorigin.app",
+    "defaultPrompt": [
+      "Brief me with Wenlan before we start",
+      "Capture this decision in Wenlan",
+      "Check whether Wenlan is ready"
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

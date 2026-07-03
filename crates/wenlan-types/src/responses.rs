@@ -118,12 +118,40 @@ pub enum RerankerStatus {
     Failed { reason: String },
 }
 
+/// Background document-enrichment queue state, surfaced on `/api/status` so
+/// operators can see whether folder-ingest enrichment is progressing, idle, or
+/// paused on an LLM failure (waiting for a backoff retry). Mirrors the
+/// [`RerankerStatus`] tagged-enum shape.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum QueueStatus {
+    /// No documents are queued for enrichment (nothing pending, in-progress, or paused).
+    #[default]
+    Idle,
+    /// Documents are queued or being enriched. `pending` counts rows not yet done.
+    Active { pending: u64 },
+    /// At least one document is paused after an LLM failure. `reason` is that
+    /// pause's failure reason, `next_retry_at` the earliest Unix-secs retry time
+    /// (the scheduler auto-resumes once it elapses — no daemon restart needed),
+    /// and `pending` counts rows not yet done.
+    Paused {
+        reason: String,
+        pending: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_retry_at: Option<i64>,
+    },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub is_running: bool,
     pub files_indexed: u64,
     pub files_total: u64,
     pub sources_connected: Vec<String>,
+    /// Background document-enrichment queue state (folder-ingest). Additive:
+    /// defaults to `Idle` so older daemons (which omit it) deserialize cleanly.
+    #[serde(default)]
+    pub queue: QueueStatus,
     /// Reranker on the DEEP path (`/api/memory/search` with `rerank=true`). Legacy
     /// field — for `WENLAN_RERANKER_ENABLED=1` it is the configured model, exactly as before.
     #[serde(default)]
@@ -1171,6 +1199,53 @@ mod tests {
 }
 
 #[cfg(test)]
+mod queue_status_tests {
+    use super::*;
+
+    #[test]
+    fn status_response_defaults_queue_to_idle_when_absent() {
+        // Old daemons omit `queue` entirely — it must default to Idle so the
+        // wire change stays additive (a new client reads an old response).
+        let json =
+            r#"{"is_running":true,"files_indexed":0,"files_total":0,"sources_connected":[]}"#;
+        let parsed: StatusResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.queue, QueueStatus::Idle);
+    }
+
+    #[test]
+    fn queue_status_paused_round_trips_with_reason_and_retry() {
+        let s = QueueStatus::Paused {
+            reason: "analysis LLM failed".into(),
+            pending: 2,
+            next_retry_at: Some(1_712_678_400),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"state\":\"paused\""), "got: {json}");
+        assert!(
+            json.contains("\"reason\":\"analysis LLM failed\""),
+            "got: {json}"
+        );
+        assert!(json.contains("\"next_retry_at\":1712678400"), "got: {json}");
+        assert_eq!(serde_json::from_str::<QueueStatus>(&json).unwrap(), s);
+    }
+
+    #[test]
+    fn queue_status_active_round_trips() {
+        let s = QueueStatus::Active { pending: 3 };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"state\":\"active\""), "got: {json}");
+        assert!(json.contains("\"pending\":3"), "got: {json}");
+        assert_eq!(serde_json::from_str::<QueueStatus>(&json).unwrap(), s);
+    }
+
+    #[test]
+    fn queue_status_idle_serializes_state_only() {
+        let json = serde_json::to_string(&QueueStatus::Idle).unwrap();
+        assert_eq!(json, r#"{"state":"idle"}"#);
+    }
+}
+
+#[cfg(test)]
 mod reranker_status_tests {
     use super::*;
 
@@ -1193,6 +1268,7 @@ mod reranker_status_tests {
             files_indexed: 0,
             files_total: 0,
             sources_connected: vec![],
+            queue: QueueStatus::Idle,
             reranker: RerankerStatus::Active {
                 model_id: "BGERerankerBase".into(),
             },

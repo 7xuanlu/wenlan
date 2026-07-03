@@ -656,7 +656,22 @@ pub async fn import_phase3_store(
 
         let classification = classifications.get(i).cloned().unwrap_or_default();
         let memory_type = &classification.memory_type;
-        let domain = classification.space.as_deref();
+        let proposed_space = classification
+            .space
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let domain = db
+            .registered_space_or_none(classification.space.as_deref())
+            .await?;
+        if domain.is_none() {
+            if let Some(space) = proposed_space {
+                log::warn!(
+                    "[importer] ignoring unregistered classifier space {:?}; memory remains unscoped",
+                    space
+                );
+            }
+        }
         let confidence =
             compute_effective_confidence(None, Some(memory_type), "review", None, confidence_cfg);
 
@@ -676,7 +691,7 @@ pub async fn import_phase3_store(
                 ("import_batch".to_string(), batch_id.clone()),
             ]),
             memory_type: Some(memory_type.to_string()),
-            space: domain.map(|s| s.to_string()),
+            space: domain,
             source_agent: Some(source.to_string()),
             confidence: Some(confidence),
             confirmed: None,
@@ -1086,6 +1101,51 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_import_phase3_ignores_unregistered_classification_space() {
+        use std::collections::HashSet;
+
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let memories = vec![ParsedMemory {
+            content: "Classifier-proposed rogue spaces must not be persisted".to_string(),
+            extracted_date: None,
+            memory_type: None,
+        }];
+        let prepared = ImportPrepared {
+            texts: memories.iter().map(|m| m.content.clone()).collect(),
+            memories,
+            duplicates: HashSet::new(),
+        };
+        let classifications = vec![ClassificationResult {
+            memory_type: "fact".to_string(),
+            space: Some("rogue-import".to_string()),
+            ..Default::default()
+        }];
+
+        let result = import_phase3_store(
+            &db,
+            &prepared,
+            &classifications,
+            &[],
+            "test",
+            &crate::tuning::ConfidenceConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.imported, 1);
+        let source_id = format!("import_{}_0", result.batch_id);
+        let space = db.get_memory_space(&source_id).await.unwrap();
+        assert_eq!(
+            space, None,
+            "unregistered classifier spaces must not be persisted by import"
+        );
+        assert!(
+            db.get_space("rogue-import").await.unwrap().is_none(),
+            "import must not create the classifier-proposed space"
+        );
     }
 
     // ── Task 13: Bulk import writes memory_entities junction rows ─────

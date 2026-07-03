@@ -1,0 +1,3 @@
+interface:
+  display_name: "Wenlan Capture"
+  short_description: "Save a durable memory to Wenlan from the current conversation"

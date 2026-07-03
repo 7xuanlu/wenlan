@@ -2425,4 +2425,187 @@ mod tests {
             "no rows deleted -- soft-suppress only"
         );
     }
+
+    #[tokio::test]
+    async fn test_document_chunks_excluded_from_resolution_pools() {
+        let (db, _tmp) = test_db().await;
+
+        // SETUP: Create a probe memory (the incoming for resolution).
+        // This is a confirmed memory that will be used as the incoming.
+        seed_memory(
+            &db,
+            "mem_probe",
+            "I use Rust for backend services, tokio workers, and libsql persistence",
+            "fact",
+            Some("engineering"),
+            None,
+            None,
+            1_710_000_000,
+            None,
+            false,
+            "confirmed",
+        )
+        .await;
+
+        // POSITIVE CONTROL: Create a confirmed capture that is a near-duplicate of the probe.
+        // This should appear in Pool A (high cosine similarity >= 0.88).
+        // Uses the same content to ensure high similarity.
+        seed_memory(
+            &db,
+            "mem_duplicate",
+            "I use Rust for backend services, tokio workers, and libsql persistence",
+            "fact",
+            Some("engineering"),
+            None,
+            None,
+            1_710_000_050,
+            None,
+            false,
+            "confirmed",
+        )
+        .await;
+
+        // NEGATIVE CONTROL: Ingest a folder document with multiple chunks (unconfirmed).
+        // Craft the content to be a near-duplicate of the probe so that IF the
+        // `confirmed = 1` filter was removed, it WOULD surface. This ensures the test
+        // can go RED if the invariant is violated.
+        let folder_doc_body = std::iter::repeat_n(
+            "I use Rust for backend services, tokio workers, and libsql persistence",
+            10,
+        )
+        .collect::<Vec<_>>()
+        .join(" ");
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "folder_doc_1".to_string(),
+            title: "Folder Decision Notes".to_string(),
+            content: folder_doc_body,
+            memory_type: Some("fact".to_string()),
+            space: Some("engineering".to_string()),
+            source_agent: Some("folder".to_string()),
+            confirmed: None,
+            content_hash: Some("folder-hash-1".to_string()),
+            last_modified: 1_710_000_100,
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        // Verify preconditions: folder document chunks exist and are ALL unconfirmed.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND source_id = ?1",
+                libsql::params!["folder_doc_1"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let chunk_count: i64 = row.get(0).unwrap();
+        drop(rows);
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND source_id = ?1 AND confirmed IS NULL",
+                libsql::params!["folder_doc_1"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let unconfirmed_count: i64 = row.get(0).unwrap();
+        drop(rows);
+        drop(conn);
+
+        assert!(
+            chunk_count > 0,
+            "folder document must exist in memories, got {chunk_count} rows"
+        );
+        assert_eq!(
+            unconfirmed_count, chunk_count,
+            "all folder document chunks must be unconfirmed (confirmed IS NULL), \
+             got {unconfirmed_count}/{chunk_count}"
+        );
+
+        // Get the probe memory as the incoming for resolution.
+        let incoming = db
+            .get_incoming_for_resolution("mem_probe")
+            .await
+            .unwrap()
+            .expect("probe memory must be resolvable");
+
+        // Build resolution pools using the probe as the incoming.
+        // The key invariant: build_resolution_pools filters on:
+        //   chunk_index = 0 AND source = 'memory' AND confirmed = 1 AND source_id != incoming
+        // This means:
+        //   - mem_duplicate (confirmed=1, chunk_index=0) SHOULD appear in Pool A (cosine >= 0.88)
+        //   - folder_doc_1 chunks (confirmed IS NULL) are excluded by the `confirmed = 1` filter
+        let (pool_a, pool_b) = db
+            .build_resolution_pools(
+                &incoming,
+                crate::retrieval::resolve::ResolutionConfig::default(),
+            )
+            .await
+            .unwrap();
+
+        // POSITIVE CONTROL ASSERTION: mem_duplicate should appear in Pool A.
+        let pool_a_ids: Vec<&str> = pool_a.iter().map(|c| c.source_id.as_str()).collect();
+        assert!(
+            pool_a_ids.contains(&"mem_duplicate"),
+            "confirmed duplicate must appear in Pool A (cosine >= 0.88), got {pool_a_ids:?}"
+        );
+
+        // NEGATIVE CONTROL ASSERTION: folder document chunks must NOT appear in either pool.
+        // This is what we're locking: unconfirmed documents are immutable and never candidates.
+        let pool_b_ids: Vec<&str> = pool_b.iter().map(|c| c.source_id.as_str()).collect();
+
+        assert!(
+            !pool_a_ids.contains(&"folder_doc_1"),
+            "unconfirmed folder document chunks must not appear in Pool A (confirmed != 1 excludes them)"
+        );
+        assert!(
+            !pool_b_ids.contains(&"folder_doc_1"),
+            "unconfirmed folder document chunks must not appear in Pool B (confirmed != 1 excludes them)"
+        );
+
+        // REQUIREMENT (2): Exercise the refinement-queue candidate path.
+        // Call resolve_dual_pool to verify that the refinement-queue candidate selection also
+        // excludes document chunks. This uses the same build_resolution_pools query, so both
+        // entry points are protected by the same predicate.
+        let llm = stub_llm(r#"{"duplicates":[0],"invalidates":[]}"#);
+        let prompts = PromptRegistry::default();
+        let dyn_em = noop_emitter();
+
+        let _outcome =
+            temp_env::async_with_vars([("WENLAN_ENABLE_DUAL_POOL_RESOLVE", Some("1"))], async {
+                resolve_dual_pool(&db, "mem_probe", Some(&llm), &prompts, &dyn_em)
+                    .await
+                    .unwrap()
+            })
+            .await;
+
+        // Verify once more that resolve_dual_pool did not surface any folder document chunks
+        // in its candidate selection (it calls build_resolution_pools internally).
+        let (pool_a_final, pool_b_final) = db
+            .build_resolution_pools(
+                &incoming,
+                crate::retrieval::resolve::ResolutionConfig::default(),
+            )
+            .await
+            .unwrap();
+
+        let pool_a_final_ids: Vec<&str> =
+            pool_a_final.iter().map(|c| c.source_id.as_str()).collect();
+        let pool_b_final_ids: Vec<&str> =
+            pool_b_final.iter().map(|c| c.source_id.as_str()).collect();
+
+        assert!(
+            !pool_a_final_ids.contains(&"folder_doc_1"),
+            "refinement-queue path: folder document chunks must not appear in Pool A"
+        );
+        assert!(
+            !pool_b_final_ids.contains(&"folder_doc_1"),
+            "refinement-queue path: folder document chunks must not appear in Pool B"
+        );
+    }
 }

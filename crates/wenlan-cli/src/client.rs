@@ -10,6 +10,7 @@
 //! status, ping, search, context, store, list, agents.
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use wenlan_types::{
     requests::{ListMemoriesRequest, SearchRequest, StoreMemoryRequest, UpdateAgentRequest},
     responses::{
@@ -17,9 +18,26 @@ use wenlan_types::{
         MemoryDetailResponse, PendingRevisionItem, RevisionAcceptResponse, RevisionDismissResponse,
         SearchResponse, StoreMemoryResponse,
     },
+    sources::Source,
 };
 
 const DEFAULT_HOST: &str = "http://127.0.0.1:7878";
+
+/// Local mirror of the daemon's `SyncStatsResponse` (defined in `wenlan-server`,
+/// which the CLI must not depend on). Typed so envelope drift fails loud rather
+/// than silently deserializing into `serde_json::Value`. The trailing optional
+/// fields carry `#[serde(default)]` so older/leaner daemon responses parse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncStats {
+    pub files_found: usize,
+    pub ingested: usize,
+    pub skipped: usize,
+    pub errors: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<String>,
+}
 
 pub fn origin_host_from_env() -> String {
     std::env::var("WENLAN_HOST")
@@ -140,6 +158,57 @@ impl WenlanClient {
         resp.json()
             .await
             .context("parsing /api/memory/store response")
+    }
+
+    /// GET /api/sources — list registered sources.
+    pub async fn list_sources(&self) -> Result<Vec<Source>> {
+        let url = format!("{}/api/sources", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {} failed (is the daemon running?)", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json().await.context("parsing /api/sources response")
+    }
+
+    /// POST /api/sources — register a source. Returns the created `Source`.
+    pub async fn add_source(&self, source_type: &str, path: &str) -> Result<Source> {
+        let url = format!("{}/api/sources", self.base_url);
+        let req = serde_json::json!({ "source_type": source_type, "path": path });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json()
+            .await
+            .context("parsing POST /api/sources response")
+    }
+
+    /// POST /api/sources/{id}/sync — sync a registered source, returning stats.
+    pub async fn sync_source(&self, id: &str) -> Result<SyncStats> {
+        let url = format!("{}/api/sources/{}/sync", self.base_url, id);
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("POST {} failed", url))?;
+        let resp = resp
+            .error_for_status()
+            .with_context(|| format!("daemon returned error for {}", url))?;
+        resp.json()
+            .await
+            .context("parsing /api/sources/{id}/sync response")
     }
 
     /// POST /api/memory/list — list memories with optional filters.

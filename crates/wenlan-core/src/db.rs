@@ -5,6 +5,7 @@ use crate::error::WenlanError;
 use crate::events::EventEmitter;
 use crate::pages::Page;
 use crate::privacy::redact_pii;
+use crate::retrieval::document_cap::{cap_per_document, DEFAULT_PER_DOCUMENT_CAP};
 use crate::sources::{stability_tier, RawDocument};
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
@@ -34,7 +35,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 64;
+pub const SCHEMA_VERSION: u32 = 67;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -251,6 +252,19 @@ pub fn resolve_fastembed_cache_dir(db_path: &std::path::Path) -> Option<std::pat
     }
 
     None
+}
+
+/// Build the chunking engine for a DB at `db_path`, preferring token-aware
+/// sizing (the BGE tokenizer loaded from the resolved FastEmbed cache) so no
+/// embedded chunk exceeds the model's 512-token limit. Falls back to
+/// character-based sizing when the tokenizer isn't on disk (e.g. FastEmbed's
+/// default `~/.fastembed_cache` with no per-DB/shared cache resolved).
+fn build_chunker(db_path: &Path) -> ChunkingEngine {
+    resolve_fastembed_cache_dir(db_path)
+        .as_deref()
+        .and_then(crate::chunker::load_bge_tokenizer)
+        .map(ChunkingEngine::with_tokenizer)
+        .unwrap_or_default()
 }
 
 /// How many candidates to fetch from base retrieval before cross-encoder rerank.
@@ -1360,6 +1374,39 @@ pub struct FileSyncState {
     pub last_synced_at: i64,
 }
 
+/// A document queued for enrichment: the persisted state machine for per-file
+/// map-fold document enrichment with checkpoint/resume. Keyed by
+/// `(source_id, file_path)`, where `source_id` is the knowledge-source id and
+/// `file_path` identifies the file within it. Cancellation is source removal
+/// (`dequeue_by_source`), so there is no per-doc cancel API.
+#[derive(Debug, Clone)]
+pub struct DocEnrichmentQueueEntry {
+    pub source_id: String,
+    pub file_path: String,
+    /// `pending` | `in_progress` | `paused` | `done`.
+    pub status: String,
+    pub content_hash: Option<String>,
+    /// Index of the last chunk whose enrichment was committed. `-1` = none yet
+    /// (resume starts at chunk 0).
+    pub last_completed_chunk: i64,
+    pub attempt_count: i64,
+    pub next_retry_at: Option<i64>,
+    pub error_detail: Option<String>,
+    pub enqueued_at: i64,
+    pub updated_at: i64,
+}
+
+/// Aggregate state of the document-enrichment queue, for `/api/status`
+/// observability. `pending` counts rows not yet `done` (pending + in_progress +
+/// paused); `paused_reason` / `next_retry_at` describe the soonest-to-retry
+/// paused row (present only when at least one row is paused).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DocEnrichmentQueueStatus {
+    pub pending: u64,
+    pub paused_reason: Option<String>,
+    pub next_retry_at: Option<i64>,
+}
+
 // ===== Schema =====
 
 const SCHEMA: &str = "
@@ -1807,7 +1854,7 @@ impl MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder: Arc::new(std::sync::Mutex::new(embedder)),
-            chunker: ChunkingEngine::new(),
+            chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
 
@@ -1878,7 +1925,7 @@ impl MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder,
-            chunker: ChunkingEngine::new(),
+            chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
 
@@ -5976,6 +6023,143 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("m64 bump: {e}")))?;
                 log::info!("[migration] Migration 64 applied: memories.last_distilled_at column (P3 consolidation demotion)");
             }
+
+            // Migration 65 (provenance): memories.content_hash — content hash of the
+            // source file a document chunk came from (folder / multi-format ingest,
+            // decision-6). All chunks of one file share the file hash. NULL for rows
+            // that carry no file provenance. Feeds the retrieval-cap schema unification
+            // and the sub-project-2 backfill. No backfill — existing rows stay NULL.
+            if version < 65 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'content_hash'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m65 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m65 add content_hash: {e}")))?;
+                }
+                conn.execute("PRAGMA user_version = 65", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m65 bump: {e}")))?;
+                log::info!("[migration] Migration 65 applied: memories.content_hash column (folder-ingest provenance)");
+            }
+
+            // Migration 66 (folder-ingest): document_enrichment_queue — persisted
+            // state machine for per-file map-fold document enrichment. Keyed by
+            // (source_id, file_path): status (pending/in_progress/paused/done),
+            // content_hash, last_completed_chunk (resume point; -1 = none),
+            // attempt_count + next_retry_at (retry backoff), error_detail.
+            // Cancellation is source removal (dequeue_by_source); there is no
+            // per-doc cancel API. Idempotent + replay-safe via CREATE ... IF NOT
+            // EXISTS.
+            if version < 66 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS document_enrichment_queue (
+                        source_id TEXT NOT NULL,
+                        file_path TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        content_hash TEXT,
+                        last_completed_chunk INTEGER NOT NULL DEFAULT -1,
+                        attempt_count INTEGER NOT NULL DEFAULT 0,
+                        next_retry_at INTEGER,
+                        error_detail TEXT,
+                        enqueued_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        PRIMARY KEY (source_id, file_path)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_doc_enrich_queue_claim
+                        ON document_enrichment_queue(status, enqueued_at);
+                    CREATE INDEX IF NOT EXISTS idx_doc_enrich_queue_source
+                        ON document_enrichment_queue(source_id);",
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("m66 document_enrichment_queue: {e}"))
+                })?;
+                conn.execute("PRAGMA user_version = 66", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m66 bump: {e}")))?;
+                log::info!("[migration] Migration 66 applied: document_enrichment_queue table (folder-ingest enrichment state)");
+            }
+
+            // Migration 67 (folder-ingest): allow `creation_kind='source'` on pages.
+            // The document-enrichment route (`document_enrichment::run_document_enrichment`)
+            // emits exactly one SOURCE page per ingested file — its chunk-granular
+            // provenance record. Migration 61 added `creation_kind` with a CHECK list
+            // (`'distilled','authored','research','imported'`) that predates the SOURCE
+            // channel, so an unrelaxed CHECK rejects the insert.
+            //
+            // SQLite cannot ALTER a CHECK constraint in place, and a full table rebuild
+            // of `pages` would have to recreate its FTS mirror, vector index, and
+            // triggers (rowid-coupled) — high risk for a value-list widening. Instead
+            // this relaxes the constraint by editing the stored schema text directly:
+            // `PRAGMA writable_schema` + an `sqlite_master.sql` string-substitution that
+            // only widens the IN-list (no column/type/layout change, so rows, rowids,
+            // indexes, triggers, and the FTS mirror are all preserved), then
+            // `PRAGMA writable_schema=RESET` reloads the schema so the relaxed CHECK
+            // takes effect on THIS connection immediately (verified empirically).
+            // Idempotent: the substitution is a no-op once `'source'` is present, and
+            // the `version < 67` guard runs it once.
+            if version < 67 {
+                let conn = self.conn.lock().await;
+                let current_sql: Option<String> = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 read pages sql: {e}")))?;
+                    match rows
+                        .next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 pages sql row: {e}")))?
+                    {
+                        Some(row) => Some(row.get::<String>(0).map_err(|e| {
+                            WenlanError::VectorDb(format!("m67 pages sql col: {e}"))
+                        })?),
+                        None => None,
+                    }
+                };
+                if let Some(sql) = current_sql {
+                    let patched = sql.replace(
+                        "creation_kind IN ('distilled','authored','research','imported')",
+                        "creation_kind IN ('distilled','authored','research','imported','source')",
+                    );
+                    if patched != sql {
+                        conn.execute("PRAGMA writable_schema=ON", ())
+                            .await
+                            .map_err(|e| WenlanError::VectorDb(format!("m67 writable on: {e}")))?;
+                        conn.execute(
+                            "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+                            libsql::params![patched],
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m67 patch schema: {e}")))?;
+                        conn.execute("PRAGMA writable_schema=RESET", ())
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("m67 writable reset: {e}"))
+                            })?;
+                    }
+                }
+                conn.execute("PRAGMA user_version = 67", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m67 bump: {e}")))?;
+                log::info!("[migration] Migration 67 applied: pages.creation_kind CHECK widened to allow 'source' (folder-ingest SOURCE pages)");
+            }
         }
 
         Ok(())
@@ -6197,6 +6381,21 @@ impl MemoryDB {
         }
     }
 
+    pub async fn registered_space_or_none(
+        &self,
+        name: Option<&str>,
+    ) -> Result<Option<String>, WenlanError> {
+        let Some(name) = name.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+
+        if self.get_space(name).await?.is_some() {
+            Ok(Some(name.to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn create_space(
         &self,
         name: &str,
@@ -6258,12 +6457,16 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("update_space begin: {}", e)))?;
 
         let txn_result = async {
-            conn.execute(
+            let updated_spaces = conn
+                .execute(
                 "UPDATE spaces SET name = ?1, description = ?2, updated_at = ?3 WHERE name = ?4",
                 libsql::params![new_name, description, now, name],
             )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+            if updated_spaces == 0 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
 
             if name != new_name {
                 conn.execute(
@@ -6282,6 +6485,24 @@ impl MemoryDB {
                 .await
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("update_space cascade entities: {}", e))
+                })?;
+
+                conn.execute(
+                    "UPDATE pages SET space = ?1 WHERE space = ?2",
+                    libsql::params![new_name, name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("update_space cascade pages.space: {}", e))
+                })?;
+
+                conn.execute(
+                    "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                    libsql::params![new_name, name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("update_space cascade pages.workspace: {}", e))
                 })?;
             }
 
@@ -6317,6 +6538,27 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("delete_space begin: {}", e)))?;
 
         let txn_result = async {
+            let mut source_rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                    libsql::params![name],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
+            let source_count = if let Some(row) = source_rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                row.get::<i64>(0).unwrap_or(0)
+            } else {
+                0
+            };
+            drop(source_rows);
+            if source_count == 0 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
+
             match memory_action {
                 "keep" => { /* do nothing — orphan memories with space tag intact */ }
                 "unassign" => {
@@ -6357,6 +6599,36 @@ impl MemoryDB {
                 }
                 other if other.starts_with("move:") => {
                     let target = &other[5..];
+                    if target == name {
+                        return Err(WenlanError::Validation(
+                            "destination space must differ from source space".to_string(),
+                        ));
+                    }
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                            libsql::params![target],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
+                        })?;
+                    let target_count = if let Some(row) = rows
+                        .next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+                    {
+                        row.get::<i64>(0).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    drop(rows);
+                    if target_count == 0 {
+                        return Err(WenlanError::VectorDb(format!(
+                            "destination space not found: {target}"
+                        )));
+                    }
+
                     conn.execute(
                         "UPDATE memories SET space = ?1 WHERE space = ?2",
                         libsql::params![target, name],
@@ -6373,13 +6645,33 @@ impl MemoryDB {
                     .map_err(|e| {
                         WenlanError::VectorDb(format!("delete_space move entities: {}", e))
                     })?;
+                    conn.execute(
+                        "UPDATE pages SET space = ?1 WHERE space = ?2",
+                        libsql::params![target, name],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move pages.space: {}", e))
+                    })?;
+                    conn.execute(
+                        "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                        libsql::params![target, name],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move pages.workspace: {}", e))
+                    })?;
                 }
                 _ => { /* unknown action — treat as keep */ }
             }
 
-            conn.execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
+            let deleted_spaces = conn
+                .execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("delete_space: {}", e)))?;
+            if deleted_spaces != 1 {
+                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+            }
 
             conn.execute("COMMIT", ())
                 .await
@@ -6395,9 +6687,9 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Bulk-reassign all memories and entities from `from` space to `to` space.
+    /// Bulk-reassign all memories, entities, and space-scoped pages from `from` space to `to` space.
     /// Returns the number of memory rows (chunks) updated.
-    /// Auto-creates the destination space if it is not already registered.
+    /// Requires the destination space to already be registered.
     pub async fn reassign_memories_space(
         &self,
         from: &str,
@@ -6405,16 +6697,51 @@ impl MemoryDB {
     ) -> Result<usize, WenlanError> {
         let conn = self.conn.lock().await;
 
-        // Auto-create destination space if not registered yet.
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp() as f64;
-        conn.execute(
-            "INSERT OR IGNORE INTO spaces (id, name, description, suggested, sort_order, created_at, updated_at)
-             SELECT ?1, ?2, NULL, 0, COALESCE(MAX(sort_order), -1) + 1, ?3, ?3 FROM spaces",
-            libsql::params![id, to, now],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("reassign auto-create-dest: {}", e)))?;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign source lookup: {}", e)))?;
+        let source_count = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(rows);
+        if source_count == 0 {
+            return Err(WenlanError::VectorDb(format!(
+                "source space not found: {from}"
+            )));
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![to],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign target lookup: {}", e)))?;
+        let target_count = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(rows);
+        if target_count == 0 {
+            return Err(WenlanError::VectorDb(format!(
+                "destination space not found: {to}"
+            )));
+        }
 
         conn.execute("BEGIN", ())
             .await
@@ -6435,6 +6762,20 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("reassign entities: {}", e)))?;
+
+            conn.execute(
+                "UPDATE pages SET space = ?1 WHERE space = ?2",
+                libsql::params![to, from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.space: {}", e)))?;
+
+            conn.execute(
+                "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
+                libsql::params![to, from],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.workspace: {}", e)))?;
 
             conn.execute("COMMIT", ()).await.map_err(|e| {
                 WenlanError::VectorDb(format!("reassign_memories_space commit: {}", e))
@@ -6549,23 +6890,6 @@ impl MemoryDB {
             false
         };
         Ok(starred)
-    }
-
-    pub async fn auto_create_space_if_needed(&self, space: &str) -> Result<(), WenlanError> {
-        if space.is_empty() {
-            return Ok(());
-        }
-        let conn = self.conn.lock().await;
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp() as f64;
-        conn.execute(
-            "INSERT OR IGNORE INTO spaces (id, name, description, suggested, created_at, updated_at)
-             VALUES (?1, ?2, NULL, 1, ?3, ?4)",
-            libsql::params![id, space, now, now],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("auto_create_space: {}", e)))?;
-        Ok(())
     }
 
     // ===== Private Helpers =====
@@ -6921,6 +7245,14 @@ impl MemoryDB {
         source_id: &str,
         space: &str,
     ) -> Result<(), WenlanError> {
+        self.update_memory_space_opt(source_id, Some(space)).await
+    }
+
+    pub async fn update_memory_space_opt(
+        &self,
+        source_id: &str,
+        space: Option<&str>,
+    ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE memories SET space = ?1 WHERE source_id = ?2",
@@ -7100,8 +7432,8 @@ impl MemoryDB {
     /// 21=entity_id, 22=quality, 23=is_recap, 24=supersede_mode,
     /// 25=structured_fields, 26=retrieval_cue, 27=source_text,
     /// 28=version, 29=pending_revision, 30=score/distance/rank,
-    /// 31=importance (T8 salience prior — APPENDED LAST so indices 0-30 and every
-    ///   `row.get(30)` score read stay byte-identical; never insert before 30).
+    /// 31=importance, 32=event_date, 33=content_hash. Append-only after 30 so
+    /// every `row.get(30)` score read stays byte-identical; never insert before 30.
     fn row_to_search_result(row: &libsql::Row, score: f32) -> Result<SearchResult, WenlanError> {
         let source_id: String = row
             .get::<String>(3)
@@ -7157,6 +7489,7 @@ impl MemoryDB {
             structured_fields: row.get::<Option<String>>(25).unwrap_or(None),
             retrieval_cue: row.get::<Option<String>>(26).unwrap_or(None),
             source_text: row.get::<Option<String>>(27).unwrap_or(None),
+            content_hash: row.get::<Option<String>>(33).unwrap_or(None),
             raw_score: 0.0, // Set later during normalization
             version: row.get::<i64>(28).unwrap_or(1),
             pending_revision,
@@ -7211,6 +7544,10 @@ impl MemoryDB {
             structured_fields: Option<String>,
             retrieval_cue: Option<String>,
             source_text: Option<String>,
+            // Provenance: content hash of the source file (folder / multi-format
+            // ingest, decision-6). Shared by every chunk of one file; None for rows
+            // with no file provenance.
+            content_hash: Option<String>,
             // T2: parent fact source_id for a verbatim `source='episode'` row;
             // None for every ordinary memory row.
             episode_of: Option<String>,
@@ -7317,6 +7654,8 @@ impl MemoryDB {
                     source_text: derived_source_text
                         .clone()
                         .or_else(|| doc.source_text.clone()),
+                    // Provenance: every chunk of one file shares the file's content_hash.
+                    content_hash: doc.content_hash.clone(),
                     // Ordinary memory rows are never episodes.
                     episode_of: None,
                 });
@@ -7387,6 +7726,8 @@ impl MemoryDB {
                     structured_fields: None,
                     retrieval_cue: None,
                     source_text: None,
+                    // Episodes are a derived retrieval channel, not file provenance.
+                    content_hash: None,
                     episode_of: Some(doc.source_id.clone()),
                 });
             }
@@ -7589,6 +7930,10 @@ impl MemoryDB {
                 .episode_of
                 .map(|s| s.into())
                 .unwrap_or(libsql::Value::Null);
+            let content_hash_val: libsql::Value = row
+                .content_hash
+                .map(|s| s.into())
+                .unwrap_or(libsql::Value::Null);
 
             conn.execute(
                 "INSERT INTO memories (id, content, source, source_id, title, summary, url,
@@ -7597,12 +7942,12 @@ impl MemoryDB {
                     stability, supersedes, pending_revision, word_count,
                     entity_id, enrichment_status, quality, is_recap, supersede_mode,
                     structured_fields, retrieval_cue, source_text,
-                    embedding, created_at, importance, episode_of)
+                    embedding, created_at, importance, episode_of, content_hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                     ?24, ?25, ?26, ?27, ?28,
                     ?29, ?30, ?31,
-                    vector32(?32), ?33, ?34, ?35)",
+                    vector32(?32), ?33, ?34, ?35, ?36)",
                 libsql::params![
                     row.id,
                     row.content,
@@ -7638,7 +7983,8 @@ impl MemoryDB {
                     vec_str,
                     row.last_modified, // created_at = last_modified at insert time
                     importance_val,
-                    episode_of_val
+                    episode_of_val,
+                    content_hash_val
                 ],
             )
             .await
@@ -7754,7 +8100,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -7824,7 +8170,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         fts.rank,
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -7909,6 +8255,7 @@ impl MemoryDB {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        final_results = cap_per_document(final_results, DEFAULT_PER_DOCUMENT_CAP);
         final_results.truncate(limit);
 
         Ok(final_results)
@@ -8117,7 +8464,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE 1=1 {} {}",
@@ -8178,7 +8525,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         fts.rank,
-                        c.importance, c.event_date
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 {} {}
@@ -8610,6 +8957,7 @@ impl MemoryDB {
         // boosting via RRF merge, not user-facing content. Without this filter, low-value
         // observations like "Settings" consume result slots and push real memories out.
         final_results.retain(|r| r.source != "knowledge_graph");
+        final_results = cap_per_document(final_results, DEFAULT_PER_DOCUMENT_CAP);
 
         log::warn!(
             "[memory_db] timing: db_queries={}ms",
@@ -8835,7 +9183,7 @@ impl MemoryDB {
             let sql =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.source = 'episode'";
@@ -8863,7 +9211,7 @@ impl MemoryDB {
             let fts_sql =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         fts.rank,
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM memories_fts fts
                  JOIN memories c ON fts.rowid = c.rowid
                  WHERE memories_fts MATCH ?1 AND c.source = 'episode'
@@ -8994,7 +9342,7 @@ impl MemoryDB {
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
-                    0.0, c.importance
+                    0.0, c.importance, c.event_date, c.content_hash
              FROM memories c
              WHERE c.source = 'memory' AND c.chunk_index = 0 AND c.source_id IN ({placeholders})",
             placeholders = placeholders
@@ -9513,6 +9861,12 @@ impl MemoryDB {
         let (page_results, mem_results): (Vec<_>, Vec<_>) =
             results.into_iter().partition(|r| r.source == "page");
         let mut results = mem_results;
+        // Per-document cap on the deep path is a backstop: the reranker pool
+        // came through search_memory_with_cue, which already capped per
+        // document, so the CE only ever sees the RRF-best <=N chunks per doc.
+        // Survivor selection is therefore by RRF rank, not CE rank — intended
+        // (spec: post-RRF, keep best-ranked).
+        results = cap_per_document(results, DEFAULT_PER_DOCUMENT_CAP);
         // T20: per-session diversification cap (opt-in, default OFF).
         // Runs on the full reranked memory pool (pre-truncate) so backfill
         // has demoted-but-valid hits to pull from.  Pages are excluded
@@ -9711,6 +10065,7 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -9873,6 +10228,7 @@ impl MemoryDB {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -9965,6 +10321,7 @@ impl MemoryDB {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        merged = cap_per_document(merged, DEFAULT_PER_DOCUMENT_CAP);
         merged.truncate(limit);
         Ok(merged)
     }
@@ -10407,8 +10764,8 @@ impl MemoryDB {
         let placeholders: Vec<String> = (1..=ranked_anchor_ids.len())
             .map(|i| format!("?{i}"))
             .collect();
-        // Projection mirrors row_to_search_result cols 0..32 (event_date at 32),
-        // then appends me.entity_id at col 33 so we can map each edge to its anchor.
+        // Projection mirrors row_to_search_result cols 0..33 (content_hash at 33),
+        // then appends me.entity_id at col 34 so we can map each edge to its anchor.
         let sql = format!(
             "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                     c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
@@ -10417,7 +10774,7 @@ impl MemoryDB {
                     c.entity_id, c.quality, c.is_recap, c.supersede_mode,
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
-                    0.0, c.importance, c.event_date, me.entity_id
+                    0.0, c.importance, c.event_date, c.content_hash, me.entity_id
              FROM memories c
              JOIN memory_entities me ON me.memory_id = c.source_id
              WHERE me.entity_id IN ({ph})
@@ -10435,7 +10792,7 @@ impl MemoryDB {
         // Per memory, keep the best (lowest) anchor rank across its edges.
         let mut best: HashMap<String, (usize, SearchResult)> = HashMap::new();
         while let Ok(Some(row)) = rows.next().await {
-            let ent: String = row.get(33).unwrap_or_default();
+            let ent: String = row.get(34).unwrap_or_default();
             let rank = anchor_rank.get(ent.as_str()).copied().unwrap_or(usize::MAX);
             let res = match Self::row_to_search_result(&row, 0.0) {
                 Ok(r) => r,
@@ -10676,7 +11033,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0 AND c.space = ?3"
@@ -10697,7 +11054,7 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance
+                        c.importance, c.event_date, c.content_hash
                  FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
                  JOIN memories c ON c.rowid = vt.id
                  WHERE c.pending_revision = 0"
@@ -10770,7 +11127,7 @@ impl MemoryDB {
                     c.structured_fields, c.retrieval_cue, c.source_text,
                     c.version, c.pending_revision,
                     fts.rank,
-                    c.importance
+                    c.importance, c.event_date, c.content_hash
              FROM memories_fts fts
              JOIN memories c ON fts.rowid = c.rowid
              WHERE memories_fts MATCH ?1
@@ -11074,6 +11431,7 @@ impl MemoryDB {
                 structured_fields: None,
                 retrieval_cue: None,
                 source_text: None,
+                content_hash: None,
                 raw_score: 0.0,
                 version: 0,
                 pending_revision: false,
@@ -11141,6 +11499,7 @@ impl MemoryDB {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: page.relevance_score,
             version: page.version,
             pending_revision: false,
@@ -11466,6 +11825,7 @@ impl MemoryDB {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 1,
             pending_revision: false,
@@ -11528,6 +11888,37 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Rebind chunks from one source_id to another. Used for rename optimization:
+    /// when a file is renamed (old vanishes, new appears with same content_hash),
+    /// rebind the old document's chunks to the new doc_source_id instead of
+    /// delete+enqueue. Updates enrichment_steps to point to the new source_id.
+    pub async fn rebind_source_id(
+        &self,
+        source: &str,
+        old_source_id: &str,
+        new_source_id: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
+            libsql::params![
+                new_source_id.to_string(),
+                source.to_string(),
+                old_source_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id: {}", e)))?;
+        // Also update enrichment_steps to point to the new source_id.
+        conn.execute(
+            "UPDATE enrichment_steps SET source_id = ?1 WHERE source_id = ?2",
+            libsql::params![new_source_id.to_string(), old_source_id.to_string()],
+        )
+        .await
+        .ok();
+        Ok(())
+    }
+
     /// Update summary for all rows of a document.
     pub async fn update_document_summary(
         &self,
@@ -11542,6 +11933,30 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("update_summary: {}", e)))?;
+        Ok(())
+    }
+
+    /// Persist a single chunk's summary, keyed by `(source_id, chunk_index)`.
+    ///
+    /// The document-enrichment map-fold (`document_enrichment::run_document_enrichment`)
+    /// writes each chunk's per-chunk analysis here as a DURABLE checkpoint: on a
+    /// resumed run the already-analyzed chunks carry their summary, so the rolling
+    /// digest is rebuilt from stored summaries and no chunk is re-sent to the LLM.
+    /// Distinct from [`update_document_summary`], which overwrites EVERY chunk of a
+    /// document with the same value.
+    pub async fn set_chunk_summary(
+        &self,
+        source_id: &str,
+        chunk_index: i64,
+        summary: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE memories SET summary = ?1 WHERE source_id = ?2 AND chunk_index = ?3",
+            libsql::params![summary.to_string(), source_id.to_string(), chunk_index],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_chunk_summary: {}", e)))?;
         Ok(())
     }
 
@@ -11703,6 +12118,33 @@ impl MemoryDB {
             });
         }
         Ok(results)
+    }
+
+    /// Count chunks under `(source, source_id)` whose vector `embedding` column
+    /// is NULL — rows that were stored but never embedded. Zero means every
+    /// chunk of the document carries an embedding. Enumerates matching ids
+    /// rather than issuing `COUNT(*)` so it stays clear of the libSQL
+    /// COUNT-on-vector-table quirk. Used by the folder-ingest e2e test to assert
+    /// full embedding coverage after `upsert_documents`.
+    pub async fn count_unembedded_chunks(
+        &self,
+        source: &str,
+        source_id: &str,
+    ) -> Result<usize, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM memories \
+                 WHERE source = ?1 AND source_id = ?2 AND embedding IS NULL",
+                libsql::params![source.to_string(), source_id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_unembedded_chunks: {}", e)))?;
+        let mut missing = 0usize;
+        while let Ok(Some(_)) = rows.next().await {
+            missing += 1;
+        }
+        Ok(missing)
     }
 
     /// Delete memories within a time range. Returns the number deleted.
@@ -12344,10 +12786,10 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
 
-        let space_clause = if space_filter.is_some() {
-            "AND space = ?3"
-        } else {
-            ""
+        let space_clause = match space_filter {
+            Some("uncategorized") => "AND space IS NULL",
+            Some(_) => "AND space = ?3",
+            None => "",
         };
 
         let sql = format!(
@@ -12389,15 +12831,18 @@ impl MemoryDB {
             supersedes_exclusion, space_clause
         );
 
-        let mut rows = if let Some(space) = space_filter {
-            conn.query(
-                &sql,
-                libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
-            )
-            .await
-        } else {
-            conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
+        let mut rows = match space_filter {
+            Some("uncategorized") | None => {
+                conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
+                    .await
+            }
+            Some(space) => {
+                conn.query(
+                    &sql,
+                    libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
+                )
                 .await
+            }
         }
         .map_err(|e| WenlanError::VectorDb(format!("load_memories_by_type: {}", e)))?;
 
@@ -12604,9 +13049,13 @@ impl MemoryDB {
             idx += 1;
         }
         if let Some(d) = space {
-            conditions.push(format!("space = ?{}", idx));
-            params.push(d.to_string().into());
-            idx += 1;
+            if d == "uncategorized" {
+                conditions.push("space IS NULL".to_string());
+            } else {
+                conditions.push(format!("space = ?{}", idx));
+                params.push(d.to_string().into());
+                idx += 1;
+            }
         }
         if let Some(c) = confirmed {
             if c {
@@ -13811,8 +14260,8 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// True if any non-archived memory carries the given space. Used by the
-    /// distillation target resolver as a "does this scope exist" check.
+    /// True if any non-archived memory carries the given space. Legacy data probe:
+    /// registered spaces, not memory rows, define valid user-facing scopes.
     pub async fn space_has_memories(&self, space: &str) -> Result<bool, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
@@ -14715,8 +15164,9 @@ impl MemoryDB {
         &self,
         query: &str,
         limit: usize,
+        space: Option<&str>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        self.search_memory(query, limit, Some("fact"), None, None, None, None, None)
+        self.search_memory(query, limit, Some("fact"), space, None, None, None, None)
             .await
     }
 
@@ -16276,10 +16726,10 @@ impl MemoryDB {
         domain_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
-        let space_clause = if domain_filter.is_some() {
-            "AND c.space = ?2"
-        } else {
-            ""
+        let space_clause = match domain_filter {
+            Some("uncategorized") => "AND c.space IS NULL",
+            Some(_) => "AND c.space = ?2",
+            None => "",
         };
         let sql = format!(
             "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.space,
@@ -16311,11 +16761,12 @@ impl MemoryDB {
             space_clause
         );
 
-        let mut rows = if let Some(space) = domain_filter {
-            conn.query(&sql, libsql::params![limit as i64, space.to_string()])
-                .await
-        } else {
-            conn.query(&sql, libsql::params![limit as i64]).await
+        let mut rows = match domain_filter {
+            Some("uncategorized") | None => conn.query(&sql, libsql::params![limit as i64]).await,
+            Some(space) => {
+                conn.query(&sql, libsql::params![limit as i64, space.to_string()])
+                    .await
+            }
         }
         .map_err(|e| WenlanError::VectorDb(format!("get_nurture_cards: {}", e)))?;
 
@@ -16387,12 +16838,9 @@ impl MemoryDB {
         Ok(changed as usize)
     }
 
-    /// Accept a pending revision for a target memory. The `target_source_id` is the
-    /// original memory being superseded. This finds the pending revision that supersedes it,
-    /// activates it, and suppresses the original. Both UPDATEs are wrapped in BEGIN/COMMIT.
     /// Resolve an accept/dismiss `id` to `(revision_source_id, target_source_id)`.
     ///
-    /// `id` may be the revision's OWN `source_id` (exact — what the curate cards
+    /// `id` may be the revision's own `source_id` (exact: what the curate cards
     /// key on, so the named revision is acted on even when several compete for
     /// one target) or the target memory's `source_id` (legacy callers: the
     /// NEWEST pending revision superseding it, deterministic by `last_modified`).
@@ -16453,7 +16901,7 @@ impl MemoryDB {
     }
 
     /// Accept a pending revision identified by `id` (the revision's own
-    /// `source_id`, or — legacy — its target's). Activates exactly that revision
+    /// `source_id`, or legacy target source_id). Activates exactly that revision
     /// (all its chunk rows) and suppresses its target. Sibling revisions are left
     /// pending. Returns `(target_source_id, revision_source_id)`.
     pub async fn accept_pending_revision(&self, id: &str) -> Result<(String, String), WenlanError> {
@@ -16461,7 +16909,7 @@ impl MemoryDB {
         let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
             .await?
             .ok_or_else(|| {
-                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+                WenlanError::NotFound(format!("No pending revision for source_id: {id}"))
             })?;
 
         conn.execute("BEGIN", ())
@@ -16504,8 +16952,8 @@ impl MemoryDB {
     }
 
     /// Dismiss a pending revision identified by `id` (the revision's own
-    /// `source_id`, or — legacy — its target's). UNSTAGES exactly that one
-    /// revision — clears its `pending_revision` + `supersedes` so it survives
+    /// `source_id`, or legacy target source_id). Unstages exactly that one
+    /// revision: clears its `pending_revision` + `supersedes` so it survives
     /// as an independent memory (not deleted); sibling revisions and the
     /// original are untouched. Returns `(target_source_id, revision_source_id)`.
     pub async fn dismiss_pending_revision(
@@ -16516,7 +16964,7 @@ impl MemoryDB {
         let (revision_source_id, target_source_id) = Self::resolve_pending_revision(&conn, id)
             .await?
             .ok_or_else(|| {
-                WenlanError::NotFound(format!("No pending revision for source_id: {}", id))
+                WenlanError::NotFound(format!("No pending revision for source_id: {id}"))
             })?;
         // Unstage, not delete: "dismiss" means "this is NOT a revision of the
         // target", so drop the false revision link (clear pending_revision +
@@ -20340,8 +20788,17 @@ impl MemoryDB {
         offset: usize,
     ) -> Result<Vec<Page>, WenlanError> {
         let conn = self.conn.lock().await;
-        let (sql, params): (String, Vec<libsql::Value>) = if let Some(d) = space {
-            (
+        let (sql, params): (String, Vec<libsql::Value>) = match space {
+            Some("uncategorized") => (
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                 FROM pages WHERE status = ?1 AND space IS NULL ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                vec![
+                    libsql::Value::Text(status.to_string()),
+                    libsql::Value::Integer(limit as i64),
+                    libsql::Value::Integer(offset as i64),
+                ],
+            ),
+            Some(d) => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
@@ -20350,9 +20807,8 @@ impl MemoryDB {
                     libsql::Value::Integer(limit as i64),
                     libsql::Value::Integer(offset as i64),
                 ],
-            )
-        } else {
-            (
+            ),
+            None => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
@@ -20360,7 +20816,7 @@ impl MemoryDB {
                     libsql::Value::Integer(limit as i64),
                     libsql::Value::Integer(offset as i64),
                 ],
-            )
+            ),
         };
         let mut rows = conn
             .query(&sql, libsql::params_from_iter(params))
@@ -20752,9 +21208,9 @@ impl MemoryDB {
 
     /// Scoped successor to `find_matching_page` for cluster-dedup (P2).
     /// Entity-first, then embedding cosine, but constrained:
-    ///  - `workspace` (when Some): only pages whose `space` matches are eligible.
-    ///    `None` = no workspace constraint (P3 adds a dedicated workspace axis;
-    ///    until then we scope on the `space` column we have).
+    ///  - `workspace` (when Some): only pages whose `workspace` matches are eligible,
+    ///    falling back to `space` for legacy pages that predate the workspace column.
+    ///    `None` = no workspace constraint.
     ///  - only `review_status='confirmed'` pages are dedup targets (an unconfirmed
     ///    authored page is not a consolidation anchor).
     ///  - when `allow_user_edited=false`, a `user_edited` match is REFUSED (returns
@@ -20770,7 +21226,8 @@ impl MemoryDB {
         // Entity-first, but scoped.
         if let Some(eid) = entity_id {
             if let Some(page) = self.get_page_by_entity(eid).await? {
-                let ws_ok = workspace.is_none_or(|w| page.space.as_deref() == Some(w));
+                let page_workspace = page.workspace.as_deref().or(page.space.as_deref());
+                let ws_ok = workspace.is_none_or(|w| page_workspace == Some(w));
                 let status_ok = page.review_status == "confirmed";
                 if ws_ok && status_ok && (allow_user_edited || !page.user_edited) {
                     return Ok(Some(page));
@@ -20791,7 +21248,7 @@ impl MemoryDB {
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
                    AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
-                   AND (?2 IS NULL OR c.space = ?2)
+                   AND (?2 IS NULL OR COALESCE(c.workspace, c.space) = ?2)
                  ORDER BY dist ASC LIMIT 1",
                 libsql::params![emb_sql, workspace],
             )
@@ -22366,7 +22823,7 @@ impl MemoryDB {
             bind.push(libsql::Value::Text(eid.to_string()));
         }
         if let Some(d) = domain_filter {
-            sql.push_str(" AND space = ?");
+            sql.push_str(" AND COALESCE(workspace, space) = ?");
             bind.push(libsql::Value::Text(d.to_string()));
         }
         sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
@@ -22853,6 +23310,335 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("delete_all_sync_state: {}", e)))?;
         Ok(())
+    }
+
+    // ===== Document Enrichment Queue Methods =====
+
+    /// Enqueue a document for enrichment. Idempotent upsert: re-enqueuing a
+    /// live row (pending / in_progress / paused) or a `done` row with the SAME
+    /// content hash is a no-op — it never resets an in-progress checkpoint. A
+    /// `done` row with a DIFFERENT hash is reset to a fresh `pending` (changed
+    /// file → re-enrich; the chunk upsert replaces the stale chunks). A new row
+    /// starts `pending` with no completed chunk (`last_completed_chunk = -1`).
+    pub async fn enqueue_document(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        content_hash: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO document_enrichment_queue
+                (source_id, file_path, status, content_hash, last_completed_chunk,
+                 attempt_count, next_retry_at, error_detail, enqueued_at, updated_at)
+             VALUES (?1, ?2, 'pending', ?3, -1, 0, NULL, NULL, ?4, ?4)
+             ON CONFLICT(source_id, file_path) DO UPDATE SET
+                status = 'pending',
+                content_hash = excluded.content_hash,
+                last_completed_chunk = -1,
+                attempt_count = 0,
+                next_retry_at = NULL,
+                error_detail = NULL,
+                updated_at = excluded.updated_at
+             WHERE document_enrichment_queue.status = 'done'
+               AND document_enrichment_queue.content_hash IS NOT excluded.content_hash",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                content_hash.map(|s| s.to_string()),
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("enqueue_document: {}", e)))?;
+        Ok(())
+    }
+
+    /// Claim the next claimable document for enrichment (serial: at most one
+    /// row). Claimable = `pending`, or `paused` whose `next_retry_at` has
+    /// elapsed (NULL retry time = immediately eligible). Transitions the claimed
+    /// row to `in_progress` and returns it; its `last_completed_chunk` is the
+    /// resume point (start at the next chunk). Oldest-enqueued first. Returns
+    /// `None` when nothing is claimable.
+    pub async fn claim_next_pending(&self) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
+        let now = chrono::Utc::now().timestamp();
+        let (source_id, file_path) = {
+            // Hold the connection lock across SELECT + UPDATE so the claim is
+            // atomic against other claimers (single-writer daemon, serialized by
+            // the connection Mutex).
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, file_path FROM document_enrichment_queue
+                     WHERE status = 'pending'
+                        OR (status = 'paused' AND (next_retry_at IS NULL OR next_retry_at <= ?1))
+                     ORDER BY enqueued_at ASC, rowid ASC
+                     LIMIT 1",
+                    libsql::params![now],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending select: {}", e)))?;
+            let picked = match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending row: {}", e)))?
+            {
+                Some(row) => (
+                    row.get::<String>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("claim source_id: {e}")))?,
+                    row.get::<String>(1)
+                        .map_err(|e| WenlanError::VectorDb(format!("claim file_path: {e}")))?,
+                ),
+                None => return Ok(None),
+            };
+            drop(rows);
+            conn.execute(
+                "UPDATE document_enrichment_queue
+                 SET status = 'in_progress', updated_at = ?3
+                 WHERE source_id = ?1 AND file_path = ?2",
+                libsql::params![picked.0.clone(), picked.1.clone(), now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending update: {}", e)))?;
+            picked
+        };
+        self.get_queue_entry(&source_id, &file_path).await
+    }
+
+    /// Persist enrichment progress for an in-progress document after committing
+    /// a map-fold chunk. `chunk_index` is the index of the last completed chunk
+    /// (the resume point). Leaves the row `in_progress`.
+    pub async fn checkpoint_chunk(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        chunk_index: i64,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET last_completed_chunk = ?3, updated_at = ?4
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                chunk_index,
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("checkpoint_chunk: {}", e)))?;
+        Ok(())
+    }
+
+    /// Mark a document enrichment complete. Clears any retry schedule and error.
+    pub async fn mark_done(&self, source_id: &str, file_path: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET status = 'done', next_retry_at = NULL, error_detail = NULL, updated_at = ?3
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![source_id.to_string(), file_path.to_string(), now],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("mark_done: {}", e)))?;
+        Ok(())
+    }
+
+    /// Pause an interrupted / failed document enrichment, recording the reason
+    /// and when it becomes eligible for retry. Increments the attempt counter.
+    /// The checkpoint (`last_completed_chunk`) is left intact so the next claim
+    /// resumes from it.
+    pub async fn mark_paused(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        reason: &str,
+        next_retry_at: Option<i64>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE document_enrichment_queue
+             SET status = 'paused',
+                 error_detail = ?3,
+                 next_retry_at = ?4,
+                 attempt_count = attempt_count + 1,
+                 updated_at = ?5
+             WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![
+                source_id.to_string(),
+                file_path.to_string(),
+                reason.to_string(),
+                next_retry_at,
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("mark_paused: {}", e)))?;
+        Ok(())
+    }
+
+    /// Cancel all queued enrichment for a source by deleting its rows. This is
+    /// the cancellation path: removing a source cancels its pending work.
+    pub async fn dequeue_by_source(&self, source_id: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM document_enrichment_queue WHERE source_id = ?1",
+            libsql::params![source_id.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dequeue_by_source: {}", e)))?;
+        Ok(())
+    }
+
+    /// Cancel a single document's queued enrichment. Used by folder-sync
+    /// deletion propagation: when a file vanishes from a live source root, any
+    /// still-pending enrichment for it must be dequeued so the worker never
+    /// re-materializes the deleted file's chunks. No-op if the row is absent.
+    pub async fn dequeue_document(
+        &self,
+        source_id: &str,
+        file_path: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM document_enrichment_queue WHERE source_id = ?1 AND file_path = ?2",
+            libsql::params![source_id.to_string(), file_path.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("dequeue_document: {}", e)))?;
+        Ok(())
+    }
+
+    /// Fetch the current queue entry for a document, if present.
+    pub async fn get_queue_entry(
+        &self,
+        source_id: &str,
+        file_path: &str,
+    ) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id, file_path, status, content_hash, last_completed_chunk,
+                        attempt_count, next_retry_at, error_detail, enqueued_at, updated_at
+                 FROM document_enrichment_queue
+                 WHERE source_id = ?1 AND file_path = ?2",
+                libsql::params![source_id.to_string(), file_path.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_queue_entry: {}", e)))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_queue_entry row: {}", e)))?
+        {
+            Ok(Some(DocEnrichmentQueueEntry {
+                source_id: row
+                    .get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue source_id: {e}")))?,
+                file_path: row
+                    .get::<String>(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue file_path: {e}")))?,
+                status: row
+                    .get::<String>(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue status: {e}")))?,
+                content_hash: row.get::<Option<String>>(3).unwrap_or(None),
+                last_completed_chunk: row.get::<i64>(4).map_err(|e| {
+                    WenlanError::VectorDb(format!("queue last_completed_chunk: {e}"))
+                })?,
+                attempt_count: row
+                    .get::<i64>(5)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue attempt_count: {e}")))?,
+                next_retry_at: row.get::<Option<i64>>(6).unwrap_or(None),
+                error_detail: row.get::<Option<String>>(7).unwrap_or(None),
+                enqueued_at: row
+                    .get::<i64>(8)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue enqueued_at: {e}")))?,
+                updated_at: row
+                    .get::<i64>(9)
+                    .map_err(|e| WenlanError::VectorDb(format!("queue updated_at: {e}")))?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Summarize the document-enrichment queue for `/api/status`. `pending` is
+    /// the count of not-`done` rows; the paused fields describe the
+    /// soonest-to-retry paused row (a NULL `next_retry_at` — immediately
+    /// eligible — sorts first), or are `None` when nothing is paused.
+    pub async fn document_enrichment_queue_status(
+        &self,
+    ) -> Result<DocEnrichmentQueueStatus, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut pending_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM document_enrichment_queue WHERE status != 'done'",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status pending: {e}")))?;
+        let pending = pending_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status pending row: {e}")))?
+            .and_then(|r| r.get::<i64>(0).ok())
+            .unwrap_or(0)
+            .max(0) as u64;
+        drop(pending_rows);
+
+        let mut paused_rows = conn
+            .query(
+                "SELECT error_detail, next_retry_at FROM document_enrichment_queue
+                 WHERE status = 'paused'
+                 ORDER BY next_retry_at ASC, rowid ASC
+                 LIMIT 1",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status paused: {e}")))?;
+        let (paused_reason, next_retry_at) = match paused_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("queue_status paused row: {e}")))?
+        {
+            Some(row) => (
+                row.get::<Option<String>>(0).unwrap_or(None),
+                row.get::<Option<i64>>(1).unwrap_or(None),
+            ),
+            None => (None, None),
+        };
+
+        Ok(DocEnrichmentQueueStatus {
+            pending,
+            paused_reason,
+            next_retry_at,
+        })
+    }
+
+    /// On daemon startup, requeue any rows left `in_progress` by a previous run
+    /// (a crash / restart mid-enrichment). The per-chunk checkpoint
+    /// (`last_completed_chunk`) is preserved so the next claim resumes from it
+    /// instead of re-analyzing the document from scratch; the retry schedule is
+    /// cleared so the row is immediately claimable. Returns the number of rows
+    /// requeued.
+    pub async fn reset_in_progress_documents(&self) -> Result<u64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        let changed = conn
+            .execute(
+                "UPDATE document_enrichment_queue
+                 SET status = 'pending', next_retry_at = NULL, updated_at = ?1
+                 WHERE status = 'in_progress'",
+                libsql::params![now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reset_in_progress_documents: {e}")))?;
+        Ok(changed)
     }
 
     /// Check which of the given source_ids already exist in the memories
@@ -24212,7 +24998,9 @@ pub(crate) mod tests {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
             embedder: shared_embedder(),
-            chunker: ChunkingEngine::new(),
+            // Token-aware chunker matching production; falls back to char-based
+            // when the BGE tokenizer isn't in the resolved cache.
+            chunker: build_chunker(std::path::Path::new(".nonexistent")),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
         memory_db
@@ -25680,12 +26468,12 @@ pub(crate) mod tests {
         doc.quality = Some("high".to_string());
         doc.source_text = Some("ORIGINAL SOURCE TEXT MARKER".to_string());
         db.upsert_documents(vec![doc]).await.unwrap();
-        // Also set importance + event_date so the trailing columns carry non-NULL
-        // values (event_date is the last projected column, idx 32).
+        // Also set importance + event_date + content_hash so the trailing columns
+        // carry non-NULL values (content_hash is the last projected column, idx 33).
         {
             let conn = db.conn.lock().await;
             conn.execute(
-                "UPDATE memories SET importance = 9, event_date = 1779602400 WHERE source_id = 'corrupt_net'",
+                "UPDATE memories SET importance = 9, event_date = 1779602400, content_hash = 'cafebabe_corrupt_net' WHERE source_id = 'corrupt_net'",
                 libsql::params![],
             )
             .await
@@ -25739,11 +26527,18 @@ pub(crate) mod tests {
         );
         // importance (idx 31) round-trips — completes the corruption net.
         assert_eq!(r.importance, Some(9), "importance (idx 31)");
-        // event_date (idx 32) round-trips — pins the trailing-column alignment.
+        // event_date (idx 32) round-trips.
         assert_eq!(
             r.event_date,
             Some(1_779_602_400),
             "event_date (idx 32) round-trips"
+        );
+        // content_hash (idx 33) round-trips — pins the trailing-column alignment
+        // (the per-document retrieval cap keys on this exact column).
+        assert_eq!(
+            r.content_hash.as_deref(),
+            Some("cafebabe_corrupt_net"),
+            "content_hash (idx 33) round-trips"
         );
     }
 
@@ -25903,8 +26698,18 @@ pub(crate) mod tests {
             .iter()
             .find(|r| r.source_id == "inert_b")
             .map(|r| r.score);
-        assert_eq!(base_a, again_a, "flag OFF must be deterministic (a)");
-        assert_eq!(base_b, again_b, "flag OFF must be deterministic (b)");
+        let base_a = base_a.expect("inert_a should be retrievable");
+        let again_a = again_a.expect("inert_a should be retrievable on rerun");
+        let base_b = base_b.expect("inert_b should be retrievable");
+        let again_b = again_b.expect("inert_b should be retrievable on rerun");
+        assert!(
+            (base_a - again_a).abs() < 1e-6,
+            "flag OFF must be stable within score epsilon (a): {base_a} vs {again_a}"
+        );
+        assert!(
+            (base_b - again_b).abs() < 1e-6,
+            "flag OFF must be stable within score epsilon (b): {base_b} vs {again_b}"
+        );
     }
 
     /// L4 cold-start neutrality: all importance NULL + flag ON must produce the
@@ -28284,7 +29089,7 @@ pub(crate) mod tests {
         db.upsert_documents(docs).await.unwrap();
 
         let results = db
-            .search_corrections_by_topic("Rust error handling unwrap", 5)
+            .search_corrections_by_topic("Rust error handling unwrap", 5, None)
             .await
             .unwrap();
         assert!(!results.is_empty(), "should find fact memory by topic");
@@ -28712,8 +29517,10 @@ pub(crate) mod tests {
         };
         db.upsert_documents(vec![revision]).await.unwrap();
 
-        // Dismiss the revision (now = unstage: drop the false link, keep both rows)
-        db.dismiss_pending_revision("dismiss_target").await.unwrap();
+        // Dismiss the revision (unstage: drop the false link, keep both rows).
+        db.dismiss_pending_revision("dismiss_revision")
+            .await
+            .unwrap();
 
         // Original should still be visible
         let mems = db.list_memories(None, None, None, None, 100).await.unwrap();
@@ -28735,8 +29542,12 @@ pub(crate) mod tests {
                 "dismissed revision must survive as an independent memory (unstage, not delete)",
             );
         assert!(
+            ids.contains(&"dismiss_revision"),
+            "dismissed revision should survive as an independent memory"
+        );
+        assert!(
             revision.supersedes.is_none(),
-            "dismiss must clear the false supersedes link"
+            "dismiss should clear the false supersedes link"
         );
 
         // No longer a pending revision against the target.
@@ -31325,28 +32136,325 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_auto_create_space_if_needed() {
+    async fn update_space_cascades_pages_space_and_workspace() {
         let (db, _dir) = test_db().await;
-        db.run_migrations(&crate::events::NoopEmitter)
+        db.create_space("work", None, false).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_legacy_work",
+            "Legacy Work",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("work"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_workspace_work",
+            "Workspace Work",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        db.update_space("work", "career", None).await.unwrap();
+
+        let legacy = db.get_page("page_legacy_work").await.unwrap().unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("career"),
+            "rename must update legacy pages.space values"
+        );
+
+        let scoped = db.get_page("page_workspace_work").await.unwrap().unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "rename must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("career"),
+            "rename must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_space_missing_source_does_not_cascade_orphaned_rows() {
+        let (db, _dir) = test_db().await;
+        db.create_space("career", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "orphan_space_mem".to_string(),
+            title: "Orphan Space Memory".to_string(),
+            content: "orphaned memory row with a missing source space".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("ghost".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.store_entity("Ghost Entity", "person", Some("ghost"), None, None)
             .await
             .unwrap();
 
-        // First call creates a suggested space
-        db.auto_create_space_if_needed("health").await.unwrap();
-        let s = db.get_space("health").await.unwrap().unwrap();
-        assert!(s.suggested);
-        assert_eq!(s.name, "health");
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_orphan_space",
+            "Orphan Space Page",
+            None,
+            "orphaned page using pages.space as a missing source space",
+            None,
+            Some("ghost"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
 
-        // Second call is a no-op
-        db.auto_create_space_if_needed("health").await.unwrap();
-        let spaces = db.list_spaces().await.unwrap();
-        assert_eq!(spaces.len(), 1);
+        let result = db.update_space("ghost", "career", None).await;
+        assert!(result.is_err(), "renaming a missing source space must fail");
 
-        // Doesn't affect manually created spaces
-        db.create_space("work", None, false).await.unwrap();
-        db.auto_create_space_if_needed("work").await.unwrap();
-        let s = db.get_space("work").await.unwrap().unwrap();
-        assert!(!s.suggested); // Stays confirmed
+        let memory_space = db.get_memory_space("orphan_space_mem").await.unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned memory rows"
+        );
+
+        let entities = db.list_entities(None, None).await.unwrap();
+        let entity = entities
+            .iter()
+            .find(|entity| entity.name == "Ghost Entity")
+            .expect("ghost entity should exist");
+        assert_eq!(
+            entity.space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned entity rows"
+        );
+
+        let page = db.get_page("page_orphan_space").await.unwrap().unwrap();
+        assert_eq!(
+            page.space.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned pages.space rows"
+        );
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed rename must not cascade orphaned pages.workspace rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_cascades_pages_space_and_workspace() {
+        let (db, _dir) = test_db().await;
+        db.create_space("old", None, false).await.unwrap();
+        db.create_space("new", None, false).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_delete_move_legacy",
+            "Delete Move Legacy",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("old"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_delete_move_workspace",
+            "Delete Move Workspace",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("old"),
+        )
+        .await
+        .unwrap();
+
+        db.delete_space("old", "move:new").await.unwrap();
+
+        assert!(
+            db.get_space("old").await.unwrap().is_none(),
+            "source space row must be deleted"
+        );
+
+        let legacy = db
+            .get_page("page_delete_move_legacy")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("new"),
+            "delete-space move must update legacy pages.space values"
+        );
+
+        let scoped = db
+            .get_page("page_delete_move_workspace")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "delete-space move must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("new"),
+            "delete-space move must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_rejects_same_source_and_destination() {
+        let (db, _dir) = test_db().await;
+        db.create_space("same", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "same_space_mem".to_string(),
+            title: "Same Space Memory".to_string(),
+            content: "memory row that should remain scoped to the same space".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("same".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let result = db.delete_space("same", "move:same").await;
+        assert!(
+            result.is_err(),
+            "moving a space into itself must fail before deleting the space row"
+        );
+        assert!(
+            db.get_space("same").await.unwrap().is_some(),
+            "failed self-move must not delete the source/destination space"
+        );
+        let memory_space = db.get_memory_space("same_space_mem").await.unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("same"),
+            "failed self-move must leave memory rows scoped to the existing space"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_move_missing_source_does_not_cascade_orphaned_rows() {
+        let (db, _dir) = test_db().await;
+        db.create_space("new", None, false).await.unwrap();
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "delete_orphan_space_mem".to_string(),
+            title: "Delete Orphan Space Memory".to_string(),
+            content: "orphaned memory row that should not be moved by missing-source delete"
+                .to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            space: Some("ghost".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.store_entity("Delete Ghost Entity", "person", Some("ghost"), None, None)
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_delete_orphan_space",
+            "Delete Orphan Space Page",
+            None,
+            "orphaned page that should not move when source space row is missing",
+            None,
+            Some("ghost"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
+
+        let result = db.delete_space("ghost", "move:new").await;
+        assert!(
+            result.is_err(),
+            "moving from a missing source space must fail"
+        );
+
+        let memory_space = db
+            .get_memory_space("delete_orphan_space_mem")
+            .await
+            .unwrap();
+        assert_eq!(
+            memory_space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned memory rows"
+        );
+
+        let entities = db.list_entities(None, None).await.unwrap();
+        let entity = entities
+            .iter()
+            .find(|entity| entity.name == "Delete Ghost Entity")
+            .expect("ghost entity should exist");
+        assert_eq!(
+            entity.space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned entity rows"
+        );
+
+        let page = db
+            .get_page("page_delete_orphan_space")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page.space.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned pages.space rows"
+        );
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed delete-space move must not cascade orphaned pages.workspace rows"
+        );
     }
 
     // ==================== migration 11: structured_fields + retrieval_cue ====================
@@ -31473,6 +32581,7 @@ pub(crate) mod tests {
             structured_fields: None,
             retrieval_cue: None,
             source_text: None,
+            content_hash: None,
             raw_score: 0.0,
             version: 0,
             pending_revision: false,
@@ -34373,6 +35482,161 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_document_enrichment_queue_state() {
+        let (db, _dir) = test_db().await;
+
+        // ── enqueue two docs; claim returns them one at a time ──────────────
+        db.enqueue_document("folder-notes", "/notes/a.md", Some("hashA"))
+            .await
+            .unwrap();
+        db.enqueue_document("folder-notes", "/notes/b.md", Some("hashB"))
+            .await
+            .unwrap();
+
+        let first = db.claim_next_pending().await.unwrap().expect("first claim");
+        let second = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("second claim");
+        // Oldest-enqueued first (serial claim).
+        assert_eq!(first.file_path, "/notes/a.md");
+        assert_eq!(second.file_path, "/notes/b.md");
+        // A freshly claimed doc has no completed chunk yet and is in_progress.
+        assert_eq!(first.last_completed_chunk, -1);
+        assert_eq!(first.status, "in_progress");
+        // Both are now in_progress → nothing else claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // ── checkpoint then resume from the saved chunk ─────────────────────
+        db.checkpoint_chunk("folder-notes", "/notes/a.md", 3)
+            .await
+            .unwrap();
+        // Pause it (interrupted attempt, retry available now) so it is claimable.
+        db.mark_paused(
+            "folder-notes",
+            "/notes/a.md",
+            "interrupted",
+            Some(chrono::Utc::now().timestamp()),
+        )
+        .await
+        .unwrap();
+        let resumed = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("resumed claim");
+        assert_eq!(resumed.file_path, "/notes/a.md");
+        assert_eq!(
+            resumed.last_completed_chunk, 3,
+            "claim resumes from the checkpointed chunk"
+        );
+        assert_eq!(resumed.attempt_count, 1, "pause bumped the retry attempt");
+        assert_eq!(resumed.error_detail.as_deref(), Some("interrupted"));
+
+        // ── enqueue same doc twice inserts one row (idempotent no-op) ───────
+        // Re-enqueue the in-progress doc; it must NOT reset the checkpoint.
+        db.enqueue_document("folder-notes", "/notes/a.md", Some("hashA"))
+            .await
+            .unwrap();
+        let after_reenqueue = db
+            .get_queue_entry("folder-notes", "/notes/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_reenqueue.status, "in_progress",
+            "re-enqueue of an existing doc is a no-op"
+        );
+        assert_eq!(
+            after_reenqueue.last_completed_chunk, 3,
+            "re-enqueue preserves the checkpoint"
+        );
+        let row_count: i64 = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM document_enrichment_queue
+                     WHERE source_id = ?1 AND file_path = ?2",
+                    libsql::params!["folder-notes", "/notes/a.md"],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+        };
+        assert_eq!(row_count, 1, "enqueue twice inserts one row");
+
+        // ── mark_done removes it from the claimable set ─────────────────────
+        db.mark_done("folder-notes", "/notes/a.md").await.unwrap();
+        let done = db
+            .get_queue_entry("folder-notes", "/notes/a.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(done.status, "done");
+        // a.md done, b.md still in_progress → nothing claimable.
+        assert!(db.claim_next_pending().await.unwrap().is_none());
+
+        // ── dequeue_by_source cancels only that source's rows ───────────────
+        db.enqueue_document("folder-other", "/other/c.md", None)
+            .await
+            .unwrap();
+        db.dequeue_by_source("folder-notes").await.unwrap();
+        assert!(
+            db.get_queue_entry("folder-notes", "/notes/a.md")
+                .await
+                .unwrap()
+                .is_none(),
+            "dequeue_by_source removed the done row"
+        );
+        assert!(
+            db.get_queue_entry("folder-notes", "/notes/b.md")
+                .await
+                .unwrap()
+                .is_none(),
+            "dequeue_by_source removed the in_progress row"
+        );
+        // The other source's row survives and is still claimable.
+        let survivor = db
+            .claim_next_pending()
+            .await
+            .unwrap()
+            .expect("other source's row survives dequeue");
+        assert_eq!(survivor.source_id, "folder-other");
+        assert_eq!(survivor.file_path, "/other/c.md");
+        assert_eq!(survivor.content_hash, None);
+    }
+
+    #[tokio::test]
+    async fn migration_66_idempotent() {
+        let (db, _dir) = test_db().await;
+        // Roll user_version back to 65 and re-run migrations: the queue table's
+        // CREATE ... IF NOT EXISTS must replay without error.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 65", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("re-run migrations idempotent");
+        let conn = db.conn.lock().await;
+        // Table still present.
+        let mut trows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='document_enrichment_queue'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = trows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "document_enrichment_queue table must exist");
+        // user_version restored to current SCHEMA_VERSION.
+        let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
     async fn test_find_concept_by_source_memory_no_substring_false_positive() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
@@ -36531,6 +37795,41 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(both.len(), 1);
         assert_eq!(both[0].id, "page_origin");
+    }
+
+    #[tokio::test]
+    async fn list_stale_pages_scoped_filters_by_workspace_column() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "page_workspace_stale",
+            "Workspace Stale",
+            None,
+            "content",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("origin"),
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_workspace_stale", "source_updated")
+            .await
+            .unwrap();
+
+        let by_workspace = db
+            .list_stale_pages_scoped("source_updated", None, Some("origin"))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = by_workspace.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            ids.contains(&"page_workspace_stale"),
+            "scoped stale page lookup must use pages.workspace, falling back to pages.space; got {ids:?}"
+        );
     }
 
     #[tokio::test]
@@ -39324,6 +40623,76 @@ pub(crate) mod tests {
         assert_eq!(foo_count, 0, "foo should have 0 memories after move");
     }
 
+    #[tokio::test]
+    async fn reassign_memories_space_cascades_pages_space_and_workspace() {
+        let (db, _td) = test_db().await;
+
+        db.create_space("src", None, false).await.unwrap();
+        db.create_space("dest", None, false).await.unwrap();
+
+        let doc = make_memory_doc(
+            "mem_page_move_1",
+            "Memory in src with an associated page.",
+            "knowledge",
+            "src",
+            "agent",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_legacy_src",
+            "Legacy Src",
+            None,
+            "legacy page using pages.space as the space axis",
+            None,
+            Some("src"),
+            &["mem_page_move_1"],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_workspace_src",
+            "Workspace Src",
+            None,
+            "newer page using pages.workspace as the space axis",
+            None,
+            Some("recap"),
+            &["mem_page_move_1"],
+            &now,
+            "authored",
+            "confirmed",
+            Some("src"),
+        )
+        .await
+        .unwrap();
+
+        db.reassign_memories_space("src", "dest").await.unwrap();
+
+        let legacy = db.get_page("page_legacy_src").await.unwrap().unwrap();
+        assert_eq!(
+            legacy.space.as_deref(),
+            Some("dest"),
+            "space move must update legacy pages.space values"
+        );
+
+        let scoped = db.get_page("page_workspace_src").await.unwrap().unwrap();
+        assert_eq!(
+            scoped.space.as_deref(),
+            Some("recap"),
+            "space move must not overwrite page category values that differ from the old space"
+        );
+        assert_eq!(
+            scoped.workspace.as_deref(),
+            Some("dest"),
+            "space move must update pages.workspace values"
+        );
+    }
+
     /// Contract test for Task 11: `apply_enrichment` must persist
     /// `event_date` and `event_end` to the `memories` table so the
     /// extracted temporal fields survive the async enrichment phase.
@@ -39379,10 +40748,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn reassign_memories_space_auto_creates_dest() {
+    async fn reassign_memories_space_rejects_unregistered_destination() {
         let (db, _td) = test_db().await;
 
-        // Only create the source space — destination "baz" does not exist yet.
         db.create_space("src", None, false).await.unwrap();
 
         let doc = make_memory_doc(
@@ -39394,16 +40762,144 @@ pub(crate) mod tests {
         );
         db.upsert_documents(vec![doc]).await.unwrap();
 
-        // Move without pre-creating "baz".
-        let affected = db.reassign_memories_space("src", "baz").await.unwrap();
-        assert!(affected >= 1, "expected >= 1 row updated, got {}", affected);
-
-        // "baz" must now appear in list_spaces.
-        let spaces = db.list_spaces().await.unwrap();
+        let err = db
+            .reassign_memories_space("src", "baz")
+            .await
+            .expect_err("move must reject an unregistered destination space");
         assert!(
-            spaces.iter().any(|s| s.name == "baz"),
-            "destination space 'baz' should be registered after move, got: {:?}",
-            spaces.iter().map(|s| &s.name).collect::<Vec<_>>()
+            err.to_string().contains("destination space not found"),
+            "unexpected error: {err}"
+        );
+
+        let source_count = db
+            .list_memories(Some("src"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            source_count >= 1,
+            "failed move must leave source memories in place"
+        );
+        assert!(
+            db.get_space("baz").await.unwrap().is_none(),
+            "failed move must not auto-create destination space"
+        );
+    }
+
+    #[tokio::test]
+    async fn reassign_memories_space_rejects_unregistered_source() {
+        let (db, _td) = test_db().await;
+
+        db.create_space("dest", None, false).await.unwrap();
+
+        let doc = make_memory_doc(
+            "mem_orphan_source_1",
+            "Orphaned memory in an unregistered source space.",
+            "knowledge",
+            "ghost",
+            "agent",
+        );
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_orphan_source",
+            "Orphan Source",
+            None,
+            "page carrying an unregistered workspace label",
+            None,
+            Some("recap"),
+            &["mem_orphan_source_1"],
+            &now,
+            "authored",
+            "confirmed",
+            Some("ghost"),
+        )
+        .await
+        .unwrap();
+
+        let err = db
+            .reassign_memories_space("ghost", "dest")
+            .await
+            .expect_err("move must reject an unregistered source space");
+        assert!(
+            err.to_string().contains("source space not found"),
+            "unexpected error: {err}"
+        );
+
+        let orphan_space_count = db
+            .list_memories(Some("ghost"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            orphan_space_count >= 1,
+            "failed move must leave orphaned source memories in place"
+        );
+
+        let moved_count = db
+            .list_memories(Some("dest"), None, None, None, 10)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(
+            moved_count, 0,
+            "failed move must not reassign orphaned memories into the destination"
+        );
+
+        let page = db.get_page("page_orphan_source").await.unwrap().unwrap();
+        assert_eq!(
+            page.workspace.as_deref(),
+            Some("ghost"),
+            "failed move must not rewrite pages.workspace for an unregistered source"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_matching_page_scoped_filters_by_workspace_column() {
+        let (db, _td) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "page_workspace_match",
+            "Workspace Match",
+            Some("workspace scoped duplicate matcher calibration phrase"),
+            "Workspace scoped duplicate matcher calibration phrase with enough body text to embed consistently.",
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+        )
+        .await
+        .unwrap();
+
+        let embedding = db
+            .generate_embeddings(&[
+                "workspace scoped duplicate matcher calibration phrase".to_string()
+            ])
+            .unwrap()
+            .remove(0);
+
+        let matched = db
+            .find_matching_page_scoped(None, &embedding, 0.85, Some("work"), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            matched.as_ref().map(|page| page.id.as_str()),
+            Some("page_workspace_match"),
+            "workspace-scoped matching must use pages.workspace, not pages.space category"
+        );
+
+        let mismatched = db
+            .find_matching_page_scoped(None, &embedding, 0.85, Some("personal"), false)
+            .await
+            .unwrap();
+        assert!(
+            mismatched.is_none(),
+            "workspace-scoped matching must not match pages from other workspaces"
         );
     }
 
@@ -42628,8 +44124,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (64 after P3 memories.last_distilled_at).
-        assert_eq!(uv, 64);
+        // the current SCHEMA_VERSION (67 after the pages.creation_kind='source' widen).
+        assert_eq!(uv, 67);
     }
 
     #[tokio::test]
@@ -42646,7 +44142,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -42680,7 +44176,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 64);
+        assert_eq!(uv, 67);
     }
 
     #[tokio::test]
@@ -42697,7 +44193,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -42746,8 +44242,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 64,
-            "terminal version is 64 after P3 memories.last_distilled_at"
+            uv, 67,
+            "terminal version is 67 after the pages.creation_kind='source' widen"
         );
     }
 
@@ -42765,7 +44261,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 64,
+            uv, 67,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -44581,5 +46077,63 @@ pub(crate) mod tests {
             .unwrap();
         let got: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(got, Some(now));
+    }
+
+    /// decision-6 provenance: a folder-ingested document upserted with a file
+    /// `content_hash` + `source_agent='folder'` stamps that hash and agent onto
+    /// EVERY chunk row of the file, and the chunker's byte offsets persist.
+    #[tokio::test]
+    async fn provenance_content_hash_stamps_all_document_chunks() {
+        let (db, _dir) = test_db().await;
+
+        // Multi-paragraph content large enough to split into >1 chunk under both
+        // the char-fallback (512) and token-aware (~512 tok) chunker modes.
+        let para = "Wenlan is a local-first personal agent memory layer where \
+            agents write what they learn and humans curate the knowledge base. \
+            The daemon owns all business logic and data while thin clients talk HTTP. ";
+        let content = para.repeat(40);
+
+        let doc = RawDocument {
+            source: "memory".into(),
+            source_id: "src_a::/notes/wenlan.txt".into(),
+            title: "wenlan.txt".into(),
+            content,
+            source_agent: Some("folder".into()),
+            content_hash: Some("abc".into()),
+            last_modified: 1_700_000_000,
+            ..Default::default()
+        };
+
+        let n = db.upsert_documents(vec![doc]).await.unwrap();
+        assert!(n >= 2, "content should split into multiple chunks, got {n}");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content_hash, source_agent, byte_start FROM memories \
+                 WHERE source = 'memory' AND source_id = 'src_a::/notes/wenlan.txt'",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut seen = 0;
+        while let Some(r) = rows.next().await.unwrap() {
+            seen += 1;
+            assert_eq!(
+                r.get::<Option<String>>(0).unwrap().as_deref(),
+                Some("abc"),
+                "every chunk row must carry the file content_hash"
+            );
+            assert_eq!(
+                r.get::<Option<String>>(1).unwrap().as_deref(),
+                Some("folder"),
+                "every chunk row must carry source_agent='folder'"
+            );
+            assert!(
+                r.get::<Option<i64>>(2).unwrap().is_some(),
+                "document chunks must persist non-null byte_start"
+            );
+        }
+        assert_eq!(seen, n, "every upserted chunk row should be returned");
     }
 }

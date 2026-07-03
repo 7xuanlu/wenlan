@@ -164,7 +164,7 @@ async fn auth_and_origin_middleware(
     match auth_header {
         Some(value) => {
             let value_str = value.to_str().unwrap_or("");
-            match auth::extract_bearer_token(value_str) {
+            match value_str.strip_prefix("Bearer ") {
                 Some(provided) if auth::verify_token(provided, expected_token) => {}
                 _ => return (StatusCode::UNAUTHORIZED, "Invalid bearer token").into_response(),
             }

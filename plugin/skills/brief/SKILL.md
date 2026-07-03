@@ -59,13 +59,16 @@ resolver script via Bash:
         ${TOPIC_ARG:+--topic "$TOPIC_ARG"}
 
 The script prints `<space>\t<source-layer>` on stdout. Capture both:
-the `<space>` value is what you pass as `space=...` to MCP tools; the
-`<source-layer>` value is one of `arg`, `env`, `cwd-config`, `cwd-repo`,
-`topic`, `default`.
+the `<space>` value is what you pass as `space=...` to MCP tools when
+non-empty; the `<source-layer>` value is one of `arg`, `env`,
+`cwd-config`, `cwd-config-default`, `cwd-repo`, `topic`, `unscoped`.
 
 Print one line to the user before the MCP call:
 
     Resolved space: <space> (from <source-layer>)
+
+If `<space>` is empty, print `Resolved space: none (unscoped)` and omit
+the `space` parameter from MCP calls.
 
 so the user can confirm the resolution before the brief proceeds.
 
@@ -76,17 +79,18 @@ argument, pass it through. Otherwise infer scope from the working directory and
 the conversation so far — don't ask the user.
 
 ```
-context(topic="<args or inferred>", space=<resolved>)
+context(topic="<args or inferred>"[, space="<resolved>"])
 ```
+
+Omit `space` when the resolver returns an empty value.
 
 **Scope inference rules:**
 
 - `topic`: if user omitted args, pass the most recent topic from the
   conversation (file or feature being discussed), or omit for a fresh
   general brief at session start.
-- `space`: use the value from the resolver script above. Always pass it;
-  the resolver guarantees a value (falling back to `"default"` if nothing
-  else matches).
+- `space`: use the value from the resolver script above when non-empty.
+  Omit it when the resolver reports `unscoped`.
 
 ## When to use
 

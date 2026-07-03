@@ -87,6 +87,7 @@ fn sample_search_result() -> SearchResult {
         quality: None,
         importance: None,
         event_date: None,
+        content_hash: None,
         is_archived: false,
         is_recap: false,
         structured_fields: None,
