@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=373ed582c20b1544bc562a74a3c1a229586490f38f0baae5f3a23e3ad5778261 -->
+<!-- README_SYNC: source=README.md sha256=ac2108c358e3aef4f47249eeff0d0eaa7ac61e25977cc03b6a32cd284d7f2336 -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -72,13 +72,13 @@ codex plugin marketplace add .
 codex plugin add wenlan@wenlan-local
 ```
 
-安裝後開啟新的 Codex thread，讓 skills 和 MCP server 載入。
+安裝後開啟新的 Codex thread，讓 plugin 和 MCP server 載入。
 
 Plugin 細節和開發說明見：[plugin-codex/](plugin-codex/README.md)。
 
-### Plugin skills
+### MCP layer
 
-兩個插件都會在同一個本地 runtime 和 MCP server 之上提供相同的 Wenlan workflow commands。用 `/brief` 帶著已記住的 context 開始，用 `/capture <memory>` 保存長期有效的事實或決定，用 `/recall <query>` 和 `/pages <query>` 找回 context，用 `/handoff` 結束會話並留下下一輪可繼續的記錄。
+兩個插件底層都會調用同一個本地 MCP server。核心工具是 `context`、`capture`、`recall`、`pages` 和 `doctor`；僅 MCP 的 clients 會直接使用這些工具。
 
 <a id="mcp-only-setup"></a>
 
@@ -91,7 +91,7 @@ npx -y wenlan setup
 ~/.wenlan/bin/wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-僅 MCP 模式會給 agents 提供 capture、recall、context、doctor 和 page distillation 工具。它不會安裝 plugin slash skills，例如 `/brief`、`/handoff`、`/distill` 或 `/setup`。
+僅 MCP 模式會給 agents 提供相同的核心工具，用於 context、capture、recall、doctor checks 和 page distillation。
 
 ### 終端執行環境設定
 

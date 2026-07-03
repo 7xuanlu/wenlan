@@ -68,24 +68,24 @@ codex plugin marketplace add .
 codex plugin add wenlan@wenlan-local
 ```
 
-Start a new Codex thread after installing so the skills and MCP server load.
+Start a new Codex thread after installing so the plugin and MCP server load.
 
 Plugin details and development notes: [plugin-codex/](plugin-codex/README.md).
 
-### Plugin skills
+### MCP layer
 
-Both plugins add the same Wenlan workflow commands over the same local runtime and MCP server. Use `/brief` to start with remembered context, `/capture <memory>` to save durable facts or decisions, `/recall <query>` and `/pages <query>` to pull context back, and `/handoff` to close the session with a continuation note.
+Both plugins call the same local MCP server under the hood. The core tools are `context`, `capture`, `recall`, `pages`, and `doctor`; MCP-only clients use those tools directly.
 
 ### MCP-only setup
 
-Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex without slash skills, Cursor, Claude Desktop, VS Code, or Gemini CLI.
+Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI.
 
 ```bash
 npx -y wenlan setup
 ~/.wenlan/bin/wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install plugin slash skills like `/brief`, `/handoff`, `/distill`, or `/setup`.
+MCP-only gives agents the same core tools for context, capture, recall, doctor checks, and page distillation.
 
 ### Terminal runtime setup
 
