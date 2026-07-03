@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=361b7f42d34f0d81edce45986cc45bd5da64d17aea77993029f27ce474f8338c -->
+<!-- README_SYNC: source=README.md sha256=6abf70614a0967ea7677581e0d607382a3e7908a988e7f966377c2ed283ce5aa -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -132,7 +132,7 @@ wenlan background off
 npx -y wenlan setup   # 安裝並啟動本地 daemon
 ```
 
-然後下載並安裝目前 macOS Apple Silicon 應用：[Wenlan_0.3.1_aarch64.dmg](https://github.com/7xuanlu/wenlan-app/releases/download/v0.3.1/Wenlan_0.3.1_aarch64.dmg)。應用會連接到你機器上的 daemon，並讀取和 CLI、MCP clients 相同的本地記憶庫。
+然後下載並安裝目前 macOS Apple Silicon 應用：[wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg)。應用會連接到你機器上的 daemon，並讀取和 CLI、MCP clients 相同的本地記憶庫。
 
 ---
 

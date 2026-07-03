@@ -124,7 +124,7 @@ The desktop app is a native UI over the same local daemon. To use it, install bo
 npx -y wenlan setup   # installs and starts the local daemon
 ```
 
-Then download and install the current macOS Apple Silicon app: [Wenlan_0.3.1_aarch64.dmg](https://github.com/7xuanlu/wenlan-app/releases/download/v0.3.1/Wenlan_0.3.1_aarch64.dmg). The app connects to the daemon on your machine and reads the same local memory store as the CLI and MCP clients.
+Then download and install the current macOS Apple Silicon app: [wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg). The app connects to the daemon on your machine and reads the same local memory store as the CLI and MCP clients.
 
 ---
 
