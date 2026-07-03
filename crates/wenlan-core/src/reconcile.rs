@@ -51,3 +51,164 @@ pub struct ReconcileCandidate {
     pub source_agent: Option<String>,
     pub cosine: f64,
 }
+
+/// One judge-confirmed conflict: candidate index + the corrected capture text.
+// Consumed by the judge-call wiring step landing in a later task.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ConflictProposal {
+    pub idx: usize,
+    pub revised_content: String,
+}
+
+/// Defensively parse the judge's response. Mirrors `parse_dual_pool`'s
+/// silent-zero guard: ANY parse failure returns empty (the sweep must never
+/// act on garbage). Out-of-range indices and blank rewrites are dropped.
+// Consumed by the judge-call wiring step landing in a later task.
+#[allow(dead_code)]
+pub(crate) fn parse_doc_reconcile(raw: &str, total_len: usize) -> Vec<ConflictProposal> {
+    let stripped = crate::llm_provider::strip_think_tags(raw);
+    let (start, end) = match (stripped.find('{'), stripped.rfind('}')) {
+        (Some(s), Some(e)) if e >= s => (s, e),
+        _ => return Vec::new(),
+    };
+    #[derive(serde::Deserialize)]
+    struct RawConflict {
+        idx: i64,
+        #[serde(default)]
+        revised_content: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        #[serde(default)]
+        conflicts: Vec<RawConflict>,
+    }
+    let parsed: Raw = match serde_json::from_str(&stripped[start..=end]) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    parsed
+        .conflicts
+        .into_iter()
+        .filter_map(|c| {
+            let idx = usize::try_from(c.idx).ok()?;
+            if idx >= total_len || c.revised_content.trim().is_empty() {
+                return None;
+            }
+            Some(ConflictProposal {
+                idx,
+                revised_content: c.revised_content,
+            })
+        })
+        .collect()
+}
+
+// Consumed by the judge-call wiring step landing in a later task.
+#[allow(dead_code)]
+fn date_label(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| ts.to_string())
+}
+
+/// Render the judge user-prompt: focus text + numbered candidates, both sides
+/// dated so a stale doc can be weighed against a newer confirmed capture.
+// Consumed by the judge-call wiring step landing in a later task.
+#[allow(dead_code)]
+pub(crate) fn build_reconcile_prompt(
+    focus_is_doc: bool,
+    focus_content: &str,
+    focus_date: i64,
+    candidates: &[ReconcileCandidate],
+) -> String {
+    let (focus_label, cand_label) = if focus_is_doc {
+        ("DOCUMENT", "CAPTURE")
+    } else {
+        ("CAPTURE", "DOCUMENT")
+    };
+    let mut p = format!(
+        "FOCUS ({focus_label}, dated {}):\n{}\n\nCANDIDATES ({cand_label} side):\n",
+        date_label(focus_date),
+        focus_content
+    );
+    for (i, c) in candidates.iter().enumerate() {
+        p.push_str(&format!(
+            "[{i}] (dated {}) {}\n",
+            date_label(c.last_modified),
+            c.content
+        ));
+    }
+    p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cand(id: &str, content: &str) -> ReconcileCandidate {
+        ReconcileCandidate {
+            source_id: id.to_string(),
+            chunk_index: 0,
+            content: content.to_string(),
+            last_modified: 1_700_000_000,
+            created_at: 1_700_000_000,
+            content_hash: None,
+            source_agent: None,
+            cosine: 0.9,
+        }
+    }
+
+    #[test]
+    fn parse_well_formed_conflicts() {
+        let raw = r#"{"conflicts":[{"idx":0,"revised_content":"Port is 7878."},{"idx":2,"revised_content":"Uses libSQL."}]}"#;
+        let out = parse_doc_reconcile(raw, 3);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].idx, 0);
+        assert_eq!(out[0].revised_content, "Port is 7878.");
+        assert_eq!(out[1].idx, 2);
+    }
+
+    #[test]
+    fn parse_tolerates_think_tags_and_fences() {
+        let raw = "<think>hmm</think>\n```json\n{\"conflicts\":[{\"idx\":1,\"revised_content\":\"x\"}]}\n```";
+        assert_eq!(parse_doc_reconcile(raw, 2).len(), 1);
+    }
+
+    #[test]
+    fn parse_garbage_and_no_conflicts_return_empty() {
+        assert!(parse_doc_reconcile("not json", 3).is_empty());
+        assert!(parse_doc_reconcile(r#"{"conflicts":[]}"#, 3).is_empty());
+        assert!(parse_doc_reconcile(r#"{"other":1}"#, 3).is_empty());
+    }
+
+    #[test]
+    fn parse_drops_out_of_range_negative_and_empty_content() {
+        let raw = r#"{"conflicts":[{"idx":9,"revised_content":"x"},{"idx":-1,"revised_content":"x"},{"idx":0,"revised_content":"  "},{"idx":1,"revised_content":"keep"}]}"#;
+        let out = parse_doc_reconcile(raw, 3);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].idx, 1);
+    }
+
+    #[test]
+    fn prompt_numbers_candidates_and_carries_dates_and_roles() {
+        let cands = vec![cand("a", "claim A"), cand("b", "claim B")];
+        let p = build_reconcile_prompt(true, "doc text", 1_700_000_000, &cands);
+        assert!(p.contains("FOCUS (DOCUMENT"));
+        assert!(p.contains("CANDIDATES (CAPTURE side)"));
+        assert!(p.contains("[0]") && p.contains("[1]"));
+        assert!(
+            p.contains("2023-11-14"),
+            "epoch 1700000000 renders as its UTC date"
+        );
+        let p2 = build_reconcile_prompt(false, "capture text", 1_700_000_000, &cands);
+        assert!(p2.contains("FOCUS (CAPTURE"));
+        assert!(p2.contains("CANDIDATES (DOCUMENT side)"));
+    }
+
+    #[test]
+    fn registry_carries_doc_reconcile_default() {
+        let reg = crate::prompts::PromptRegistry::default();
+        assert!(reg.doc_reconcile.contains("mutually exclusive"));
+        assert!(reg.doc_reconcile.contains("conflicts"));
+    }
+}

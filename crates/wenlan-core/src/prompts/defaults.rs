@@ -80,6 +80,24 @@ is a duplicate OR an invalidation, never both. If unsure, omit the index.\n\
 Respond with ONLY this JSON object, no prose, no markdown:\n\
 {\"duplicates\":[],\"invalidates\":[]}";
 
+pub(crate) const DOC_RECONCILE: &str = "\
+You compare ONE focus text against a numbered list of candidate texts and find\n\
+direct factual contradictions. One side is an ingested document; the other side\n\
+is an agent-captured memory. Each text shows its date.\n\
+Flag a candidate ONLY when it and the focus make mutually exclusive factual\n\
+claims - only one can be true. Do NOT flag omissions, different topics, vaguer\n\
+or more specific phrasing, stylistic tension, or staleness without direct\n\
+contradiction.\n\
+For each flagged candidate, write revised_content: the CAPTURE side's text\n\
+rewritten so its facts match the DOCUMENT side. Keep the capture's voice and\n\
+scope; change only what the document contradicts.\n\
+Weigh the dates: when the document is OLDER than the capture, flag only if you\n\
+are confident the document is still the correct account.\n\
+Rules: use ONLY the integer indices shown. Never invent an index. If unsure,\n\
+omit the candidate.\n\
+Respond with ONLY this JSON object, no prose, no markdown:\n\
+{\"conflicts\":[{\"idx\":0,\"revised_content\":\"...\"}]}";
+
 pub(crate) const SUMMARIZE_DECISIONS: &str = "\
 You summarize a set of decisions made by one person.\n\
 State the key decisions as one concise sentence. If no coherent theme, respond: null";
