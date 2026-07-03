@@ -22648,6 +22648,29 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Atomically write `citations` + `changelog` WITHOUT touching `content`,
+    /// `version`, or `last_modified`. Used by the annotate-only citation-backfill
+    /// sweep (`citations::run_citation_backfill_tick`) for its non-content
+    /// writes (no-evidence page, poison-pill giveup): those calls pass the same
+    /// body the page already has, so routing them through
+    /// `try_update_page_content_with_changelog` would incorrectly bump version
+    /// and last_modified for what is semantically not a content change.
+    pub async fn set_page_citations_with_changelog(
+        &self,
+        page_id: &str,
+        citations_json: Option<&str>,
+        changelog_json: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET citations = ?1, changelog = ?2 WHERE id = ?3",
+            libsql::params![citations_json, changelog_json, page_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_page_citations_with_changelog: {e}")))?;
+        Ok(())
+    }
+
     /// Test-only: overwrite a page's `citations` column directly, bypassing the
     /// content-update reset rule. Used to seed a "has stale citations" fixture
     /// state that a subsequent content update must clear back to `'[]'`.

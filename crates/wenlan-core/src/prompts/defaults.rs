@@ -206,6 +206,14 @@ Cite each factual claim by appending [N] immediately after it, where N is the nu
 Do not write HTML comments (the <!-- ... --> form) anywhere in the page.\n\
 Output the complete updated page in the same format (TLDR, prose paragraphs, Open Questions).";
 
+pub(crate) const ANNOTATE_CITATIONS: &str = "\
+You annotate an existing wiki page with citations. You are given the page body \
+and a numbered source list. Insert [N] markers immediately after each factual \
+claim that a source supports, where N is that source's number in the list. \
+Change NOTHING else: do not rewrite, reorder, add, or remove any text. \
+If you are unsure a source supports a claim, leave the claim unmarked. \
+Output the complete page body with the markers inserted.";
+
 pub(crate) const ASSIGN_ORPHANS: &str = r#"You are a knowledge organization assistant. Given a list of unassigned memories and existing concepts, for each memory:
 1. If it clearly belongs to an existing page, assign it (return the page_id)
 2. If 3+ unassigned memories share a theme not covered by existing pages, propose a new page (return a title and the memory indices)

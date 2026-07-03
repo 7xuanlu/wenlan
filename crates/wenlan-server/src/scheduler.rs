@@ -145,6 +145,11 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_reconcile_sweep = Instant::now()
             .checked_sub(RECONCILE_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
+        // Fire the citation-backfill sweep every 30 min when an LLM provider is available.
+        const CITATION_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
+        let mut last_citation_sweep = Instant::now()
+            .checked_sub(CITATION_SWEEP_INTERVAL)
+            .unwrap_or_else(Instant::now);
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -426,6 +431,31 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                         }
                     });
                     last_reconcile_sweep = now;
+                }
+            }
+
+            // --- 7. Citation-backfill sweep: annotate legacy pages (citations
+            //        IS NULL) with per-claim [N] markers. Annotate-only —
+            //        legacy prose is never rewritten (see citations.rs). ---
+            if wenlan_core::db::citation_backfill_enabled()
+                && now.duration_since(last_citation_sweep) >= CITATION_SWEEP_INTERVAL
+            {
+                let sweep_llm = api_llm.as_ref().or(llm.as_ref()).cloned();
+                if let Some(provider) = sweep_llm {
+                    let db_ref = db.clone();
+                    let prompts_ref = prompts.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = wenlan_core::citations::run_citation_backfill_tick(
+                            &db_ref,
+                            &provider,
+                            &prompts_ref,
+                        )
+                        .await
+                        {
+                            tracing::warn!("[scheduler] citation backfill sweep error: {e}");
+                        }
+                    });
+                    last_citation_sweep = now;
                 }
             }
         }
