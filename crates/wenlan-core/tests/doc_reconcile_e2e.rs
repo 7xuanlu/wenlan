@@ -5,6 +5,9 @@
 use std::sync::Arc;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
+use wenlan_core::prompts::PromptRegistry;
+use wenlan_core::reconcile::{write_revision, RevisionInput};
+use wenlan_core::tuning::{DistillationConfig, RefineryConfig};
 use wenlan_types::RawDocument;
 
 async fn temp_db() -> (tempfile::TempDir, MemoryDB) {
@@ -240,4 +243,62 @@ async fn candidates_match_same_space_opposite_side_above_gate() {
     assert_eq!(doc_cands.len(), 1);
     assert_eq!(doc_cands[0].source_id, "src_f1::net.md");
     assert_eq!(doc_cands[0].content_hash.as_deref(), Some("h1"));
+}
+
+#[tokio::test]
+async fn write_revision_stages_embedded_pending_row_with_provenance() {
+    let (_dir, db) = temp_db().await;
+    db.upsert_documents(vec![
+        capture(
+            "mem_cap1",
+            "The daemon listens on port 9999.",
+            Some("work"),
+            100,
+        ),
+        doc(
+            "src_f1::net.md",
+            "The daemon listens on port 7878.",
+            "hash_v1",
+            150,
+        ),
+    ])
+    .await
+    .unwrap();
+
+    let rev_id = write_revision(
+        &db,
+        RevisionInput {
+            capture_source_id: "mem_cap1",
+            capture_space: Some("work"),
+            doc_file_source_id: "src_f1::net.md",
+            doc_chunk_index: 0,
+            doc_hash: "hash_v1",
+            revised_content: "The daemon listens on port 7878.",
+        },
+        None, // no LLM: Phase-1 placeholders, still embedded + stored
+        &PromptRegistry::default(),
+        &RefineryConfig::default(),
+        &DistillationConfig::default(),
+    )
+    .await
+    .unwrap();
+
+    // Surfaced on the existing pending-revisions queue.
+    let pending = db.list_pending_revisions(10).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].target_source_id, "mem_cap1");
+    assert_eq!(pending[0].revision_source_id, rev_id);
+    assert_eq!(pending[0].source_agent.as_deref(), Some("reconcile"));
+
+    // Canonical-path contract: the revision row is embedded (never a dead row).
+    let missing = db.count_unembedded_chunks("memory", &rev_id).await.unwrap();
+    assert_eq!(missing, 0, "revision must be embedded at store time");
+
+    // Pair key present for the treadmill guard.
+    assert!(db
+        .reconcile_pair_exists("mem_cap1", "src_f1::net.md", "hash_v1")
+        .await
+        .unwrap());
+    // Same space as the capture.
+    assert!(db.capture_has_pending_revision("mem_cap1").await.unwrap());
 }

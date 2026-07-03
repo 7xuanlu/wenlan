@@ -7,6 +7,14 @@
 //! surface. Doc rows are NEVER written; the capture is untouched until human
 //! accept. Design: docs/superpowers/specs/2026-07-02-doc-grounded-revisions-design.md.
 
+use std::sync::Arc;
+
+use crate::db::MemoryDB;
+use crate::llm_provider::LlmProvider;
+use crate::prompts::PromptRegistry;
+use crate::tuning::{DistillationConfig, RefineryConfig};
+use wenlan_types::RawDocument;
+
 /// Minimum cosine SIMILARITY for a frontier item / candidate pair to reach the
 /// LLM judge. Known recall ceiling (contradictions need not be embedding-near);
 /// measured post-ship per spec §7.
@@ -26,6 +34,91 @@ pub(crate) const RECONCILE_TOP_K: usize = 5;
 // Consumed by the poison-pill ejection step landing in a later task.
 #[allow(dead_code)]
 pub(crate) const RECONCILE_POISON_TICKS: u32 = 3;
+
+/// Inputs for staging one doc-grounded revision row.
+#[derive(Debug, Clone)]
+pub struct RevisionInput<'a> {
+    pub capture_source_id: &'a str,
+    pub capture_space: Option<&'a str>,
+    /// File-level doc source_id ("{source_id}::{path}", shared by all chunks).
+    pub doc_file_source_id: &'a str,
+    pub doc_chunk_index: i64,
+    pub doc_hash: &'a str,
+    pub revised_content: &'a str,
+}
+
+/// Stage ONE revision row via the canonical store + enrichment path (ingest
+/// parity: embedding at store time, Phase-1 classify/tags when an LLM is
+/// available). pending_revision=1 keeps it out of Phase-3 pools; the human
+/// gate owns activation. Returns the new revision source_id.
+pub async fn write_revision(
+    db: &MemoryDB,
+    input: RevisionInput<'_>,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    refinery: &RefineryConfig,
+    distillation: &DistillationConfig,
+) -> Result<String, crate::WenlanError> {
+    let source_id = format!(
+        "mem_{}",
+        uuid::Uuid::new_v4()
+            .to_string()
+            .replace('-', "")
+            .chars()
+            .take(12)
+            .collect::<String>()
+    );
+    let structured = serde_json::json!({
+        "revises": input.capture_source_id,
+        "grounded_in": input.doc_file_source_id,
+        "grounded_chunk": input.doc_chunk_index,
+        "doc_hash": input.doc_hash,
+    })
+    .to_string();
+
+    let row = RawDocument {
+        source: "memory".to_string(),
+        source_id: source_id.clone(),
+        title: input.revised_content.chars().take(80).collect(),
+        content: input.revised_content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        space: input.capture_space.map(str::to_string),
+        source_agent: Some("reconcile".to_string()),
+        confirmed: None,
+        supersedes: Some(input.capture_source_id.to_string()),
+        pending_revision: true,
+        structured_fields: Some(structured.clone()),
+        ..Default::default()
+    };
+    db.upsert_documents(vec![row]).await?;
+
+    let opts = crate::ingest::EnrichmentOpts {
+        initial_memory_type: "identity".to_string(),
+        initial_domain: input.capture_space.map(str::to_string),
+        rejected_explicit_domain: false,
+        initial_supersede_mode: "hide".to_string(),
+        initial_structured_fields: Some(structured),
+        agent_supplied_memory_type: false,
+        agent_supplied_profile_alias: false,
+        // Protect the provenance JSON from Phase-1 overwrite.
+        agent_supplied_structured_fields: true,
+    };
+    crate::ingest::run_canonical_enrichment(
+        db,
+        &source_id,
+        input.revised_content,
+        None,
+        llm,
+        prompts,
+        refinery,
+        distillation,
+        None,
+        &opts,
+        None,
+    )
+    .await;
+    Ok(source_id)
+}
 
 /// A frontier row awaiting reconciliation (doc chunk or capture).
 #[derive(Debug, Clone, PartialEq)]
