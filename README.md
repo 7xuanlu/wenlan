@@ -58,8 +58,6 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
 
 If Claude Code asks for a restart after installing, restart once, then run `/setup`. The plugin handles local runtime setup, MCP wiring, local memory setup, and the first round-trip check.
 
-Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
-
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
 ### Codex plugin
@@ -70,9 +68,13 @@ codex plugin marketplace add .
 codex plugin add wenlan@wenlan-local
 ```
 
-Start a new Codex thread after installing so the skills and MCP server load. Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`, `/pages <query>`, or `/handoff`.
+Start a new Codex thread after installing so the skills and MCP server load.
 
 Plugin details and development notes: [plugin-codex/](plugin-codex/README.md).
+
+### Plugin skills
+
+Both plugins add the same Wenlan workflow commands over the same local runtime and MCP server. Use `/brief` to start with remembered context, `/capture <memory>` to save durable facts or decisions, `/recall <query>` and `/pages <query>` to pull context back, and `/handoff` to close the session with a continuation note.
 
 ### MCP-only setup
 
