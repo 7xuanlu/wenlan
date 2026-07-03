@@ -881,19 +881,17 @@ pub(crate) async fn re_distill_stale_pages(
         }
 
         const MEM_SNIPPET_CAP: usize = 800;
-        let memories_block: String = memories
+        let numbered: Vec<crate::citations::NumberedSource> = memories
             .iter()
-            .map(|m| {
-                let snippet: String = m.content.chars().take(MEM_SNIPPET_CAP).collect();
-                let snippet = if m.content.chars().count() > MEM_SNIPPET_CAP {
-                    format!("{}...", snippet.trim_end())
-                } else {
-                    snippet
-                };
-                format!("[{}] {}", m.source_id, snippet)
+            .enumerate()
+            .map(|(i, m)| crate::citations::NumberedSource {
+                index: (i + 1) as u32,
+                source_kind: "memory".to_string(),
+                locator: m.source_id.clone(),
+                text: m.content.chars().take(MEM_SNIPPET_CAP).collect(),
             })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+            .collect();
+        let memories_block = crate::citations::build_numbered_block(&numbered);
 
         let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
         let response = llm_ref
@@ -913,6 +911,16 @@ pub(crate) async fn re_distill_stale_pages(
                     .trim()
                     .to_string();
                 if !content.is_empty() {
+                    // Verify [N] markers against the numbered sources; the
+                    // citation records themselves are not yet persisted here
+                    // (update_page has no citations param until Task 6).
+                    let (content, _cites, stats) =
+                        crate::citations::process_citation_output(&content, &numbered);
+                    log::info!(
+                        "[re-distill-stale] page '{}' citations: {}",
+                        page.title,
+                        stats.summary()
+                    );
                     // Real CAS: require_stale=true means the write only lands
                     // when stale_reason IS NOT NULL, so a concurrent agent-side
                     // PUT that cleared staleness wins the race without TOCTOU.

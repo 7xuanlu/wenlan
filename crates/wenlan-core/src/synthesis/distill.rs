@@ -588,21 +588,19 @@ pub async fn distill_one_cluster(
     // without runaway context. The 800-char cap is honest: it matches the
     // amount the model can synthesize well at 2048 output tokens.
     const MEM_SNIPPET_CAP: usize = 800;
-    let memories_block: String = cluster
+    let numbered: Vec<crate::citations::NumberedSource> = cluster
         .source_ids
         .iter()
         .zip(cleaned_contents.iter())
-        .map(|(id, content)| {
-            let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-            let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                format!("{}...", snippet.trim_end())
-            } else {
-                snippet
-            };
-            format!("[{}] {}", id, snippet)
+        .enumerate()
+        .map(|(i, (id, content))| crate::citations::NumberedSource {
+            index: (i + 1) as u32,
+            source_kind: "memory".to_string(),
+            locator: id.clone(),
+            text: content.chars().take(MEM_SNIPPET_CAP).collect(),
         })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        .collect();
+    let memories_block = crate::citations::build_numbered_block(&numbered);
     let titles_hint = build_existing_titles_hint(db).await;
     let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
 
@@ -677,12 +675,20 @@ pub async fn distill_one_cluster(
                 .find(|l| l.starts_with("- "))
                 .map(|l| l.trim_start_matches("- ").to_string());
 
+            // Verify [N] markers the LLM emitted against the numbered sources:
+            // out-of-range markers are stripped, each remaining occurrence gets
+            // a verified/unverified status via union-of-cited-sources overlap.
+            let (content, cites, stats) =
+                crate::citations::process_citation_output(&content, &numbered);
+            let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".into());
+
             // Build source IDs as &str refs
             let source_refs: Vec<&str> = cluster.source_ids.iter().map(|s| s.as_str()).collect();
             let now = chrono::Utc::now().to_rfc3339();
             let page_id = crate::pages::new_page_id();
+            log::info!("[distill] page {page_id} citations: {}", stats.summary());
 
-            db.insert_page(
+            db.insert_page_with_kind(
                 &page_id,
                 &title,
                 summary.as_deref(),
@@ -691,6 +697,10 @@ pub async fn distill_one_cluster(
                 cluster.space.as_deref(),
                 &source_refs,
                 &now,
+                "distilled",
+                "confirmed",
+                None,
+                Some(&citations_json),
             )
             .await?;
 
@@ -1002,21 +1012,19 @@ pub async fn distill_pages_scoped(
         // without runaway context. The 800-char cap is honest: it matches the
         // amount the model can synthesize well at 2048 output tokens.
         const MEM_SNIPPET_CAP: usize = 800;
-        let memories_block: String = cluster
+        let numbered: Vec<crate::citations::NumberedSource> = cluster
             .source_ids
             .iter()
             .zip(cleaned_contents.iter())
-            .map(|(id, content)| {
-                let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-                let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                    format!("{}...", snippet.trim_end())
-                } else {
-                    snippet
-                };
-                format!("[{}] {}", id, snippet)
+            .enumerate()
+            .map(|(i, (id, content))| crate::citations::NumberedSource {
+                index: (i + 1) as u32,
+                source_kind: "memory".to_string(),
+                locator: id.clone(),
+                text: content.chars().take(MEM_SNIPPET_CAP).collect(),
             })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+            .collect();
+        let memories_block = crate::citations::build_numbered_block(&numbered);
         let titles_hint = build_existing_titles_hint(db).await;
         let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
 
@@ -1087,13 +1095,19 @@ pub async fn distill_pages_scoped(
                     .find(|l| l.starts_with("- "))
                     .map(|l| l.trim_start_matches("- ").to_string());
 
+                // Verify [N] markers the LLM emitted against the numbered sources.
+                let (content, cites, stats) =
+                    crate::citations::process_citation_output(&content, &numbered);
+                let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".into());
+
                 // Build source IDs as &str refs
                 let source_refs: Vec<&str> =
                     cluster.source_ids.iter().map(|s| s.as_str()).collect();
                 let now = chrono::Utc::now().to_rfc3339();
                 let page_id = crate::pages::new_page_id();
+                log::info!("[distill] page {page_id} citations: {}", stats.summary());
 
-                db.insert_page(
+                db.insert_page_with_kind(
                     &page_id,
                     &title,
                     summary.as_deref(),
@@ -1102,6 +1116,10 @@ pub async fn distill_pages_scoped(
                     cluster.space.as_deref(),
                     &source_refs,
                     &now,
+                    "distilled",
+                    "confirmed",
+                    None,
+                    Some(&citations_json),
                 )
                 .await?;
 
@@ -1273,19 +1291,17 @@ pub(crate) async fn recompile_single_page(
     }
 
     const MEM_SNIPPET_CAP: usize = 800;
-    let memories_block: String = memories
+    let numbered: Vec<crate::citations::NumberedSource> = memories
         .iter()
-        .map(|(id, content)| {
-            let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-            let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                format!("{}...", snippet.trim_end())
-            } else {
-                snippet
-            };
-            format!("[{}] {}", id, snippet)
+        .enumerate()
+        .map(|(i, (id, content))| crate::citations::NumberedSource {
+            index: (i + 1) as u32,
+            source_kind: "memory".to_string(),
+            locator: id.clone(),
+            text: content.chars().take(MEM_SNIPPET_CAP).collect(),
         })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        .collect();
+    let memories_block = crate::citations::build_numbered_block(&numbered);
     let titles_hint = build_existing_titles_hint(db).await;
     let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", page.title, memories_block);
 
@@ -1306,6 +1322,20 @@ pub(crate) async fn recompile_single_page(
                 .trim()
                 .to_string();
             if !content.is_empty() {
+                // Verify [N] markers against the numbered sources; out-of-range
+                // markers are stripped from the body before it is saved. The
+                // citation records themselves are not yet persisted here —
+                // `update_page` (post_write.rs) resets `citations` to '[]' on
+                // any content change without a fresh citation map (Task 6
+                // threads real citations through the growth path); the
+                // annotate-only backfill sweep (Task 7) re-derives them.
+                let (content, _cites, stats) =
+                    crate::citations::process_citation_output(&content, &numbered);
+                log::info!(
+                    "[re-distill] page '{}' citations: {}",
+                    page.title,
+                    stats.summary()
+                );
                 let result = crate::post_write::update_page(
                     db,
                     &page.id,
@@ -1384,19 +1414,17 @@ pub async fn deep_distill_single(
     }
 
     const MEM_SNIPPET_CAP: usize = 800;
-    let memories_block: String = memories
+    let numbered: Vec<crate::citations::NumberedSource> = memories
         .iter()
-        .map(|(id, content)| {
-            let snippet: String = content.chars().take(MEM_SNIPPET_CAP).collect();
-            let snippet = if content.chars().count() > MEM_SNIPPET_CAP {
-                format!("{}...", snippet.trim_end())
-            } else {
-                snippet
-            };
-            format!("[{}] {}", id, snippet)
+        .enumerate()
+        .map(|(i, (id, content))| crate::citations::NumberedSource {
+            index: (i + 1) as u32,
+            source_kind: "memory".to_string(),
+            locator: id.clone(),
+            text: content.chars().take(MEM_SNIPPET_CAP).collect(),
         })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        .collect();
+    let memories_block = crate::citations::build_numbered_block(&numbered);
     let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
 
     let response = llm
@@ -1419,6 +1447,15 @@ pub async fn deep_distill_single(
         log::warn!("[distill] empty output for page '{}', skipping", page.title);
         return Ok(false);
     }
+
+    // Verify [N] markers against the numbered sources; the citation records
+    // themselves are not yet persisted here (see recompile_single_page above).
+    let (content, _cites, stats) = crate::citations::process_citation_output(&content, &numbered);
+    log::info!(
+        "[distill] page '{}' citations: {}",
+        page.title,
+        stats.summary()
+    );
 
     let result = crate::post_write::update_page(
         db,
@@ -1526,6 +1563,47 @@ mod tests {
             target.is_none(),
             "unregistered legacy memory labels must not resolve as distill space targets: {target:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn distill_one_cluster_persists_verified_and_unverified_citations() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+
+        let cluster = crate::db::DistillationCluster {
+            source_ids: vec!["mem_daemon".into(), "mem_embed".into()],
+            contents: vec![
+                "The Wenlan daemon binds to port 7878 by default on localhost, providing \
+                 the HTTP API surface used by the CLI and the MCP bridge for all downstream \
+                 tools that talk to the local memory store."
+                    .to_string(),
+                "FastEmbed uses the BGE-Base-EN embeddings model with 768 dimensions for \
+                 vector search across every stored memory and page in the local database, \
+                 combined with FTS5 for hybrid retrieval."
+                    .to_string(),
+            ],
+            entity_id: None,
+            entity_name: Some("Wenlan daemon".into()),
+            space: None,
+            estimated_tokens: 120,
+            centroid_embedding: None,
+        };
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "The Wenlan daemon binds to port 7878 by default.[1]\n\n\
+             Second claim: an entirely unrelated statement about the flavor of ice cream.[2]",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let page_id = distill_one_cluster(&db, &llm, &prompts, &cluster, None)
+            .await
+            .unwrap()
+            .expect("cluster should synthesize a page");
+
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.citations.len(), 2, "citations: {:?}", page.citations);
+        assert_eq!(page.citations[0].status, "verified");
+        assert_eq!(page.citations[0].locator, "mem_daemon");
+        assert!(page.content.contains("[1]"));
     }
 
     #[tokio::test]

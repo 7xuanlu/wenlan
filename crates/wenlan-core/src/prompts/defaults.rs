@@ -193,7 +193,7 @@ Rules:\n\
 - Preserve specifics — don't generalize away details like exact names, versions, or numbers.\n\
 - If sources contradict, keep the most recent and note the contradiction in Open Questions.\n\
 - 3-5 paragraphs total. Quality over quantity.\n\
-- Do NOT add a sources or citations section, and do not cite source ids in the prose — the system attaches provenance automatically.\n\
+- Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
 - Do not write HTML comments (the <!-- ... --> form) anywhere in the page.";
 
 pub(crate) const UPDATE_PAGE: &str = "\
@@ -273,10 +273,11 @@ mod tests {
 
     #[test]
     fn distill_page_does_not_author_sources() {
-        // The exporter generates the Sources block from DB truth; the LLM must
-        // not author a `## Sources` section or per-claim memory-id citations.
+        // The LLM cites via [N] markers into the numbered source list, but must
+        // not author its own `## Sources` section — the system renders citations
+        // from the markers.
         assert!(!DISTILL_PAGE.contains("## Sources"));
-        assert!(!DISTILL_PAGE.contains("Attribute key claims"));
+        assert!(DISTILL_PAGE.contains("appending [N]"));
         // HTML comments banned so the LLM can't forge the delimiter.
         assert!(DISTILL_PAGE.contains("HTML comment"));
     }
