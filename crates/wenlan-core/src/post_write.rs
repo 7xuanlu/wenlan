@@ -526,6 +526,7 @@ pub async fn create_page(
             creation_kind,
             review_status,
             req.workspace.as_deref(),
+            None, // citations: create_page has no citation source; NULL = never citation-processed
         )
         .await
     {
@@ -743,6 +744,8 @@ pub async fn update_page(
         crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
 
     // ── Apply DB update ─────────────────────────────────────────────────────
+    // citations: None -> resets `citations` to '[]' (this path has no fresh
+    // citation source yet; Task 6 threads real citations through here).
     let wrote = db
         .try_update_page_content_with_changelog(
             page_id,
@@ -751,6 +754,7 @@ pub async fn update_page(
             edited_by,
             require_stale,
             &new_changelog,
+            None,
         )
         .await?;
 

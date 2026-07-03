@@ -297,6 +297,7 @@ async fn scoped_match_attach_stamps_only_attached_ids() {
         "distilled",
         "confirmed",
         None, // workspace
+        None, // citations
     )
     .await
     .expect("insert_page_with_kind must succeed");
@@ -462,6 +463,7 @@ async fn source_less_page_passes_own_workspace_no_personal_leak() {
         "authored",
         "confirmed",
         None, // workspace set via SQL helper below (simulates pre-Step-4 state)
+        None, // citations
     )
     .await
     .expect("insert_page_with_kind must succeed for source-less authored page");

@@ -404,6 +404,7 @@ mod tests {
             "fs_edit",
             false,
             "user-edited",
+            None,
         )
         .await
         .unwrap();

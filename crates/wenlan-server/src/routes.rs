@@ -1637,6 +1637,7 @@ mod context_page_selection_tests {
             "distilled",
             "confirmed",
             Some("other"),
+            None,
         )
         .await
         .unwrap();
@@ -1653,6 +1654,7 @@ mod context_page_selection_tests {
             "distilled",
             "confirmed",
             Some("work"),
+            None,
         )
         .await
         .unwrap();
@@ -1669,6 +1671,7 @@ mod context_page_selection_tests {
             "distilled",
             "confirmed",
             Some("work"),
+            None,
         )
         .await
         .unwrap();
@@ -1777,6 +1780,7 @@ mod search_supplemental_pages_tests {
             "distilled",
             "confirmed",
             Some("other"),
+            None,
         )
         .await
         .unwrap();
@@ -1793,6 +1797,7 @@ mod search_supplemental_pages_tests {
             "distilled",
             "confirmed",
             Some("work"),
+            None,
         )
         .await
         .unwrap();

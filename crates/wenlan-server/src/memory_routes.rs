@@ -3988,6 +3988,7 @@ mod search_quick_path_page_tests {
             "distilled",
             "confirmed",
             Some("work"),
+            None,
         )
         .await
         .unwrap();
@@ -4004,6 +4005,7 @@ mod search_quick_path_page_tests {
             "distilled",
             "confirmed",
             Some("other"),
+            None,
         )
         .await
         .unwrap();

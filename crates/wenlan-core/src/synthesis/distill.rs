@@ -1684,6 +1684,7 @@ mod tests {
             "authored",
             "confirmed",
             None, // workspace
+            None, // citations
         ).await.unwrap();
 
         // 2. A cluster on the same topic with its own memory + a centroid embedding
@@ -1820,6 +1821,7 @@ mod tests {
             "fs_edit",
             false,
             "user-edited",
+            None,
         )
         .await
         .unwrap();
