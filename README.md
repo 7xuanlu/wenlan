@@ -72,6 +72,8 @@ Start a new Codex thread after installing so the plugin and MCP server load.
 
 Plugin details and development notes: [plugin-codex/](plugin-codex/README.md).
 
+### MCP layer
+
 Both plugins call the same local MCP server under the hood. The core tools are `context`, `capture`, `recall`, `pages`, and `doctor`; MCP-only clients use those tools directly.
 
 ### MCP-only setup
@@ -215,24 +217,24 @@ Build details for the daemon, MCP server, CLI, and core crates live in the crate
 
 ## Learn more
 
-Longer-form writing on AI work memory and how Wenlan compares lives at [useorigin.app/learn](https://useorigin.app/learn):
+Longer-form writing on AI work memory and how Wenlan compares lives at [wenlan.app/learn](https://wenlan.app/learn):
 
 **Concepts**
-- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory): the shape of the problem Wenlan solves
-- [MCP memory server](https://useorigin.app/learn/mcp-memory-server): how Wenlan exposes memory through the Model Context Protocol
-- [Local-first AI memory](https://useorigin.app/learn/local-first-ai-memory): data, privacy, and control
-- [Markdown + local index](https://useorigin.app/learn/markdown-local-index-ai-memory): the storage model
-- [AI agent handoff loop](https://useorigin.app/learn/ai-agent-handoff-loop): session-end discipline that prevents context loss
+- [What is AI work memory?](https://wenlan.app/learn/ai-work-memory): the shape of the problem Wenlan solves
+- [MCP memory server](https://wenlan.app/learn/mcp-memory-server): how Wenlan exposes memory through the Model Context Protocol
+- [Local-first AI memory](https://wenlan.app/learn/local-first-ai-memory): data, privacy, and control
+- [Markdown + local index](https://wenlan.app/learn/markdown-local-index-ai-memory): the storage model
+- [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop): session-end discipline that prevents context loss
 
 **Comparisons**
-- [Wenlan vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
-- [Wenlan vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Wenlan vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory): tradeoffs against another local memory shape
+- [Wenlan vs Basic Memory](https://wenlan.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
+- [Wenlan vs claude-mem](https://wenlan.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/origin-vs-superlocal-memory): tradeoffs against another local memory shape
 
 **Docs**
-- [Get started](https://useorigin.app/docs/get-started): install + verify the first local memory loop
-- [Daily workflow](https://useorigin.app/docs/daily-workflow): capture, handoff, distill
-- [MCP clients](https://useorigin.app/docs/mcp-clients): connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+- [Get started](https://wenlan.app/docs/get-started): install + verify the first local memory loop
+- [Daily workflow](https://wenlan.app/docs/daily-workflow): capture, handoff, distill
+- [MCP clients](https://wenlan.app/docs/mcp-clients): connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
 
 ---
 

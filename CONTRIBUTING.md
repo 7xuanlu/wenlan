@@ -99,6 +99,6 @@ By contributing, you agree that your changes will be licensed under the license 
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the local memory loop before opening a PR
-- [useorigin.app/docs/daily-workflow](https://useorigin.app/docs/daily-workflow) — the workflow your changes will fit into
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started) — install + verify the local memory loop before opening a PR
+- [wenlan.app/docs/daily-workflow](https://wenlan.app/docs/daily-workflow) — the workflow your changes will fit into

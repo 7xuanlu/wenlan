@@ -114,10 +114,10 @@ The actual skill instructions live in [`../skills`](../skills):
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/learn/claude-code-memory](https://useorigin.app/learn/claude-code-memory) — Claude Code memory concept article
-- [useorigin.app/docs/daily-workflow](https://useorigin.app/docs/daily-workflow) — the brief/capture/recall/handoff loop
-- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/learn/claude-code-memory](https://wenlan.app/learn/claude-code-memory) — Claude Code memory concept article
+- [wenlan.app/docs/daily-workflow](https://wenlan.app/docs/daily-workflow) — the brief/capture/recall/handoff loop
+- [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started) — install + verify
 
 ## License
 

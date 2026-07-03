@@ -93,9 +93,9 @@ See [`src/tools.rs`](src/tools.rs) for the full instructions.
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/learn/mcp-memory-server](https://useorigin.app/learn/mcp-memory-server) — concept article on Wenlan as an MCP memory server
-- [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/learn/mcp-memory-server](https://wenlan.app/learn/mcp-memory-server) — concept article on Wenlan as an MCP memory server
+- [wenlan.app/docs/mcp-clients](https://wenlan.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
 - [npm: wenlan-mcp](https://www.npmjs.com/package/wenlan-mcp) — standalone npm package
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 

@@ -34,5 +34,5 @@ We are especially interested in:
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/.well-known/security.txt](https://useorigin.app/.well-known/security.txt) — machine-readable security contact per RFC 9116
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/.well-known/security.txt](https://wenlan.app/.well-known/security.txt) — machine-readable security contact per RFC 9116

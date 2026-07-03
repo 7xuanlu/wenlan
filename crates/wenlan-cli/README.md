@@ -195,10 +195,10 @@ wenlan sources add ~/Notes/project.md
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the first memory loop
-- [useorigin.app/docs/commands](https://useorigin.app/docs/commands) — Claude Code commands and MCP tools reference
-- [useorigin.app/docs/troubleshooting](https://useorigin.app/docs/troubleshooting) — common failure modes
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started) — install + verify the first memory loop
+- [wenlan.app/docs/commands](https://wenlan.app/docs/commands) — Claude Code commands and MCP tools reference
+- [wenlan.app/docs/troubleshooting](https://wenlan.app/docs/troubleshooting) — common failure modes
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 - [github.com/7xuanlu/wenlan/releases/latest](https://github.com/7xuanlu/wenlan/releases/latest) — desktop app and runtime downloads
 

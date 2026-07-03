@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=8dd061636bad902c57f998d8872092532b9d25b119271811a30069177d9def9b -->
+<!-- README_SYNC: source=README.md sha256=c3b98e142eef7cfc0296c80d4c3fecb4b8d2b683a414cb9b1e06b13c34dae90e -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -75,6 +75,8 @@ codex plugin add wenlan@wenlan-local
 安裝後開啟新的 Codex thread，讓 plugin 和 MCP server 載入。
 
 Plugin 細節和開發說明見：[plugin-codex/](plugin-codex/README.md)。
+
+### MCP layer
 
 兩個插件底層都會調用同一個本地 MCP server。核心工具是 `context`、`capture`、`recall`、`pages` 和 `doctor`；僅 MCP 的 clients 會直接使用這些工具。
 
@@ -222,24 +224,24 @@ daemon、MCP server、CLI 和 core crates 的構建細節在上面連結的 crat
 
 ## 瞭解更多
 
-關於 AI work memory 以及 Wenlan 對比的長文在 [useorigin.app/learn](https://useorigin.app/learn)：
+關於 AI work memory 以及 Wenlan 對比的長文在 [wenlan.app/learn](https://wenlan.app/learn)：
 
 **Concepts**
-- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory)：Wenlan 要解決的問題形態
-- [MCP memory server](https://useorigin.app/learn/mcp-memory-server)：Wenlan 如何透過 Model Context Protocol 暴露 memory
-- [Local-first AI memory](https://useorigin.app/learn/local-first-ai-memory)：data、privacy 和 control
-- [Markdown + local index](https://useorigin.app/learn/markdown-local-index-ai-memory)：storage model
-- [AI agent handoff loop](https://useorigin.app/learn/ai-agent-handoff-loop)：防止 context loss 的 session-end discipline
+- [What is AI work memory?](https://wenlan.app/learn/ai-work-memory)：Wenlan 要解決的問題形態
+- [MCP memory server](https://wenlan.app/learn/mcp-memory-server)：Wenlan 如何透過 Model Context Protocol 暴露 memory
+- [Local-first AI memory](https://wenlan.app/learn/local-first-ai-memory)：data、privacy 和 control
+- [Markdown + local index](https://wenlan.app/learn/markdown-local-index-ai-memory)：storage model
+- [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop)：防止 context loss 的 session-end discipline
 
 **Comparisons**
-- [Wenlan vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory)：Markdown knowledge base vs AI work-session memory
-- [Wenlan vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem)：observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Wenlan vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory)：與另一種本地記憶形態的 tradeoffs
+- [Wenlan vs Basic Memory](https://wenlan.app/learn/origin-vs-basic-memory)：Markdown knowledge base vs AI work-session memory
+- [Wenlan vs claude-mem](https://wenlan.app/learn/origin-vs-claude-mem)：observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/origin-vs-superlocal-memory)：與另一種本地記憶形態的 tradeoffs
 
 **Docs**
-- [Get started](https://useorigin.app/docs/get-started)：install + verify 第一個本地 memory loop
-- [Daily workflow](https://useorigin.app/docs/daily-workflow)：capture、handoff、distill
-- [MCP clients](https://useorigin.app/docs/mcp-clients)：連接 Claude Code、Cursor、Codex、Claude Desktop、Gemini CLI
+- [Get started](https://wenlan.app/docs/get-started)：install + verify 第一個本地 memory loop
+- [Daily workflow](https://wenlan.app/docs/daily-workflow)：capture、handoff、distill
+- [MCP clients](https://wenlan.app/docs/mcp-clients)：連接 Claude Code、Cursor、Codex、Claude Desktop、Gemini CLI
 
 ---
 
