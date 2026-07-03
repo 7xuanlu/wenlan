@@ -22,11 +22,11 @@
 
 **A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-Unlike a normal llm-wiki that generates pages from a fixed document set, Wenlan keeps a source-cited wiki current with live agent work and trusted sources. Your agents capture what they learn during sessions, you add pages and sources you already trust, and Wenlan distills both into Markdown pages that refresh between sessions.
+Unlike a normal llm-wiki that generates pages from a fixed document set, Wenlan keeps a source-cited wiki current with live agent work and trusted sources. It is built for long-running work with AI agents, from software development and research to writing, consulting, product decisions, and client work.
 
-Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections: a copy of the 四庫全書.
+Your agents capture what they learn during sessions, you add pages and sources you already trust, and Wenlan distills both into Markdown pages that refresh between sessions. Each new thread starts from that updated wiki, with a brief to bring context forward and a handoff to record where the work should continue.
 
-Each new thread starts from that updated wiki: a brief brings the relevant context forward, and a handoff records where the work should continue.
+Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections, including a copy of the 四庫全書.
 
 [![Watch the Wenlan demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
 
