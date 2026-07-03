@@ -72,8 +72,6 @@ Start a new Codex thread after installing so the plugin and MCP server load.
 
 Plugin details and development notes: [plugin-codex/](plugin-codex/README.md).
 
-### MCP layer
-
 Both plugins call the same local MCP server under the hood. The core tools are `context`, `capture`, `recall`, `pages`, and `doctor`; MCP-only clients use those tools directly.
 
 ### MCP-only setup

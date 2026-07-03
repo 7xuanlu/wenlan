@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=fab5992443330c0229a601d14761072d9ff230e3fa66929459f40af59af5a914 -->
+<!-- README_SYNC: source=README.md sha256=8dd061636bad902c57f998d8872092532b9d25b119271811a30069177d9def9b -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -75,8 +75,6 @@ codex plugin add wenlan@wenlan-local
 安裝後開啟新的 Codex thread，讓 plugin 和 MCP server 載入。
 
 Plugin 細節和開發說明見：[plugin-codex/](plugin-codex/README.md)。
-
-### MCP layer
 
 兩個插件底層都會調用同一個本地 MCP server。核心工具是 `context`、`capture`、`recall`、`pages` 和 `doctor`；僅 MCP 的 clients 會直接使用這些工具。
 
