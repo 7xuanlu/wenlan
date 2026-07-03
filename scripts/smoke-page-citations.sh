@@ -100,7 +100,11 @@ echo "==> Phase A: daemon up (citation backfill default ON, harmless — no page
 start_daemon
 
 AGENT="smoke-citation-agent"
-echo "==> Storing + confirming 3 related memories (one cluster)"
+# NOTE: memories must stay UNCONFIRMED — find_distillation_clusters only
+# clusters unconfirmed rows (db.rs: `AND (m.confirmed = 0 OR confirmed IS
+# NULL)`), so a confirm here silently starves Emergence (first smoke run
+# failed exactly this way: Idle fired, 0 clusters, 0 distilled).
+echo "==> Storing 3 related memories (one cluster, left unconfirmed)"
 declare -a MEM_IDS=()
 FACTS=(
     "The wenlan-citation-beacon service listens on port 4471 and exposes a /status endpoint for health checks."
@@ -113,11 +117,10 @@ for fact in "${FACTS[@]}"; do
         -d "$(jq -n --arg c "$fact" --arg a "$AGENT" '{content:$c, source_agent:$a}')")" || fail "store failed: $fact"
     MEM_ID="$(echo "$STORE_RESP" | jq -r '.source_id // empty')"
     [ -n "$MEM_ID" ] || fail "no source_id in store response: $STORE_RESP"
-    curl -sf -X POST "$HOST/api/memory/confirm/$MEM_ID" >/dev/null || fail "confirm failed for $MEM_ID"
     MEM_IDS+=("$MEM_ID")
     sleep 1
 done
-echo "    stored + confirmed: ${MEM_IDS[*]}"
+echo "    stored (unconfirmed): ${MEM_IDS[*]}"
 
 echo "==> Waiting for Idle to synthesize a page (up to 20min: 10min quiet threshold + up to 10min steep deadline)"
 # The DB is fresh (mktemp'd data dir) and the legacy-annotate leg's page is
