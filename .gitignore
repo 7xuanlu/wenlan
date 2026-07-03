@@ -45,7 +45,9 @@ crates/*/.fastembed_cache
 *.db
 
 # Claude
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 .mcp.json
 
 # Coverage reports
