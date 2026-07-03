@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=f453a333d51e3718409388bafd9b848ffa5fb0afecb8e76545054a3a15e31052 -->
+<!-- README_SYNC: source=README.md sha256=a317c94847ac9849d2b51045e8e6a297f10f0cd55f68498f7445fe04345e9c38 -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生时代的、会生长的个人知识库。" width="100%">
@@ -24,7 +24,7 @@
 
 **面向 AI 原生时代的、会生长的个人知识库，由你的 agents 构建，并由来源支撑。**
 
-Wenlan（文澜）的名字来自一座皇家藏书楼，它曾收藏中国规模最大的典籍之一。你的 agents 在工作时捕获它们学到的内容；你也可以加入自己已经信任的页面和来源。Wenlan 会把这两类材料提炼成带来源引用的 wiki 页面，并自行保持知识库更新。
+Wenlan（文澜）的名字来自文澜阁，一座皇家藏书楼，它曾收藏中国规模最大的典籍之一：《四库全书》。你的 agents 在工作时捕获它们学到的内容；你也可以加入自己已经信任的页面和来源。Wenlan 会把这两类材料提炼成带来源引用的 wiki 页面，并自行保持知识库更新。
 
 每次会话开始时都有简报，结束时都有交接记录，所以上下文会延续，而不是从头再来。
 

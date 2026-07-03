@@ -22,7 +22,7 @@
 
 **A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections. Your agents capture what they learn as they work, and you can add pages and sources you already trust. Wenlan turns both into source-cited wiki pages and keeps the library current on its own.
+Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections: a copy of the 四庫全書. Your agents capture what they learn as they work, and you can add pages and sources you already trust. Wenlan turns both into source-cited wiki pages and keeps the library current on its own.
 
 Each session opens with a brief and closes with a handoff, so the thread carries forward instead of restarting.
 
