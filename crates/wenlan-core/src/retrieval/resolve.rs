@@ -215,6 +215,63 @@ pub(crate) fn expiry_direction(incoming_valid: i64, existing_valid: i64) -> Expi
     }
 }
 
+/// Source-precedence ranks for doc-grounded revisions (L3 reconcile).
+///
+/// Ordered low -> high so `Ord` matches precedence: an ingested document
+/// outranks external reference material, which outranks an agent capture.
+/// Derived purely from the row's `source_agent` (NOT `source` — every memory
+/// row has source='memory'); no schema column, no per-row storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SourcePrecedence {
+    /// Agent capture or any unrecognized agent. Lowest — fail-closed: an
+    /// unknown agent can never ground a revision to a document.
+    Capture,
+    /// External reference material fetched from the web.
+    Reference,
+    /// Folder/multi-format ingested documents (L1).
+    Document,
+}
+
+/// Map a row's `source_agent` to its precedence rank.
+pub(crate) fn source_precedence(source_agent: Option<&str>) -> SourcePrecedence {
+    match source_agent {
+        Some("folder") => SourcePrecedence::Document,
+        Some("webpage") | Some("web") => SourcePrecedence::Reference,
+        _ => SourcePrecedence::Capture,
+    }
+}
+
+/// Decide direction from precedence alone. `None` on equal precedence — the
+/// caller falls back to the temporal tiebreak ([`expiry_direction`]).
+#[allow(dead_code)]
+pub(crate) fn precedence_direction(
+    incoming: SourcePrecedence,
+    existing: SourcePrecedence,
+) -> Option<ExpiryDirection> {
+    use std::cmp::Ordering;
+    match incoming.cmp(&existing) {
+        Ordering::Greater => Some(ExpiryDirection::ExistingSuperseded),
+        Ordering::Less => Some(ExpiryDirection::IncomingExpired),
+        Ordering::Equal => None,
+    }
+}
+
+/// Full conflict-direction decision: precedence first, valid-time recency only
+/// as the equal-precedence tiebreak.
+#[allow(dead_code)]
+pub(crate) fn conflict_direction(
+    incoming_source_agent: Option<&str>,
+    existing_source_agent: Option<&str>,
+    incoming_valid: i64,
+    existing_valid: i64,
+) -> ExpiryDirection {
+    precedence_direction(
+        source_precedence(incoming_source_agent),
+        source_precedence(existing_source_agent),
+    )
+    .unwrap_or_else(|| expiry_direction(incoming_valid, existing_valid))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +512,82 @@ mod tests {
         let mut c = cand("x");
         c.stability = "confirmed".into();
         assert!(!c.is_protected());
+    }
+
+    // ---- source precedence (doc-grounded revisions, L3) ----
+
+    #[test]
+    fn documents_outrank_references_and_captures() {
+        assert!(source_precedence(Some("folder")) > source_precedence(Some("webpage")));
+        assert!(source_precedence(Some("folder")) > source_precedence(None));
+        assert!(source_precedence(Some("webpage")) > source_precedence(None));
+    }
+
+    #[test]
+    fn unknown_source_agent_defaults_to_capture() {
+        // Fail-closed: unknown agents and 'reconcile' rows rank lowest.
+        assert_eq!(
+            source_precedence(Some("claude-code")),
+            SourcePrecedence::Capture
+        );
+        assert_eq!(
+            source_precedence(Some("reconcile")),
+            SourcePrecedence::Capture
+        );
+        assert_eq!(source_precedence(None), SourcePrecedence::Capture);
+    }
+
+    #[test]
+    fn document_incoming_directs_revision_of_capture_existing() {
+        assert_eq!(
+            precedence_direction(SourcePrecedence::Document, SourcePrecedence::Capture),
+            Some(ExpiryDirection::ExistingSuperseded)
+        );
+    }
+
+    #[test]
+    fn capture_incoming_against_document_existing_expires_incoming() {
+        assert_eq!(
+            precedence_direction(SourcePrecedence::Capture, SourcePrecedence::Document),
+            Some(ExpiryDirection::IncomingExpired)
+        );
+    }
+
+    #[test]
+    fn equal_precedence_defers_to_temporal_tiebreak() {
+        assert_eq!(
+            precedence_direction(SourcePrecedence::Capture, SourcePrecedence::Capture),
+            None
+        );
+    }
+
+    #[test]
+    fn precedence_overrides_recency_protecting_document_existing() {
+        // Incoming capture is NEWER (100 > 50) but existing is a document.
+        assert_eq!(
+            conflict_direction(None, Some("folder"), 100, 50),
+            ExpiryDirection::IncomingExpired
+        );
+    }
+
+    #[test]
+    fn precedence_overrides_recency_letting_document_incoming_win() {
+        // Incoming document is OLDER (50 < 100) than the existing capture.
+        assert_eq!(
+            conflict_direction(Some("folder"), None, 50, 100),
+            ExpiryDirection::ExistingSuperseded
+        );
+    }
+
+    #[test]
+    fn equal_precedence_uses_temporal_recency() {
+        assert_eq!(
+            conflict_direction(None, None, 50, 100),
+            ExpiryDirection::IncomingExpired
+        );
+        assert_eq!(
+            conflict_direction(None, None, 100, 50),
+            ExpiryDirection::ExistingSuperseded
+        );
     }
 }
