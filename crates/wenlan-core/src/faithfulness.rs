@@ -72,7 +72,7 @@ mod tests {
     fn overlap_fraction_exact_and_boundary() {
         assert_eq!(overlap_fraction("word", ""), 0.0);
         assert_eq!(overlap_fraction(".", "anything"), 1.0); // vacuous
-                                                            // 2 of 4 content tokens present => exactly 0.5 => faithful
+                                                            // 2 of 5 content tokens present => 0.4 => below the 0.5 floor
         let sent = "Rust provides memory safety guarantees.";
         let src = "rust ... memory ..."; // hits: rust, memory; misses: provides, safety, guarantees
         let f = overlap_fraction(sent, src);
