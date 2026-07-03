@@ -261,6 +261,39 @@ async fn build_backfill_changelog(
         .unwrap_or_else(|_| "[]".to_string())
 }
 
+/// Record a failed annotate attempt (guard rejection OR zero markers, per
+/// spec §6) against the page's attempt counter. On the 3rd consecutive
+/// failure, poison-pills the page (`citations = '[]'`, changelog notes the
+/// giveup with `giveup_reason`) and clears the counter; otherwise bumps it.
+async fn record_annotate_failure(
+    db: &MemoryDB,
+    page_id: &str,
+    page_version: i64,
+    giveup_reason: &str,
+) -> Result<(), WenlanError> {
+    let attempts = db
+        .get_app_metadata(&attempt_key(page_id))
+        .await?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+        + 1;
+    if attempts >= MAX_ANNOTATE_ATTEMPTS {
+        let changelog = build_backfill_changelog(db, page_id, page_version, giveup_reason).await;
+        let _ = db
+            .set_page_citations_with_changelog(page_id, Some("[]"), &changelog)
+            .await;
+        let _ = db.set_app_metadata(&attempt_key(page_id), "0").await;
+    } else {
+        let _ = db
+            .set_app_metadata(&attempt_key(page_id), &attempts.to_string())
+            .await;
+        log::info!(
+            "[citation_backfill] page {page_id} annotate attempt failed (attempt {attempts})"
+        );
+    }
+    Ok(())
+}
+
 /// Annotate-only backfill sweep: pick up to `BACKFILL_BATCH_SIZE` active pages
 /// with `citations IS NULL`, insert `[N]` markers against their memory-kind
 /// evidence, and save. A deterministic prose guard (marker-stripped output
@@ -337,48 +370,46 @@ pub async fn run_citation_backfill_tick(
             normalize_ws(&strip_markers(&out)) == normalize_ws(&strip_markers(&page.content));
         if same {
             let (body, cites, stats) = process_citation_output(&out, &numbered);
-            let json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".into());
-            let changelog =
-                build_backfill_changelog(db, &page_id, page.version + 1, &stats.summary()).await;
-            let _ = db
-                .try_update_page_content_with_changelog(
-                    &page_id,
-                    &body,
-                    &[],
-                    "citation_backfill",
-                    false,
-                    &changelog,
-                    Some(&json),
-                )
-                .await;
-            let _ = db.set_app_metadata(&attempt_key(&page_id), "0").await;
-        } else {
-            let attempts = db
-                .get_app_metadata(&attempt_key(&page_id))
-                .await?
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(0)
-                + 1;
-            if attempts >= MAX_ANNOTATE_ATTEMPTS {
-                let changelog = build_backfill_changelog(
+            if cites.is_empty() {
+                // Zero markers is a failed attempt per spec §6 ("guard
+                // rejections OR zero markers") — retry up to
+                // MAX_ANNOTATE_ATTEMPTS instead of draining the page on the
+                // first pass.
+                record_annotate_failure(
                     db,
                     &page_id,
                     page.version,
-                    "citation backfill gave up: annotate guard rejected 3x",
+                    "citation backfill gave up: zero markers after 3 attempts",
                 )
-                .await;
+                .await?;
+            } else {
+                let json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".into());
+                let changelog =
+                    build_backfill_changelog(db, &page_id, page.version + 1, &stats.summary())
+                        .await;
+                let existing_sources: Vec<&str> =
+                    page.source_memory_ids.iter().map(String::as_str).collect();
                 let _ = db
-                    .set_page_citations_with_changelog(&page_id, Some("[]"), &changelog)
+                    .try_update_page_content_with_changelog(
+                        &page_id,
+                        &body,
+                        &existing_sources,
+                        "citation_backfill",
+                        false,
+                        &changelog,
+                        Some(&json),
+                    )
                     .await;
                 let _ = db.set_app_metadata(&attempt_key(&page_id), "0").await;
-            } else {
-                let _ = db
-                    .set_app_metadata(&attempt_key(&page_id), &attempts.to_string())
-                    .await;
-                log::info!(
-                    "[citation_backfill] page {page_id} guard rejected (attempt {attempts})"
-                );
             }
+        } else {
+            record_annotate_failure(
+                db,
+                &page_id,
+                page.version,
+                "citation backfill gave up: annotate guard rejected 3x",
+            )
+            .await?;
         }
     }
     Ok(())
@@ -607,6 +638,93 @@ mod tests {
             attempts.as_deref(),
             Some("0"),
             "attempt key must be cleared"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_happy_path_preserves_source_memory_ids() {
+        // Regression: the annotate-success path must not clobber
+        // `source_memory_ids` with an empty array (it broke
+        // `recompile_single_page` / `max_source_trust_tier` / page-growth
+        // append, which all read the page's linked sources back).
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "p_sources",
+            "T",
+            None,
+            BACKFILL_BODY,
+            None,
+            None,
+            &["mem_a"],
+            &now,
+        )
+        .await
+        .unwrap();
+        insert_test_memory(&db, "mem_a", BACKFILL_MEM_CONTENT).await;
+        db.link_page_evidence("p_sources", "memory", Some("mem_a"), None, "test")
+            .await
+            .unwrap();
+
+        let annotated = format!("{BACKFILL_BODY}[1]");
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(&annotated));
+        let prompts = PromptRegistry::default();
+
+        run_citation_backfill_tick(&db, &llm, &prompts)
+            .await
+            .unwrap();
+
+        let page = db.get_page("p_sources").await.unwrap().unwrap();
+        assert_eq!(
+            page.source_memory_ids,
+            vec!["mem_a".to_string()],
+            "source_memory_ids must survive the annotate-only save"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_zero_markers_retries_before_poison_pill() {
+        // Regression: a guard-passing output with zero [N] markers must count
+        // toward the 3-attempt poison-pill (spec §6: "guard rejections OR
+        // zero markers"), not drain the page on the first tick.
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_backfill_page(&db, "p_zero", true).await;
+
+        // Guard-passing (unchanged prose), but no [N] markers inserted.
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(BACKFILL_BODY));
+        let prompts = PromptRegistry::default();
+
+        run_citation_backfill_tick(&db, &llm, &prompts)
+            .await
+            .unwrap();
+
+        assert!(
+            db.get_pages_missing_citations(10)
+                .await
+                .unwrap()
+                .contains(&"p_zero".to_string()),
+            "citations should still be NULL after one zero-marker attempt (retry, not drain)"
+        );
+        let attempts = db.get_app_metadata(&attempt_key("p_zero")).await.unwrap();
+        assert_eq!(attempts.as_deref(), Some("1"));
+
+        // Two more zero-marker ticks trigger the poison-pill.
+        for _ in 0..2 {
+            run_citation_backfill_tick(&db, &llm, &prompts)
+                .await
+                .unwrap();
+        }
+        assert!(
+            !db.get_pages_missing_citations(10)
+                .await
+                .unwrap()
+                .contains(&"p_zero".to_string()),
+            "citations should be '[]' after 3 zero-marker attempts (gave up)"
+        );
+        let log = db.get_page_changelog("p_zero").await.unwrap();
+        assert!(
+            log.contains("citation backfill gave up"),
+            "changelog: {log}"
         );
     }
 
