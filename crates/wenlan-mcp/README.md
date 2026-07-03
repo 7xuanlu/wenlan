@@ -9,11 +9,11 @@ Wenlan owns storage, search, embeddings, pages, and distill cycles. `wenlan-mcp`
 Most users should install through the root README. After `npx -y wenlan setup`, use the product CLI to configure supported clients:
 
 ```bash
-wenlan mcp add codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
-wenlan mcp add cursor --dry-run   # preview before editing JSON config
+wenlan connect codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
+wenlan connect cursor --dry-run   # preview before editing JSON config
 ```
 
-MCP-only setup gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/init`; use the Wenlan plugin for that workflow.
+MCP-only setup gives agents tools for capture, recall, context, doctor, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/setup`; use the Wenlan plugin for that workflow.
 
 If you only need the raw MCP connector config, add this to your MCP client:
 
@@ -76,8 +76,8 @@ Wenlan works immediately in **local memory** mode: storage, search, recall, and 
 
 Users can opt into more expensive distill cycles:
 
-- **On-device model:** private extraction and distillation after `wenlan model install`.
-- **Anthropic key:** richer extraction and page synthesis after `wenlan key set anthropic`.
+- **On-device model:** private extraction and distillation after `wenlan models install`.
+- **Anthropic key:** richer extraction and page synthesis after `wenlan keys set anthropic`.
 
 ## Agent Guidance
 

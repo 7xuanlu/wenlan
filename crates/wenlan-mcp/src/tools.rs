@@ -560,7 +560,7 @@ Install:
   curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
   export PATH=\"$HOME/.wenlan/bin:$PATH\"
   wenlan setup
-  wenlan install
+  wenlan background on
   wenlan status"
 }
 
@@ -661,8 +661,8 @@ fn format_doctor_message(status: &serde_json::Value) -> String {
     } else if !anthropic_key_configured && local_model_loaded.is_none() {
         msg.push_str(
             "\n\nLocal memory works now: capture, recall, and context are available. \
-             To enable richer extraction and distill cycles, run `wenlan model install` \
-             or `wenlan key set anthropic`.",
+             To enable richer extraction and distill cycles, run `wenlan models install` \
+             or `wenlan keys set anthropic`.",
         );
     }
 
@@ -2765,8 +2765,8 @@ mod tests {
         assert!(msg.contains("On-device model: not selected"));
         assert!(msg.contains("Distill cycles: off"));
         assert!(msg.contains("Local memory works now: capture, recall, and context are available"));
-        assert!(msg.contains("wenlan model install"));
-        assert!(msg.contains("wenlan key set anthropic"));
+        assert!(msg.contains("wenlan models install"));
+        assert!(msg.contains("wenlan keys set anthropic"));
     }
 
     #[test]

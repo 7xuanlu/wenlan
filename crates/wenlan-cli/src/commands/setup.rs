@@ -29,6 +29,11 @@ pub enum ModelCommand {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+    /// Set the cross-encoder reranker mode (off/lite/full).
+    Reranker {
+        /// Mode to persist; the daemon reads it at startup.
+        mode: RerankerModeArg,
+    },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +122,7 @@ pub async fn run_model(command: ModelCommand) -> anyhow::Result<()> {
             let id = model_id.unwrap_or_else(|| on_device_models::get_default_model().id.into());
             install_model(&id, yes).await
         }
+        ModelCommand::Reranker { mode } => run_reranker(mode).await,
     }
 }
 
@@ -192,8 +198,8 @@ pub async fn run_doctor() -> anyhow::Result<()> {
         println!("Distill cycles: ready for richer extraction and page synthesis.");
     } else {
         println!("Distill cycles: off until you choose a local model or Anthropic key.");
-        println!("  Run: wenlan model install");
-        println!("  Or:  wenlan key set anthropic");
+        println!("  Run: wenlan models install");
+        println!("  Or:  wenlan keys set anthropic");
     }
 
     let cwd = std::env::current_dir()?;

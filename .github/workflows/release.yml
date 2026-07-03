@@ -80,7 +80,7 @@ jobs:
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
-          > Wenlan works in local memory mode without a local model or API key. Distill cycles are opt-in with \`wenlan model install\` or \`wenlan key set anthropic\`.
+          > Wenlan works in local memory mode without a local model or API key. Distill cycles are opt-in with \`wenlan models install\` or \`wenlan keys set anthropic\`.
           INSTALL_EOF
 
           # Strip leading whitespace from heredoc indentation

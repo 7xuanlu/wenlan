@@ -1,6 +1,6 @@
 {
   "name": "wenlan",
-  "version": "0.9.5+codex.20260702051547",
+  "version": "0.10.0+codex",
   "description": "Codex-native workflow layer for Wenlan, the local-first personal memory layer for AI agents.",
   "author": {
     "name": "Qi-Xuan Lu",
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Wenlan",
     "shortDescription": "Local memory workflows for Codex",
-    "longDescription": "Adds Codex-native Wenlan workflows for session briefing, memory capture, and first-run setup on top of the existing wenlan-mcp server and local daemon.",
+    "longDescription": "Adds Codex-native Wenlan workflows for session briefing, memory capture, and first-run setup on top of the existing wenlan-mcp server and local runtime.",
     "developerName": "Qi-Xuan Lu",
     "category": "Productivity",
     "capabilities": [
@@ -33,7 +33,7 @@
     "defaultPrompt": [
       "Brief me with Wenlan before we start",
       "Capture this decision in Wenlan",
-      "Check whether Wenlan is ready"
+      "Set up Wenlan"
     ],
     "brandColor": "#2563EB",
     "screenshots": []

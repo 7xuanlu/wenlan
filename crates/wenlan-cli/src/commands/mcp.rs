@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Configure Wenlan MCP in supported clients.
+//! Connect Wenlan MCP to supported clients.
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -20,20 +20,14 @@ struct ServerCommand {
     args: Vec<String>,
 }
 
-#[derive(Subcommand)]
-pub enum McpCommand {
-    /// Add Wenlan MCP to a supported client.
-    Add(AddArgs),
-}
-
 #[derive(Args)]
-pub struct AddArgs {
+pub struct ConnectArgs {
     /// Client to configure.
     #[arg(value_enum)]
-    client: McpClient,
+    pub client: McpClient,
     /// Print the command or file edit without changing anything.
     #[arg(long)]
-    dry_run: bool,
+    pub dry_run: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -54,13 +48,11 @@ pub enum McpClient {
     Vscode,
 }
 
-pub fn run(command: McpCommand, quiet: bool) -> Result<()> {
-    match command {
-        McpCommand::Add(args) => add(args, quiet),
-    }
+pub fn run_connect(args: ConnectArgs, quiet: bool) -> Result<()> {
+    add(args, quiet)
 }
 
-fn add(args: AddArgs, quiet: bool) -> Result<()> {
+fn add(args: ConnectArgs, quiet: bool) -> Result<()> {
     let server = server_command();
     match args.client {
         McpClient::ClaudeCode => add_native(
@@ -318,8 +310,8 @@ fn home_path(parts: &[&str]) -> Result<PathBuf> {
 }
 
 fn claude_code_tools_only_note() -> &'static str {
-    "Claude Code MCP tools only: remember, recall, context, doctor, and related Wenlan tools. \
-This does not install Wenlan plugin skills like /brief, /handoff, /distill, or /init."
+    "Claude Code MCP tools only: capture, recall, context, doctor, and related Wenlan tools. \
+This does not install Wenlan plugin skills like /brief, /handoff, /distill, or /setup."
 }
 
 fn server_command() -> ServerCommand {

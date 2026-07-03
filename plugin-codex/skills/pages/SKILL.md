@@ -33,7 +33,7 @@ else
 fi
 ```
 
-If `wenlan` is not found, tell the user to run `/init`.
+If `wenlan` is not found, tell the user to run `/setup`.
 
 ## `/pages <query>`
 

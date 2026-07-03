@@ -1,0 +1,3 @@
+interface:
+  display_name: "Wenlan Setup"
+  short_description: "Set up and verify the local Wenlan runtime and MCP bridge"

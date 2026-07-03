@@ -11,7 +11,7 @@ mkdir -p "$TMPDIR_TEST/crates/wenlan-mcp/npm"
 mkdir -p "$TMPDIR_TEST/crates/wenlan-cli/npm"
 mkdir -p "$TMPDIR_TEST/plugin/.claude-plugin"
 mkdir -p "$TMPDIR_TEST/plugin/bin"
-mkdir -p "$TMPDIR_TEST/plugin/skills/init"
+mkdir -p "$TMPDIR_TEST/plugin/skills/setup"
 
 cat > "$TMPDIR_TEST/version.txt" <<EOF
 0.5.0
@@ -42,7 +42,7 @@ cat > "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" <<EOF
 exec npx -y wenlan-mcp@^0.4.1 "\$@"
 EOF
 
-cat > "$TMPDIR_TEST/plugin/skills/init/SKILL.md" <<EOF
+cat > "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" <<EOF
 Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash
 EOF
 
@@ -106,7 +106,7 @@ PLUGIN_VER=$(jq -r .version "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json")
 [[ "$WENLAN_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: wenlan npm not bumped (got $WENLAN_NPM_VER)"; exit 1; }
 [[ "$PLUGIN_VER" == "0.5.0" ]] || { echo "FAIL: plugin not bumped (got $PLUGIN_VER)"; exit 1; }
 grep -q 'wenlan-mcp@\^0.5.0' "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" || { echo "FAIL: runner pin not bumped"; exit 1; }
-grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin/skills/init/SKILL.md" || { echo "FAIL: init skill installer not bumped"; exit 1; }
+grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" || { echo "FAIL: setup skill installer not bumped"; exit 1; }
 
 # Cargo.lock: all five workspace members bumped to 0.5.0, exactly as
 # validate-versions.sh reads them (name:version pairs).

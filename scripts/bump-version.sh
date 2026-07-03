@@ -64,15 +64,15 @@ else
 fi
 echo "  Updated $PLUGIN_MCP_RUNNER (wenlan-mcp pin)"
 
-# 5. /init skill install.sh URL pinned to current tag (not `main`), so the
+# 5. /setup skill install.sh URL pinned to current tag (not `main`), so the
 # install one-liner is reproducible at the release boundary.
-INIT_SKILL="plugin/skills/init/SKILL.md"
+SETUP_SKILL="plugin/skills/setup/SKILL.md"
 if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
+    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$SETUP_SKILL"
 else
-    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$INIT_SKILL"
+    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$SETUP_SKILL"
 fi
-echo "  Updated $INIT_SKILL (install.sh tag pin)"
+echo "  Updated $SETUP_SKILL (install.sh tag pin)"
 
 # 6. Cargo.lock workspace member versions. release-please bumps the manifests
 # above but never regenerates the lockfile, so validate-versions.sh (run in

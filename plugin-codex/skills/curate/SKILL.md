@@ -52,7 +52,7 @@ fi
 "$W" --format json curate
 ```
 
-If `wenlan` is missing, tell the user to run `/init`.
+If `wenlan` is missing, tell the user to run `/setup`.
 
 The JSON array contains:
 

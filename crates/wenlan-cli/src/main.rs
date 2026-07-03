@@ -24,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show daemon, service, model, and API key state.
+    /// Show background process, model, API key, and memory state.
     Status,
     /// Guided setup for local memory, a local model, or an Anthropic key.
     Setup {
@@ -41,34 +41,27 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Install the Wenlan daemon as a macOS LaunchAgent.
-    Install,
-    /// Uninstall the Wenlan LaunchAgent.
-    Uninstall,
-    /// Restart the Wenlan daemon (stop then start). Required after an upgrade.
+    /// Control whether Wenlan keeps running in the background.
+    Background {
+        #[command(subcommand)]
+        command: commands::service::BackgroundCommand,
+    },
+    /// Restart the Wenlan background process. Required after an update.
     Restart,
-    /// Diagnose daemon, model, and API key setup.
+    /// Diagnose runtime, model, and API key setup.
     Doctor,
     /// Manage local models.
-    Model {
+    Models {
         #[command(subcommand)]
         command: commands::setup::ModelCommand,
     },
     /// Manage provider API keys.
-    Key {
+    Keys {
         #[command(subcommand)]
         command: commands::setup::KeyCommand,
     },
-    /// Set the cross-encoder reranker mode (off/lite/full; persisted to config).
-    Reranker {
-        /// Mode to persist; the daemon reads it at startup.
-        mode: commands::setup::RerankerModeArg,
-    },
-    /// Configure Wenlan MCP for supported clients.
-    Mcp {
-        #[command(subcommand)]
-        command: commands::mcp::McpCommand,
-    },
+    /// Connect Wenlan to a supported agent or editor.
+    Connect(commands::mcp::ConnectArgs),
     /// Search memories by query (vector + FTS hybrid).
     Search {
         /// Search query.
@@ -90,13 +83,13 @@ enum Commands {
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
     },
-    /// Ingest a folder (or single file) — register it as a source and sync now.
-    Ingest {
-        /// Path to a directory or file to ingest.
-        path: std::path::PathBuf,
+    /// Manage folders and files Wenlan should learn from.
+    Sources {
+        #[command(subcommand)]
+        command: commands::ingest::SourcesCommand,
     },
-    /// Store a memory. Provide text positionally, or use --file, or pipe via stdin.
-    Store {
+    /// Capture a memory. Provide text positionally, or use --file, or pipe via stdin.
+    Capture {
         /// Content text. If omitted and --file unset, read from stdin.
         text: Option<String>,
         /// Read content from a file.
@@ -107,7 +100,7 @@ enum Commands {
         memory_type: Option<String>,
     },
     /// List recent memories.
-    List {
+    Memories {
         /// Max results.
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
@@ -126,7 +119,7 @@ enum Commands {
         cmd: commands::agents::AgentsCmd,
     },
     /// Manage memory spaces (list, add, default, move, show).
-    Space {
+    Spaces {
         #[command(subcommand)]
         cmd: commands::space::SpaceCmd,
     },
@@ -154,14 +147,12 @@ async fn main() -> anyhow::Result<()> {
             })
             .await?
         }
-        Commands::Install => commands::service::install()?,
-        Commands::Uninstall => commands::service::uninstall()?,
+        Commands::Background { command } => commands::service::run_background(command)?,
         Commands::Restart => commands::service::restart()?,
         Commands::Doctor => commands::setup::run_doctor().await?,
-        Commands::Model { command } => commands::setup::run_model(command).await?,
-        Commands::Key { command } => commands::setup::run_key(command).await?,
-        Commands::Reranker { mode } => commands::setup::run_reranker(mode).await?,
-        Commands::Mcp { command } => commands::mcp::run(command, cli.quiet)?,
+        Commands::Models { command } => commands::setup::run_model(command).await?,
+        Commands::Keys { command } => commands::setup::run_key(command).await?,
+        Commands::Connect(args) => commands::mcp::run_connect(args, cli.quiet)?,
         Commands::Search { query, limit } => {
             commands::search::run(&client, format, cli.quiet, query, limit).await?
         }
@@ -169,22 +160,22 @@ async fn main() -> anyhow::Result<()> {
             commands::recall::run(&client, format, cli.quiet, query).await?
         }
         Commands::Pages { query, limit } => commands::pages::run(format, cli.quiet, query, limit)?,
-        Commands::Ingest { path } => {
-            commands::ingest::run(&client, format, cli.quiet, path).await?
+        Commands::Sources { command } => {
+            commands::ingest::run_sources(&client, format, cli.quiet, command).await?
         }
-        Commands::Store {
+        Commands::Capture {
             text,
             file,
             memory_type,
         } => commands::store::run(&client, format, cli.quiet, text, file, memory_type).await?,
-        Commands::List { limit, memory_type } => {
+        Commands::Memories { limit, memory_type } => {
             commands::list::run(&client, format, cli.quiet, limit, memory_type).await?
         }
         Commands::Curate { action } => {
             commands::curate::run(&client, format, cli.quiet, action).await?
         }
         Commands::Agents { cmd } => commands::agents::run(&client, format, cli.quiet, cmd).await?,
-        Commands::Space { cmd } => commands::space::run(&client, format, cli.quiet, cmd).await?,
+        Commands::Spaces { cmd } => commands::space::run(&client, format, cli.quiet, cmd).await?,
     }
     Ok(())
 }

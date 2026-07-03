@@ -24,6 +24,21 @@ pub const SERVICE_LABEL: &str = "com.wenlan.server";
 #[cfg(target_os = "windows")]
 pub const WINDOWS_TASK_NAME: &str = "WenlanServer";
 
+#[derive(clap::Subcommand)]
+pub enum BackgroundCommand {
+    /// Start Wenlan now and keep it running in the background after login.
+    On,
+    /// Stop Wenlan and stop keeping it running in the background.
+    Off,
+}
+
+pub fn run_background(command: BackgroundCommand) -> Result<()> {
+    match command {
+        BackgroundCommand::On => install(),
+        BackgroundCommand::Off => uninstall(),
+    }
+}
+
 fn label() -> Result<ServiceLabel> {
     SERVICE_LABEL.parse().context("invalid service label")
 }
@@ -324,7 +339,7 @@ pub fn uninstall() -> Result<()> {
 /// incumbent on port 7878 and exits). See wenlan-server/src/main.rs:582-615.
 pub fn restart() -> Result<()> {
     if !is_installed() {
-        anyhow::bail!("Wenlan service is not installed. Run `wenlan install` first.");
+        anyhow::bail!("Wenlan background process is not set up. Run `wenlan background on` first.");
     }
 
     #[cfg(target_os = "windows")]

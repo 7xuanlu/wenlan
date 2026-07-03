@@ -147,7 +147,7 @@ async function main() {
   if (args[0] === "setup") {
     const setupArgs = args.slice(1);
     run(wenlan, ["setup", ...(setupArgs.length ? setupArgs : ["--basic"])]);
-    run(wenlan, ["install"]);
+    run(wenlan, ["background", "on"]);
     run(wenlan, ["status", "--format", "table"]);
     printPathHint(dir);
     return;
