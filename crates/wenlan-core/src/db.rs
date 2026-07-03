@@ -46021,6 +46021,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn doc_reconcile_enabled_defaults_on_and_opts_out() {
+        // default ON when unset
+        temp_env::with_var("WENLAN_ENABLE_DOC_RECONCILE", None::<&str>, || {
+            assert!(doc_reconcile_enabled());
+        });
+        // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
+        for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
+            temp_env::with_var("WENLAN_ENABLE_DOC_RECONCILE", Some(v), || {
+                assert!(!doc_reconcile_enabled(), "{v:?} must disable");
+            });
+        }
+        // truthy and unrecognized values remain ON
+        for v in ["1", "true", "yes", ""] {
+            temp_env::with_var("WENLAN_ENABLE_DOC_RECONCILE", Some(v), || {
+                assert!(doc_reconcile_enabled(), "{v:?} must stay enabled");
+            });
+        }
+    }
+
+    #[test]
     fn build_cluster_populates_centroid_embedding() {
         let mems = vec![
             ClusterMemRow {
