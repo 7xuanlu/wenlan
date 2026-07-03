@@ -14,7 +14,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-no-verify.sh"
+            "command": "bash -c 'IN=$(cat); H=.claude/hooks/block-no-verify.sh; R=\"${CLAUDE_PROJECT_DIR:-}\"; [ -f \"$R/$H\" ] || R=$(git -C \"$(printf %s \"$IN\" | jq -r .cwd)\" rev-parse --show-toplevel 2>/dev/null); [ -f \"$R/$H\" ] || { echo \"block-no-verify: hook script unresolvable — failing closed\" >&2; exit 2; }; printf %s \"$IN\" | CLAUDE_PROJECT_DIR=\"$R\" bash \"$R/$H\"'"
           }
         ]
       },
@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-release-please-files.sh"
+            "command": "bash -c 'IN=$(cat); H=.claude/hooks/block-release-please-files.sh; R=\"${CLAUDE_PROJECT_DIR:-}\"; [ -f \"$R/$H\" ] || R=$(git -C \"$(printf %s \"$IN\" | jq -r .cwd)\" rev-parse --show-toplevel 2>/dev/null); [ -f \"$R/$H\" ] || { echo \"block-release-please-files: hook script unresolvable — failing closed\" >&2; exit 2; }; printf %s \"$IN\" | CLAUDE_PROJECT_DIR=\"$R\" bash \"$R/$H\"'"
           }
         ]
       }
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/cargo-check-crate.sh"
+            "command": "bash -c 'IN=$(cat); H=.claude/hooks/cargo-check-crate.sh; R=\"${CLAUDE_PROJECT_DIR:-}\"; [ -f \"$R/$H\" ] || R=$(git -C \"$(printf %s \"$IN\" | jq -r .cwd)\" rev-parse --show-toplevel 2>/dev/null); [ -f \"$R/$H\" ] || { echo \"cargo-check-crate: hook script unresolvable — skipping (advisory)\" >&2; exit 1; }; printf %s \"$IN\" | CLAUDE_PROJECT_DIR=\"$R\" bash \"$R/$H\"'"
           }
         ]
       }
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-stop-gate.sh"
+            "command": "bash -c 'IN=$(cat); H=.claude/hooks/pre-stop-gate.sh; R=\"${CLAUDE_PROJECT_DIR:-}\"; [ -f \"$R/$H\" ] || R=$(git -C \"$(printf %s \"$IN\" | jq -r .cwd)\" rev-parse --show-toplevel 2>/dev/null); [ -f \"$R/$H\" ] || { echo \"pre-stop-gate: hook script unresolvable — gate did not run\" >&2; exit 1; }; printf %s \"$IN\" | CLAUDE_PROJECT_DIR=\"$R\" bash \"$R/$H\"'"
           }
         ]
       }
