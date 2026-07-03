@@ -390,6 +390,7 @@ mod tests {
                 locator: "mem_a".into(),
                 score: 0.9,
                 status: "verified".into(),
+                scope: "sentence".into(),
             },
             PageCitation {
                 occurrence: 2,
@@ -398,6 +399,7 @@ mod tests {
                 locator: "mem_b".into(),
                 score: 0.2,
                 status: "unverified".into(),
+                scope: "paragraph".into(),
             },
         ];
         let out = render_citations(&cites);

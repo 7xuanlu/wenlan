@@ -143,6 +143,21 @@ pub fn process_citation_output(
     }
     spans.push((prev, bare_body.len()));
 
+    // Paragraph spans (blank-line delimited) for the fallback scope: small
+    // on-device models attach markers to a paragraph's closing elaboration
+    // sentence rather than the fact sentence, so a sentence-only check badges
+    // true claims (live smoke 2026-07-03: 2/3 supported claims scored 0.0).
+    // A claim that fails at sentence scope retries against its enclosing
+    // paragraph; the record's `scope` field keeps the weaker guarantee visible.
+    let para_re = regex::Regex::new(r"\n\s*\n").expect("static regex");
+    let mut para_spans: Vec<(usize, usize)> = Vec::new();
+    let mut pprev = 0;
+    for m in para_re.find_iter(&bare_body) {
+        para_spans.push((pprev, m.start()));
+        pprev = m.end();
+    }
+    para_spans.push((pprev, bare_body.len()));
+
     let mut citations = Vec::new();
     let mut occurrence = 0u32;
     let mut verified = 0usize;
@@ -176,7 +191,23 @@ pub fn process_citation_output(
             .map(|s| s.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        let claim_verified = crate::faithfulness::overlap_fraction(sentence, &union) >= 0.5;
+        // Tier 1: the marker's own sentence. Tier 2 (fallback): the
+        // enclosing paragraph — see the para_spans comment above.
+        let marker_pos = group[0].1;
+        let sentence_verified = crate::faithfulness::overlap_fraction(sentence, &union) >= 0.5;
+        let (claim_verified, scope, claim_text) = if sentence_verified {
+            (true, "sentence", sentence)
+        } else {
+            let (p_start, p_end) = para_spans
+                .iter()
+                .rev()
+                .find(|p| p.0 <= marker_pos)
+                .copied()
+                .unwrap_or((0, bare_body.len()));
+            let paragraph = bare_body[p_start..p_end].trim();
+            let para_verified = crate::faithfulness::overlap_fraction(paragraph, &union) >= 0.5;
+            (para_verified, "paragraph", paragraph)
+        };
         if claim_verified {
             verified += group.len();
         } else {
@@ -186,7 +217,8 @@ pub fn process_citation_output(
         for &(n, _) in &group {
             occurrence += 1;
             if let Some(src) = sources.get((n - 1) as usize) {
-                let score = crate::faithfulness::overlap_fraction(sentence, &src.text);
+                // Audit score at the scope that decided the status.
+                let score = crate::faithfulness::overlap_fraction(claim_text, &src.text);
                 citations.push(PageCitation {
                     occurrence,
                     marker: n,
@@ -199,6 +231,7 @@ pub fn process_citation_output(
                         "unverified"
                     }
                     .to_string(),
+                    scope: scope.to_string(),
                 });
             }
         }
@@ -477,15 +510,33 @@ mod tests {
 
     #[test]
     fn reused_marker_gets_per_occurrence_status() {
+        // Separate paragraphs so the second occurrence cannot inherit the
+        // first paragraph's support via the paragraph-scope fallback.
         let body =
-            "The daemon binds to port 7878 by default.[1] Completely unrelated quantum claim.[1]";
+            "The daemon binds to port 7878 by default.[1]\n\nCompletely unrelated quantum claim.[1]";
         let (_o, cites, _s) = process_citation_output(body, &srcs());
         assert_eq!(cites.len(), 2);
         assert_eq!((cites[0].occurrence, &cites[0].status[..]), (1, "verified"));
+        assert_eq!(cites[0].scope, "sentence");
         assert_eq!(
             (cites[1].occurrence, &cites[1].status[..]),
             (2, "unverified")
         );
+        assert_eq!(cites[1].scope, "paragraph"); // both tiers tried, both failed
+    }
+
+    #[test]
+    fn elaboration_sentence_verifies_at_paragraph_scope() {
+        // Small models attach the marker to a paragraph's closing
+        // elaboration sentence; the fact lives in the preceding sentence.
+        // Sentence scope fails, the enclosing paragraph clears the floor.
+        let body = "The daemon binds to port 7878 by default. \
+                    This binding reduces exposure.[1]";
+        let (_o, cites, _s) = process_citation_output(body, &srcs());
+        assert_eq!(cites.len(), 1);
+        assert_eq!(cites[0].status, "verified");
+        assert_eq!(cites[0].scope, "paragraph");
+        assert!(cites[0].score >= 0.5);
     }
 
     #[test]

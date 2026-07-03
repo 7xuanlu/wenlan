@@ -97,11 +97,24 @@ pub struct PageCitation {
     pub marker: u32,
     pub source_kind: String,
     pub locator: String,
-    /// claim-vs-this-source-alone content-token overlap (0..=1), audit only.
+    /// Claim-vs-this-source-alone content-token overlap (0..=1) at the
+    /// recorded `scope` granularity, audit only.
     pub score: f64,
     /// "verified" | "unverified" — decided claim-level vs the UNION of the
     /// claim's cited sources (spec §5).
     pub status: String,
+    /// Granularity that decided the status: "sentence" (the marker's own
+    /// sentence cleared the floor) or "paragraph" (sentence failed; the
+    /// enclosing paragraph cleared it — small on-device models cite at
+    /// paragraph ends, so elaboration sentences would otherwise badge true
+    /// claims). The recorded scope keeps the weaker guarantee visible to
+    /// renderers. Unverified records carry "paragraph" (both tiers tried).
+    #[serde(default = "default_citation_scope")]
+    pub scope: String,
+}
+
+fn default_citation_scope() -> String {
+    "sentence".to_string()
 }
 
 #[cfg(test)]
@@ -126,10 +139,18 @@ mod citation_tests {
             locator: "mem_a".into(),
             score: 0.31,
             status: "unverified".into(),
+            scope: "paragraph".into(),
         };
         let s = serde_json::to_string(&vec![c]).unwrap();
         let back: Vec<PageCitation> = serde_json::from_str(&s).unwrap();
         assert_eq!(back[0].occurrence, 2);
         assert_eq!(back[0].status, "unverified");
+        assert_eq!(back[0].scope, "paragraph");
+        // pre-scope records (old rows) default to "sentence"
+        let legacy: PageCitation = serde_json::from_str(
+            r#"{"occurrence":1,"marker":1,"source_kind":"memory","locator":"m","score":1.0,"status":"verified"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.scope, "sentence");
     }
 }

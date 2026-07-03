@@ -193,7 +193,7 @@ Rules:\n\
 - Preserve specifics — don't generalize away details like exact names, versions, or numbers.\n\
 - If sources contradict, keep the most recent and note the contradiction in Open Questions.\n\
 - 3-5 paragraphs total. Quality over quantity.\n\
-- Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
+- Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. Attach the marker to the exact sentence that states the fact — never at the end of a paragraph, and never on a sentence that only explains or elaborates. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
 - Do not write HTML comments (the <!-- ... --> form) anywhere in the page.";
 
 pub(crate) const UPDATE_PAGE: &str = "\
@@ -202,7 +202,7 @@ Integrate new facts into the existing prose naturally — don't just append bull
 If the new information contradicts existing content, note it in Open Questions.\n\
 Do not remove existing content unless it is explicitly superseded.\n\
 Do NOT include a title heading (# Title) -- the title is displayed separately by the UI.\n\
-Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
+Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. Attach the marker to the exact sentence that states the fact — never at the end of a paragraph, and never on a sentence that only explains or elaborates. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
 Do not write HTML comments (the <!-- ... --> form) anywhere in the page.\n\
 Output the complete updated page in the same format (TLDR, prose paragraphs, Open Questions).";
 
