@@ -105,16 +105,16 @@ npx -y wenlan setup
 
 Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan capture <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
-Service management:
+Runtime control:
 
 ```bash
-wenlan background on      # register + start the background runtime
-wenlan restart            # stop + start the background runtime after upgrading
+wenlan background on      # start or restart the background runtime
+wenlan restart            # reload after upgrades made outside setup
 wenlan status
 wenlan background off
 ```
 
-After upgrading Wenlan (`npx -y wenlan setup` or `install.sh`), the new binary is on disk but the already-running runtime keeps serving the old code until you restart it. `wenlan background on` restarts automatically; if you upgraded another way, run `wenlan restart`.
+Most users only need `npx -y wenlan setup`. Use the runtime commands when you want Wenlan to keep running in the background or after upgrading outside setup.
 
 ### Desktop app
 
@@ -208,26 +208,6 @@ Update workflow and answer-quality snapshots live in [docs/eval](docs/eval/READM
 | LME_Oracle (500 Q) | 93.6% | 0.857 | 0.883 |
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
-
----
-
-## Repo Map
-
-Wenlan is daemon-first. `wenlan-server` owns the local database, embeddings, distill cycles, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
-
-
-| Path                                                   | What lives there                                                                                                                                                                                           |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [crates/wenlan-core](crates/wenlan-core/README.md)     | Storage, search, embeddings, distill cycles, graph, pages, export, eval.                                                                                                                                   |
-| [crates/wenlan-server](crates/wenlan-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
-| [crates/wenlan-mcp](crates/wenlan-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
-| [crates/wenlan-cli](crates/wenlan-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
-| [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`).                                                                                                                                           |
-| [plugin-codex/](plugin-codex/)                         | Codex plugin (`.codex-plugin/plugin.json`, skills, `agents/openai.yaml`, `.mcp.json`).                                                                                                                     |
-| [docs/eval](docs/eval/README.md)                       | Benchmark workflow and methodology.                                                                                                                                                                        |
-
-
-Full contributor map: [CLAUDE.md](CLAUDE.md).
 
 ---
 
