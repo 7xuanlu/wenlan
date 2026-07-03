@@ -859,6 +859,18 @@ pub fn entity_sweep_enabled() -> bool {
     }
 }
 
+/// Gate for the background doc-reconcile sweep (doc-grounded revisions, L3).
+/// Opt-out: default ON; disable with WENLAN_ENABLE_DOC_RECONCILE=0/false/no/off.
+pub fn doc_reconcile_enabled() -> bool {
+    match std::env::var("WENLAN_ENABLE_DOC_RECONCILE") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
 /// True iff `WENLAN_RERANK_SKIP_PREFERENCE` is truthy. OPT-IN, default OFF.
 ///
 /// When ON, preference/recommendation-seeking queries (per
@@ -17032,7 +17044,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT supersedes, source_id, content, source_agent, last_modified \
+                "SELECT supersedes, source_id, content, source_agent, last_modified, structured_fields \
                  FROM memories \
                  WHERE pending_revision = 1 \
                    AND supersedes IS NOT NULL \
@@ -17050,6 +17062,15 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_pending_revisions row: {e}")))?
         {
+            let grounded_in = row
+                .get::<Option<String>>(5)
+                .unwrap_or(None)
+                .and_then(|sf| serde_json::from_str::<serde_json::Value>(&sf).ok())
+                .and_then(|v| {
+                    v.get("grounded_in")
+                        .and_then(|g| g.as_str())
+                        .map(str::to_string)
+                });
             out.push(wenlan_types::responses::PendingRevisionItem {
                 target_source_id: row
                     .get::<String>(0)
@@ -17064,7 +17085,265 @@ impl MemoryDB {
                 last_modified: row
                     .get::<i64>(4)
                     .map_err(|e| WenlanError::VectorDb(format!("col 4: {e}")))?,
+                grounded_in,
             });
+        }
+        Ok(out)
+    }
+
+    // ---- doc-reconcile sweep (doc-grounded revisions, L3) ----
+
+    /// Doc chunks new or re-ingested since the (ts, id, chunk) cursor, ascending.
+    pub async fn reconcile_doc_frontier(
+        &self,
+        after_ts: i64,
+        after_id: &str,
+        after_chunk: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::reconcile::ReconcileItem>, WenlanError> {
+        let sql = "SELECT source_id, chunk_index, content, space, last_modified, content_hash \
+                   FROM memories \
+                   WHERE source_agent = 'folder' \
+                     AND (last_modified > ?1 OR (last_modified = ?1 AND \
+                          (source_id > ?2 OR (source_id = ?2 AND chunk_index > ?3)))) \
+                   ORDER BY last_modified ASC, source_id ASC, chunk_index ASC \
+                   LIMIT ?4";
+        self.reconcile_frontier_rows(sql, after_ts, after_id, after_chunk, limit)
+            .await
+    }
+
+    /// Live confirmed captures created/modified since the cursor, ascending.
+    /// Excludes 'folder' (docs), 'reconcile' (accepted revisions — no self-churn),
+    /// unconfirmed rows, and rows already staged as pending revisions.
+    pub async fn reconcile_capture_frontier(
+        &self,
+        after_ts: i64,
+        after_id: &str,
+        after_chunk: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::reconcile::ReconcileItem>, WenlanError> {
+        let sql = "SELECT source_id, chunk_index, content, space, last_modified, content_hash \
+                   FROM memories \
+                   WHERE source = 'memory' AND chunk_index = 0 AND confirmed = 1 \
+                     AND pending_revision = 0 \
+                     AND (source_agent IS NULL OR source_agent NOT IN ('folder', 'reconcile')) \
+                     AND (last_modified > ?1 OR (last_modified = ?1 AND \
+                          (source_id > ?2 OR (source_id = ?2 AND chunk_index > ?3)))) \
+                   ORDER BY last_modified ASC, source_id ASC, chunk_index ASC \
+                   LIMIT ?4";
+        self.reconcile_frontier_rows(sql, after_ts, after_id, after_chunk, limit)
+            .await
+    }
+
+    async fn reconcile_frontier_rows(
+        &self,
+        sql: &str,
+        after_ts: i64,
+        after_id: &str,
+        after_chunk: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::reconcile::ReconcileItem>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                sql,
+                libsql::params![after_ts, after_id, after_chunk, limit as i64],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_frontier: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_frontier row: {e}")))?
+        {
+            out.push(crate::reconcile::ReconcileItem {
+                source_id: row.get::<String>(0).unwrap_or_default(),
+                chunk_index: row.get::<i64>(1).unwrap_or(0),
+                content: row.get::<String>(2).unwrap_or_default(),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
+                last_modified: row.get::<i64>(4).unwrap_or(0),
+                content_hash: row.get::<Option<String>>(5).unwrap_or(None),
+            });
+        }
+        Ok(out)
+    }
+
+    /// True when a revision row already carries this (revises, grounded_in, doc_hash)
+    /// triple — the file-level treadmill guard. Quoted-LIKE avoids the
+    /// LIKE-against-JSON substring class (mem_1 vs mem_10).
+    pub async fn reconcile_pair_exists(
+        &self,
+        revises: &str,
+        grounded_in: &str,
+        doc_hash: &str,
+    ) -> Result<bool, WenlanError> {
+        let p_rev = format!("%\"revises\":\"{revises}\"%");
+        let p_gnd = format!("%\"grounded_in\":\"{grounded_in}\"%");
+        let p_hash = format!("%\"doc_hash\":\"{doc_hash}\"%");
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM memories WHERE source_agent = 'reconcile' \
+                 AND structured_fields LIKE ?1 AND structured_fields LIKE ?2 \
+                 AND structured_fields LIKE ?3 LIMIT 1",
+                libsql::params![p_rev, p_gnd, p_hash],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_pair_exists: {e}")))?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_pair_exists row: {e}")))?
+            .is_some())
+    }
+
+    /// True when the capture already has ANY pending revision staged against it.
+    pub async fn capture_has_pending_revision(
+        &self,
+        capture_id: &str,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM memories WHERE pending_revision = 1 AND supersedes = ?1 LIMIT 1",
+                libsql::params![capture_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("capture_has_pending_revision: {e}")))?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("capture_has_pending_revision row: {e}")))?
+            .is_some())
+    }
+
+    /// True when MORE THAN `cap` doc-grounded revisions await human review.
+    /// Enumerates up to cap+1 rows instead of COUNT(*) (libsql COUNT-with-vector-index hazard).
+    pub async fn pending_reconcile_at_cap(&self, cap: usize) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM memories WHERE source_agent = 'reconcile' \
+                 AND pending_revision = 1 LIMIT ?1",
+                libsql::params![(cap + 1) as i64],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("pending_reconcile_at_cap: {e}")))?;
+        let mut n = 0usize;
+        while rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("pending_reconcile_at_cap row: {e}")))?
+            .is_some()
+        {
+            n += 1;
+        }
+        Ok(n > cap)
+    }
+
+    /// Vector top-k candidates on the opposite side of a frontier item, same space
+    /// (NULL matches only NULL), cosine similarity >= min_cosine.
+    /// toward_docs=true: candidates are doc chunks; false: live captures.
+    pub async fn reconcile_candidates(
+        &self,
+        item_source_id: &str,
+        item_chunk_index: i64,
+        space: Option<&str>,
+        toward_docs: bool,
+        k: usize,
+        min_cosine: f64,
+    ) -> Result<Vec<crate::reconcile::ReconcileCandidate>, WenlanError> {
+        // 1. Fetch the frontier item's stored embedding.
+        let embedding: Vec<f32> =
+            {
+                let conn = self.conn.lock().await;
+                let mut rows = conn
+                    .query(
+                        "SELECT embedding FROM memories WHERE source_id = ?1 AND chunk_index = ?2",
+                        libsql::params![item_source_id, item_chunk_index],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("reconcile_candidates emb: {e}")))?;
+                match rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("reconcile_candidates emb row: {e}"))
+                })? {
+                    Some(row) => row
+                        .get::<Vec<u8>>(0)
+                        .unwrap_or_default()
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                        .collect(),
+                    None => return Ok(Vec::new()),
+                }
+            };
+        if embedding.is_empty() {
+            return Ok(Vec::new());
+        }
+        let vec_str = Self::vec_to_sql(&embedding);
+
+        // 2. ANN probe with over-fetch; predicates cut after the probe.
+        // Deliberate asymmetry vs reconcile_capture_frontier: accepted
+        // revision rows (source_agent='reconcile') are excluded as frontier
+        // FOCUS items (no self-churn) but admitted here as CANDIDATE captures,
+        // so a doc that changes later can still propose a revision to an
+        // already-accepted revision. reconcile_pair_exists keys on doc_hash,
+        // so the unchanged doc can never re-propose (no treadmill).
+        let side_predicate = if toward_docs {
+            "c.source_agent = 'folder'"
+        } else {
+            "c.source = 'memory' AND c.chunk_index = 0 AND c.confirmed = 1 \
+             AND c.pending_revision = 0 \
+             AND (c.source_agent IS NULL OR c.source_agent != 'folder')"
+        };
+        let sql = format!(
+            "SELECT c.source_id, c.chunk_index, c.content, c.last_modified, c.created_at, \
+                    c.content_hash, c.source_agent, \
+                    vector_distance_cos(c.embedding, vector32(?1)) AS dist \
+             FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt \
+             JOIN memories c ON c.rowid = vt.id \
+             WHERE {side_predicate} \
+               AND ((?3 IS NULL AND c.space IS NULL) OR c.space = ?3) \
+               AND c.source_id != ?4 \
+             ORDER BY dist ASC"
+        );
+        let overfetch = (k * 20).max(100) as i64;
+        let space_val: libsql::Value = match space {
+            Some(s) => s.into(),
+            None => libsql::Value::Null,
+        };
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                &sql,
+                libsql::params![vec_str, overfetch, space_val, item_source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_candidates: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile_candidates row: {e}")))?
+        {
+            let dist = row.get::<f64>(7).unwrap_or(1.0);
+            let cosine = 1.0 - dist;
+            if cosine < min_cosine {
+                continue;
+            }
+            out.push(crate::reconcile::ReconcileCandidate {
+                source_id: row.get::<String>(0).unwrap_or_default(),
+                chunk_index: row.get::<i64>(1).unwrap_or(0),
+                content: row.get::<String>(2).unwrap_or_default(),
+                last_modified: row.get::<i64>(3).unwrap_or(0),
+                created_at: row.get::<Option<i64>>(4).unwrap_or(None).unwrap_or(0),
+                content_hash: row.get::<Option<String>>(5).unwrap_or(None),
+                source_agent: row.get::<Option<String>>(6).unwrap_or(None),
+                cosine,
+            });
+            if out.len() >= k {
+                break;
+            }
         }
         Ok(out)
     }
@@ -45853,6 +46132,26 @@ pub(crate) mod tests {
         for v in ["1", "true", "yes", ""] {
             temp_env::with_var("WENLAN_ENABLE_ENTITY_SWEEP", Some(v), || {
                 assert!(entity_sweep_enabled(), "{v:?} must stay enabled");
+            });
+        }
+    }
+
+    #[test]
+    fn doc_reconcile_enabled_defaults_on_and_opts_out() {
+        // default ON when unset
+        temp_env::with_var("WENLAN_ENABLE_DOC_RECONCILE", None::<&str>, || {
+            assert!(doc_reconcile_enabled());
+        });
+        // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
+        for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
+            temp_env::with_var("WENLAN_ENABLE_DOC_RECONCILE", Some(v), || {
+                assert!(!doc_reconcile_enabled(), "{v:?} must disable");
+            });
+        }
+        // truthy and unrecognized values remain ON
+        for v in ["1", "true", "yes", ""] {
+            temp_env::with_var("WENLAN_ENABLE_DOC_RECONCILE", Some(v), || {
+                assert!(doc_reconcile_enabled(), "{v:?} must stay enabled");
             });
         }
     }
