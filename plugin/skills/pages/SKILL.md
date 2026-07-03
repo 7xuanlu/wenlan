@@ -66,7 +66,7 @@ Prints the newest ~20 titles (CLI-capped; `--limit 0` for all). Show them and
 tell the user to `/pages <query>` to open one. No picker over the whole set —
 that's the lossy, 4-cap case the CLI list avoids.
 
-If `wenlan` isn't found, the CLI isn't installed — tell the user to run `/init`.
+If `wenlan` isn't found, the CLI isn't installed — tell the user to run `/setup`.
 
 ## When NOT to use
 

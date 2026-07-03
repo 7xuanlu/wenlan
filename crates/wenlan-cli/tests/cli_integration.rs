@@ -201,35 +201,72 @@ fn each_subcommand_has_help() {
         "status",
         "search",
         "recall",
-        "store",
-        "list",
+        "capture",
+        "memories",
         "agents",
         "setup",
-        "install",
-        "uninstall",
+        "background",
         "restart",
         "doctor",
-        "model",
-        "key",
-        "mcp",
+        "models",
+        "keys",
+        "connect",
+        "sources",
     ] {
         cli().args([sub, "--help"]).assert().success();
     }
 }
 
 #[test]
-fn mcp_subcommands_have_help() {
-    for args in [&["mcp", "--help"][..], &["mcp", "add", "--help"][..]] {
+fn removed_top_level_commands_are_not_advertised() {
+    let output = cli()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let help = String::from_utf8(output).expect("help is utf8");
+    for removed in [
+        "install",
+        "uninstall",
+        "mcp",
+        "store",
+        "list",
+        "space",
+        "model",
+        "key",
+        "reranker",
+        "ingest",
+    ] {
+        let advertised: Vec<&str> = help
+            .lines()
+            .filter_map(|line| line.strip_prefix("  "))
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+        assert!(
+            !advertised.contains(&removed),
+            "removed command advertised: {removed}\n{help}"
+        );
+    }
+}
+
+#[test]
+fn connect_command_has_help() {
+    for args in [
+        &["connect", "--help"][..],
+        &["connect", "claude-code", "--help"][..],
+    ] {
         cli().args(args).assert().success();
     }
 }
 
 #[test]
-fn mcp_add_claude_code_dry_run_explains_tools_only() {
+fn connect_claude_code_dry_run_explains_tools_only() {
     let runtime = IsolatedRuntime::new();
 
     cli_with_isolated_runtime(&runtime)
-        .args(["mcp", "add", "claude-code", "--dry-run"])
+        .args(["connect", "claude-code", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(
@@ -240,11 +277,11 @@ fn mcp_add_claude_code_dry_run_explains_tools_only() {
         .stdout(predicate::str::contains("/brief"))
         .stdout(predicate::str::contains("/handoff"))
         .stdout(predicate::str::contains("/distill"))
-        .stdout(predicate::str::contains("/init"));
+        .stdout(predicate::str::contains("/setup"));
 }
 
 #[test]
-fn mcp_add_native_clients_run_add_without_destructive_remove() {
+fn connect_native_clients_run_add_without_destructive_remove() {
     let wenlan_mcp = origin_mcp_sibling_arg();
     let cases = [
         (
@@ -271,7 +308,7 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
 
         cli_with_isolated_runtime(&runtime)
             .env("WENLAN_TEST_CLI_LOG", &log)
-            .args(["mcp", "add", client])
+            .args(["connect", client])
             .assert()
             .success()
             .stdout(predicate::str::contains("Configured Wenlan MCP"));
@@ -286,7 +323,7 @@ fn mcp_add_native_clients_run_add_without_destructive_remove() {
 }
 
 #[test]
-fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_wenlan() {
+fn connect_cursor_preserves_existing_servers_and_backs_up_changed_wenlan() {
     let runtime = IsolatedRuntime::new();
     let config_path = runtime.home.path().join(".cursor/mcp.json");
     fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
@@ -297,7 +334,7 @@ fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_wenlan() {
     .unwrap();
 
     cli_with_isolated_runtime(&runtime)
-        .args(["mcp", "add", "cursor"])
+        .args(["connect", "cursor"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Updated"));
@@ -329,7 +366,7 @@ fn mcp_add_cursor_preserves_existing_servers_and_backs_up_changed_wenlan() {
 }
 
 #[test]
-fn mcp_add_cursor_dry_run_prints_only_wenlan_block() {
+fn connect_cursor_dry_run_prints_only_wenlan_block() {
     let runtime = IsolatedRuntime::new();
     let config_path = runtime.home.path().join(".cursor/mcp.json");
     fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
@@ -340,7 +377,7 @@ fn mcp_add_cursor_dry_run_prints_only_wenlan_block() {
     .unwrap();
 
     cli_with_isolated_runtime(&runtime)
-        .args(["mcp", "add", "cursor", "--dry-run"])
+        .args(["connect", "cursor", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains("mcpServers.wenlan"))
@@ -354,11 +391,11 @@ fn mcp_add_cursor_dry_run_prints_only_wenlan_block() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn mcp_add_json_clients_write_expected_config_shapes() {
+fn connect_json_clients_write_expected_config_shapes() {
     let runtime = IsolatedRuntime::new();
 
     cli_with_isolated_runtime(&runtime)
-        .args(["mcp", "add", "claude-desktop"])
+        .args(["connect", "claude-desktop"])
         .assert()
         .success();
     let claude = fs::read_to_string(
@@ -373,7 +410,7 @@ fn mcp_add_json_clients_write_expected_config_shapes() {
 
     cli_with_isolated_runtime(&runtime)
         .current_dir(runtime.root.path())
-        .args(["mcp", "add", "vscode"])
+        .args(["connect", "vscode"])
         .assert()
         .success();
     let vscode = fs::read_to_string(runtime.root.path().join(".vscode/mcp.json"))
@@ -383,14 +420,14 @@ fn mcp_add_json_clients_write_expected_config_shapes() {
 }
 
 #[test]
-fn mcp_add_invalid_json_fails_without_modifying_file() {
+fn connect_invalid_json_fails_without_modifying_file() {
     let runtime = IsolatedRuntime::new();
     let config_path = runtime.home.path().join(".cursor/mcp.json");
     fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
     fs::write(&config_path, "{not json").unwrap();
 
     cli_with_isolated_runtime(&runtime)
-        .args(["mcp", "add", "cursor"])
+        .args(["connect", "cursor"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("invalid JSON"));
@@ -405,12 +442,13 @@ fn mcp_add_invalid_json_fails_without_modifying_file() {
 fn setup_subcommands_have_help() {
     for args in [
         &["setup", "--help"][..],
-        &["model", "list", "--help"][..],
-        &["model", "install", "--help"][..],
-        &["model", "status", "--help"][..],
-        &["key", "status", "--help"][..],
-        &["key", "set", "--help"][..],
-        &["key", "clear", "--help"][..],
+        &["models", "list", "--help"][..],
+        &["models", "install", "--help"][..],
+        &["models", "status", "--help"][..],
+        &["models", "reranker", "--help"][..],
+        &["keys", "status", "--help"][..],
+        &["keys", "set", "--help"][..],
+        &["keys", "clear", "--help"][..],
     ] {
         cli().args(args).assert().success();
     }
@@ -422,10 +460,10 @@ fn invalid_subcommand_fails() {
 }
 
 #[test]
-fn store_text_and_file_conflict_bails() {
+fn capture_text_and_file_conflict_bails() {
     // text=Some, file=Some -> bail at runtime (mutual exclusion)
     cli()
-        .args(["store", "some text", "--file", "/dev/null"])
+        .args(["capture", "some text", "--file", "/dev/null"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("either"));
@@ -504,10 +542,10 @@ fn restart_after_install_succeeds_isolated() {
         .arg("restart")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("not installed"));
+        .stderr(predicate::str::contains("background process is not set up"));
 
     cli_with_isolated_runtime(&runtime)
-        .arg("install")
+        .args(["background", "on"])
         .assert()
         .success();
 
@@ -521,22 +559,22 @@ fn restart_after_install_succeeds_isolated() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn install_over_running_daemon_stops_first_isolated() {
+fn background_on_over_running_daemon_stops_first_isolated() {
     let runtime = IsolatedRuntime::new();
     let log = runtime.data.path().join("launchctl.log");
 
-    // First install registers + starts the service.
+    // First background-on registers + starts the service.
     cli_with_isolated_runtime(&runtime)
-        .arg("install")
+        .args(["background", "on"])
         .assert()
         .success();
 
-    // Second install (the upgrade case): clear the log, reinstall, and assert
+    // Second background-on (the upgrade case): clear the log, re-register, and assert
     // a stop-class launchctl call happened before the new start.
     let _ = fs::remove_file(&log);
     cli_with_isolated_runtime(&runtime)
         .env("WENLAN_TEST_LAUNCHCTL_LOG", &log)
-        .arg("install")
+        .args(["background", "on"])
         .assert()
         .success();
 
@@ -548,13 +586,13 @@ fn install_over_running_daemon_stops_first_isolated() {
     // between our explicit stop and the library's internal unload-before-reload.
     assert!(
         calls.lines().any(|l| l.starts_with("stop ")),
-        "second install must explicitly call `launchctl stop` before reinstalling; launchctl calls were:\n{calls}"
+        "second background-on must explicitly call `launchctl stop` before re-registering; launchctl calls were:\n{calls}"
     );
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-fn setup_install_status_uninstall_roundtrip_isolated() {
+fn setup_background_status_roundtrip_isolated() {
     let runtime = IsolatedRuntime::new();
 
     cli_with_isolated_runtime(&runtime)
@@ -572,7 +610,7 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
     assert!(config.contains(r#""anthropic_api_key": null"#));
 
     cli_with_isolated_runtime(&runtime)
-        .arg("install")
+        .args(["background", "on"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -617,7 +655,7 @@ fn setup_install_status_uninstall_roundtrip_isolated() {
         .stdout(predicate::str::contains("\"status\": \"unreachable\""));
 
     cli_with_isolated_runtime(&runtime)
-        .arg("uninstall")
+        .args(["background", "off"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Uninstalled com.wenlan.server"));

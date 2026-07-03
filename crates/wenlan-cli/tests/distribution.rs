@@ -46,7 +46,7 @@ fn plugin_distribution_contains_required_files() {
         "plugin/skills/brief/SKILL.md",
         "plugin/skills/capture/SKILL.md",
         "plugin/skills/handoff/SKILL.md",
-        "plugin/skills/init/SKILL.md",
+        "plugin/skills/setup/SKILL.md",
         "plugin/skills/distill/SKILL.md",
     ] {
         assert_file(path);

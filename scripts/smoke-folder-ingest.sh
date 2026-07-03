@@ -74,8 +74,8 @@ Plain text fixture for the folder ingest smoke test.
 The xylophone-birch-4242 sentinel sentence is buried here.
 EOF
 
-echo "==> wenlan ingest ${FIXTURE_DIR}"
-WENLAN_HOST="$HOST" "$BIN/wenlan" ingest "$FIXTURE_DIR"
+echo "==> wenlan sources add ${FIXTURE_DIR}"
+WENLAN_HOST="$HOST" "$BIN/wenlan" sources add "$FIXTURE_DIR"
 
 echo "==> Confirming source registered with file_count > 0"
 # macOS mktemp dirs canonicalize /var -> /private/var; match on the basename.
@@ -104,7 +104,7 @@ done
 
 echo "==> Deletion propagation: remove plain.txt, re-sync, sentence must vanish"
 rm "$FIXTURE_DIR/plain.txt"
-WENLAN_HOST="$HOST" "$BIN/wenlan" ingest "$FIXTURE_DIR"
+WENLAN_HOST="$HOST" "$BIN/wenlan" sources add "$FIXTURE_DIR"
 gone=""
 for i in $(seq 1 15); do
     RESP="$(curl -sf -X POST "$HOST/api/memory/search" \

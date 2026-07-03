@@ -27,10 +27,6 @@ REQUIRED_SKILL_INTERFACE = {
         "display_name": "Wenlan Curate",
         "short_description": "Review pending Wenlan captures or revisions from Codex",
     },
-    "debrief": {
-        "display_name": "Wenlan Debrief",
-        "short_description": "End a Codex session using the brief/debrief naming pair",
-    },
     "distill": {
         "display_name": "Wenlan Distill",
         "short_description": "Synthesize or refresh source-backed Wenlan pages",
@@ -47,10 +43,6 @@ REQUIRED_SKILL_INTERFACE = {
         "display_name": "Wenlan Help",
         "short_description": "Show the Codex Wenlan command reference",
     },
-    "init": {
-        "display_name": "Wenlan Init",
-        "short_description": "Set up and verify the local Wenlan daemon and MCP bridge",
-    },
     "pages": {
         "display_name": "Wenlan Pages",
         "short_description": "List or open distilled Wenlan pages from Codex",
@@ -59,9 +51,13 @@ REQUIRED_SKILL_INTERFACE = {
         "display_name": "Wenlan Recall",
         "short_description": "Search Wenlan memories from Codex",
     },
+    "setup": {
+        "display_name": "Wenlan Setup",
+        "short_description": "Set up and verify the local Wenlan runtime and MCP bridge",
+    },
 }
 SKILLS_WITHOUT_MCP_REFERENCE = {"help", "pages"}
-SKILLS_USING_RESOLVER = {"brief", "capture", "debrief", "distill", "handoff", "recall"}
+SKILLS_USING_RESOLVER = {"brief", "capture", "distill", "handoff", "recall"}
 REQUIRED_GUARDRAILS = {
     "forget": [
         "cannot be undone",
@@ -77,11 +73,6 @@ REQUIRED_GUARDRAILS = {
         "revision_source_id",
         "Perform no mutation until the user replies",
         "Ambiguous replies do not mutate",
-    ],
-    "debrief": [
-        "Pending-captures preview",
-        "MCP captures",
-        "Write session log",
     ],
 }
 CLAUDE_ONLY_TOKENS = (
@@ -226,7 +217,7 @@ def validate_pages_skill() -> None:
         "Never read a page body",
         "Do not use a picker",
         "If several pages match, print the CLI output",
-        "If `wenlan` is not found, tell the user to run `/init`",
+        "If `wenlan` is not found, tell the user to run `/setup`",
     ]
     for needle in required:
         if needle not in text:

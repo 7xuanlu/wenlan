@@ -62,10 +62,10 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
 ```text
 /plugin marketplace add 7xuanlu/claude-plugins
 /plugin install wenlan@7xuanlu
-/init
+/setup
 ```
 
-If Claude Code asks for a restart after installing, restart once, then run `/init`. The plugin handles daemon setup, MCP wiring, local memory setup, and the first round-trip check.
+If Claude Code asks for a restart after installing, restart once, then run `/setup`. The plugin handles local runtime setup, MCP wiring, local memory setup, and the first round-trip check.
 
 Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
 
@@ -73,7 +73,7 @@ Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
 ### Codex plugin (local development)
 
-The Codex plugin lives in [plugin-codex](plugin-codex/) and is exposed through the repo-local marketplace at [.agents/plugins/marketplace.json](.agents/plugins/marketplace.json). It adds `/init`, `/brief`, `/capture`, `/recall`, `/distill`, `/pages`, `/curate`, `/forget`, `/handoff`, `/debrief`, and `/help` skills plus a `wenlan` MCP server.
+The Codex plugin lives in [plugin-codex](plugin-codex/) and is exposed through the repo-local marketplace at [.agents/plugins/marketplace.json](.agents/plugins/marketplace.json). It adds `/setup`, `/brief`, `/capture`, `/recall`, `/distill`, `/pages`, `/curate`, `/forget`, `/handoff`, and `/help` skills plus a `wenlan` MCP server.
 
 From this repo:
 
@@ -83,7 +83,7 @@ codex plugin marketplace add .
 codex plugin add wenlan@wenlan-local
 ```
 
-Start a new Codex thread after installing so the skills and MCP server load. Then try `/init`, `/brief`, `/capture <memory>`, `/recall <query>`, `/pages <query>`, or `/handoff`.
+Start a new Codex thread after installing so the skills and MCP server load. Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`, `/pages <query>`, or `/handoff`.
 
 For plugin development, reinstall after plugin edits:
 
@@ -92,7 +92,7 @@ python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster
 codex plugin add wenlan@wenlan-local
 ```
 
-The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back to `npx -y wenlan-mcp@^0.9.5`. It passes `--agent-name codex` so captures are labeled as Codex writes.
+The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back to `npx -y wenlan-mcp@^0.10.0`. It passes `--agent-name codex` so captures are labeled as Codex writes.
 
 The shared Claude/Codex plugin inventory lives in [plugin-contract.json](plugin-contract.json). Before changing plugin skills, manifests, MCP runner wiring, or the local marketplace, run:
 
@@ -108,10 +108,10 @@ Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex
 
 ```bash
 npx -y wenlan setup
-~/.wenlan/bin/wenlan mcp add claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+~/.wenlan/bin/wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install plugin slash skills like `/brief`, `/handoff`, `/distill`, or `/init`.
+MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install plugin slash skills like `/brief`, `/handoff`, `/distill`, or `/setup`.
 
 ### Terminal runtime setup
 
@@ -121,18 +121,18 @@ Set up the local Wenlan runtime:
 npx -y wenlan setup
 ```
 
-Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan store <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
+Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan capture <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 Service management:
 
 ```bash
-wenlan install            # register + start the daemon (stops a running one first)
-wenlan restart            # stop + start the daemon -- run this after upgrading
+wenlan background on      # register + start the background runtime
+wenlan restart            # stop + start the background runtime after upgrading
 wenlan status
-wenlan uninstall
+wenlan background off
 ```
 
-After upgrading Wenlan (`npx -y wenlan setup` or `install.sh`), the new binary is on disk but the already-running daemon keeps serving the old code until you restart it. `wenlan install` now restarts automatically; if you upgraded another way, run `wenlan restart`.
+After upgrading Wenlan (`npx -y wenlan setup` or `install.sh`), the new binary is on disk but the already-running runtime keeps serving the old code until you restart it. `wenlan background on` restarts automatically; if you upgraded another way, run `wenlan restart`.
 
 ---
 
@@ -193,10 +193,10 @@ Memories belong to a **space** like `wenlan`, `career`, or
 Or declaratively via `~/.wenlan/spaces.toml` (see
 `plugin/examples/spaces.toml`). To manage spaces from the CLI:
 
-    wenlan space list
-    wenlan space add ideas --default
-    wenlan space show ideas
-    wenlan space move scratch career
+    wenlan spaces list
+    wenlan spaces add ideas --default
+    wenlan spaces show ideas
+    wenlan spaces move scratch career
 
 `wenlan doctor` prints the current resolver state so you can see exactly
 which layer chose the active space.

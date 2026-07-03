@@ -656,7 +656,7 @@ async fn run_daemon() -> anyhow::Result<()> {
         tokio::spawn(async move {
             let Some(on_device_id) = on_device_id else {
                 tracing::info!(
-                    "[on-device] no local model selected, skipping init (run `wenlan model install` to enable)"
+                    "[on-device] no local model selected, skipping init (run `wenlan models install` to enable)"
                 );
                 return;
             };

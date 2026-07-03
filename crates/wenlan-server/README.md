@@ -4,7 +4,7 @@ Local daemon for Wenlan. It owns the database, embeddings, search, distill cycle
 
 ## Headless install
 
-Most users install Wenlan through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/init` runs. This page is for daemon internals. For terminal setup, use the product CLI:
+Most users install Wenlan through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/setup` runs. This page is for daemon internals. For terminal setup, use the product CLI:
 
 ```bash
 npx -y wenlan setup
@@ -16,10 +16,10 @@ The installer downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wen
 
 ```bash
 wenlan setup                  # interactive (1=local memory, 2=on-device model, 3=Anthropic key)
-wenlan setup --basic          # non-interactive local memory setup used by the plugin's /init
-wenlan model install          # opt into a local Qwen model (llama.cpp + Metal)
-wenlan key set anthropic      # opt into Anthropic-backed extraction (BYOK)
-wenlan doctor                 # diagnose daemon, model, and key state
+wenlan setup --basic          # non-interactive local memory setup used by the plugin's /setup
+wenlan models install         # opt into a local Qwen model (llama.cpp + Metal)
+wenlan keys set anthropic     # opt into Anthropic-backed extraction (BYOK)
+wenlan doctor                 # diagnose runtime, model, and key state
 ```
 
 Local memory works without a local model or API key: store, search, recall, and MCP memory are available immediately. On-device models and Anthropic keys unlock distill cycles: auto entity extraction, page synthesis, recaps, and knowledge-graph rethink.
@@ -42,8 +42,8 @@ The libSQL store lives under the platform data directory (`dirs::data_local_dir(
 ## Service Commands
 
 ```bash
-wenlan install      # register with the host service manager (launchd / systemd-user / schtasks)
-wenlan uninstall    # remove from the service manager
+wenlan background on   # register with the host service manager (launchd / systemd-user / schtasks)
+wenlan background off  # remove from the service manager
 wenlan status       # service + runtime status
 ```
 
@@ -63,7 +63,7 @@ Or build a release binary and register it with the host service manager:
 ```bash
 cargo build --release -p wenlan -p wenlan-server
 ./target/release/wenlan setup --basic
-./target/release/wenlan install
+./target/release/wenlan background on
 ./target/release/wenlan status
 ```
 
