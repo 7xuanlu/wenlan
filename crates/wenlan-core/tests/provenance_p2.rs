@@ -415,6 +415,7 @@ async fn source_less_page_embeds_title_plus_content() {
         "Detailed notes about Rust ownership, borrowing, and the lifetime system used in async code.",
         None, None, &[], &now, "authored", "confirmed",
         None, // workspace
+        None, // citations
     ).await.unwrap();
     let q = db
         .generate_embeddings(&["Rust ownership borrowing lifetimes".to_string()])

@@ -30,6 +30,7 @@ pub struct PromptRegistry {
     pub correct_memory: String,            // template with {original}, {correction}
     pub distill_page: String,
     pub update_page: String,
+    pub annotate_citations: String,
     pub assign_orphans: String,
     pub global_page_review: String,
     pub refine_clusters: String,
@@ -60,6 +61,7 @@ impl Default for PromptRegistry {
             correct_memory: defaults::CORRECT_MEMORY.to_string(),
             distill_page: defaults::DISTILL_PAGE.to_string(),
             update_page: defaults::UPDATE_PAGE.to_string(),
+            annotate_citations: defaults::ANNOTATE_CITATIONS.to_string(),
             assign_orphans: defaults::ASSIGN_ORPHANS.to_string(),
             global_page_review: defaults::GLOBAL_PAGE_REVIEW.to_string(),
             refine_clusters: defaults::REFINE_CLUSTERS.to_string(),
@@ -105,6 +107,7 @@ impl PromptRegistry {
             ("correct_memory", &mut reg.correct_memory),
             ("distill_page", &mut reg.distill_page),
             ("update_page", &mut reg.update_page),
+            ("annotate_citations", &mut reg.annotate_citations),
             ("assign_orphans", &mut reg.assign_orphans),
             ("global_page_review", &mut reg.global_page_review),
             ("refine_clusters", &mut reg.refine_clusters),
@@ -190,6 +193,7 @@ mod tests {
         assert!(!reg.correct_memory.is_empty());
         assert!(!reg.distill_page.is_empty());
         assert!(!reg.update_page.is_empty());
+        assert!(!reg.annotate_citations.is_empty());
         assert!(!reg.assign_orphans.is_empty());
         assert!(!reg.global_page_review.is_empty());
         assert!(!reg.compress_context.is_empty());

@@ -35,7 +35,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 67;
+pub const SCHEMA_VERSION: u32 = 68;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -863,6 +863,19 @@ pub fn entity_sweep_enabled() -> bool {
 /// Opt-out: default ON; disable with WENLAN_ENABLE_DOC_RECONCILE=0/false/no/off.
 pub fn doc_reconcile_enabled() -> bool {
     match std::env::var("WENLAN_ENABLE_DOC_RECONCILE") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
+/// Gate for the background citation-backfill sweep (per-claim citations,
+/// annotate-only). Opt-out: default ON; disable with
+/// WENLAN_ENABLE_CITATION_BACKFILL=0/false/no/off.
+pub fn citation_backfill_enabled() -> bool {
+    match std::env::var("WENLAN_ENABLE_CITATION_BACKFILL") {
         Ok(v) => !matches!(
             v.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off"
@@ -6171,6 +6184,37 @@ impl MemoryDB {
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m67 bump: {e}")))?;
                 log::info!("[migration] Migration 67 applied: pages.creation_kind CHECK widened to allow 'source' (folder-ingest SOURCE pages)");
+            }
+
+            // Migration 68 (per-claim citations): pages.citations — per-occurrence
+            // claim->source citation records (JSON array,
+            // wenlan_types::pages::PageCitation). NULL = never citation-processed
+            // (the backfill sweep picks it up); '[]' = processed, none. Additive
+            // ALTER COLUMN, same idempotent pattern as m64/m65.
+            if version < 68 {
+                let conn = self.conn.lock().await;
+                let has_col: bool = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'citations'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m68 col check: {e}")))?;
+                    match rows.next().await {
+                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                        _ => false,
+                    }
+                };
+                if !has_col {
+                    conn.execute("ALTER TABLE pages ADD COLUMN citations TEXT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m68 add citations: {e}")))?;
+                }
+                conn.execute("PRAGMA user_version = 68", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m68 bump: {e}")))?;
+                log::info!("[migration] Migration 68 applied: pages.citations column");
             }
         }
 
@@ -16418,7 +16462,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages WHERE status = 'active' ORDER BY created_at ASC LIMIT 1",
                 (),
             )
@@ -20796,13 +20840,20 @@ impl MemoryDB {
             "distilled",
             "confirmed",
             None, // workspace: distilled pages inherit from source memory backfill (migration 63)
+            None, // citations: legacy/non-citation-aware callers -> NULL (never citation-processed)
         )
         .await
     }
 
-    /// Like `insert_page` but with explicit `creation_kind`, `review_status`, and `workspace`.
+    /// Like `insert_page` but with explicit `creation_kind`, `review_status`, `workspace`,
+    /// and `citations_json`.
     /// All callers that need non-distilled pages (authored, research) use this.
-    /// `insert_page` is a thin wrapper that delegates with distilled/confirmed/NULL-workspace defaults.
+    /// `insert_page` is a thin wrapper that delegates with distilled/confirmed/NULL-workspace/
+    /// NULL-citations defaults.
+    ///
+    /// `citations_json`: `Some(json)` writes fresh per-claim citation records
+    /// atomically with the new page; `None` leaves the column SQL NULL, marking
+    /// the page as never citation-processed (the backfill sweep picks it up).
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_page_with_kind(
         &self,
@@ -20817,6 +20868,7 @@ impl MemoryDB {
         creation_kind: &str,
         review_status: &str,
         workspace: Option<&str>,
+        citations_json: Option<&str>,
     ) -> Result<(), WenlanError> {
         // Sanitize daemon-reserved Sources delimiters from client content so
         // persisted `Page.content` never carries them (symmetric with the
@@ -20863,16 +20915,16 @@ impl MemoryDB {
         let concept_result = match &embedding_sql {
             Some(emb) => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified, creation_kind, review_status, workspace)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9, ?10, ?11, ?12)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now, creation_kind, review_status, workspace],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, embedding, created_at, last_compiled, last_modified, creation_kind, review_status, workspace, citations)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', vector32(?8), ?9, ?9, ?9, ?10, ?11, ?12, ?13)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, emb.as_str(), now, creation_kind, review_status, workspace, citations_json],
                 ).await
             }
             None => {
                 conn.execute(
-                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, creation_kind, review_status, workspace)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8, ?9, ?10, ?11)",
-                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now, creation_kind, review_status, workspace],
+                    "INSERT INTO pages (id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, creation_kind, review_status, workspace, citations)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 'active', ?8, ?8, ?8, ?9, ?10, ?11, ?12)",
+                    libsql::params![id, title, summary, content, entity_id, space, source_ids_json, now, creation_kind, review_status, workspace, citations_json],
                 ).await
             }
         };
@@ -20931,7 +20983,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages WHERE id = ?1",
                 libsql::params![id],
             )
@@ -20949,7 +21001,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages WHERE entity_id = ?1 AND status = 'active' LIMIT 1",
                 libsql::params![entity_id],
             )
@@ -21000,7 +21052,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3",
                 libsql::params![status, limit, offset],
             )
@@ -21025,7 +21077,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages
                  WHERE status = ?1
                    AND stale_reason IS NOT NULL
@@ -21069,7 +21121,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let (sql, params): (String, Vec<libsql::Value>) = match space {
             Some("uncategorized") => (
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages WHERE status = ?1 AND space IS NULL ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -21078,7 +21130,7 @@ impl MemoryDB {
                 ],
             ),
             Some(d) => (
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -21088,7 +21140,7 @@ impl MemoryDB {
                 ],
             ),
             None => (
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
@@ -21125,9 +21177,17 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<(), WenlanError> {
-        self.try_update_page_content(id, content, source_memory_ids, link_reason, false, None)
-            .await
-            .map(|_| ())
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            false,
+            None,
+            None,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Refinery-flavoured variant of `update_page_content` that gates the
@@ -21144,14 +21204,27 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<bool, WenlanError> {
-        self.try_update_page_content(id, content, source_memory_ids, link_reason, true, None)
-            .await
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            true,
+            None,
+            None,
+        )
+        .await
     }
 
     /// Capability-fn variant: like `try_update_page_content_if_stale` but also
     /// writes a pre-computed `changelog` JSON string atomically with the content
     /// update. Called exclusively by `post_write::update_page`; all other callers
     /// go through `update_page_content` / `try_update_page_content_if_stale`.
+    ///
+    /// `citations_json`: `Some(json)` writes fresh per-claim citation records
+    /// atomically with the content; `None` resets `citations` to `'[]'` (stale
+    /// claim-maps must never survive a content change — global constraint).
+    #[allow(clippy::too_many_arguments)]
     pub async fn try_update_page_content_with_changelog(
         &self,
         id: &str,
@@ -21160,6 +21233,7 @@ impl MemoryDB {
         link_reason: &str,
         require_stale: bool,
         changelog: &str,
+        citations_json: Option<&str>,
     ) -> Result<bool, WenlanError> {
         self.try_update_page_content(
             id,
@@ -21168,12 +21242,18 @@ impl MemoryDB {
             link_reason,
             require_stale,
             Some(changelog),
+            citations_json,
         )
         .await
     }
 
     /// Internal implementation. `require_stale` gates on `stale_reason IS NOT NULL`.
     /// `changelog` when `Some` is written atomically with the content update.
+    /// `citations_json` when `Some` is written atomically with the content;
+    /// `None` always resets `citations` to `'[]'` on a content change (never
+    /// leaves a stale marker-to-source map pointing at prose that no longer
+    /// carries those markers).
+    #[allow(clippy::too_many_arguments)]
     async fn try_update_page_content(
         &self,
         id: &str,
@@ -21182,7 +21262,9 @@ impl MemoryDB {
         link_reason: &str,
         require_stale: bool,
         changelog: Option<&str>,
+        citations_json: Option<&str>,
     ) -> Result<bool, WenlanError> {
+        let citations_bind: &str = citations_json.unwrap_or("[]");
         // Sanitize daemon-reserved Sources delimiters from client content so
         // persisted `Page.content` never carries them (symmetric with the
         // watcher's egress canonicalization). Shadows `content` so both the
@@ -21224,7 +21306,8 @@ impl MemoryDB {
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
-                   changelog = ?6 \
+                   changelog = ?6, \
+                   citations = ?7 \
                  WHERE id = ?5 \
                    AND stale_reason IS NOT NULL \
                    AND COALESCE(user_edited, 0) = 0"
@@ -21237,13 +21320,22 @@ impl MemoryDB {
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
-                   changelog = ?6 \
+                   changelog = ?6, \
+                   citations = ?7 \
                  WHERE id = ?5"
             };
             match conn
                 .execute(
                     sql,
-                    libsql::params![content, source_ids_json, now, link_reason, id, cl],
+                    libsql::params![
+                        content,
+                        source_ids_json,
+                        now,
+                        link_reason,
+                        id,
+                        cl,
+                        citations_bind
+                    ],
                 )
                 .await
             {
@@ -21262,7 +21354,8 @@ impl MemoryDB {
                    last_compiled = ?3, \
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
-                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
+                   citations = ?6 \
                  WHERE id = ?5 \
                    AND stale_reason IS NOT NULL \
                    AND COALESCE(user_edited, 0) = 0"
@@ -21274,13 +21367,21 @@ impl MemoryDB {
                    last_compiled = ?3, \
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
-                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
+                   citations = ?6 \
                  WHERE id = ?5"
             };
             match conn
                 .execute(
                     sql,
-                    libsql::params![content, source_ids_json, now, link_reason, id],
+                    libsql::params![
+                        content,
+                        source_ids_json,
+                        now,
+                        link_reason,
+                        id,
+                        citations_bind
+                    ],
                 )
                 .await
             {
@@ -21460,7 +21561,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
-                        c.workspace,
+                        c.workspace, c.citations,
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
@@ -21475,7 +21576,7 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            let dist: f64 = row.get(19).unwrap_or(1.0);
+            let dist: f64 = row.get(20).unwrap_or(1.0);
             let similarity = 1.0 - dist;
             if similarity >= similarity_threshold {
                 return Ok(Some(Self::row_to_page(&row)?));
@@ -21522,7 +21623,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
-                        c.workspace,
+                        c.workspace, c.citations,
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
@@ -21538,7 +21639,7 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            let dist: f64 = row.get(19).unwrap_or(1.0);
+            let dist: f64 = row.get(20).unwrap_or(1.0);
             if 1.0 - dist >= threshold {
                 let page = Self::row_to_page(&row)?;
                 if !allow_user_edited && page.user_edited {
@@ -22076,7 +22177,7 @@ impl MemoryDB {
                               c.source_memory_ids, c.version, c.status, c.created_at, \
                               c.last_compiled, c.last_modified, \
                               COALESCE(c.sources_updated_count, 0), c.stale_reason, \
-                              COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'), c.workspace";
+                              COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'), c.workspace, c.citations";
 
         // Optional page_type clause: pages store their category in `space`.
         // When Some("recap") is passed, only pages with space='recap' are returned.
@@ -22110,7 +22211,7 @@ impl MemoryDB {
                 while let Ok(Some(row)) = rows.next().await {
                     match Self::row_to_page(&row) {
                         Ok(page) => {
-                            let distance: f64 = row.get(19).unwrap_or(1.0);
+                            let distance: f64 = row.get(20).unwrap_or(1.0);
                             let id = page.id.clone();
                             vector_results.push((id, distance, page));
                         }
@@ -22290,8 +22391,10 @@ impl MemoryDB {
     /// Parse a row into a Page. Column order must match the SELECT used in page queries.
     /// Columns 0-14 are the fixed page fields; column 15 is COALESCE(changelog,'[]');
     /// column 16 is COALESCE(creation_kind,'distilled'); column 17 is COALESCE(review_status,'confirmed');
-    /// column 18 is workspace (P3 dedicated scope axis, may be NULL).
-    /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 19.
+    /// column 18 is workspace (P3 dedicated scope axis, may be NULL); column 19 is
+    /// citations (JSON array of `wenlan_types::pages::PageCitation`, may be NULL —
+    /// NULL and unparseable both default to an empty Vec).
+    /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 20.
     fn row_to_page(row: &libsql::Row) -> Result<Page, WenlanError> {
         let source_ids_json: String = row.get::<String>(6).unwrap_or_else(|_| "[]".to_string());
         let source_memory_ids: Vec<String> =
@@ -22299,6 +22402,11 @@ impl MemoryDB {
         let changelog_str = row.get::<String>(15).unwrap_or_else(|_| "[]".to_string());
         let (last_edited_by, last_edited_at, last_delta_summary) =
             Self::parse_changelog_tail(&changelog_str);
+        let citations: Vec<wenlan_types::pages::PageCitation> = row
+            .get::<Option<String>>(19)
+            .unwrap_or(None)
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
         Ok(Page {
             id: row
                 .get::<String>(0)
@@ -22341,6 +22449,7 @@ impl MemoryDB {
                 .get::<String>(17)
                 .unwrap_or_else(|_| "confirmed".to_string()),
             workspace: row.get::<Option<String>>(18).unwrap_or(None),
+            citations,
         })
     }
 
@@ -22478,6 +22587,107 @@ impl MemoryDB {
             });
         }
         Ok(result)
+    }
+
+    /// List active pages never citation-processed (`citations IS NULL`), oldest
+    /// `last_modified` first. Feeds the annotate-only citation-backfill sweep
+    /// (`citations::run_citation_backfill_tick`). Returns bare ids (row
+    /// enumeration, no `COUNT(*)` — see the libsql vector-index COUNT bug note).
+    pub async fn get_pages_missing_citations(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<String>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM pages WHERE status = 'active' AND citations IS NULL ORDER BY last_modified ASC LIMIT ?1",
+                libsql::params![limit as i64],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_pages_missing_citations: {e}")))?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            ids.push(row.get::<String>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("get_pages_missing_citations id: {e}"))
+            })?);
+        }
+        Ok(ids)
+    }
+
+    /// Overwrite a page's `citations` column directly with a freshly computed
+    /// citation map. Used by re-distill paths that save through
+    /// `post_write::update_page` (which has no `citations` param until Task 6
+    /// wires the growth path) — the content write resets the column to `'[]'`
+    /// first, and this follow-up call persists the real `Vec<PageCitation>`
+    /// computed from the SAME body by `citations::process_citation_output`.
+    ///
+    /// `Some(json)` writes the citation map; `None` writes SQL `NULL`. Callers
+    /// use the `None` form as an explicit failure fallback: if the primary
+    /// `Some(json)` write errors (page body already carries `[N]` markers but
+    /// the content write left `citations = '[]'`), resetting to `NULL` marks
+    /// the page "never citation-processed" — the same state the annotate-only
+    /// backfill sweep (`get_pages_missing_citations`, `citations IS NULL`)
+    /// already uses to find legacy pages, so the divergence self-heals on the
+    /// next sweep instead of persisting silently forever.
+    pub async fn set_page_citations(
+        &self,
+        page_id: &str,
+        citations_json: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET citations = ?1 WHERE id = ?2",
+            libsql::params![citations_json, page_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_page_citations: {e}")))?;
+        Ok(())
+    }
+
+    /// Atomically write `citations` + `changelog` WITHOUT touching `content`,
+    /// `version`, or `last_modified`. Used by the annotate-only citation-backfill
+    /// sweep (`citations::run_citation_backfill_tick`) for its non-content
+    /// writes (no-evidence page, poison-pill giveup): those calls pass the same
+    /// body the page already has, so routing them through
+    /// `try_update_page_content_with_changelog` would incorrectly bump version
+    /// and last_modified for what is semantically not a content change.
+    pub async fn set_page_citations_with_changelog(
+        &self,
+        page_id: &str,
+        citations_json: Option<&str>,
+        changelog_json: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET citations = ?1, changelog = ?2 WHERE id = ?3",
+            libsql::params![citations_json, changelog_json, page_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_page_citations_with_changelog: {e}")))?;
+        Ok(())
+    }
+
+    /// Test-only: overwrite a page's `citations` column directly, bypassing the
+    /// content-update reset rule. Used to seed a "has stale citations" fixture
+    /// state that a subsequent content update must clear back to `'[]'`.
+    #[cfg(test)]
+    pub async fn set_page_citations_for_test(
+        &self,
+        page_id: &str,
+        citations_json: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET citations = ?1 WHERE id = ?2",
+            libsql::params![citations_json, page_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_page_citations_for_test: {e}")))?;
+        Ok(())
     }
 
     /// Idempotent typed-evidence link. authored rows (NULL locator) never collide.
@@ -22649,7 +22859,7 @@ impl MemoryDB {
                         c.source_memory_ids, c.version, c.status, c.created_at, c.last_compiled, c.last_modified,
                         COALESCE(c.sources_updated_count, 0), c.stale_reason, COALESCE(c.user_edited, 0),
                         COALESCE(c.changelog, '[]'), COALESCE(c.creation_kind, 'distilled'), COALESCE(c.review_status, 'confirmed'),
-                        c.workspace
+                        c.workspace, c.citations
                  FROM pages c
                  INNER JOIN page_sources cs ON c.id = cs.page_id
                  WHERE cs.memory_source_id = ?1 AND c.status = 'active'",
@@ -23093,7 +23303,7 @@ impl MemoryDB {
     ) -> Result<Vec<crate::pages::Page>, WenlanError> {
         let conn = self.conn.lock().await;
         let mut sql = String::from(
-            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace \
+            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations \
              FROM pages WHERE stale_reason = ?1 AND status = 'active'",
         );
         let mut bind: Vec<libsql::Value> = vec![libsql::Value::Text(reason.to_string())];
@@ -23129,7 +23339,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace
+                "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
                  FROM pages
                  WHERE status = 'archived'
                    AND entity_id IS NULL
@@ -25536,6 +25746,7 @@ pub(crate) mod tests {
             creation_kind: "distilled".to_string(),
             review_status: "confirmed".to_string(),
             workspace: workspace.map(|w| w.to_string()),
+            citations: Vec::new(),
         }
     }
 
@@ -32432,6 +32643,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -32447,6 +32659,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("work"),
+            None,
         )
         .await
         .unwrap();
@@ -32507,6 +32720,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("ghost"),
+            None,
         )
         .await
         .unwrap();
@@ -32564,6 +32778,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -32579,6 +32794,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("old"),
+            None,
         )
         .await
         .unwrap();
@@ -32688,6 +32904,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("ghost"),
+            None,
         )
         .await
         .unwrap();
@@ -38093,6 +38310,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("origin"),
+            None,
         )
         .await
         .unwrap();
@@ -40246,6 +40464,7 @@ pub(crate) mod tests {
             "fs_edit",
             false,
             "User-edited content",
+            None,
         )
         .await
         .unwrap();
@@ -40274,6 +40493,7 @@ pub(crate) mod tests {
             "fs_edit",
             false,
             "user-edited",
+            None,
         )
         .await
         .unwrap();
@@ -40931,6 +41151,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -40946,6 +41167,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("src"),
+            None,
         )
         .await
         .unwrap();
@@ -41093,6 +41315,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("ghost"),
+            None,
         )
         .await
         .unwrap();
@@ -41151,6 +41374,7 @@ pub(crate) mod tests {
             "authored",
             "confirmed",
             Some("work"),
+            None,
         )
         .await
         .unwrap();
@@ -41788,6 +42012,7 @@ pub(crate) mod tests {
             creation_kind: "distilled".to_string(),
             review_status: "confirmed".to_string(),
             workspace: None,
+            citations: Vec::new(),
         };
         let r = MemoryDB::search_result_from_page(page);
         assert_eq!(r.source, "page");
@@ -44403,8 +44628,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (67 after the pages.creation_kind='source' widen).
-        assert_eq!(uv, 67);
+        // the current SCHEMA_VERSION (68 after the pages.citations column).
+        assert_eq!(uv, 68);
     }
 
     #[tokio::test]
@@ -44421,7 +44646,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 67,
+            uv, 68,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -44455,7 +44680,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 67);
+        assert_eq!(uv, 68);
     }
 
     #[tokio::test]
@@ -44472,7 +44697,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 67,
+            uv, 68,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -44521,8 +44746,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 67,
-            "terminal version is 67 after the pages.creation_kind='source' widen"
+            uv, 68,
+            "terminal version is 68 after the pages.citations column"
         );
     }
 
@@ -44540,7 +44765,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 67,
+            uv, 68,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -46154,6 +46379,91 @@ pub(crate) mod tests {
                 assert!(doc_reconcile_enabled(), "{v:?} must stay enabled");
             });
         }
+    }
+
+    #[test]
+    fn citation_backfill_enabled_defaults_on_and_opts_out() {
+        // default ON when unset
+        temp_env::with_var("WENLAN_ENABLE_CITATION_BACKFILL", None::<&str>, || {
+            assert!(citation_backfill_enabled());
+        });
+        // explicit opt-out values: 0 / false / no / off (and whitespace/case variants)
+        for v in ["0", "false", "no", "off", " 0 ", "FALSE", "OFF"] {
+            temp_env::with_var("WENLAN_ENABLE_CITATION_BACKFILL", Some(v), || {
+                assert!(!citation_backfill_enabled(), "{v:?} must disable");
+            });
+        }
+        // truthy and unrecognized values remain ON
+        for v in ["1", "true", "yes", ""] {
+            temp_env::with_var("WENLAN_ENABLE_CITATION_BACKFILL", Some(v), || {
+                assert!(citation_backfill_enabled(), "{v:?} must stay enabled");
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_68_adds_citations_column_null_for_legacy() {
+        let (db, _dir) = test_db().await;
+        // legacy insert path writes NULL citations
+        db.insert_page(
+            "p_legacy",
+            "T",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            "2026-07-03T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let ids = db.get_pages_missing_citations(10).await.unwrap();
+        assert!(ids.contains(&"p_legacy".to_string()));
+    }
+
+    #[tokio::test]
+    async fn content_update_without_citations_resets_to_empty() {
+        let (db, _dir) = test_db().await;
+        db.insert_page(
+            "p1",
+            "T",
+            None,
+            "old body",
+            None,
+            None,
+            &[],
+            "2026-07-03T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        // pretend it had citations
+        db.set_page_citations_for_test(
+            "p1",
+            r#"[{"occurrence":1,"marker":1,"source_kind":"memory","locator":"m","score":1.0,"status":"verified"}]"#,
+        )
+        .await
+        .unwrap();
+        let ok = db
+            .try_update_page_content_with_changelog(
+                "p1",
+                "new body",
+                &[],
+                "test",
+                false,
+                "[]",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(ok);
+        let page = db.get_page("p1").await.unwrap().unwrap();
+        assert!(page.citations.is_empty());
+        // '[]' (processed, none) — not NULL, so the backfill sweep must not re-pick it.
+        assert!(!db
+            .get_pages_missing_citations(10)
+            .await
+            .unwrap()
+            .contains(&"p1".to_string()));
     }
 
     #[test]

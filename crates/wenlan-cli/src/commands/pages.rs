@@ -225,6 +225,35 @@ pub fn run(format: OutputFormat, quiet: bool, query: Option<String>, limit: usiz
     Ok(())
 }
 
+/// Render a page's per-claim citations for terminal display: verified
+/// citations show plain, unverified ones carry the exact spec-mandated badge
+/// text (never "false" — see spec §5). Empty input renders empty (no
+/// dangling "Citations:" header for uncited pages).
+///
+/// Reference implementation: `wenlan pages` currently reads pages from local
+/// markdown files (no daemon round-trip, by design — see module doc), so
+/// citation data (which lives on the DB-backed `Page`/`PageCitation` served
+/// via `GET /api/pages/{id}`) isn't wired into this command's print path yet.
+/// This helper demonstrates the rendering contract for that future caller.
+#[allow(dead_code)] // reference implementation — not yet wired to a live fetch path, see doc above
+fn render_citations(citations: &[wenlan_types::pages::PageCitation]) -> String {
+    if citations.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nCitations:\n");
+    for c in citations {
+        if c.status == "verified" {
+            out.push_str(&format!("  [{}] {}\n", c.marker, c.locator));
+        } else {
+            out.push_str(&format!(
+                "  [{}] {} — ⚠ not directly traceable to a source\n",
+                c.marker, c.locator
+            ));
+        }
+    }
+    out
+}
+
 fn print_list(shown: &[(String, usize)], total_titles: usize, total_pages: usize, dir: &Path) {
     if total_pages == 0 {
         println!("(no pages in {})", dir.display());
@@ -348,6 +377,35 @@ mod tests {
         sort_newest_first(&mut v);
         let order: Vec<&str> = v.iter().map(|p| p.title.as_str()).collect();
         assert_eq!(order, ["New", "Mid", "Old"]);
+    }
+
+    #[test]
+    fn render_citations_verified_and_badged() {
+        use wenlan_types::pages::PageCitation;
+        let cites = vec![
+            PageCitation {
+                occurrence: 1,
+                marker: 1,
+                source_kind: "memory".into(),
+                locator: "mem_a".into(),
+                score: 0.9,
+                status: "verified".into(),
+                scope: "sentence".into(),
+            },
+            PageCitation {
+                occurrence: 2,
+                marker: 2,
+                source_kind: "memory".into(),
+                locator: "mem_b".into(),
+                score: 0.2,
+                status: "unverified".into(),
+                scope: "paragraph".into(),
+            },
+        ];
+        let out = render_citations(&cites);
+        assert!(out.contains("[1] mem_a"));
+        assert!(out.contains("⚠ not directly traceable"));
+        assert!(!render_citations(&[]).contains("Citations"));
     }
 
     #[test]

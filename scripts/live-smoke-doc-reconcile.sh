@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Smoke test: the doc-reconcile sweep (doc-grounded revisions, L3) fires in a
-# LIVE daemon with a REAL on-device judge — the two seams the e2e suite stubs
+# Live smoke test: the doc-reconcile sweep (doc-grounded revisions, L3) fires
+# in a LIVE daemon with a REAL on-device judge — the two seams the e2e suite stubs
 # (scheduler wiring + real model output through the parser). L7 manual: needs
 # the qwen3-4b GGUF already in the HF cache (~2.5GB; `wenlan model install`),
 # so it cannot run in CI. Isolated port + data dir per repo smoke-test policy.

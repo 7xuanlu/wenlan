@@ -881,19 +881,17 @@ pub(crate) async fn re_distill_stale_pages(
         }
 
         const MEM_SNIPPET_CAP: usize = 800;
-        let memories_block: String = memories
+        let numbered: Vec<crate::citations::NumberedSource> = memories
             .iter()
-            .map(|m| {
-                let snippet: String = m.content.chars().take(MEM_SNIPPET_CAP).collect();
-                let snippet = if m.content.chars().count() > MEM_SNIPPET_CAP {
-                    format!("{}...", snippet.trim_end())
-                } else {
-                    snippet
-                };
-                format!("[{}] {}", m.source_id, snippet)
+            .enumerate()
+            .map(|(i, m)| crate::citations::NumberedSource {
+                index: (i + 1) as u32,
+                source_kind: "memory".to_string(),
+                locator: m.source_id.clone(),
+                text: m.content.chars().take(MEM_SNIPPET_CAP).collect(),
             })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+            .collect();
+        let memories_block = crate::citations::build_numbered_block(&numbered);
 
         let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
         let response = llm_ref
@@ -913,6 +911,15 @@ pub(crate) async fn re_distill_stale_pages(
                     .trim()
                     .to_string();
                 if !content.is_empty() {
+                    // Verify [N] markers against the numbered sources; out-of-
+                    // range markers are stripped from the body before saving.
+                    let (content, cites, stats) =
+                        crate::citations::process_citation_output(&content, &numbered);
+                    log::info!(
+                        "[re-distill-stale] page '{}' citations: {}",
+                        page.title,
+                        stats.summary()
+                    );
                     // Real CAS: require_stale=true means the write only lands
                     // when stale_reason IS NOT NULL, so a concurrent agent-side
                     // PUT that cleared staleness wins the race without TOCTOU.
@@ -926,9 +933,31 @@ pub(crate) async fn re_distill_stale_pages(
                         "re_distill",
                         true,
                         knowledge_path,
+                        None,
                     )
                     .await?;
                     if result.wrote {
+                        // `update_page` has no `citations` param until Task 6
+                        // wires the growth path, so the content write resets
+                        // the column to '[]'; persist the real citation map
+                        // computed from this same body as a follow-up write
+                        // (else the backfill sweep, IS NULL only, would never
+                        // re-visit this page).
+                        let citations_json =
+                            serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
+                        if let Err(e) = db.set_page_citations(&page.id, Some(&citations_json)).await
+                        {
+                            log::warn!(
+                                "[re-distill-stale] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
+                                page.title
+                            );
+                            if let Err(e2) = db.set_page_citations(&page.id, None).await {
+                                log::error!(
+                                    "[re-distill-stale] citations NULL fallback also failed for '{}': {e2}",
+                                    page.title
+                                );
+                            }
+                        }
                         db.clear_page_staleness(&page.id).await?;
                         recompiled += 1;
                         log::info!("[re-distill-stale] refreshed page '{}'", page.title);
