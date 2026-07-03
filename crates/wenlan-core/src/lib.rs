@@ -14,6 +14,7 @@ pub mod briefing;
 pub mod cache;
 pub mod chat_import;
 pub mod chunker;
+pub mod citations;
 pub mod classify;
 pub mod config;
 pub mod context_packager;
