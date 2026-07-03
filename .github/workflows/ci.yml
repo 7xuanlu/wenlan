@@ -242,7 +242,7 @@ jobs:
         # behind #![cfg(feature = "eval-harness")] — without the flag they
         # compile to 0 tests and pass silently. Explicit --test selection
         # keeps eval_harness.rs (needs ANTHROPIC_API_KEY) out of the build.
-        run: cargo nextest run -p wenlan-core --features eval-harness --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e --test folder_ingest_e2e --test doc_reconcile_e2e --test build_env --test eval_cost_caps --test eval_report_paths --test eval_report_roundtrip --test eval_save_guards
+        run: cargo nextest run -p wenlan-core --features eval-harness --test chat_import_e2e --test distillation_quality --test provenance_p2 --test provenance_p3 --test space_scoping_e2e --test folder_ingest_e2e --test doc_reconcile_e2e --test page_citations_e2e --test build_env --test eval_cost_caps --test eval_report_paths --test eval_report_roundtrip --test eval_save_guards
       - name: Run embedding-only eval (main only, Linux)
         if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         env:
