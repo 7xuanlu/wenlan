@@ -1350,8 +1350,17 @@ pub(crate) async fn recompile_single_page(
                     // map computed from this same body as a follow-up write.
                     let citations_json =
                         serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-                    if let Err(e) = db.set_page_citations(&page.id, &citations_json).await {
-                        log::warn!("[re-distill] persist citations failed: {e}");
+                    if let Err(e) = db.set_page_citations(&page.id, Some(&citations_json)).await {
+                        log::warn!(
+                            "[re-distill] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
+                            page.title
+                        );
+                        if let Err(e2) = db.set_page_citations(&page.id, None).await {
+                            log::error!(
+                                "[re-distill] citations NULL fallback also failed for '{}': {e2}",
+                                page.title
+                            );
+                        }
                     }
                     log::info!("[re-distill] refreshed page '{}'", page.title);
                     return Ok(true);
@@ -1480,8 +1489,17 @@ pub async fn deep_distill_single(
         // follow-up write rather than let the content write's '[]' reset
         // stick (which the backfill sweep, IS NULL only, would never re-visit).
         let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-        if let Err(e) = db.set_page_citations(page_id, &citations_json).await {
-            log::warn!("[distill] persist citations failed: {e}");
+        if let Err(e) = db.set_page_citations(page_id, Some(&citations_json)).await {
+            log::warn!(
+                "[distill] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
+                page.title
+            );
+            if let Err(e2) = db.set_page_citations(page_id, None).await {
+                log::error!(
+                    "[distill] citations NULL fallback also failed for '{}': {e2}",
+                    page.title
+                );
+            }
         }
         log::info!(
             "[distill] re-distilled page '{}' (v{}->v{})",

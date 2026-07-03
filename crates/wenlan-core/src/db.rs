@@ -22624,10 +22624,19 @@ impl MemoryDB {
     /// wires the growth path) — the content write resets the column to `'[]'`
     /// first, and this follow-up call persists the real `Vec<PageCitation>`
     /// computed from the SAME body by `citations::process_citation_output`.
+    ///
+    /// `Some(json)` writes the citation map; `None` writes SQL `NULL`. Callers
+    /// use the `None` form as an explicit failure fallback: if the primary
+    /// `Some(json)` write errors (page body already carries `[N]` markers but
+    /// the content write left `citations = '[]'`), resetting to `NULL` marks
+    /// the page "never citation-processed" — the same state the annotate-only
+    /// backfill sweep (`get_pages_missing_citations`, `citations IS NULL`)
+    /// already uses to find legacy pages, so the divergence self-heals on the
+    /// next sweep instead of persisting silently forever.
     pub async fn set_page_citations(
         &self,
         page_id: &str,
-        citations_json: &str,
+        citations_json: Option<&str>,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         conn.execute(

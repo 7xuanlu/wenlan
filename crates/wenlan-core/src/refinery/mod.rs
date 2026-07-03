@@ -944,8 +944,18 @@ pub(crate) async fn re_distill_stale_pages(
                         // re-visit this page).
                         let citations_json =
                             serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-                        if let Err(e) = db.set_page_citations(&page.id, &citations_json).await {
-                            log::warn!("[re-distill-stale] persist citations failed: {e}");
+                        if let Err(e) = db.set_page_citations(&page.id, Some(&citations_json)).await
+                        {
+                            log::warn!(
+                                "[re-distill-stale] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
+                                page.title
+                            );
+                            if let Err(e2) = db.set_page_citations(&page.id, None).await {
+                                log::error!(
+                                    "[re-distill-stale] citations NULL fallback also failed for '{}': {e2}",
+                                    page.title
+                                );
+                            }
                         }
                         db.clear_page_staleness(&page.id).await?;
                         recompiled += 1;
