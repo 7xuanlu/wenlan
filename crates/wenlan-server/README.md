@@ -80,9 +80,9 @@ See [CLAUDE.md](../../CLAUDE.md) for the full route and module map.
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the first memory loop
-- [useorigin.app/docs/mcp-clients](https://useorigin.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started) — install + verify the first memory loop
+- [wenlan.app/docs/mcp-clients](https://wenlan.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 
 ## License

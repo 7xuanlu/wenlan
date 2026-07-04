@@ -1,6 +1,6 @@
 # wenlan-cli
 
-Wenlan's product CLI. Use it to set up the local runtime, manage the background service, search and recall memory, capture new memories, configure models/API keys, and run doctor checks.
+Wenlan's product CLI. Use it to set up the local runtime, control background mode, search and recall memory, capture new memories, configure models/API keys, and run doctor checks.
 
 License: Apache-2.0.
 
@@ -12,7 +12,7 @@ Recommended user setup:
 npx -y wenlan setup
 ```
 
-The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, registers the background runtime with the host's native service manager (launchd on macOS, systemd-user on Linux, Task Scheduler on Windows), and verifies status.
+The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, starts the background runtime, and verifies status.
 
 For local development:
 
@@ -39,7 +39,7 @@ export WENLAN_HOST=http://127.0.0.1:7878  # default
 
 ### `wenlan status`
 
-Show background process, native service (launchd / systemd-user / sc.exe), model, and API key state.
+Show background runtime, model, and API key state.
 
 ```bash
 wenlan status
@@ -59,11 +59,7 @@ wenlan setup --anthropic-api-key-env ANTHROPIC_API_KEY
 
 ### `wenlan background <on|off>`
 
-Register or remove the background runtime with the host's native service manager. The service runs the sibling `wenlan-server` binary next to `wenlan`.
-
-- **macOS**: launchd user agent at `~/Library/LaunchAgents/com.wenlan.server.plist`.
-- **Linux**: systemd user unit at `~/.config/systemd/user/wenlan-server.service`. `loginctl enable-linger` if you want it alive after logout.
-- **Windows**: per-user Task Scheduler ONLOGON task.
+Start, restart, or remove the per-user background runtime. Most users run `wenlan background on` once after setup and `wenlan restart` after upgrades installed outside `wenlan setup`.
 
 ```bash
 wenlan background on
@@ -73,7 +69,7 @@ wenlan restart
 
 ### `wenlan doctor`
 
-Diagnose runtime reachability, native service state (launchd / systemd-user / sc.exe), model setup, and API key setup.
+Diagnose runtime reachability, background mode, model setup, and API key setup.
 
 ```bash
 wenlan doctor
@@ -199,11 +195,12 @@ wenlan sources add ~/Notes/project.md
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/docs/get-started](https://useorigin.app/docs/get-started) — install + verify the first memory loop
-- [useorigin.app/docs/commands](https://useorigin.app/docs/commands) — Claude Code commands and MCP tools reference
-- [useorigin.app/docs/troubleshooting](https://useorigin.app/docs/troubleshooting) — common failure modes
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started) — install + verify the first memory loop
+- [wenlan.app/docs/commands](https://wenlan.app/docs/commands) — Claude Code commands and MCP tools reference
+- [wenlan.app/docs/troubleshooting](https://wenlan.app/docs/troubleshooting) — common failure modes
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
+- [github.com/7xuanlu/wenlan/releases/latest](https://github.com/7xuanlu/wenlan/releases/latest) — desktop app and runtime downloads
 
 ## License
 

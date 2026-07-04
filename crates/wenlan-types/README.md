@@ -14,8 +14,8 @@ Pre-1.0. Expect minor version bumps to include breaking changes, per Rust 0.x co
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/docs](https://useorigin.app/docs) — install + daily workflow
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/docs](https://wenlan.app/docs) — install + daily workflow
 - [wenlan-mcp on crates.io](https://crates.io/crates/wenlan-mcp) — sibling crate
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 

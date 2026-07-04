@@ -66,7 +66,7 @@ instead of falling back to `personal`.
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/docs/commands](https://useorigin.app/docs/commands) — full Claude Code commands and MCP tools reference
-- [useorigin.app/docs/daily-workflow](https://useorigin.app/docs/daily-workflow) — brief/capture/recall/handoff loop
-- [useorigin.app/learn/claude-code-memory](https://useorigin.app/learn/claude-code-memory) — Claude Code memory concept article
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/docs/commands](https://wenlan.app/docs/commands) — full Claude Code commands and MCP tools reference
+- [wenlan.app/docs/daily-workflow](https://wenlan.app/docs/daily-workflow) — brief/capture/recall/handoff loop
+- [wenlan.app/learn/claude-code-memory](https://wenlan.app/learn/claude-code-memory) — Claude Code memory concept article

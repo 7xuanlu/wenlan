@@ -48,5 +48,5 @@ Run summary: `docs/eval/results/lme_s_fullstack_ce_reranker_best.summary.json`.
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app#benchmarks](https://useorigin.app/#benchmarks) — the public benchmark table sourced from this workflow
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app#benchmarks](https://wenlan.app/#benchmarks) — the public benchmark table sourced from this workflow

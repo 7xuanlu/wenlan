@@ -6,7 +6,7 @@
     "name": "Qi-Xuan Lu",
     "url": "https://github.com/7xuanlu"
   },
-  "homepage": "https://useorigin.app",
+  "homepage": "https://wenlan.app",
   "repository": "https://github.com/7xuanlu/wenlan",
   "license": "Apache-2.0",
   "keywords": [
@@ -29,7 +29,7 @@
       "Read",
       "Write"
     ],
-    "websiteURL": "https://useorigin.app",
+    "websiteURL": "https://wenlan.app",
     "defaultPrompt": [
       "Brief me with Wenlan before we start",
       "Capture this decision in Wenlan",

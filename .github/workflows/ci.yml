@@ -95,16 +95,14 @@ jobs:
             echo 'json=["ubuntu-24.04", "macos-14"]' >> "$GITHUB_OUTPUT"
           fi
 
-  # fmt + lint always run (cheap, cached). Skipping them based on
-  # detect-changes outputs created a FAIL-OPEN path: if detect-changes
-  # failed, its `outputs.rust` was empty, fmt/lint/test all skipped, and
-  # the conclusion gate accepted `skipped` as success → green CI with
-  # zero verification. Always-on fmt+lint closes that surface for the
-  # cheap jobs; the conclusion gate now also fails the build when
-  # detect-changes itself did not succeed.
+  # Rust fmt + lint only run when Rust-affecting paths changed. Docs/image-only
+  # PRs should still get the required aggregate `conclusion` check, but they
+  # should not spend runners on Cargo jobs. The fail-open surface is closed by
+  # `conclusion`, which explicitly fails if `detect-changes` itself fails.
   fmt:
     name: fmt
-    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
+    needs: [detect-changes]
+    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -116,8 +114,8 @@ jobs:
 
   lint:
     name: lint
-    needs: [fmt]
-    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
+    needs: [detect-changes, fmt]
+    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -260,8 +258,9 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: |
           set -euo pipefail
-          sudo loginctl enable-linger $(whoami)
-          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          sudo loginctl enable-linger "$(whoami)"
+          uid="$(id -u)"
+          export XDG_RUNTIME_DIR="/run/user/$uid"
           # Build native (cargo nextest run --workspace --lib already built tests,
           # but the install path needs the actual release-or-debug binaries).
           cargo build -p wenlan -p wenlan-server
@@ -416,11 +415,8 @@ jobs:
   #
   # detect-changes.result is checked explicitly: if the path filter itself
   # fails, downstream jobs would be skipped silently and this gate would
-  # have passed pre-fix. fmt + lint always run now, so `skipped` on them
-  # only occurs on release-please bot pushes (acceptable). plugin + npm are
-  # path-filtered, so `skipped` is their normal state on PRs not touching
-  # those surfaces — before they were added here, a broken plugin.json or
-  # npm package could go red without blocking the merge.
+  # otherwise pass. fmt/lint/test/plugin/npm are path-filtered, so `skipped`
+  # is their normal state on PRs not touching those surfaces.
   conclusion:
     name: conclusion
     needs: [detect-changes, fmt, lint, test, plugin, npm]

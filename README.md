@@ -2,27 +2,18 @@
   <img src="./docs/assets/social-preview.png" alt="Wenlan: a living personal knowledge library for the AI-native age." width="100%">
 </p>
 
-[![CI](https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain)
-[![Release](https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver)](https://github.com/7xuanlu/wenlan/releases/latest)
-[![npm: wenlan](https://img.shields.io/npm/v/wenlan?label=wenlan)](https://www.npmjs.com/package/wenlan)
-[![npm: wenlan-mcp](https://img.shields.io/npm/v/wenlan-mcp?label=wenlan-mcp)](https://www.npmjs.com/package/wenlan-mcp)
-[![MCP Server](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
-
 <p align="center">
-  <img alt="macOS" src="https://img.shields.io/badge/macOS-arm64%20%7C%20x64-A2AAAD?logo=apple&logoColor=white">
-  <img alt="Linux" src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-FCC624?logo=linux&logoColor=black">
-  <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D6?logo=windows&logoColor=white">
+  <a href="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
+  <a href="https://github.com/7xuanlu/wenlan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver&label=release"></a>
+  <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
 </p>
 
 <p align="center">
   <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
-  <a href="#codex-plugin-local-development"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-plugin-111827"></a>
-  <a href="#mcp-only-setup"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-MCP-111111"></a>
-  <a href="#mcp-only-setup"><img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-MCP-007ACC"></a>
-  <a href="#mcp-only-setup"><img alt="Claude Desktop" src="https://img.shields.io/badge/Claude%20Desktop-MCP-D97757"></a>
-  <a href="#mcp-only-setup"><img alt="Gemini CLI" src="https://img.shields.io/badge/Gemini%20CLI-MCP-4285F4"></a>
-  <a href="#what-you-get"><img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-Markdown%20pages-7C3AED"></a>
+  <a href="#codex-plugin"><img alt="Codex" src="https://img.shields.io/badge/Codex-plugin-111827"></a>
+  <a href="#mcp-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
+  <a href="#start-with-the-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
+  <a href="#what-you-get"><img alt="Markdown pages" src="https://img.shields.io/badge/Markdown-pages-7C3AED"></a>
 </p>
 
 <p align="center">
@@ -31,20 +22,40 @@
 
 **A living personal knowledge library for the AI-native age, built by your agents and grounded in its sources.**
 
-Wenlan (文瀾) takes its name from an imperial library that held one of China's largest book collections. Your agents capture what they learn as they work, and you add the pages and sources you already trust, so the library grows from the bottom up and the top down. Wenlan keeps it current on its own, distilling both into source-cited wiki pages.
+Unlike a normal llm-wiki that generates pages from a fixed document set, Wenlan keeps a source-cited wiki current with live agent work and trusted sources. It is built for long-running work with AI agents, from software development and research to writing, consulting, product decisions, and client work.
 
-Each session opens with a brief and closes with a handoff, so the thread carries forward instead of restarting.
+Your agents capture what they learn during sessions, you add pages and sources you already trust, and Wenlan distills both into Markdown pages that refresh between sessions. Each new thread starts from that updated wiki, with a brief to bring context forward and a handoff to record where the work should continue.
 
-Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box memory, every page shows its sources, so you can read, trust, or correct it.
+Wenlan (文瀾) takes its name from 文瀾閣. The imperial library held 四庫全書 as part of one of China's largest book collections.
 
-[![Watch the Wenlan demo](./docs/assets/demo-preview.gif)](https://youtu.be/k37gjWVPHwI)
+<p align="center">
+  <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan desktop app showing a source-cited wiki page with a source memory hover card." width="100%">
+</p>
+
+---
+
+<a id="start-with-the-app"></a>
+
+## Start with the app
+
+The desktop app is the fastest way to read and curate your source-cited wiki. Agents keep capturing and recalling context in Claude Code, Codex, Cursor, VS Code, Claude Desktop, or any MCP client, and every path talks to the same local daemon and Markdown store.
+
+Set up Wenlan once:
+
+```bash
+npx -y wenlan setup
+```
+
+Then download the current macOS Apple Silicon build: [wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg).
+
+App source: [wenlan-app](https://github.com/7xuanlu/wenlan-app). Product details: [wenlan.app](https://wenlan.app).
 
 ---
 
 ## What makes Wenlan distinct
 
-1. **Trustworthy on its own.** Every page cites the memories it came from, and the daemon refuses unsourced pages rather than letting hallucinated summaries in. It dedupes facts and supersedes the old version when one changes, so you read a clean, current wiki instead of a pile of duplicates. The everyday flow never stops for approval; a capture only surfaces for you when something genuinely conflicts.
-2. **Evolves on its own.** Most memory tools just hand back what you put in. Wenlan keeps working between sessions, clustering your captures into source-cited wiki pages that feed retrieval alongside the atomic notes they came from. Unlike a static llm-wiki, it stays current without you maintaining it.
+1. **Trustworthy sources.** Every page cites the memories behind it, and Wenlan refuses unsourced pages rather than letting hallucinated summaries in. It dedupes facts and supersedes old versions when facts change, so the wiki stays clean without turning daily capture into an approval queue.
+2. **Current between sessions.** Wenlan clusters new captures into source-cited pages between sessions, and feeds retrieval with both the pages and the atomic notes behind them. The wiki reflects your latest work instead of a stale snapshot.
 3. **One home, locked to none.** Every MCP client queries the same local daemon, so context built in one tool shows up in the next. Obsidian is one optional view you can symlink in, not where your work lives.
 4. **Real git versioning.** Memory, page, and session writes commit into `~/.wenlan/.git/`, so you can inspect, diff, revert, or branch the Markdown artifacts.
    ```text
@@ -52,6 +63,12 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
    9f8e7d6 session: handoff embedding-work
    5a4b3c2 capture: decision mem_abc123
    ```
+
+The short reel below shows the product loop: source-backed pages, source cards, graph structure, agent capture, and curation before recall.
+
+<p align="center">
+  <img src="./docs/assets/feature-reel.gif" alt="Wenlan five-scene feature reel showing source-backed pages, source cards, graph structure, agent capture, and curation review." width="100%">
+</p>
 
 ---
 
@@ -67,15 +84,9 @@ Unlike a static llm-wiki, it keeps evolving between sessions. Unlike a black-box
 
 If Claude Code asks for a restart after installing, restart once, then run `/setup`. The plugin handles local runtime setup, MCP wiring, local memory setup, and the first round-trip check.
 
-Then try `/brief`, `/capture <decision>`, or `/handoff` inside Claude Code.
-
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
-### Codex plugin (local development)
-
-The Codex plugin lives in [plugin-codex](plugin-codex/) and is exposed through the repo-local marketplace at [.agents/plugins/marketplace.json](.agents/plugins/marketplace.json). It adds `/setup`, `/brief`, `/capture`, `/recall`, `/distill`, `/pages`, `/curate`, `/forget`, `/handoff`, and `/help` skills plus a `wenlan` MCP server.
-
-From this repo:
+### Codex plugin
 
 ```bash
 npx -y wenlan setup
@@ -83,58 +94,42 @@ codex plugin marketplace add .
 codex plugin add wenlan@wenlan-local
 ```
 
-Start a new Codex thread after installing so the skills and MCP server load. Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`, `/pages <query>`, or `/handoff`.
+Start a new Codex thread after installing so the plugin and MCP server load.
 
-For plugin development, reinstall after plugin edits:
+Plugin details and development notes: [plugin-codex/](plugin-codex/README.md).
 
-```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py plugin-codex
-codex plugin add wenlan@wenlan-local
-```
+<a id="mcp-setup"></a>
 
-The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back to `npx -y wenlan-mcp@^0.10.0`. It passes `--agent-name codex` so captures are labeled as Codex writes.
+### MCP setup
 
-The shared Claude/Codex plugin inventory lives in [plugin-contract.json](plugin-contract.json). Before changing plugin skills, manifests, MCP runner wiring, or the local marketplace, run:
+Both plugins call the same local MCP server under the hood. The core tools are `context`, `capture`, `recall`, `pages`, and `doctor`.
 
-```bash
-python3 scripts/validate-codex-plugin-slice.py
-python3 scripts/validate-plugin-contract.py
-bash scripts/validate-plugin-contract.test.sh
-```
-
-### MCP-only setup
-
-Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex without slash skills, Cursor, Claude Desktop, VS Code, or Gemini CLI.
+Use this if you want Wenlan tools in Claude Code without the plugin, or in Codex, Cursor, Claude Desktop, VS Code, or Gemini CLI:
 
 ```bash
 npx -y wenlan setup
-~/.wenlan/bin/wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
+wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-MCP-only gives agents tools for capture, recall, context, doctor, and page distillation. It does not install plugin slash skills like `/brief`, `/handoff`, `/distill`, or `/setup`.
+MCP-only clients use the same core tools for context, capture, recall, doctor checks, and page distillation.
 
-### Terminal runtime setup
+### CLI
 
-Set up the local Wenlan runtime:
+Set up Wenlan once:
 
 ```bash
 npx -y wenlan setup
 ```
 
-Then start with `~/.wenlan/bin/wenlan status`, `~/.wenlan/bin/wenlan recall <query>`, or `~/.wenlan/bin/wenlan capture <text>`. CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
-
-Service management:
+Then use the CLI directly:
 
 ```bash
-wenlan background on      # register + start the background runtime
-wenlan restart            # stop + start the background runtime after upgrading
 wenlan status
-wenlan background off
+wenlan recall <query>
+wenlan capture <text>
 ```
 
-After upgrading Wenlan (`npx -y wenlan setup` or `install.sh`), the new binary is on disk but the already-running runtime keeps serving the old code until you restart it. `wenlan background on` restarts automatically; if you upgraded another way, run `wenlan restart`.
-
----
+CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 ## How Wenlan works
 
@@ -173,41 +168,21 @@ Works fully local with no API key, cloud account, or signup. Capture, recall, hy
 
 ## What you get
 
-- **Atomic memory layer**: every capture is stored first as a typed memory with source agent, confidence, stability, and supersession metadata.
+- **Typed captures**: every capture is stored with source agent, confidence, stability, and supersession metadata.
 - **Source-backed pages**: pages keep source memory IDs, stale reasons, and revision state so distillation can refresh them without losing provenance.
 - **Hybrid retrieval on libSQL**: memories, pages, FTS5 text, vector embeddings, and graph context in one local store your MCP clients can query, fused with reciprocal-rank fusion. An optional local cross-encoder reranker sharpens the top results.
 - **Connected recall**: people, projects, tools, and decisions come back linked, so a memory arrives with the context around it instead of alone.
 - **Distill cycles**: run `/distill` manually today, or add a local model/API key for background extraction, page refreshes, recaps, and richer graph links.
-- **Stays fresh on its own**: background passes link entities, grow matching pages, and update each memory's effective confidence from type, access, and age, so recent and load-bearing memories surface while stale ones fade.
+- **Refreshes between sessions**: background passes link entities, grow matching pages, and update each memory's effective confidence from type, access, and age, so recent and load-bearing memories surface while stale ones fade.
 - **Review before trust**: low-confidence captures, pending revisions, contradictions, and supersessions can surface instead of silently entering context.
 - **Explicit spaces**: tag memories, pages, and recalls with `space=work | personal | client-X` so a day-job capture never bleeds into a side-project brief. Auto-detected from the current repo or workspace when no space is set; overridable always.
 - **You own the data**: everything is plain Markdown under `~/.wenlan/`, versioned in git. Grep it, symlink it into Obsidian, or walk away with the files anytime. No lock-in.
-
-### Spaces
-
-Memories belong to a **space** like `wenlan`, `career`, or
-`ideas`. Set the active space per shell:
-
-    WENLAN_SPACE=career claude
-
-Or declaratively via `~/.wenlan/spaces.toml` (see
-`plugin/examples/spaces.toml`). To manage spaces from the CLI:
-
-    wenlan spaces list
-    wenlan spaces add ideas --default
-    wenlan spaces show ideas
-    wenlan spaces move scratch career
-
-`wenlan doctor` prints the current resolver state so you can see exactly
-which layer chose the active space.
 
 ---
 
 ## Evaluation
 
-**Hybrid retrieval, transparent eval.** BGE-Base-EN-v1.5-Q + FTS5 + Reciprocal Rank Fusion; local BGE-Reranker-Base cross-encoder rerank is the default path when enabled, with BGE-Reranker-V2-M3 available as a higher-quality option. The retrieval table is not end-to-end answer quality. ~168 tokens per recall query. Eval harness at [`crates/wenlan-core/src/eval/`](crates/wenlan-core/src/eval/). Run it yourself.
-
-Update workflow and answer-quality snapshots live in [docs/eval](docs/eval/README.md).
+Retrieval-only snapshot, not end-to-end answer quality. Method and update workflow live in [docs/eval](docs/eval/README.md).
 
 
 <!-- EVAL_SNAPSHOT_START -->
@@ -216,26 +191,6 @@ Update workflow and answer-quality snapshots live in [docs/eval](docs/eval/READM
 | LME_Oracle (500 Q) | 93.6% | 0.857 | 0.883 |
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
-
----
-
-## Repo Map
-
-Wenlan is daemon-first. `wenlan-server` owns the local database, embeddings, distill cycles, knowledge graph, and HTTP API on `127.0.0.1:7878`. The plugin, MCP server, CLI, and local tools are thin clients over that daemon.
-
-
-| Path                                                   | What lives there                                                                                                                                                                                           |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [crates/wenlan-core](crates/wenlan-core/README.md)     | Storage, search, embeddings, distill cycles, graph, pages, export, eval.                                                                                                                                   |
-| [crates/wenlan-server](crates/wenlan-server/README.md) | Local daemon and HTTP API.                                                                                                                                                                                 |
-| [crates/wenlan-mcp](crates/wenlan-mcp/README.md)       | MCP server, tools, npm package.                                                                                                                                                                            |
-| [crates/wenlan-cli](crates/wenlan-cli/README.md)       | User CLI for setup, service management, search, recall, store, list, agents, model/key setup, and doctor.                                                                                                  |
-| [plugin/](plugin/.claude-plugin/README.md)             | Claude Code plugin (`plugin.json`, skills, hooks, `.mcp.json`).                                                                                                                                           |
-| [plugin-codex/](plugin-codex/)                         | Codex plugin (`.codex-plugin/plugin.json`, skills, `agents/openai.yaml`, `.mcp.json`).                                                                                                                     |
-| [docs/eval](docs/eval/README.md)                       | Benchmark workflow and methodology.                                                                                                                                                                        |
-
-
-Full contributor map: [CLAUDE.md](CLAUDE.md).
 
 ---
 
@@ -256,24 +211,24 @@ Build details for the daemon, MCP server, CLI, and core crates live in the crate
 
 ## Learn more
 
-Longer-form writing on AI work memory and how Wenlan compares lives at [useorigin.app/learn](https://useorigin.app/learn):
+Longer-form writing on AI work memory and how Wenlan compares lives at [wenlan.app/learn](https://wenlan.app/learn):
 
 **Concepts**
-- [What is AI work memory?](https://useorigin.app/learn/ai-work-memory): the shape of the problem Wenlan solves
-- [MCP memory server](https://useorigin.app/learn/mcp-memory-server): how Wenlan exposes memory through the Model Context Protocol
-- [Local-first AI memory](https://useorigin.app/learn/local-first-ai-memory): data, privacy, and control
-- [Markdown + local index](https://useorigin.app/learn/markdown-local-index-ai-memory): the storage model
-- [AI agent handoff loop](https://useorigin.app/learn/ai-agent-handoff-loop): session-end discipline that prevents context loss
+- [What is AI work memory?](https://wenlan.app/learn/ai-work-memory): the shape of the problem Wenlan solves
+- [MCP memory server](https://wenlan.app/learn/mcp-memory-server): how Wenlan exposes memory through the Model Context Protocol
+- [Local-first AI memory](https://wenlan.app/learn/local-first-ai-memory): data, privacy, and control
+- [Markdown + local index](https://wenlan.app/learn/markdown-local-index-ai-memory): the storage model
+- [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop): session-end discipline that prevents context loss
 
 **Comparisons**
-- [Wenlan vs Basic Memory](https://useorigin.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
-- [Wenlan vs claude-mem](https://useorigin.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Wenlan vs Superlocal Memory](https://useorigin.app/learn/origin-vs-superlocal-memory): tradeoffs against another local memory shape
+- [Wenlan vs Basic Memory](https://wenlan.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
+- [Wenlan vs claude-mem](https://wenlan.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/origin-vs-superlocal-memory): tradeoffs against another local memory shape
 
 **Docs**
-- [Get started](https://useorigin.app/docs/get-started): install + verify the first local memory loop
-- [Daily workflow](https://useorigin.app/docs/daily-workflow): capture, handoff, distill
-- [MCP clients](https://useorigin.app/docs/mcp-clients): connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
+- [Get started](https://wenlan.app/docs/get-started): install + verify the first local memory loop
+- [Daily workflow](https://wenlan.app/docs/daily-workflow): capture, handoff, distill
+- [MCP clients](https://wenlan.app/docs/mcp-clients): connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
 
 ---
 

@@ -45,9 +45,9 @@ Evaluation docs live in [docs/eval](../../docs/eval/README.md). Slow GPU/API ben
 
 ## Links
 
-- [useorigin.app](https://useorigin.app) — project home
-- [useorigin.app/learn/local-first-ai-memory](https://useorigin.app/learn/local-first-ai-memory) — storage model explained
-- [useorigin.app/learn/markdown-local-index-ai-memory](https://useorigin.app/learn/markdown-local-index-ai-memory) — why Markdown + libSQL together
+- [wenlan.app](https://wenlan.app) — project home
+- [wenlan.app/learn/local-first-ai-memory](https://wenlan.app/learn/local-first-ai-memory) — storage model explained
+- [wenlan.app/learn/markdown-local-index-ai-memory](https://wenlan.app/learn/markdown-local-index-ai-memory) — why Markdown + libSQL together
 - [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
 
 ## License
