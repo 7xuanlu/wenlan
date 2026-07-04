@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=d10dc90ab3f1c53f63140d4f3d881355e36203a2c4b10dac349fdc5c3f464d8f -->
+<!-- README_SYNC: source=README.md sha256=48f15ffc51953d7eb90b7a80805d539ca88b5e2e041f9ee01cc75cbe681ef88d -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -28,7 +28,7 @@
 
 你的 agents 在會話中捕獲它們學到的內容；你也可以加入自己已經信任的頁面和來源。Wenlan 會把兩者提煉成 Markdown 頁面，並在會話之間刷新。每條新 thread 都從這套更新後的 wiki 開始，用 brief 帶回相關上下文，用 handoff 記錄下一次該從哪裡繼續。
 
-Wenlan（文瀾）的名字來自文瀾閣，一座皇家藏書樓，它曾收藏中國規模最大的典籍之一，包括《四庫全書》。
+Wenlan（文瀾）的名字來自文瀾閣。這座皇家藏書樓藏有《四庫全書》，曾是中國規模最大的藏書之一。
 
 <p align="center">
   <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan 桌面 app，展示帶來源引用的 wiki 頁面和 source memory 懸浮卡片。" width="100%">

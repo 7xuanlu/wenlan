@@ -26,7 +26,7 @@ Unlike a normal llm-wiki that generates pages from a fixed document set, Wenlan 
 
 Your agents capture what they learn during sessions, you add pages and sources you already trust, and Wenlan distills both into Markdown pages that refresh between sessions. Each new thread starts from that updated wiki, with a brief to bring context forward and a handoff to record where the work should continue.
 
-Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held one of China's largest book collections, including a copy of the 四庫全書.
+Wenlan (文瀾) takes its name from 文瀾閣. The imperial library held 四庫全書 as part of one of China's largest book collections.
 
 <p align="center">
   <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan desktop app showing a source-cited wiki page with a source memory hover card." width="100%">
