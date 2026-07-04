@@ -69,7 +69,7 @@ describe("AddSourceDialog", () => {
     });
   });
 
-  it("detects markdown files without obsidian", async () => {
+  it("counts markdown, text, and pdf files without obsidian", async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const { readDir } = await import("@tauri-apps/plugin-fs");
     (open as ReturnType<typeof vi.fn>).mockResolvedValue("/Users/test/notes");
@@ -77,6 +77,8 @@ describe("AddSourceDialog", () => {
       { name: "note1.md", isDirectory: false, isFile: true, isSymlink: false },
       { name: "note2.md", isDirectory: false, isFile: true, isSymlink: false },
       { name: "readme.txt", isDirectory: false, isFile: true, isSymlink: false },
+      { name: "paper.pdf", isDirectory: false, isFile: true, isSymlink: false },
+      { name: "photo.jpg", isDirectory: false, isFile: true, isSymlink: false },
     ]);
 
     render(<AddSourceDialog onClose={onClose} onSuccess={onSuccess} />, {
@@ -86,16 +88,16 @@ describe("AddSourceDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /browse/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/2 markdown files/)).toBeInTheDocument();
+      expect(screen.getByText(/4 supported files/)).toBeInTheDocument();
     });
   });
 
-  it("shows error when no markdown files found", async () => {
+  it("shows error when no supported files found", async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const { readDir } = await import("@tauri-apps/plugin-fs");
     (open as ReturnType<typeof vi.fn>).mockResolvedValue("/Users/test/empty");
     (readDir as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { name: "readme.txt", isDirectory: false, isFile: true, isSymlink: false },
+      { name: "photo.jpg", isDirectory: false, isFile: true, isSymlink: false },
     ]);
 
     render(<AddSourceDialog onClose={onClose} onSuccess={onSuccess} />, {
@@ -105,9 +107,68 @@ describe("AddSourceDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /browse/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/no markdown files/i)).toBeInTheDocument();
+      expect(screen.getByText(/no supported files/i)).toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: /add source/i })).toBeDisabled();
+  });
+
+  it("registers an obsidian vault as obsidian and a plain folder as directory", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const { readDir } = await import("@tauri-apps/plugin-fs");
+    vi.mocked(tauri.addSource).mockResolvedValue({
+      id: "src",
+      source_type: "directory",
+      path: "/Users/test/papers",
+      status: "Active",
+      last_sync: null,
+      file_count: 0,
+      memory_count: 0,
+    });
+    vi.mocked(tauri.syncRegisteredSource).mockReturnValue(new Promise(() => {}));
+
+    // Plain folder → directory
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue("/Users/test/papers");
+    (readDir as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "paper.pdf", isDirectory: false, isFile: true, isSymlink: false },
+    ]);
+    const first = render(
+      <AddSourceDialog onClose={onClose} onSuccess={onSuccess} />,
+      { wrapper },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/1 supported file/)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    await waitFor(() => {
+      expect(tauri.addSource).toHaveBeenCalledWith("directory", "/Users/test/papers");
+    });
+    // Directory sources ride the daemon's background scheduler — no on-add sync.
+    expect(tauri.syncRegisteredSource).not.toHaveBeenCalled();
+    first.unmount();
+
+    // Vault → obsidian
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue("/Users/test/vault");
+    (readDir as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: ".obsidian", isDirectory: true, isFile: false, isSymlink: false },
+      { name: "note.md", isDirectory: false, isFile: true, isSymlink: false },
+    ]);
+    render(<AddSourceDialog onClose={onClose} onSuccess={onSuccess} />, {
+      wrapper,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Obsidian vault/)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    await waitFor(() => {
+      expect(tauri.addSource).toHaveBeenCalledWith("obsidian", "/Users/test/vault");
+    });
+    // Obsidian vaults are NOT on the daemon scheduler, so a one-shot first index
+    // must fire on add or the vault sits at "Indexing…" forever.
+    await waitFor(() => {
+      expect(tauri.syncRegisteredSource).toHaveBeenCalledWith("src");
+    });
   });
 
   it("invalidates registered sources after a successful add before background sync completes", async () => {
@@ -138,7 +199,7 @@ describe("AddSourceDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /browse/i }));
     await waitFor(() => {
-      expect(screen.getByText(/1 markdown files/)).toBeInTheDocument();
+      expect(screen.getByText(/1 supported file/)).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole("button", { name: /add source/i }));
 

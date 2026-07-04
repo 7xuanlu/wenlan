@@ -72,6 +72,27 @@ describe("Sidebar", () => {
     expect(graph.compareDocumentPosition(spaces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("places a Sources tab above Spaces and routes it through onNavigateSources", async () => {
+    const user = userEvent.setup();
+    const onNavigateSources = vi.fn();
+    renderSidebar({ onNavigateSources });
+
+    const sources = screen.getByRole("button", { name: "Sources" });
+    const spaces = screen.getByTestId("space-list");
+
+    // Sources sits in the primary nav, above the Spaces list.
+    expect(sources.compareDocumentPosition(spaces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(sources);
+    expect(onNavigateSources).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the Sources tab when source navigation is not wired", () => {
+    renderSidebar();
+
+    expect(screen.queryByRole("button", { name: "Sources" })).not.toBeInTheDocument();
+  });
+
   it("keeps the Wenlan brand in the sidebar footer", () => {
     renderSidebar();
 

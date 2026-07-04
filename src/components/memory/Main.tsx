@@ -30,6 +30,7 @@ import ViewToggle from "../ViewToggle";
 import Sidebar, { SidebarToggleButton } from "./Sidebar";
 import SettingsSidebar, { type SettingsSection } from "./settings/SettingsSidebar";
 import SpaceDetail from "./SpaceDetail";
+import SourcesView from "./SourcesView";
 import DecisionLog from "./DecisionLog";
 import MemoryCard from "./MemoryCard";
 import { readPreference, writePreference } from "../../lib/preferenceStorage";
@@ -42,7 +43,7 @@ interface MainProps {
   onBackFromDetail?: () => void;
 }
 
-type View = { kind: "home" } | { kind: "stream" } | { kind: "activity" } | { kind: "recaps" } | { kind: "entity"; entityId: string } | { kind: "profile" } | { kind: "memory"; sourceId: string } | { kind: "settings"; section?: SettingsSection } | { kind: "import" } | { kind: "connect-agent" } | { kind: "space"; spaceName: string } | { kind: "graph" } | { kind: "page"; pageId: string } | { kind: "distill-review" } | { kind: "decisions" };
+type View = { kind: "home" } | { kind: "stream" } | { kind: "activity" } | { kind: "recaps" } | { kind: "entity"; entityId: string } | { kind: "profile" } | { kind: "memory"; sourceId: string } | { kind: "settings"; section?: SettingsSection } | { kind: "import" } | { kind: "connect-agent" } | { kind: "space"; spaceName: string } | { kind: "graph" } | { kind: "page"; pageId: string } | { kind: "distill-review" } | { kind: "decisions" } | { kind: "sources" };
 
 const SIDEBAR_KEY = "wenlan-sidebar-collapsed";
 const LEGACY_SIDEBAR_KEY = "origin-sidebar-collapsed";
@@ -353,11 +354,12 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
             onNavigateLog={() => { setView({ kind: "stream" }); setViewHistory([]); }}
             onNavigateHome={navigateHome}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
+            onNavigateSources={() => navigateTo({ kind: "sources" })}
           />
         )}
 
         {/* Main content */}
-        <main className={`flex-1 ${view.kind === "graph" ? "overflow-hidden p-0" : "overflow-y-auto pb-7"}`} style={view.kind === "graph" ? undefined : { paddingLeft: "72px", paddingRight: "72px", paddingTop: "56px" }}>
+        <main className={`flex-1 ${view.kind === "graph" || view.kind === "sources" ? "overflow-hidden p-0" : "overflow-y-auto pb-7"}`} style={view.kind === "graph" || view.kind === "sources" ? undefined : { paddingLeft: "72px", paddingRight: "72px", paddingTop: "56px" }}>
           {/* Search results overlay */}
           {query ? (
             (results.length > 0 || entityResults.length > 0 || conceptResults.length > 0) ? (
@@ -556,6 +558,10 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
             <RecapsList
               onBack={navigateBack}
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
+            />
+          ) : view.kind === "sources" ? (
+            <SourcesView
+              onManageSources={() => navigateTo({ kind: "settings", section: "sources" })}
             />
           ) : view.kind === "graph" ? (
             <div style={{ position: "relative", width: "100%", height: "100%" }}>

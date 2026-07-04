@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import * as tauri from './tauri';
+import { daemonMeetsFloor } from "./tauri";
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -981,5 +982,20 @@ describe('redistillPage', () => {
 
     expect(result).toEqual(payload);
     expect(mockInvoke).toHaveBeenCalledWith('redistill_page', { pageId: 'page-refresh' });
+  });
+});
+
+describe("daemonMeetsFloor", () => {
+  it("rejects the live 0.9.5 daemon (below floor)", () => {
+    expect(daemonMeetsFloor("0.9.5")).toBe(false);
+  });
+  it("accepts exactly the floor and above", () => {
+    expect(daemonMeetsFloor("0.10.0")).toBe(true);
+    expect(daemonMeetsFloor("0.10.1")).toBe(true);
+    expect(daemonMeetsFloor("0.11.0")).toBe(true);
+    expect(daemonMeetsFloor("1.0.0")).toBe(true);
+  });
+  it("tolerates a pre-release suffix", () => {
+    expect(daemonMeetsFloor("0.11.0-rc.1")).toBe(true);
   });
 });

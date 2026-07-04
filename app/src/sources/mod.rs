@@ -4,6 +4,7 @@ pub mod data_source;
 pub mod local_files;
 pub mod obsidian;
 pub mod sync;
+pub mod uploads;
 
 // Wire types (Source, SourceStatus, RawDocument, MemoryType, etc.) from the
 // shared types crate -- no heavy deps, safe for downstream consumers.

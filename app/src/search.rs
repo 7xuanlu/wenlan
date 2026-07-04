@@ -807,6 +807,63 @@ pub async fn open_file(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntryDto {
+    name: String,
+    is_directory: bool,
+}
+
+/// List the immediate entries of a directory for the Sources browser.
+///
+/// The webview's fs plugin is unscoped (`fs:default`), so a registered
+/// source's path isn't readable there on a fresh launch (only paths the user
+/// just picked via the dialog are in scope). The Rust side has no such limit,
+/// so it reads the directory directly. Names only — never file contents —
+/// which is the same trust level the webview already has via `open_file`.
+#[tauri::command]
+pub async fn read_source_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
+    let rd = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for entry in rd.flatten() {
+        // ponytail: 10k-entry ceiling as a payload safety valve; real sources
+        // are far smaller. Raise it if a source ever legitimately exceeds it.
+        if out.len() >= 10_000 {
+            break;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Hide dotfiles (.obsidian, .git, .DS_Store) — the daemon skips them at
+        // ingest, so they aren't part of the "foundation" the browser shows.
+        if name.starts_with('.') {
+            continue;
+        }
+        let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        out.push(DirEntryDto { name, is_directory });
+    }
+    Ok(out)
+}
+
+/// Read a text file's contents for inline preview in the Sources detail pane.
+///
+/// Same trust level as `open_file`, which already hands the whole file to the
+/// native app; the webview's `fs:default` scope can't reach arbitrary
+/// registered paths, so the Rust side reads it. The caller gates this to
+/// markdown/plain-text extensions — never PDFs or binaries.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, String> {
+    // ponytail: 512 KiB ceiling so a stray huge file can't wedge the webview.
+    // Real notes are a few KB; raise it if a legit doc ever exceeds it.
+    const MAX_BYTES: u64 = 512 * 1024;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_BYTES {
+        return Err(format!(
+            "file is {} KB — too large to preview inline (open it instead)",
+            meta.len() / 1024
+        ));
+    }
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 // ── Index / watch path / source commands (local + config) ─────────────
 
 #[tauri::command]
@@ -3313,10 +3370,41 @@ pub async fn list_decision_domains_cmd(
 
 pub use crate::sources::sync::SyncStats;
 
+/// The daemon dedupes sources by path; a repeat POST returns this string. The
+/// app treats it as success (check-or-ignore), not an error path (§2).
+fn already_registered(err: &str) -> bool {
+    err.contains("Source already registered")
+}
+
+/// Register a directory (folder in place, or the managed uploads dir) with the
+/// daemon, which owns ingestion (§1, §6). On repeat registration the daemon
+/// returns "Source already registered" — resolve the existing source instead
+/// of erroring.
+async fn register_directory_source_with_daemon(
+    state: &tauri::State<'_, State>,
+    path: &std::path::Path,
+) -> Result<crate::sources::Source, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let path_str = path.to_string_lossy().to_string();
+    match client.add_source("directory".to_string(), path_str).await {
+        Ok(source) => Ok(source),
+        Err(e) if already_registered(&e) => client
+            .list_sources()
+            .await?
+            .into_iter()
+            .find(|s| s.path == path)
+            .ok_or_else(|| "source registered but not returned by daemon".to_string()),
+        Err(e) => Err(e),
+    }
+}
+
 #[tauri::command]
 pub async fn add_source(
     state: tauri::State<'_, State>,
-    watcher: tauri::State<'_, WatcherState>,
+    _watcher: tauri::State<'_, WatcherState>,
     source_type: String,
     path: String,
 ) -> Result<crate::sources::Source, String> {
@@ -3344,11 +3432,15 @@ pub async fn add_source(
             };
             client.add_source("obsidian".to_string(), path).await
         }
-        "directory" => add_directory_source(&state, &watcher, path_buf, &path).await,
+        "directory" => register_directory_source_with_daemon(&state, &path_buf).await,
         other => Err(format!("Unknown source_type: {}", other)),
     }
 }
 
+// ponytail: legacy bridge for pre-v0.10.0 daemons only; new directory sources
+// go straight to the daemon (register_directory_source_with_daemon). Remove
+// once the minimum supported daemon is raised to v0.10.0 (§6).
+#[allow(dead_code)]
 async fn add_directory_source(
     state: &tauri::State<'_, State>,
     watcher: &tauri::State<'_, WatcherState>,
@@ -3405,6 +3497,62 @@ async fn add_directory_source(
     Ok(source)
 }
 
+#[cfg(test)]
+mod already_registered_tests {
+    #[test]
+    fn already_registered_matches_daemon_dedupe_string() {
+        assert!(super::already_registered("Source already registered"));
+        assert!(super::already_registered(
+            "ValidationError: Source already registered for path"
+        ));
+        assert!(!super::already_registered("Path does not exist"));
+        assert!(!super::already_registered("connection refused"));
+    }
+}
+
+/// Blobs to delete on removal. Only the app-managed uploads dir holds copies;
+/// in-place folder sources are never copied, so nothing to clean (§4).
+fn managed_blob_paths(
+    sources_dir: &std::path::Path,
+    source: &crate::sources::Source,
+) -> Vec<std::path::PathBuf> {
+    if source.path == sources_dir {
+        vec![sources_dir.to_path_buf()]
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod managed_blob_paths_tests {
+    #[test]
+    fn managed_blob_paths_targets_only_the_managed_dir() {
+        let sources_dir = std::path::Path::new("/home/u/.wenlan/sources");
+        let managed = crate::sources::Source {
+            id: "directory-sources".into(),
+            source_type: crate::sources::SourceType::Directory,
+            path: sources_dir.to_path_buf(),
+            status: crate::sources::SyncStatus::Active,
+            last_sync: None,
+            file_count: 0,
+            memory_count: 0,
+            last_sync_errors: 0,
+            last_sync_error_detail: None,
+        };
+        // The managed dir itself is cleaned; an in-place folder source is not.
+        assert_eq!(
+            super::managed_blob_paths(sources_dir, &managed),
+            vec![sources_dir.to_path_buf()]
+        );
+
+        let in_place = crate::sources::Source {
+            path: "/home/u/Documents/Books".into(),
+            ..managed.clone()
+        };
+        assert!(super::managed_blob_paths(sources_dir, &in_place).is_empty());
+    }
+}
+
 #[tauri::command]
 pub async fn remove_source(state: tauri::State<'_, State>, id: String) -> Result<(), String> {
     let local_source = config::load_config()
@@ -3423,7 +3571,12 @@ pub async fn remove_source(state: tauri::State<'_, State>, id: String) -> Result
         let s = state.read().await;
         s.client.clone()
     };
-    client.remove_source(&id).await
+    client.remove_source(&id).await?;
+    if id == "directory-sources" {
+        let dir = crate::sources::uploads::sources_dir();
+        let _ = std::fs::remove_dir_all(&dir); // managed uploads only, best-effort
+    }
+    Ok(())
 }
 
 async fn remove_directory_source(
@@ -3437,6 +3590,11 @@ async fn remove_directory_source(
     }
     cfg.sources.retain(|s| s.id != id);
     config::save_config(&cfg).map_err(|e| e.to_string())?;
+
+    let sources_dir = crate::sources::uploads::sources_dir();
+    for blob in managed_blob_paths(&sources_dir, &source) {
+        let _ = std::fs::remove_dir_all(&blob); // best-effort; missing dir is fine
+    }
 
     let mut app_state = state.write().await;
     app_state.watch_paths.retain(|p| p != &source.path);
@@ -3508,6 +3666,31 @@ pub async fn sync_registered_source(
         errors: stats.errors,
         error_detail: None,
     })
+}
+
+#[tauri::command]
+pub async fn daemon_version(state: tauri::State<'_, State>) -> Result<String, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    Ok(client.health().await?.version)
+}
+
+/// Stage a loose file into the managed uploads dir, then ensure that dir is
+/// registered with the daemon as a `directory` source (§2, §6).
+#[tauri::command]
+pub async fn upload_source_file(
+    state: tauri::State<'_, State>,
+    path: String,
+) -> Result<crate::sources::Source, String> {
+    let src = std::path::PathBuf::from(&path);
+    if !src.is_file() {
+        return Err(format!("Not a file: {}", path));
+    }
+    let dir = crate::sources::uploads::sources_dir();
+    crate::sources::uploads::place_upload_file(&dir, &src).map_err(|e| e.to_string())?;
+    register_directory_source_with_daemon(&state, &dir).await
 }
 
 // ---------------------------------------------------------------------------

@@ -121,7 +121,11 @@ export async function listSources(): Promise<SourceStatus[]> {
 // ===== Registered Sources =====
 
 export type SourceTypeStr = "obsidian" | "directory";
-export type SyncStatusStr = "Active" | "Paused" | { Error: string };
+export type SyncStatusStr =
+  | "Active"
+  | "Paused"
+  | { Error: string }
+  | { Unavailable: string };
 
 /**
  * Categorized sync error detail string. The Rust side sends this as
@@ -172,6 +176,31 @@ export async function syncRegisteredSource(id: string): Promise<SyncStats> {
   return invoke("sync_registered_source", { id });
 }
 
+/** Read the running daemon's version string from GET /api/health. */
+export async function getDaemonVersion(): Promise<string> {
+  return invoke("daemon_version");
+}
+
+/**
+ * True when the daemon version is >= floor. Daemon-native file ingest landed
+ * in 0.10.0; below that, files register but never index (§0 version gate).
+ */
+export function daemonMeetsFloor(version: string, floor = "0.10.0"): boolean {
+  const parse = (v: string) => v.split(".").map((n) => parseInt(n, 10) || 0);
+  const a = parse(version);
+  const b = parse(floor);
+  for (let i = 0; i < 3; i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d > 0;
+  }
+  return true;
+}
+
+/** Stage a loose file into the managed dir and ensure it is a daemon source. */
+export async function uploadSourceFile(path: string): Promise<RegisteredSource> {
+  return invoke("upload_source_file", { path });
+}
+
 export interface IndexedFileInfo {
   source: string;
   source_id: string;
@@ -211,6 +240,33 @@ export async function deleteBulk(items: { source: string; sourceId: string }[]):
 export async function openFile(url: string): Promise<void> {
   const path = url.startsWith("file://") ? url.slice(7) : url;
   return invoke("open_file", { path });
+}
+
+export interface SourceDirEntry {
+  name: string;
+  isDirectory: boolean;
+}
+
+/**
+ * List the immediate entries of a directory (for the Sources browser).
+ * Reads via the Rust `read_source_dir` command rather than the webview fs
+ * plugin, because `fs:default` has no path scope — a registered source's path
+ * isn't readable from the webview on a fresh launch. Names only, dotfiles
+ * hidden. Sorting is the caller's job.
+ */
+export async function readSourceDir(path: string): Promise<SourceDirEntry[]> {
+  return invoke("read_source_dir", { path });
+}
+
+/**
+ * Read a text file's full contents for inline preview in the detail pane.
+ * Backed by the Rust `read_text_file` command (same reason as readSourceDir:
+ * the webview fs plugin is unscoped). Caller must gate to text extensions —
+ * the command rejects files over 512 KiB. Named `readSourceText` to avoid
+ * colliding with the fs plugin's own `readTextFile`.
+ */
+export async function readSourceText(path: string): Promise<string> {
+  return invoke("read_text_file", { path });
 }
 
 export interface ChunkDetail {

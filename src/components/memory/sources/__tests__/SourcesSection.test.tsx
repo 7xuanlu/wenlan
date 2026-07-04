@@ -56,7 +56,7 @@ describe("SourcesSection", () => {
     expect(screen.getByText(/3,118 memories/)).toBeInTheDocument();
   });
 
-  it("filters out non-obsidian sources", async () => {
+  it("shows directory sources alongside obsidian vaults", async () => {
     vi.mocked(tauri.listRegisteredSources).mockResolvedValue([
       {
         id: "obsidian-vault",
@@ -68,9 +68,9 @@ describe("SourcesSection", () => {
         memory_count: 20,
       },
       {
-        id: "directory-old",
+        id: "directory-papers",
         source_type: "directory",
-        path: "/Users/test/old-docs",
+        path: "/Users/test/papers",
         status: "Active",
         last_sync: null,
         file_count: 5,
@@ -83,7 +83,9 @@ describe("SourcesSection", () => {
     await waitFor(() => {
       expect(screen.getByText("vault")).toBeInTheDocument();
     });
-    expect(screen.queryByText("old-docs")).not.toBeInTheDocument();
+    expect(screen.getByText("papers")).toBeInTheDocument();
+    expect(screen.getByText(/Obsidian vault ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Folder ·/)).toBeInTheDocument();
   });
 
   it("renders knowledge directory block with path and count", async () => {

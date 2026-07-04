@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listRegisteredSources,
@@ -43,11 +43,6 @@ export default function SourcesSection() {
     queryFn: listRegisteredSources,
     refetchInterval: 10_000,
   });
-
-  const obsidianSources = useMemo(
-    () => sources.filter((s) => s.source_type === "obsidian"),
-    [sources],
-  );
 
   const { data: knowledgePath } = useQuery({
     queryKey: ["knowledgePath"],
@@ -121,7 +116,7 @@ export default function SourcesSection() {
 
   return (
     <section className="space-y-3">
-      {obsidianSources.length === 0 ? (
+      {sources.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--mem-border)] p-8 text-center">
           <p className="text-sm text-[var(--mem-text-secondary)] mb-3">
             No sources yet
@@ -135,7 +130,7 @@ export default function SourcesSection() {
         </div>
       ) : (
         <div className="space-y-2">
-          {obsidianSources.map((source) => {
+          {sources.map((source) => {
             const isSyncing = syncingId === source.id;
             const justSynced = justSyncedId === source.id;
             const errorCount = source.last_sync_errors ?? 0;
@@ -155,7 +150,7 @@ export default function SourcesSection() {
                     <p className="text-xs text-[var(--mem-text-secondary)] mt-0.5">
                       {isSyncing
                         ? "Syncing…"
-                        : `${source.file_count.toLocaleString()} files · ${source.memory_count.toLocaleString()} memories · ${relativeTime(source.last_sync)}`}
+                        : `${source.source_type === "obsidian" ? "Obsidian vault" : "Folder"} · ${source.file_count.toLocaleString()} files · ${source.memory_count.toLocaleString()} memories · ${relativeTime(source.last_sync)}`}
                     </p>
                   </div>
 

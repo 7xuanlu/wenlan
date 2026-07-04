@@ -60,7 +60,9 @@ this split pinning is why — it's a known gap, not a regression.
 ## Environment
 
 - `WENLAN_BACKEND_DIR` — override for the sibling backend checkout path
-  (default: `../wenlan`). Consumed by `scripts/resolve-backend-dir.sh`.
+  (default: `../wenlan`). Consumed by `scripts/resolve-backend-dir.sh`. Its
+  fallbacks don't reach worktrees under `.claude/worktrees/<name>` — set it
+  explicitly there. Agent launch/drive recipe: `.claude/skills/run-wenlan-app/`.
 - `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) — required by `tauri build`
   because `app/tauri.conf.json` sets `bundle.createUpdaterArtifacts: true` with
   an updater `pubkey`. Unset it and the build fails at the updater-signing step
