@@ -499,6 +499,7 @@ pub async fn create_page(
         creation_kind: creation_kind.to_string(),
         review_status: review_status.to_string(),
         workspace: req.workspace.clone(),
+        citations: Vec::new(),
     };
 
     // md-first write (only if a knowledge_path was provided)
@@ -525,6 +526,7 @@ pub async fn create_page(
             creation_kind,
             review_status,
             req.workspace.as_deref(),
+            None, // citations: create_page has no citation source; NULL = never citation-processed
         )
         .await
     {
@@ -619,6 +621,14 @@ pub(crate) fn merge_shrink_threshold() -> Option<f64> {
 /// Daemon-internal callers (`distill`, `re_distill`, `page_growth`,
 /// `refinery_merge`) skip it — incremental updates may push aggregate cosine
 /// sim below 0.6 and would silently drop legitimate writes.
+///
+/// `citations`: `Some((citations_json, stats_summary))` when the caller has
+/// freshly verified [N] markers against a numbered source list for this
+/// exact `req.content` — persisted atomically with the content, and
+/// `stats_summary` is recorded on the changelog entry. `None` always resets
+/// `citations` to `'[]'` (a stale marker-to-source map must not survive a
+/// content change without fresh verification).
+#[allow(clippy::too_many_arguments)]
 pub async fn update_page(
     db: &MemoryDB,
     page_id: &str,
@@ -626,6 +636,7 @@ pub async fn update_page(
     edited_by: &str,
     require_stale: bool,
     knowledge_path: Option<&Path>,
+    citations: Option<(String, String)>,
 ) -> Result<WriteResult, WenlanError> {
     // ── Pre-write validation ────────────────────────────────────────────────
     if req.content.trim().is_empty() {
@@ -727,13 +738,16 @@ pub async fn update_page(
             .collect(),
     );
 
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "version": new_version,
         "at": chrono::Utc::now().timestamp(),
         "edited_by": edited_by,
         "delta_summary": delta_summary,
         "incoming_source_ids": added_sources_json,
     });
+    if let Some((_, ref stats_summary)) = citations {
+        entry["citations_summary"] = serde_json::Value::String(stats_summary.clone());
+    }
 
     // Read existing changelog and append the new entry
     let existing_cl = db.get_page_changelog(page_id).await?;
@@ -742,6 +756,8 @@ pub async fn update_page(
         crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
 
     // ── Apply DB update ─────────────────────────────────────────────────────
+    // citations: None -> resets `citations` to '[]' (no fresh citation source
+    // for this write; a stale claim-map must not survive a content change).
     let wrote = db
         .try_update_page_content_with_changelog(
             page_id,
@@ -750,6 +766,7 @@ pub async fn update_page(
             edited_by,
             require_stale,
             &new_changelog,
+            citations.as_ref().map(|(json, _)| json.as_str()),
         )
         .await?;
 
@@ -1500,7 +1517,7 @@ mod tests {
             content: content_v2.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let r2 = update_page(&db, &page_id, req2, "re_distill", false, None)
+        let r2 = update_page(&db, &page_id, req2, "re_distill", false, None, None)
             .await
             .unwrap();
         assert_eq!(r2.id, page_id);
@@ -1511,7 +1528,7 @@ mod tests {
             content: content_v3.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let r3 = update_page(&db, &page_id, req3, "re_distill", false, None)
+        let r3 = update_page(&db, &page_id, req3, "re_distill", false, None, None)
             .await
             .unwrap();
 
@@ -1542,7 +1559,7 @@ mod tests {
             content: "Rust is a systems language with memory safety and performance".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "re_distill", true, None)
+        let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
             .unwrap();
 
@@ -1570,7 +1587,7 @@ mod tests {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "re_distill", true, None)
+        let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
             .unwrap();
 
@@ -1596,7 +1613,7 @@ mod tests {
             content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "manual_edit", false, None).await;
+        let result = update_page(&db, &page_id, req, "manual_edit", false, None, None).await;
         assert!(
             matches!(result, Err(WenlanError::Validation(_))),
             "hallucination guard should reject manual_edit with unrelated body"
@@ -1617,7 +1634,7 @@ mod tests {
             source_memory_ids: vec![mem_id.to_string()],
         };
         // Should succeed without hallucination check
-        update_page(&db, &page_id, req, "re_distill", false, None)
+        update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
             .unwrap();
         let page = db.get_page(&page_id).await.unwrap().unwrap();
@@ -1639,7 +1656,7 @@ mod tests {
                     .to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        update_page(&db, &page_id, req, "fs_edit", false, None)
+        update_page(&db, &page_id, req, "fs_edit", false, None, None)
             .await
             .unwrap();
         let page = db.get_page(&page_id).await.unwrap().unwrap();
@@ -1676,7 +1693,7 @@ mod tests {
             content: "Rust is a systems language with memory safety (user edited)".to_string(),
             source_memory_ids: vec![ghost_source.to_string()],
         };
-        update_page(&db, page_id, req, "fs_edit", false, None)
+        update_page(&db, page_id, req, "fs_edit", false, None, None)
             .await
             .unwrap();
         let page = db.get_page(page_id).await.unwrap().unwrap();
@@ -1696,7 +1713,7 @@ mod tests {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "re_distill", false, None)
+        let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
             .unwrap();
 
@@ -1731,6 +1748,7 @@ mod tests {
             "re_distill",
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1760,6 +1778,7 @@ mod tests {
             },
             "re_distill",
             false,
+            None,
             None,
         )
         .await
@@ -1796,7 +1815,7 @@ mod tests {
             content: content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "re_distill", false, None)
+        let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
             .unwrap();
 
@@ -2166,7 +2185,7 @@ mod tests {
             content: short_body,
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "distill", false, None).await;
+        let result = update_page(&db, &page_id, req, "distill", false, None, None).await;
         assert!(
             matches!(result, Err(WenlanError::Validation(_))),
             "shrink-guard must reject truncated LLM rewrite"
@@ -2199,7 +2218,7 @@ mod tests {
             content: long_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "page_growth", false, None).await;
+        let result = update_page(&db, &page_id, req, "page_growth", false, None, None).await;
         assert!(result.is_ok(), "shrink-guard must allow growing body");
         let page = db.get_page(&page_id).await.unwrap().unwrap();
         assert_eq!(page.content, long_body);
@@ -2222,7 +2241,7 @@ mod tests {
             content: tiny_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
         };
-        let result = update_page(&db, &page_id, req, "distill", false, None)
+        let result = update_page(&db, &page_id, req, "distill", false, None, None)
             .await
             .unwrap();
         assert!(result.wrote, "guard OFF must allow any size update");
@@ -2254,7 +2273,7 @@ mod tests {
         // so shrink-guard must NOT fire even though the body shrinks drastically
         // (hallucination guard WILL fire for manual_edit -- seed with real-ish content)
         // Actually manual_edit triggers hallucination guard, so use fs_edit instead
-        let result = update_page(&db, &page_id, req, "fs_edit", false, None).await;
+        let result = update_page(&db, &page_id, req, "fs_edit", false, None, None).await;
         // fs_edit IS guarded by hallucination guard and will likely fail cos-sim check.
         // The key assertion: if it fails, it must NOT be a shrink-guard Validation error.
         // If it succeeds, the body must be updated.

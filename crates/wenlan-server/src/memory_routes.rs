@@ -3367,6 +3367,9 @@ pub async fn handle_refresh_page(
         creation_kind: existing.creation_kind.clone(),
         review_status: existing.review_status.clone(),
         workspace: existing.workspace.clone(),
+        // Content update without fresh citations resets citations to []
+        // (Global Constraints: stale claim-maps must not survive a content edit).
+        citations: Vec::new(),
     };
 
     // 1. md-first
@@ -3985,6 +3988,7 @@ mod search_quick_path_page_tests {
             "distilled",
             "confirmed",
             Some("work"),
+            None,
         )
         .await
         .unwrap();
@@ -4001,6 +4005,7 @@ mod search_quick_path_page_tests {
             "distilled",
             "confirmed",
             Some("other"),
+            None,
         )
         .await
         .unwrap();

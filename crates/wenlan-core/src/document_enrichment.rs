@@ -474,6 +474,7 @@ async fn write_source_page(
         "source",
         "unconfirmed",
         None,
+        None, // citations: SOURCE pages are chunk-granular provenance, not distilled citations
     )
     .await
 }
