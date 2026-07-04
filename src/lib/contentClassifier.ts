@@ -64,9 +64,11 @@ function normalizeLine(text: string): string {
   }
 
   // Bare numbered items: "1) item, 2) item, 3) item"
-  const bareNumMatches = text.match(/\b\d+\)/g);
+  // Excludes rewritten citation links, e.g. "[1](#citation:1)" — the ")" there
+  // closes a markdown link destination, not a list marker.
+  const bareNumMatches = text.match(/(?<!#citation:)\b\d+\)/g);
   if (bareNumMatches && bareNumMatches.length >= 2) {
-    const parts = text.split(/\b\d+\)\s*/);
+    const parts = text.split(/(?<!#citation:)\b\d+\)\s*/);
     const lines: string[] = [];
     if (parts[0].trim()) {
       lines.push(parts[0].replace(/,\s*$/, "").trim());

@@ -5,7 +5,6 @@ import {
   getPage,
   getPageLinks,
   getPageRevisions,
-  listOrphanLinks,
   redistillPage,
   updatePage,
   deletePage,
@@ -13,9 +12,12 @@ import {
   exportPageToObsidian,
   listRegisteredSources,
   getPageSources,
-  type MemoryItem,
 } from "../../lib/tauri";
 import ContentRenderer from "./ContentRenderer";
+import RelatedPages from "./page/RelatedPages";
+import PageInfo from "./page/PageInfo";
+import { processCitations, stripCitationLinks } from "../../lib/pageCitations";
+import CitationChip from "./page/CitationChip";
 
 interface PageDetailProps {
   pageId: string;
@@ -55,44 +57,6 @@ function folderName(path: string): string {
 
 const PAGE_LINK_ANCHOR_PREFIX = "#concept:";
 
-const KNOWN_AGENTS: Record<string, string> = {
-  "claude-code": "Claude Code",
-  "claude-desktop": "Claude Desktop",
-  cursor: "Cursor",
-  "chatgpt-mcp": "ChatGPT",
-  chatgpt: "ChatGPT",
-  "gemini-cli": "Gemini CLI",
-  windsurf: "Windsurf",
-  zed: "Zed",
-};
-
-function prettyAgent(name: string | null | undefined): string {
-  if (!name) return "unknown agent";
-  const key = name.trim().toLowerCase();
-  return KNOWN_AGENTS[key] ?? name;
-}
-
-const SOURCE_KIND_LABEL: Record<string, string> = {
-  memory: "memory",
-  chat: "chat",
-  file: "file",
-  obsidian: "obsidian",
-  web: "web",
-};
-
-function sourceKindLabel(mem: MemoryItem): string {
-  const mt = mem.memory_type?.toLowerCase() ?? "";
-  return SOURCE_KIND_LABEL[mt] ?? (mt || "memory");
-}
-
-function relativeMs(ms: number): string {
-  const delta = Date.now() - ms;
-  if (delta < 60_000) return "just now";
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
-  return `${Math.floor(delta / 86_400_000)}d ago`;
-}
-
 export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick }: PageDetailProps) {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
@@ -127,13 +91,6 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     retry: false,
   });
 
-  const { data: orphanLinks } = useQuery({
-    queryKey: ["orphan-page-links", 2],
-    queryFn: () => listOrphanLinks(2),
-    staleTime: 60_000,
-    retry: false,
-  });
-
   const outboundTargetByLabel = useMemo(() => {
     const map = new Map<string, string>();
     for (const link of pageLinks?.outbound ?? []) {
@@ -164,18 +121,6 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
   useEffect(() => {
     setRedistillNotice(null);
   }, [pageId]);
-
-  // Extract MemoryItems from the join table result.
-  // Sort: versioned (updated) memories first, then by last_modified descending.
-  const sourceMemories: MemoryItem[] | undefined = pageSources
-    ?.filter((cs) => cs.memory !== null)
-    .map((cs) => cs.memory as MemoryItem)
-    .sort((a, b) => {
-      const aVersioned = (a.version ?? 1) > 1 ? 1 : 0;
-      const bVersioned = (b.version ?? 1) > 1 ? 1 : 0;
-      if (aVersioned !== bVersioned) return bVersioned - aVersioned; // versioned first
-      return (b.last_modified ?? 0) - (a.last_modified ?? 0); // then by recency
-    });
 
   const updateMutation = useMutation({
     mutationFn: (content: string) => updatePage(pageId, content),
@@ -315,9 +260,13 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
 
   const sourceCount = pageSources?.length ?? page.source_memory_ids.length;
 
-  // Strip ## Sources (shown as MemoryCard UI below)
+  // Citations first (occurrence counting mirrors the backend and runs over the
+  // raw stored body), then the existing display transforms.
+  const processed = processCitations(page.content, page.citations);
+
+  // Strip ## Sources (shown in Page info below)
   // Convert [[wikilinks]] to markdown links if they resolve to pages, else plain text
-  const cleanedContent = page.content
+  const cleanedContent = processed.content
     .replace(/^#\s+.*\n+/, "") // Strip title heading (displayed separately by UI)
     .replace(/## Sources\n[\s\S]*?(?=\n## |\s*$)/, "")
     .replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => {
@@ -328,11 +277,17 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     })
     .trim();
 
+  const sourceMemoryByLocator = new Map(
+    (pageSources ?? [])
+      .filter((cs) => cs.memory !== null)
+      .map((cs) => [cs.source.memory_source_id, cs.memory!]),
+  );
+
   // Extract TLDR (first sentence) for native rendering under title.
   // Match first sentence ending with ". " or ".\n" — but not inside [[wikilinks]] or after abbreviations.
   const sentenceEnd = cleanedContent.search(/\.\s/);
   const tldr = sentenceEnd > 0 && sentenceEnd < 400
-    ? cleanedContent.slice(0, sentenceEnd + 1).trim()
+    ? stripCitationLinks(cleanedContent.slice(0, sentenceEnd + 1).trim())
     : "";
   const displayContent = tldr
     ? cleanedContent.slice(sentenceEnd + 1).trim()
@@ -356,9 +311,7 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
 
   const outboundLinks = pageLinks?.outbound ?? [];
   const inboundLinks = pageLinks?.inbound ?? [];
-  const hasPageLinks = !!pageLinks && (outboundLinks.length > 0 || inboundLinks.length > 0);
   const pageRevisionEntries = pageRevisions?.entries ?? [];
-  const orphanLinkLabels = orphanLinks?.orphan_labels ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -624,414 +577,40 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
               </p>
             </div>
           )}
-          <ContentRenderer content={displayContent} variant="detail" />
-        </div>
-      )}
-
-      {/* Page links — daemon-resolved inbound/outbound relationships */}
-      {!editing && hasPageLinks && (
-        <div aria-label="Page links">
-          <h3
-            className="mb-2"
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "11px",
-              fontWeight: 600,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            Page Links
-          </h3>
-          <div className="flex flex-col gap-1.5">
-            {outboundLinks.map((link, idx) => {
-              const key = `out-${link.label}-${link.target_page_id ?? idx}`;
-              const targetPageId = link.target_page_id;
-              const inner = (
-                <div className="flex items-center gap-2">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: "var(--mem-page-icon)" }} className="shrink-0">
-                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                  </svg>
-                  <span
-                    className={targetPageId ? "group-hover:text-[var(--mem-accent-indigo)] transition-colors" : undefined}
-                    style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", fontWeight: 500, color: "var(--mem-text)" }}
-                  >
-                    {link.label}
-                  </span>
-                </div>
-              );
-              if (!targetPageId) {
-                return (
-                  <div
-                    key={key}
-                    className="w-full text-left rounded-lg px-4 py-3"
-                    style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                  >
-                    {inner}
-                  </div>
-                );
-              }
+          <ContentRenderer
+            content={displayContent}
+            variant="detail"
+            renderCitation={(k) => {
+              const c = processed.byOccurrence.get(k);
+              if (!c) return null;
               return (
-                <button
-                  key={key}
-                  onClick={() => onPageClick?.(targetPageId)}
-                  className="w-full text-left rounded-lg px-4 py-3 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)] group"
-                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                >
-                  {inner}
-                </button>
+                <CitationChip
+                  occurrence={k}
+                  citation={c}
+                  sourceMemory={sourceMemoryByLocator.get(c.locator) ?? null}
+                  sourcesLoading={pageSources === undefined}
+                  onOpenMemory={onMemoryClick}
+                />
               );
-            })}
-            {inboundLinks.map((link, idx) => {
-              const key = `in-${link.source_page_id}-${link.label}-${idx}`;
-              const inner = (
-                <div className="flex items-start gap-2">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: "var(--mem-accent-indigo)" }} className="shrink-0">
-                    <path d="M7 7h10v10M17 7L7 17" />
-                  </svg>
-                  <div className="min-w-0">
-                    <span
-                      className={onPageClick ? "group-hover:text-[var(--mem-accent-indigo)] transition-colors" : undefined}
-                      style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", fontWeight: 500, color: "var(--mem-text)" }}
-                    >
-                      {link.label}
-                    </span>
-                    <div
-                      style={{
-                        fontFamily: "var(--mem-font-mono)",
-                        fontSize: "10px",
-                        color: "var(--mem-text-tertiary)",
-                        marginTop: "2px",
-                      }}
-                    >
-                      from {link.source_page_id}
-                    </div>
-                  </div>
-                </div>
-              );
-              if (!onPageClick) {
-                return (
-                  <div
-                    key={key}
-                    className="w-full text-left rounded-lg px-4 py-3"
-                    style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                  >
-                    {inner}
-                  </div>
-                );
-              }
-              return (
-                <button
-                  key={key}
-                  onClick={() => onPageClick(link.source_page_id)}
-                  className="w-full text-left rounded-lg px-4 py-3 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)] group"
-                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                >
-                  {inner}
-                </button>
-              );
-            })}
-          </div>
+            }}
+          />
         </div>
       )}
 
-      {/* Global page-link diagnostics — repeated unresolved wikilinks */}
-      {!editing && orphanLinkLabels.length > 0 && (
-        <div aria-label="Orphan page links">
-          <h3
-            className="mb-2"
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "11px",
-              fontWeight: 600,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            Unlinked Mentions
-          </h3>
-          <div className="flex flex-col gap-1.5">
-            {orphanLinkLabels.map((link) => (
-              <div
-                key={link.label}
-                className="rounded-lg px-4 py-3"
-                style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: "var(--mem-accent-amber)" }} className="shrink-0">
-                      <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
-                      <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
-                    </svg>
-                    <span
-                      style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", fontWeight: 500, color: "var(--mem-text)" }}
-                    >
-                      {link.label}
-                    </span>
-                  </div>
-                  <span
-                    className="shrink-0"
-                    style={{ fontFamily: "var(--mem-font-mono)", fontSize: "10px", color: "var(--mem-text-tertiary)" }}
-                  >
-                    {link.count} {link.count === 1 ? "mention" : "mentions"}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {!editing && <RelatedPages outbound={outboundLinks} onPageClick={onPageClick} />}
 
-      {/* Revision history — daemon page changelog */}
-      {!editing && pageRevisionEntries.length > 0 && (
-        <div aria-label="Revision history">
-          <h3
-            className="mb-2"
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "11px",
-              fontWeight: 600,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            Revision History
-          </h3>
-          <div className="flex flex-col gap-1.5">
-            {pageRevisionEntries.map((entry) => {
-              const incomingCount = entry.incoming_source_ids?.length ?? 0;
-              return (
-                <div
-                  key={`${entry.version}-${entry.at}`}
-                  className="rounded-lg px-4 py-3"
-                  style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                >
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span
-                      style={{
-                        fontFamily: "var(--mem-font-mono)",
-                        fontSize: "11px",
-                        fontWeight: 600,
-                        color: "var(--mem-accent-page)",
-                      }}
-                    >
-                      v{entry.version}
-                    </span>
-                    <span
-                      style={{
-                        fontFamily: "var(--mem-font-body)",
-                        fontSize: "12px",
-                        color: "var(--mem-text-secondary)",
-                      }}
-                    >
-                      {entry.edited_by}
-                    </span>
-                    <span
-                      style={{
-                        fontFamily: "var(--mem-font-mono)",
-                        fontSize: "10px",
-                        color: "var(--mem-text-tertiary)",
-                      }}
-                    >
-                      {relativeMs(entry.at * 1000)}
-                    </span>
-                    {incomingCount > 0 && (
-                      <span
-                        style={{
-                          fontFamily: "var(--mem-font-mono)",
-                          fontSize: "10px",
-                          color: "var(--mem-text-tertiary)",
-                        }}
-                      >
-                        {incomingCount} incoming {incomingCount === 1 ? "memory" : "memories"}
-                      </span>
-                    )}
-                  </div>
-                  {entry.delta_summary && (
-                    <p
-                      style={{
-                        fontFamily: "var(--mem-font-body)",
-                        fontSize: "13px",
-                        color: "var(--mem-text)",
-                        lineHeight: "1.5",
-                      }}
-                    >
-                      {entry.delta_summary}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Source Memories: evidence cards */}
-      {!editing && sourceCount > 0 && (
-        <div>
-          <h3
-            className="mb-1"
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "11px",
-              fontWeight: 600,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            Source Memories ({sourceCount})
-          </h3>
-          <ul>
-            {sourceMemories?.map((mem, idx) => (
-              <EvidenceCard
-                key={mem.source_id}
-                mem={mem}
-                isLast={idx === (sourceMemories?.length ?? 0) - 1}
-                onClick={onMemoryClick}
-              />
-            ))}
-            {/* While loading show placeholders matching source count */}
-            {!sourceMemories &&
-              page.source_memory_ids.map((id) => (
-                <li
-                  key={id}
-                  style={{
-                    borderBottom: "1px solid color-mix(in srgb, var(--mem-border) 60%, transparent)",
-                    padding: "10px 8px",
-                    opacity: 0.4,
-                  }}
-                >
-                  <div style={{ width: "60%", height: "10px", background: "var(--mem-hover)", borderRadius: "4px" }} />
-                </li>
-              ))
-            }
-          </ul>
-        </div>
+      {!editing && (
+        <PageInfo
+          sourceCount={sourceCount}
+          sources={pageSources}
+          inbound={inboundLinks}
+          revisions={pageRevisionEntries}
+          citations={page.citations}
+          citationState={processed.state}
+          onMemoryClick={onMemoryClick}
+          onPageClick={onPageClick}
+        />
       )}
     </div>
-  );
-}
-
-// Evidence card for a single source memory.
-// Hairline border-bottom row, hover background shift, click opens memory detail.
-function EvidenceCard({
-  mem,
-  isLast,
-  onClick,
-}: {
-  mem: MemoryItem;
-  isLast: boolean;
-  onClick: (sourceId: string) => void;
-}) {
-  const [hover, setHover] = useState(false);
-  const ts = mem.last_modified ? relativeMs(mem.last_modified * 1000) : null;
-  const agent = mem.source_agent ? prettyAgent(mem.source_agent) : null;
-  const kind = sourceKindLabel(mem);
-  const snippet = mem.content
-    ? mem.content.replace(/\s+/g, " ").trim().slice(0, 160)
-    : null;
-
-  return (
-    <li
-      className="py-3 px-2 transition-colors duration-150"
-      style={{
-        backgroundColor: hover ? "var(--mem-hover)" : "transparent",
-        borderBottom: isLast
-          ? "none"
-          : "1px solid color-mix(in srgb, var(--mem-border) 60%, transparent)",
-        cursor: "pointer",
-      }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={() => onClick(mem.source_id)}
-    >
-      <div className="flex items-center gap-2 mb-0.5">
-        {ts && (
-          <span
-            style={{
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "11px",
-              color: "var(--mem-text-tertiary)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {ts}
-          </span>
-        )}
-        {agent && (
-          <span
-            style={{
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "11px",
-              fontWeight: 500,
-              color: "var(--mem-text-secondary)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {agent}
-          </span>
-        )}
-        <span
-          style={{
-            fontFamily: "var(--mem-font-mono)",
-            fontSize: "10px",
-            color: "var(--mem-text-tertiary)",
-            background: "var(--mem-hover)",
-            padding: "1px 5px",
-            borderRadius: "3px",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {kind}
-        </span>
-        {mem.version != null && mem.version > 1 && (
-          <span
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "10px",
-              color: "var(--mem-accent-blue, #60a5fa)",
-              background: "color-mix(in srgb, var(--mem-accent-blue, #60a5fa) 15%, transparent)",
-              padding: "1px 5px",
-              borderRadius: "3px",
-              whiteSpace: "nowrap",
-            }}
-          >
-            v{mem.version}
-          </span>
-        )}
-      </div>
-      {mem.title && (
-        <p
-          className="truncate"
-          style={{
-            fontFamily: "var(--mem-font-heading)",
-            fontSize: "13px",
-            fontWeight: 500,
-            color: "var(--mem-text)",
-            lineHeight: 1.4,
-          }}
-        >
-          {mem.title}
-        </p>
-      )}
-      {snippet && (
-        <p
-          className="line-clamp-2"
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "12px",
-            color: "var(--mem-text-secondary)",
-            lineHeight: 1.5,
-            marginTop: "2px",
-          }}
-        >
-          {snippet}
-        </p>
-      )}
-    </li>
   );
 }

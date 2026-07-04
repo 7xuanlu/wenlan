@@ -100,3 +100,37 @@ describe("ContentRenderer card variant", () => {
     expect(screen.getByText("No content")).toBeInTheDocument();
   });
 });
+
+describe("ContentRenderer citation links", () => {
+  it("renders #citation: links through renderCitation", () => {
+    render(
+      <ContentRenderer
+        content="A claim.[1](#citation:1) More text."
+        variant="detail"
+        renderCitation={(k) => <button data-testid={`chip-${k}`}>chip {k}</button>}
+      />,
+    );
+    expect(screen.getByTestId("chip-1")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "1" })).toBeNull();
+  });
+
+  it("leaves ordinary links alone when renderCitation is set", () => {
+    const { container } = render(
+      <ContentRenderer
+        content="See [docs](https://example.com) and a claim.[1](#citation:1)"
+        variant="detail"
+        renderCitation={(k) => <span data-testid={`chip-${k}`} />}
+      />,
+    );
+    const link = container.querySelector('a[href="https://example.com"]');
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute("target")).toBe("_blank");
+  });
+
+  it("renders #citation: hrefs as plain anchors when renderCitation is absent", () => {
+    const { container } = render(
+      <ContentRenderer content="A claim.[1](#citation:1)" variant="detail" />,
+    );
+    expect(container.querySelector('a[href="#citation:1"]')).not.toBeNull();
+  });
+});

@@ -219,7 +219,8 @@ describe("PageDetail", () => {
 
   it("renders source memories section with count", async () => {
     renderWithQuery(<PageDetail {...defaultProps} />);
-    expect(await screen.findByText("Source Memories (2)")).toBeTruthy();
+    await screen.findByText("libSQL Architecture");
+    expect(screen.getByText(/2 sources/)).toBeInTheDocument();
   });
 
   it("uses mem- CSS variables (matches MemoryDetail pattern)", async () => {
@@ -238,7 +239,7 @@ describe("PageDetail", () => {
       inbound: [],
     });
     renderWithQuery(<PageDetail {...defaultProps} />);
-    expect(await screen.findByLabelText("Page links")).toBeTruthy();
+    expect(await screen.findByLabelText("Related pages")).toBeTruthy();
     const entityEls = await screen.findAllByText("Entity Graph");
     const cardSpan = entityEls.find((el) => el.tagName === "SPAN");
     expect(cardSpan).toBeTruthy();
@@ -249,7 +250,8 @@ describe("PageDetail", () => {
     const { listPages: mockList } = await import("../../lib/tauri");
     renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    expect(screen.queryByLabelText("Page links")).toBeNull();
+    expect(screen.queryByLabelText("Related pages")).toBeNull();
+    expect(screen.getByText(/Page info/i)).toBeInTheDocument();
     expect(mockList).not.toHaveBeenCalled();
   });
 
@@ -271,36 +273,25 @@ describe("PageDetail", () => {
     });
     renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("Simple Page");
-    expect(screen.queryByLabelText("Page links")).toBeNull();
-  });
-
-  it("shows loading placeholders while source memories are fetching", async () => {
-    const { getPageSources } = await import("../../lib/tauri");
-    let resolveMemories!: (v: unknown[]) => void;
-    (getPageSources as ReturnType<typeof vi.fn>).mockReturnValueOnce(
-      new Promise((res) => { resolveMemories = res; }),
-    );
-    renderWithQuery(<PageDetail {...defaultProps} />);
-    await screen.findByText("libSQL Architecture");
-    // Section header should be visible while memories are loading
-    expect(screen.getByText(/Source Memories/)).toBeTruthy();
-    // Resolve so the test doesn't leave a pending promise
-    resolveMemories([]);
+    expect(screen.queryByLabelText("Related pages")).toBeNull();
+    expect(screen.getByText(/Page info/i)).toBeInTheDocument();
   });
 
   it("renders one evidence card per source memory after fetch", async () => {
-    renderWithQuery(<PageDetail {...defaultProps} />);
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    // Both source memory titles should appear as evidence cards
-    expect(await screen.findByText("libSQL stores vectors")).toBeTruthy();
-    expect(await screen.findByText("DiskANN indexing strategy")).toBeTruthy();
+    await user.click(screen.getByText(/Page info/i));
+    expect(screen.getAllByTestId("page-info-source-row")).toHaveLength(2);
   });
 
   it("clicking an evidence card calls onMemoryClick with the right source_id", async () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
-    await screen.findByText("libSQL stores vectors");
-    const card = screen.getByText("libSQL stores vectors").closest("li")!;
-    await user.click(card);
+    await screen.findByText("libSQL Architecture");
+    await user.click(screen.getByText(/Page info/i));
+    const row = screen
+      .getByText("libSQL stores vectors")
+      .closest('[data-testid="page-info-source-row"]')!;
+    await user.click(row);
     expect(defaultProps.onMemoryClick).toHaveBeenCalledWith("mem_1");
   });
 

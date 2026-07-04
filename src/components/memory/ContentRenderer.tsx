@@ -7,12 +7,15 @@ import {
   extractPreview,
   normalizeContent,
 } from "../../lib/contentClassifier";
+import { CITATION_ANCHOR_PREFIX } from "../../lib/pageCitations";
 
 interface ContentRendererProps {
   content: string;
   structuredFields?: string | null;
   variant: "card" | "detail";
   className?: string;
+  /** Render #citation:k links as inline chips (page detail). */
+  renderCitation?: (occurrence: number) => React.ReactNode;
 }
 
 const markdownComponents = {
@@ -219,6 +222,7 @@ export default function ContentRenderer({
   structuredFields,
   variant,
   className,
+  renderCitation,
 }: ContentRendererProps) {
   if (variant === "card") {
     return (
@@ -247,9 +251,23 @@ export default function ContentRenderer({
   const shape = classifyContent(normalized, structuredFields);
   const prepared = prepareForRender(normalized, shape);
 
+  const components = renderCitation
+    ? {
+        ...markdownComponents,
+        a: (props: { href?: string; children?: React.ReactNode }) => {
+          const href = props.href ?? "";
+          if (href.startsWith(CITATION_ANCHOR_PREFIX)) {
+            const k = Number(href.slice(CITATION_ANCHOR_PREFIX.length));
+            if (Number.isInteger(k) && k > 0) return <>{renderCitation(k)}</>;
+          }
+          return markdownComponents.a(props);
+        },
+      }
+    : markdownComponents;
+
   return (
     <div className={["content-renderer", className].filter(Boolean).join(" ")}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {prepared}
       </ReactMarkdown>
     </div>

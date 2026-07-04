@@ -546,10 +546,7 @@ impl WenlanClient {
         self.get_json(&path).await
     }
 
-    pub async fn get_page_revisions(
-        &self,
-        page_id: &str,
-    ) -> Result<wenlan_types::responses::ListPageRevisionsResponse, String> {
+    pub async fn get_page_revisions(&self, page_id: &str) -> Result<serde_json::Value, String> {
         let path = format!("/api/pages/{}/revisions", page_id);
         self.get_json(&path).await
     }

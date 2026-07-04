@@ -80,7 +80,7 @@ describe("PageDetail page links", () => {
     tauriMocks.exportPageToObsidian.mockResolvedValue({ path: "/tmp/page.md" });
   });
 
-  it("uses daemon page links for related links and wikilink navigation", async () => {
+  it("uses daemon page links for related pages and wikilink navigation", async () => {
     tauriMocks.getPageLinks.mockResolvedValue({
       outbound: [
         { label: "Resolved Link", target_page_id: "page-2" },
@@ -101,14 +101,14 @@ describe("PageDetail page links", () => {
     await user.click(contentLink);
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
 
-    const linksSection = await screen.findByLabelText("Page links");
-    const resolvedButton = within(linksSection).getByRole("button", { name: /Resolved Link/ });
-    await user.click(resolvedButton);
+    const related = await screen.findByLabelText("Related pages");
+    await user.click(within(related).getByRole("button", { name: /Resolved Link/ }));
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
+    expect(within(related).getByText("Missing Link")).toBeInTheDocument();
+    expect(within(related).queryByRole("button", { name: /Missing Link/ })).toBeNull();
 
-    expect(within(linksSection).getByText("Missing Link")).toBeInTheDocument();
-    expect(within(linksSection).queryByRole("button", { name: /Missing Link/ })).toBeNull();
-    expect(within(linksSection).getByText("Inbound Mention")).toBeInTheDocument();
+    await user.click(screen.getByText(/Page info/i));
+    expect(screen.getByRole("button", { name: "Inbound Mention" })).toBeInTheDocument();
   });
 
   it("invalidates page links after saving edited content", async () => {
@@ -134,7 +134,7 @@ describe("PageDetail page links", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["page-revisions", "page-1"] });
   });
 
-  it("shows source identity for duplicate inbound link labels", async () => {
+  it("renders duplicate inbound labels without raw page ids", async () => {
     tauriMocks.getPageLinks.mockResolvedValue({
       outbound: [],
       inbound: [
@@ -143,12 +143,11 @@ describe("PageDetail page links", () => {
       ],
     });
 
-    renderWithQuery(<PageDetail {...defaultProps} />);
-
-    const linksSection = await screen.findByLabelText("Page links");
-    expect(within(linksSection).getAllByText("Shared Mention")).toHaveLength(2);
-    expect(within(linksSection).getByText("from source-page-a")).toBeInTheDocument();
-    expect(within(linksSection).getByText("from source-page-b")).toBeInTheDocument();
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+    expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
+    await user.click(screen.getByText(/Page info/i));
+    expect(screen.getAllByRole("button", { name: "Shared Mention" })).toHaveLength(2);
+    expect(screen.queryByText(/source-page-a/)).toBeNull();
   });
 
   it("uses daemon target labels for alias and heading wikilinks", async () => {
@@ -187,29 +186,15 @@ describe("PageDetail page links", () => {
       expect(tauriMocks.getPageLinks).toHaveBeenCalledWith("page-1");
     });
     expect(tauriMocks.listPages).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Page links")).toBeNull();
+    expect(screen.queryByLabelText("Related pages")).toBeNull();
+    expect(screen.getByText(/Page info/i)).toBeInTheDocument();
   });
 
-  it("renders daemon orphan link diagnostics", async () => {
-    tauriMocks.listOrphanLinks.mockResolvedValue({
-      min_count: 2,
-      orphan_labels: [
-        { label: "Missing Link", count: 4 },
-        { label: "Roadmap Draft", count: 2 },
-      ],
-    });
-
+  it("does not query orphan links and renders no Unlinked Mentions section", async () => {
     renderWithQuery(<PageDetail {...defaultProps} />);
-
-    const section = await screen.findByLabelText("Orphan page links");
-    await waitFor(() => {
-      expect(tauriMocks.listOrphanLinks).toHaveBeenCalledWith(2);
-    });
-    expect(within(section).getByText("Unlinked Mentions")).toBeInTheDocument();
-    expect(within(section).getByText("Missing Link")).toBeInTheDocument();
-    expect(within(section).getByText("4 mentions")).toBeInTheDocument();
-    expect(within(section).getByText("Roadmap Draft")).toBeInTheDocument();
-    expect(within(section).getByText("2 mentions")).toBeInTheDocument();
+    expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
+    expect(tauriMocks.listOrphanLinks).not.toHaveBeenCalled();
+    expect(screen.queryByText("Unlinked Mentions")).toBeNull();
   });
 
   it("renders daemon page revision history", async () => {
@@ -229,11 +214,11 @@ describe("PageDetail page links", () => {
       ],
     });
 
-    renderWithQuery(<PageDetail {...defaultProps} />);
-
-    expect(await screen.findByText(/revision history/i)).toBeInTheDocument();
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+    expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
+    await user.click(screen.getByText(/Page info/i));
     expect(screen.getByText(/added backlinks/i)).toBeInTheDocument();
-    expect(within(screen.getByLabelText("Revision history")).getByText("just now")).toBeInTheDocument();
+    expect(screen.getByText("just now")).toBeInTheDocument();
   });
 
   it("keeps rendering the page when page revisions route is unavailable", async () => {
@@ -242,6 +227,6 @@ describe("PageDetail page links", () => {
     renderWithQuery(<PageDetail {...defaultProps} />);
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    expect(screen.queryByText(/revision history/i)).toBeNull();
+    expect(screen.getByText(/0 revisions/)).toBeInTheDocument();
   });
 });

@@ -2988,14 +2988,22 @@ mod remaining_json_command_type_tests {
 
 // ── Pages ──────────────────────────────────────────────────────────
 
-/// Wire wrapper for the daemon's `{ "page": {...} }` response shape.
-#[derive(serde::Deserialize)]
-struct GetPageWire {
-    page: Option<Page>,
+/// Extract the `page` object from the daemon's `{ "page": {...} }` wrapper.
+/// Raw-JSON passthrough: the pinned wenlan-types structs would silently drop
+/// fields the daemon added after 0.9.2 (e.g. `citations`); the Rust layer
+/// consumes no Page fields on this path, so TypeScript types the response.
+fn page_from_wire(mut wire: serde_json::Value) -> Option<serde_json::Value> {
+    match wire.get_mut("page") {
+        Some(v) if !v.is_null() => Some(v.take()),
+        _ => None,
+    }
 }
 
 #[tauri::command]
-pub async fn get_page(state: tauri::State<'_, State>, id: String) -> Result<Option<Page>, String> {
+pub async fn get_page(
+    state: tauri::State<'_, State>,
+    id: String,
+) -> Result<Option<serde_json::Value>, String> {
     let client = state.read().await.client.clone();
     // The daemon returns 404 when the page doesn't exist, which reqwest
     // turns into an error. Distinguish "not found" from real errors so the
@@ -3003,10 +3011,10 @@ pub async fn get_page(state: tauri::State<'_, State>, id: String) -> Result<Opti
     // rather than the previous silent `Err(_) => Ok(None)` which hid
     // wrapper/deserialization bugs behind a "not found" UI.
     match client
-        .get_json::<GetPageWire>(&format!("/api/pages/{}", id))
+        .get_json::<serde_json::Value>(&format!("/api/pages/{}", id))
         .await
     {
-        Ok(wrapped) => Ok(wrapped.page),
+        Ok(wire) => Ok(page_from_wire(wire)),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("404") || msg.to_lowercase().contains("not found") {
@@ -3015,6 +3023,27 @@ pub async fn get_page(state: tauri::State<'_, State>, id: String) -> Result<Opti
                 Err(format!("get_page failed: {}", msg))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod get_page_tests {
+    use super::*;
+
+    #[test]
+    fn page_from_wire_extracts_page_object_with_unknown_fields() {
+        let wire = serde_json::json!({
+            "page": { "id": "p1", "citations": [{ "occurrence": 1, "marker": 1 }] }
+        });
+        let page = page_from_wire(wire).expect("page present");
+        assert_eq!(page["id"], "p1");
+        assert_eq!(page["citations"][0]["occurrence"], 1);
+    }
+
+    #[test]
+    fn page_from_wire_maps_null_and_missing_page_to_none() {
+        assert!(page_from_wire(serde_json::json!({ "page": null })).is_none());
+        assert!(page_from_wire(serde_json::json!({})).is_none());
     }
 }
 
@@ -3256,7 +3285,7 @@ pub async fn get_page_links(
 pub async fn get_page_revisions(
     state: tauri::State<'_, State>,
     page_id: String,
-) -> Result<responses::ListPageRevisionsResponse, String> {
+) -> Result<serde_json::Value, String> {
     let client = {
         let s = state.read().await;
         s.client.clone()

@@ -846,6 +846,7 @@ export interface PageChangelogEntry {
   edited_by: string;
   delta_summary?: string | null;
   incoming_source_ids?: string[] | null;
+  citations_summary?: string | null;
 }
 
 export interface ListPageRevisionsResponse {
@@ -968,6 +969,16 @@ export interface EntitySuggestion {
 
 // ── Pages ───────────────────────────────────────────────────────────
 
+export interface PageCitation {
+  occurrence: number;
+  marker: number;
+  source_kind: "memory" | "external_url" | "external_file" | "authored";
+  locator: string;
+  score: number;
+  status: "verified" | "unverified";
+  scope: "sentence" | "paragraph";
+}
+
 export interface Page {
   id: string;
   title: string;
@@ -986,6 +997,7 @@ export interface Page {
   sources_updated_count?: number;
   stale_reason?: string | null;
   user_edited?: boolean;
+  citations?: PageCitation[];
 }
 
 /** @deprecated Use {@link Page} instead. Kept for gradual migration. */

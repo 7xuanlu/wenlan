@@ -41,3 +41,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   copyFile: vi.fn(),
   stat: vi.fn(),
 }));
+
+vi.mock('@tauri-apps/plugin-shell', () => ({
+  open: vi.fn(),
+}));
