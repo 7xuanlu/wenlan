@@ -693,7 +693,7 @@ pub(crate) async fn grow_page(
         source_ids.push(source_id.to_string());
     }
     let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-    let _ = crate::post_write::update_page(
+    let write_result = crate::post_write::update_page(
         db,
         &page.id,
         UpdatePageRequest {
@@ -706,6 +706,9 @@ pub(crate) async fn grow_page(
         Some((citations_json, stats.summary())),
     )
     .await?;
+    if write_result.gated || !write_result.wrote {
+        return Ok(false);
+    }
 
     // Log activity: attribute to the agent who authored the triggering memory.
     let agent = db
@@ -1502,5 +1505,90 @@ mod tests {
         let log: Vec<wenlan_types::responses::PageChangelogEntry> =
             serde_json::from_str(&db.get_page_changelog(&page_id).await.unwrap()).unwrap();
         assert!(log.last().unwrap().citations_summary.is_some());
+    }
+
+    #[tokio::test]
+    async fn grow_page_staged_revision_card_reports_skipped_and_does_not_log_growth() {
+        let (db, _dir) = test_db().await;
+
+        let mem_v1 = "mem_grow_gate_v1";
+        let v1_content = "Rust ownership keeps memory safety rules explicit in systems code";
+        db.upsert_documents(vec![make_doc(mem_v1, v1_content)])
+            .await
+            .unwrap();
+
+        let page_req = wenlan_types::requests::CreateConceptRequest {
+            title: "Rust Ownership".to_string(),
+            content: v1_content.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![mem_v1.to_string()],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+        let page_id = crate::post_write::create_page(&db, page_req, "test", None)
+            .await
+            .unwrap()
+            .id;
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            before.creation_kind, "authored",
+            "precondition: authored pages are human-owned"
+        );
+
+        let mem_new = "mem_grow_gate_new";
+        let new_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+        db.upsert_documents(vec![make_doc(mem_new, new_content)])
+            .await
+            .unwrap();
+
+        let proposed = format!("{v1_content}.[1] {new_content}.[2]");
+        let stub = std::sync::Arc::new(CapturingStubProvider {
+            response: proposed.clone(),
+            captured_prompt: std::sync::Mutex::new(None),
+        });
+        let llm: std::sync::Arc<dyn LlmProvider> = stub;
+
+        let grew = grow_page(
+            &db,
+            mem_new,
+            new_content,
+            None,
+            Some(&llm),
+            &crate::prompts::PromptRegistry::default(),
+            0.0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !grew,
+            "grow_page must report skipped when PageWrite stages a revision card"
+        );
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, before.content,
+            "gated page growth must not overwrite human-owned page prose"
+        );
+        assert_eq!(
+            after.version, before.version,
+            "gated page growth must not bump the protected page version"
+        );
+
+        let revisions = db.list_pending_revisions(10).await.unwrap();
+        assert!(
+            revisions
+                .iter()
+                .any(|r| { r.target_source_id == page_id && r.revision_content == proposed }),
+            "gated page growth must stage the proposed prose as a revision card"
+        );
+
+        let activities = db.list_agent_activity(20, None, None).await.unwrap();
+        assert!(
+            !activities.iter().any(|a| a.action == "page_grow"),
+            "gated page growth must not log a successful page_grow activity"
+        );
     }
 }

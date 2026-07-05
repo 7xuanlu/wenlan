@@ -1163,20 +1163,7 @@ impl WenlanMcpServer {
         // Ownership gate (spec §5.2): a human-owned page is never overwritten in
         // place; the daemon stages a revision card. Surface that so the caller
         // does not believe the prose was rewritten.
-        let msg = if resp.gated {
-            match resp.revision_card_id {
-                Some(card) => format!(
-                    "Page {} is human-owned; staged revision card {} for review — prose left unchanged.",
-                    params.page_id, card
-                ),
-                None => format!(
-                    "Page {} is human-owned; staged a revision card for review — prose left unchanged.",
-                    params.page_id
-                ),
-            }
-        } else {
-            format!("Refreshed page {}", params.page_id)
-        };
+        let msg = format_update_page_response(&params.page_id, resp);
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
@@ -1640,6 +1627,24 @@ fn format_page_list(pages: &[wenlan_types::Page]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn format_update_page_response(
+    page_id: &str,
+    resp: wenlan_types::responses::PageWriteResponse,
+) -> String {
+    if resp.gated {
+        match resp.revision_card_id {
+            Some(card) => format!(
+                "Page {page_id} is human-owned; staged revision card for review — prose left unchanged.\ngated: true\nrevision_card_id: {card}"
+            ),
+            None => format!(
+                "Page {page_id} is human-owned; staged a revision card for review — prose left unchanged.\ngated: true"
+            ),
+        }
+    } else {
+        format!("Refreshed page {page_id}")
+    }
 }
 
 /// Percent-encode a string for use in URL query parameter values.
@@ -3423,6 +3428,26 @@ mod tests {
         assert!(
             result.is_error.unwrap_or(false),
             "should fail with connection error, not transport block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_page_surfaces_gated_revision_card_fields() {
+        let text = format_update_page_response(
+            "page_x",
+            wenlan_types::responses::PageWriteResponse {
+                ok: true,
+                gated: true,
+                revision_card_id: Some("mem_page_card_1".to_string()),
+            },
+        );
+        assert!(
+            text.contains("gated: true"),
+            "gated field missing from update_page response: {text}"
+        );
+        assert!(
+            text.contains("revision_card_id: mem_page_card_1"),
+            "revision_card_id missing from update_page response: {text}"
         );
     }
 
