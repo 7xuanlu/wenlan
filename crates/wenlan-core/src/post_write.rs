@@ -2799,7 +2799,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_page_user_edited_machine_write_creates_revision_card_without_overwrite() {
+    async fn page_write_update_user_edited_machine_write_creates_revision_card_without_overwrite() {
         let (db, _dir) = test_db().await;
         let mem_id = "mem-pagewrite-owned";
         let source_content = "Rust ownership keeps memory safety rules explicit in systems code";
@@ -2821,17 +2821,19 @@ mod tests {
 
         let human_content =
             "Rust ownership keeps memory safety rules explicit in systems code, with human notes";
-        update_page(
+        page_write(
             &db,
-            page_id,
-            UpdatePageRequest {
-                content: human_content.to_string(),
-                source_memory_ids: vec![mem_id.to_string()],
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: human_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                },
+                edited_by: "fs_edit",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
             },
-            "fs_edit",
-            false,
-            None,
-            None,
         )
         .await
         .unwrap();
@@ -2844,29 +2846,52 @@ mod tests {
 
         let machine_content =
             "Rust ownership lets the compiler enforce memory safety during page refresh";
-        let result = update_page(
+        let result = page_write(
             &db,
-            page_id,
-            UpdatePageRequest {
-                content: machine_content.to_string(),
-                source_memory_ids: vec![mem_id.to_string()],
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: machine_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
             },
-            "re_distill",
-            false,
-            None,
-            None,
         )
         .await
         .unwrap();
 
         let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(result.id, page_id);
+        assert!(!result.wrote, "gated PageWrite must report wrote=false");
+        assert!(result.gated, "gated PageWrite must expose gated=true");
+        assert_eq!(result.attached_to, None);
+        assert_eq!(
+            result.warnings,
+            vec!["human-owned page; staged revision card instead of overwriting content"],
+            "gated PageWrite must explain that the page prose was not overwritten"
+        );
         assert_eq!(
             after.content, before.content,
             "machine PageWrite must not overwrite human-owned page prose"
         );
         assert_eq!(
+            after.content, human_content,
+            "machine PageWrite must leave the human-authored bytes unchanged"
+        );
+        assert_eq!(
+            after.source_memory_ids, before.source_memory_ids,
+            "gated PageWrite must not mutate the protected page source set"
+        );
+        assert_eq!(
             after.version, before.version,
             "gated PageWrite must not bump the protected page version"
+        );
+        assert!(
+            after.user_edited,
+            "gated PageWrite must preserve the human ownership marker"
         );
 
         let result_json = serde_json::to_value(&result).unwrap();
@@ -2877,12 +2902,59 @@ mod tests {
             .expect("gated response must include revision_card_id");
 
         let revisions = db.list_pending_revisions(10).await.unwrap();
+        assert_eq!(
+            revisions.len(),
+            1,
+            "gated PageWrite must stage exactly one pending revision card"
+        );
         let card = revisions
             .iter()
             .find(|r| r.revision_source_id == revision_card_id)
             .expect("revision card must be visible in pending revisions");
         assert_eq!(card.target_source_id, page_id);
         assert_eq!(card.revision_content, machine_content);
+        assert_eq!(card.source_agent.as_deref(), Some("page_write"));
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source, supersedes, pending_revision, confirmed, stability, \
+                        structured_fields, source_text, memory_type \
+                 FROM memories WHERE source_id = ?1",
+                libsql::params![revision_card_id.to_string()],
+            )
+            .await
+            .unwrap();
+        let row = rows
+            .next()
+            .await
+            .unwrap()
+            .expect("revision card row must be persisted");
+        assert_eq!(row.get::<String>(0).unwrap(), "memory");
+        assert_eq!(row.get::<String>(1).unwrap(), page_id);
+        assert_eq!(row.get::<i64>(2).unwrap(), 1);
+        assert_eq!(row.get::<i64>(3).unwrap(), 0);
+        assert_eq!(row.get::<String>(4).unwrap(), "new");
+        let structured_fields = row.get::<String>(5).unwrap();
+        assert_eq!(
+            row.get::<Option<String>>(6).unwrap().as_deref(),
+            Some(machine_content)
+        );
+        assert_eq!(row.get::<String>(7).unwrap(), "fact");
+        assert!(
+            rows.next().await.unwrap().is_none(),
+            "revision_card_id must identify one persisted card row"
+        );
+        drop(rows);
+        drop(conn);
+
+        let structured: serde_json::Value = serde_json::from_str(&structured_fields).unwrap();
+        assert_eq!(structured["revision_kind"], "page_write");
+        assert_eq!(structured["target_kind"], "page");
+        assert_eq!(structured["revises_page"], page_id);
+        assert_eq!(structured["page_version"], before.version);
+        assert_eq!(structured["edited_by"], "re_distill");
+        assert_eq!(structured["source_memory_ids"], serde_json::json!([mem_id]));
     }
 
     // ── accept_pending_revision ──────────────────────────────────────────────
