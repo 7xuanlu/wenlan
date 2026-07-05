@@ -632,6 +632,13 @@ async fn distill_one_cluster_with_tuning(
     // without runaway context. The 800-char cap is honest: it matches the
     // amount the model can synthesize well at 2048 output tokens.
     const MEM_SNIPPET_CAP: usize = 800;
+    // Resolve each source's typed kind (spec §5.1) so a folder-doc or webpage
+    // source cited here carries external_file / external_url, not the
+    // hardcoded 'memory' default.
+    let kinds = db
+        .resolve_source_kinds(&cluster.source_ids)
+        .await
+        .unwrap_or_default();
     let numbered: Vec<crate::citations::NumberedSource> = cluster
         .source_ids
         .iter()
@@ -639,7 +646,10 @@ async fn distill_one_cluster_with_tuning(
         .enumerate()
         .map(|(i, (id, content))| crate::citations::NumberedSource {
             index: (i + 1) as u32,
-            source_kind: "memory".to_string(),
+            source_kind: kinds
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| "memory".to_string()),
             locator: id.clone(),
             text: content.chars().take(MEM_SNIPPET_CAP).collect(),
         })
@@ -1058,6 +1068,13 @@ pub async fn distill_pages_scoped(
         // without runaway context. The 800-char cap is honest: it matches the
         // amount the model can synthesize well at 2048 output tokens.
         const MEM_SNIPPET_CAP: usize = 800;
+        // Resolve each source's typed kind (spec §5.1) so a folder-doc or
+        // webpage source cited here carries external_file / external_url,
+        // not the hardcoded 'memory' default.
+        let kinds = db
+            .resolve_source_kinds(&cluster.source_ids)
+            .await
+            .unwrap_or_default();
         let numbered: Vec<crate::citations::NumberedSource> = cluster
             .source_ids
             .iter()
@@ -1065,7 +1082,10 @@ pub async fn distill_pages_scoped(
             .enumerate()
             .map(|(i, (id, content))| crate::citations::NumberedSource {
                 index: (i + 1) as u32,
-                source_kind: "memory".to_string(),
+                source_kind: kinds
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| "memory".to_string()),
                 locator: id.clone(),
                 text: content.chars().take(MEM_SNIPPET_CAP).collect(),
             })
@@ -1439,12 +1459,20 @@ pub async fn refresh_page(
     }
 
     const MEM_SNIPPET_CAP: usize = 800;
+    // Resolve each source's typed kind (spec §5.1) so a folder-doc or webpage
+    // source cited here carries external_file / external_url, not the
+    // hardcoded 'memory' default.
+    let ids: Vec<String> = memories.iter().map(|(id, _)| id.clone()).collect();
+    let kinds = db.resolve_source_kinds(&ids).await.unwrap_or_default();
     let numbered: Vec<crate::citations::NumberedSource> = memories
         .iter()
         .enumerate()
         .map(|(i, (id, content))| crate::citations::NumberedSource {
             index: (i + 1) as u32,
-            source_kind: "memory".to_string(),
+            source_kind: kinds
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| "memory".to_string()),
             locator: id.clone(),
             text: content.chars().take(MEM_SNIPPET_CAP).collect(),
         })
@@ -1969,6 +1997,167 @@ mod tests {
         assert!(
             latest.get("citations_summary").is_some(),
             "citations committed atomically with the content bump"
+        );
+    }
+
+    /// Spec §5.1 (True source kinds): `refresh_page` is the PageWrite
+    /// boundary that builds the per-claim `citations` numbered-source list.
+    /// Its `NumberedSource.source_kind` must resolve per-source (folder docs
+    /// -> `external_file`) instead of hardcoding `'memory'` for every
+    /// citation, else the shipped citation chips (wenlan-app PR #70) always
+    /// badge folder-doc-sourced claims as plain memories.
+    #[tokio::test]
+    async fn refresh_page_citations_resolve_external_file_source_kind() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Tokio is an async runtime for Rust programs', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+            // Folder-doc row: source_agent='folder' + the `{source_id}::{provenance}`
+            // id shape stamped by `sources::directory::document_source_id`.
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Folder documents describe async runtimes in Rust projects', 0, 'text', 'fact', 'test', 'folder', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["folder-notes::rust/tokio.md".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+        db.insert_page(
+            "page_fk",
+            "Tokio",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_seed", "folder-notes::rust/tokio.md"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_fk", "source_updated")
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "Tokio is an async runtime for Rust programs [1]. Folder documents describe async runtimes in Rust projects [2].",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let outcome = refresh_page(
+            &db,
+            &llm,
+            &prompts,
+            "page_fk",
+            RefreshReason::SourceChanged,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(outcome.wrote, "machine page should be rewritten in place");
+
+        let page = db.get_page("page_fk").await.unwrap().unwrap();
+        assert!(
+            !page.citations.is_empty(),
+            "per-claim citations persisted with the content"
+        );
+        let kind_of = |locator: &str| -> Option<String> {
+            page.citations
+                .iter()
+                .find(|c| c.locator == locator)
+                .map(|c| c.source_kind.clone())
+        };
+        assert_eq!(
+            kind_of("mem_seed").as_deref(),
+            Some("memory"),
+            "a plain agent capture must carry source_kind='memory' in its citation"
+        );
+        assert_eq!(
+            kind_of("folder-notes::rust/tokio.md").as_deref(),
+            Some("external_file"),
+            "a folder-doc source cited by refresh_page must carry source_kind='external_file', not 'memory'"
+        );
+    }
+
+    /// Spec §5.1 (True source kinds): the initial page-creation compile path
+    /// (`distill_one_cluster_with_tuning`) must resolve a folder-doc source's
+    /// typed kind rather than hardcoding `'memory'` on the new page's citations.
+    #[tokio::test]
+    async fn distill_one_cluster_resolves_external_file_source_kind() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        let mem_plain = "mem_cluster_kind_plain";
+        let mem_doc = "folder-notes::rust/cluster.md";
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Rust ownership rules prevent data races and dangling pointers at compile time without a garbage collector', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params![mem_plain.to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+            // Folder-doc row: source_agent='folder' + the `{source_id}::{provenance}`
+            // id shape stamped by `sources::directory::document_source_id`.
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'The borrow checker enforces these ownership rules statically at compile time by tracking lifetimes across function boundaries', 0, 'text', 'fact', 'test', 'folder', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params![mem_doc.to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        let plain_content =
+            "Rust ownership rules prevent data races and dangling pointers at compile time without a garbage collector".to_string();
+        let doc_content =
+            "The borrow checker enforces these ownership rules statically at compile time by tracking lifetimes across function boundaries".to_string();
+        let cluster = crate::db::DistillationCluster {
+            source_ids: vec![mem_plain.to_string(), mem_doc.to_string()],
+            contents: vec![plain_content.clone(), doc_content.clone()],
+            entity_id: None,
+            entity_name: Some("Rust ownership".into()),
+            space: Some("test".into()),
+            estimated_tokens: 60,
+            centroid_embedding: None,
+        };
+
+        let tuning = crate::tuning::DistillationConfig::default();
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(&format!(
+            "{plain_content}.[1] {doc_content}.[2]"
+        )));
+        let prompts = PromptRegistry::default();
+
+        let page_id = distill_one_cluster_with_tuning(&db, &llm, &prompts, &cluster, &tuning, None)
+            .await
+            .unwrap()
+            .expect("cluster should synthesize a new page");
+
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        let kind_of = |locator: &str| -> Option<String> {
+            page.citations
+                .iter()
+                .find(|c| c.locator == locator)
+                .map(|c| c.source_kind.clone())
+        };
+        assert_eq!(
+            kind_of(mem_plain).as_deref(),
+            Some("memory"),
+            "a plain agent capture must carry source_kind='memory' in its citation"
+        );
+        assert_eq!(
+            kind_of(mem_doc).as_deref(),
+            Some("external_file"),
+            "a folder-doc source cited during initial page synth must carry source_kind='external_file', not 'memory'"
         );
     }
 

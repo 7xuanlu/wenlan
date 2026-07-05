@@ -20857,20 +20857,54 @@ impl MemoryDB {
     /// Insert a new page. Generates an embedding from `title + summary` if available.
     /// Embedding failures are logged but do not prevent insertion.
     ///
+    /// Look up one source id's `(source, source_agent)` shape on an
+    /// already-open connection and resolve its typed evidence kind via the
+    /// pure [`crate::citations::resolve_page_evidence_source_kind`] resolver.
+    /// A `source_id` with no `memories` row (pruned/orphaned) resolves using
+    /// the `source_id` shape alone (URL / folder-doc detection needs no row),
+    /// else falls back to `'memory'`. Shared by [`Self::insert_resolved_page_evidence`]
+    /// (transaction-bound) and [`Self::resolve_source_kinds`] (self-contained
+    /// lock) so every page-evidence / citation emitter resolves a source's
+    /// kind through this ONE query shape (spec §5.1).
+    async fn resolve_one_source_kind(
+        conn: &libsql::Connection,
+        source_id: &str,
+    ) -> Result<String, libsql::Error> {
+        let mut rows = conn
+            .query(
+                "SELECT source, source_agent FROM memories WHERE source_id = ?1 LIMIT 1",
+                libsql::params![source_id],
+            )
+            .await?;
+        let (source, source_agent) = match rows.next().await? {
+            Some(row) => (
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<Option<String>>(1).unwrap_or(None),
+            ),
+            None => (String::new(), None),
+        };
+        drop(rows);
+        Ok(crate::citations::resolve_page_evidence_source_kind(
+            &source,
+            source_agent.as_deref(),
+            source_id,
+        )
+        .to_string())
+    }
+
     /// Resolve each source memory's typed evidence `source_kind`
     /// (`memory` | `external_url` | `external_file` | `authored`) from its
-    /// `(source, source_agent, source_id)` shape via the pure
-    /// [`crate::citations::resolve_page_evidence_source_kind`] resolver, then
-    /// `INSERT OR IGNORE` the `page_evidence` rows on the already-open
+    /// `(source, source_agent, source_id)` shape via [`Self::resolve_one_source_kind`],
+    /// then `INSERT OR IGNORE` the `page_evidence` rows on the already-open
     /// transaction `conn`. Running on the caller's open transaction keeps the
     /// evidence rows atomic with the page-content write.
     ///
-    /// This is the ONE site that calls the resolver — it replaces the hardcoded
-    /// `source_kind='memory'` literals at the page-evidence emitters (spec
-    /// §5.1) so book/paper/report (folder-doc) and webpage sources record
-    /// `external_file` / `external_url`. A `source_id` with no `memories` row
-    /// (pruned/orphaned) falls back to `'memory'`, matching the pre-resolver
-    /// default.
+    /// This is the ONE site that writes `page_evidence` rows — it replaces the
+    /// hardcoded `source_kind='memory'` literals at the page-evidence emitters
+    /// (spec §5.1) so book/paper/report (folder-doc) and webpage sources
+    /// record `external_file` / `external_url`. A `source_id` with no
+    /// `memories` row (pruned/orphaned) falls back to `'memory'`, matching the
+    /// pre-resolver default.
     async fn insert_resolved_page_evidence(
         conn: &libsql::Connection,
         page_id: &str,
@@ -20879,25 +20913,7 @@ impl MemoryDB {
         link_reason: &str,
     ) -> Result<(), libsql::Error> {
         for sid in source_ids {
-            let mut rows = conn
-                .query(
-                    "SELECT source, source_agent FROM memories WHERE source_id = ?1 LIMIT 1",
-                    libsql::params![*sid],
-                )
-                .await?;
-            let (source, source_agent) = match rows.next().await? {
-                Some(row) => (
-                    row.get::<String>(0).unwrap_or_default(),
-                    row.get::<Option<String>>(1).unwrap_or(None),
-                ),
-                None => (String::new(), None),
-            };
-            drop(rows);
-            let source_kind = crate::citations::resolve_page_evidence_source_kind(
-                &source,
-                source_agent.as_deref(),
-                sid,
-            );
+            let source_kind = Self::resolve_one_source_kind(conn, sid).await?;
             conn.execute(
                 "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
                  VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
@@ -20906,6 +20922,33 @@ impl MemoryDB {
             .await?;
         }
         Ok(())
+    }
+
+    /// Batch-resolve typed `page_evidence.source_kind` values
+    /// (`memory` | `external_url` | `external_file` | `authored`) for a list
+    /// of source ids, keyed by id. The ONE wiring site for every citation
+    /// emitter outside a PageWrite transaction (the compile/grow/refresh
+    /// sites in `synthesis/distill.rs` and `post_ingest.rs` build their
+    /// `NumberedSource.source_kind` from this map instead of hardcoding
+    /// `'memory'`), mirroring the same resolution `insert_resolved_page_evidence`
+    /// applies to `page_evidence` rows (spec §5.1: "one fix site instead of
+    /// ten"). Missing ids resolve to `'memory'` via the shared per-id lookup.
+    pub async fn resolve_source_kinds(
+        &self,
+        source_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, WenlanError> {
+        if source_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let conn = self.conn.lock().await;
+        let mut map = std::collections::HashMap::with_capacity(source_ids.len());
+        for sid in source_ids {
+            let kind = Self::resolve_one_source_kind(&conn, sid)
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("resolve_source_kinds: {e}")))?;
+            map.insert(sid.clone(), kind);
+        }
+        Ok(map)
     }
 
     /// Dual-writes the concept row and one `page_sources` row per

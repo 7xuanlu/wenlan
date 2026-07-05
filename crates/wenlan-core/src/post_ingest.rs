@@ -616,12 +616,20 @@ pub(crate) async fn grow_page(
     locators.push(source_id.to_string());
     locators.dedup();
     let mems = db.get_memories_by_source_ids(&locators).await?;
+    // Resolve each source's typed kind (spec §5.1): the existing evidence is
+    // pre-filtered to 'memory', but the newly-triggering `source_id` may be a
+    // folder-doc or webpage source, so every entry resolves through the
+    // shared resolver rather than hardcoding 'memory'.
+    let kinds = db.resolve_source_kinds(&locators).await.unwrap_or_default();
     let numbered: Vec<crate::citations::NumberedSource> = mems
         .iter()
         .enumerate()
         .map(|(i, m)| crate::citations::NumberedSource {
             index: (i + 1) as u32,
-            source_kind: "memory".to_string(),
+            source_kind: kinds
+                .get(&m.source_id)
+                .cloned()
+                .unwrap_or_else(|| "memory".to_string()),
             locator: m.source_id.clone(),
             text: m.content.chars().take(800).collect(),
         })
@@ -1505,6 +1513,79 @@ mod tests {
         let log: Vec<wenlan_types::responses::PageChangelogEntry> =
             serde_json::from_str(&db.get_page_changelog(&page_id).await.unwrap()).unwrap();
         assert!(log.last().unwrap().citations_summary.is_some());
+    }
+
+    /// Spec §5.1 (True source kinds): `grow_page`'s numbered-source list must
+    /// resolve the triggering memory's typed kind instead of hardcoding
+    /// `'memory'`, else a folder-doc source that grows an existing page is
+    /// mis-badged as a plain memory citation.
+    #[tokio::test]
+    async fn grow_page_resolves_external_file_kind_for_folder_doc_trigger() {
+        let (db, _dir) = test_db().await;
+
+        let mem_v1 = "mem_grow_kind_v1";
+        let v1_content = "Rust is a systems programming language with memory safety guarantees";
+        db.upsert_documents(vec![make_doc(mem_v1, v1_content)])
+            .await
+            .unwrap();
+
+        let page_req = wenlan_types::requests::CreateConceptRequest {
+            title: "Rust".to_string(),
+            content: v1_content.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![mem_v1.to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        let page_id = crate::post_write::create_page(&db, page_req, "test", None)
+            .await
+            .unwrap()
+            .id;
+
+        // The NEW triggering source is a folder document: source_agent='folder'
+        // + the `{source_id}::{provenance}` id shape stamped by
+        // `sources::directory::document_source_id` (directory.rs:372).
+        let mem_new = "folder-notes::rust/new.md";
+        let new_content =
+            "Rust also provides zero-cost abstractions for high-performance systems programming";
+        let mut folder_doc = make_doc(mem_new, new_content);
+        folder_doc.source_agent = Some("folder".to_string());
+        db.upsert_documents(vec![folder_doc]).await.unwrap();
+
+        let stub = std::sync::Arc::new(CapturingStubProvider {
+            response: format!(
+                "{v1_content}.[1] It also provides zero-cost abstractions for high-performance systems programming.[2]"
+            ),
+            captured_prompt: std::sync::Mutex::new(None),
+        });
+        let llm: std::sync::Arc<dyn LlmProvider> = stub.clone();
+
+        let grew = grow_page(
+            &db,
+            mem_new,
+            new_content,
+            None,
+            Some(&llm),
+            &crate::prompts::PromptRegistry::default(),
+            0.0,
+        )
+        .await
+        .unwrap();
+        assert!(grew, "grow_page should report growth");
+
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        let kind_of = page
+            .citations
+            .iter()
+            .find(|c| c.locator == mem_new)
+            .map(|c| c.source_kind.clone());
+        assert_eq!(
+            kind_of.as_deref(),
+            Some("external_file"),
+            "a folder-doc source growing a page must carry source_kind='external_file', not 'memory'"
+        );
     }
 
     #[tokio::test]
