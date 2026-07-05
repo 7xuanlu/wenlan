@@ -37,6 +37,12 @@ const VALID_PAGE_CREATION_KINDS: [&str; 4] = ["distilled", "authored", "research
 const PAGE_BIRTH_REVIEW_STATUS: &str = "unconfirmed";
 
 pub enum PageWrite<'a> {
+    Attach {
+        page_id: &'a str,
+        source_memory_ids: &'a [String],
+        link_reason: &'a str,
+        agent: &'a str,
+    },
     Create {
         req: CreateConceptRequest,
         agent: &'a str,
@@ -56,6 +62,12 @@ pub enum PageWrite<'a> {
 
 pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResult, WenlanError> {
     match write {
+        PageWrite::Attach {
+            page_id,
+            source_memory_ids,
+            link_reason,
+            agent,
+        } => attach_page_sources_impl(db, page_id, source_memory_ids, link_reason, agent).await,
         PageWrite::Create {
             req,
             agent,
@@ -93,6 +105,27 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             .await
         }
     }
+}
+
+async fn attach_page_sources_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    source_memory_ids: &[String],
+    link_reason: &str,
+    agent: &str,
+) -> Result<WriteResult, WenlanError> {
+    for sid in source_memory_ids {
+        db.link_page_source(page_id, sid, link_reason).await?;
+    }
+    log_activity_best_effort(db, agent, "page_attach", page_id).await;
+    Ok(WriteResult {
+        id: page_id.to_string(),
+        attached_to: Some(page_id.to_string()),
+        warnings: vec![],
+        wrote: true,
+        revision_card_id: None,
+        gated: false,
+    })
 }
 
 /// Best-effort activity logger used by curation-mutate capability fns.

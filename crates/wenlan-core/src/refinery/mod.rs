@@ -25,6 +25,7 @@ pub use crate::kg::reweave::reweave_entity_links;
 // Internal re-imports for refinery code that still calls into the moved
 // distillation helpers (distill_one_cluster + refine_clusters_with_llm +
 // recompile_single_page from other refinery phases).
+use crate::synthesis::detect::detect_page_candidates;
 use crate::synthesis::distill::{build_page_compile_user_prompt, recompile_single_page};
 use crate::synthesis::refinement_queue::process_refinement_queue;
 use wenlan_types::requests::UpdatePageRequest;
@@ -65,6 +66,7 @@ impl TriggerKind {
             Self::Idle => matches!(
                 phase,
                 Phase::CommunityDetection
+                    | Phase::Detect
                     | Phase::Emergence
                     | Phase::SummaryRollup
                     | Phase::ReDistill
@@ -88,7 +90,7 @@ impl TriggerKind {
     /// of phases, so they need different time budgets:
     /// - BurstEnd: tight (recaps + refinement only, should be fast)
     /// - Idle/Daily: moderate (focused subsets, no competition)
-    /// - Backstop: generous (runs all 13 phases, safety net every 6h)
+    /// - Backstop: generous (runs all phases, safety net every 6h)
     pub fn deadline_secs(&self, base: u64) -> u64 {
         match self {
             Self::BurstEnd => base,      // 120s — recaps should be fast
@@ -454,6 +456,34 @@ pub async fn run_periodic_steep_with_api(
             let (nudge, headline) = classify_backfill(count);
             Ok(PhaseOutput {
                 items_processed: count,
+                nudge,
+                headline,
+            })
+        })
+        .await;
+        phases.push(phase);
+    }
+
+    // Phase 5c: DETECT — embedding/cosine-only page candidate pass. It runs
+    // before compile/emergence so cheap attach-to-existing-page opportunities
+    // are consumed through PageWrite before any LLM synthesis lane is touched.
+    if trigger.runs_phase(Phase::Detect) {
+        let phase = run_phase(Phase::Detect, || async {
+            let report = detect_page_candidates(db_ref, distillation).await?;
+            if report.candidates_processed > 0
+                || report.attached > 0
+                || report.skipped_unchanged > 0
+            {
+                log::info!(
+                    "[detect] processed={}, attached={}, skipped_unchanged={}",
+                    report.candidates_processed,
+                    report.attached,
+                    report.skipped_unchanged
+                );
+            }
+            let (nudge, headline) = classify_backfill(report.attached);
+            Ok(PhaseOutput {
+                items_processed: report.candidates_processed,
                 nudge,
                 headline,
             })
@@ -1295,6 +1325,7 @@ mod tests {
         assert!(!t.runs_phase(Phase::Promote));
         assert!(!t.runs_phase(Phase::Emergence));
         assert!(!t.runs_phase(Phase::CommunityDetection));
+        assert!(!t.runs_phase(Phase::Detect));
         assert!(!t.runs_phase(Phase::DecisionLogs));
         assert!(!t.runs_phase(Phase::PruneRejections));
         assert!(!t.runs_phase(Phase::Evict));
@@ -1304,6 +1335,7 @@ mod tests {
     fn test_trigger_kind_idle_subset() {
         let t = TriggerKind::Idle;
         assert!(t.runs_phase(Phase::CommunityDetection));
+        assert!(t.runs_phase(Phase::Detect));
         assert!(t.runs_phase(Phase::Emergence));
         assert!(t.runs_phase(Phase::ReDistill));
         assert!(t.runs_phase(Phase::DecisionLogs));
@@ -1332,6 +1364,7 @@ mod tests {
         // Should NOT run synthesis or burst phases
         assert!(!t.runs_phase(Phase::Recaps));
         assert!(!t.runs_phase(Phase::Emergence));
+        assert!(!t.runs_phase(Phase::Detect));
         assert!(!t.runs_phase(Phase::ReDistill));
         assert!(!t.runs_phase(Phase::DecisionLogs));
         assert!(!t.runs_phase(Phase::CommunityDetection));
@@ -1608,6 +1641,7 @@ mod tests {
         // Idle subset
         let expected: &[&str] = &[
             "community_detection",
+            "detect",
             "emergence",
             "re-distill",
             "decision_logs",
@@ -1620,6 +1654,19 @@ mod tests {
                 phase_names
             );
         }
+        let detect_pos = phase_names
+            .iter()
+            .position(|name| *name == "detect")
+            .expect("detect phase should run on Idle");
+        let emergence_pos = phase_names
+            .iter()
+            .position(|name| *name == "emergence")
+            .expect("emergence phase should run on Idle");
+        assert!(
+            detect_pos < emergence_pos,
+            "DETECT must run before compile/emergence, got {:?}",
+            phase_names
+        );
 
         // Must NOT run anything else
         for name in &phase_names {
@@ -1724,7 +1771,7 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // All 13 phases must run with Backstop. `kg_rethink` is
+        // All phases must run with Backstop. `kg_rethink` is
         // rate-limited, so on a fresh DB (last_kg_rethink_ts=0) it runs
         // on the first steep.
         let expected: &[&str] = &[
@@ -1735,6 +1782,7 @@ mod tests {
             "reembed",
             "entity_extraction",
             "community_detection",
+            "detect",
             "emergence",
             "re-distill",
             "refinement_queue",

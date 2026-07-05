@@ -299,6 +299,10 @@ pub struct DistillationConfig {
     pub page_growth_threshold: f64,
     #[serde(default = "d_085")]
     pub page_match_threshold: f64,
+    /// Max DETECT candidates attempted per sweep tick. DETECT is intentionally
+    /// bounded separately from synthesis because it scans the staging pool.
+    #[serde(default = "d_5_usize")]
+    pub detect_max_candidates_per_tick: usize,
     /// Reserved for future integration into search_memory scoring pipeline.
     /// Currently pages are searched via separate search_pages endpoint.
     #[serde(default = "d_13_f32", alias = "concept_boost")]
@@ -654,6 +658,7 @@ impl Default for DistillationConfig {
             page_min_cluster_size: d_3_usize(),
             page_growth_threshold: d_075(),
             page_match_threshold: d_085(),
+            detect_max_candidates_per_tick: d_5_usize(),
             page_boost: d_13_f32(),
             max_unlinked_cluster_size: d_50_usize(),
             max_grouped_cluster_size: d_12_usize(),
