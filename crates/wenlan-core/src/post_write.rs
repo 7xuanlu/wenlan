@@ -520,15 +520,6 @@ pub async fn create_page_with_tuning(
     .await
 }
 
-fn page_embedding_text(title: &str, summary: Option<&str>, content: &str) -> String {
-    const PAGE_EMBED_CONTENT_CAP: usize = 1500;
-    let capped_body: String = content.chars().take(PAGE_EMBED_CONTENT_CAP).collect();
-    match summary {
-        Some(summary) => format!("{title} {summary} {capped_body}"),
-        None => format!("{title} {capped_body}"),
-    }
-}
-
 async fn create_page_impl(
     db: &MemoryDB,
     req: CreateConceptRequest,
@@ -594,7 +585,8 @@ async fn create_page_impl(
     }
 
     if creation_kind == "distilled" {
-        let embed_text = page_embedding_text(&req.title, req.summary.as_deref(), &req.content);
+        let embed_text =
+            crate::pages::page_embedding_text(&req.title, req.summary.as_deref(), &req.content);
         let embedding = match db.generate_embeddings(&[embed_text]) {
             Ok(mut embeddings) => embeddings.pop(),
             Err(e) => {

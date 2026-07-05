@@ -13,6 +13,19 @@ pub fn new_page_id() -> String {
     format!("page_{}", uuid::Uuid::new_v4())
 }
 
+/// Build the text embedded for page-level matching.
+///
+/// This is shared by page writes and PageWrite dedup so the stored page vector
+/// and the candidate vector cannot drift apart.
+pub(crate) fn page_embedding_text(title: &str, summary: Option<&str>, content: &str) -> String {
+    const PAGE_EMBED_CONTENT_CAP: usize = 1500;
+    let capped_body: String = content.chars().take(PAGE_EMBED_CONTENT_CAP).collect();
+    match summary {
+        Some(summary) => format!("{title} {summary} {capped_body}"),
+        None => format!("{title} {capped_body}"),
+    }
+}
+
 /// Maps a source memory's `memory_type` to the read-trust tier it sits behind.
 pub fn trust_tier_for_memory_type(memory_type: Option<&str>) -> u8 {
     match memory_type {
@@ -213,6 +226,62 @@ mod tests {
         let search_ids: HashSet<String> = ["m1"].iter().map(|s| s.to_string()).collect();
         let kept = filter_pages_by_source_overlap(&pages, &search_ids, 0);
         assert_eq!(kept.len(), 2); // min_overlap=0 keeps everything
+    }
+
+    #[test]
+    fn page_embedding_text_concats_title_summary_and_capped_body() {
+        // With a summary the slots join as "{title} {summary} {body}".
+        assert_eq!(
+            page_embedding_text("Title", Some("Summary"), "Body"),
+            "Title Summary Body"
+        );
+        // Without a summary the summary slot is dropped entirely.
+        assert_eq!(page_embedding_text("Title", None, "Body"), "Title Body");
+        // The body is capped so a long page can't blow the embedder window;
+        // the cap counts characters, not bytes.
+        let long_body = "x".repeat(2000);
+        let text = page_embedding_text("T", None, &long_body);
+        let body_part = text.strip_prefix("T ").expect("title prefix present");
+        assert_eq!(
+            body_part.chars().count(),
+            1500,
+            "body must be capped at 1500 chars"
+        );
+    }
+
+    #[test]
+    fn page_embedding_text_is_the_single_source_of_truth() {
+        // The write side (`insert_page_with_kind`) and the read/dedup side
+        // (`create_page_impl`) must build the page embedding vector from the
+        // SAME helper. If either re-inlines the formula or the cap, the stored
+        // page vector and the dedup candidate vector silently drift and
+        // near-duplicate pages stop matching — the exact bug this dedup path
+        // exists to prevent. Guard it at compile-inlined source level.
+        let db_source = include_str!("db.rs");
+        let post_write_source = include_str!("post_write.rs");
+
+        // Both call sites route through the shared helper.
+        assert!(
+            db_source.contains("page_embedding_text("),
+            "insert_page_with_kind must call the shared page_embedding_text helper"
+        );
+        assert!(
+            post_write_source.contains("page_embedding_text("),
+            "PageWrite dedup must call the shared page_embedding_text helper"
+        );
+        // Neither call site redefines the helper or its cap locally.
+        assert!(
+            !post_write_source.contains("fn page_embedding_text"),
+            "PageWrite must not carry its own page_embedding_text definition"
+        );
+        assert!(
+            !db_source.contains("PAGE_EMBED_CONTENT_CAP"),
+            "insert_page_with_kind must not carry a private page embedding cap"
+        );
+        assert!(
+            !post_write_source.contains("PAGE_EMBED_CONTENT_CAP"),
+            "PageWrite dedup must not carry a private page embedding cap"
+        );
     }
 
     #[test]
