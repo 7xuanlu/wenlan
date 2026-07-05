@@ -920,9 +920,18 @@ pub(crate) async fn re_distill_stale_pages(
                         page.title,
                         stats.summary()
                     );
+                    // Atomicity (spec §5.1): pass the freshly verified [N]
+                    // citation map INTO update_page so the content, citations,
+                    // and changelog commit in ONE transaction (mirrors
+                    // grow_page). The old two-step — update_page(.., None) then
+                    // a separate set_page_citations — left the page with updated
+                    // content but un-updated ('[]') citations if the second
+                    // write failed or the process crashed between them.
                     // Real CAS: require_stale=true means the write only lands
                     // when stale_reason IS NOT NULL, so a concurrent agent-side
                     // PUT that cleared staleness wins the race without TOCTOU.
+                    let citations_json =
+                        serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
                     let result = crate::post_write::update_page(
                         db,
                         &page.id,
@@ -933,31 +942,10 @@ pub(crate) async fn re_distill_stale_pages(
                         "re_distill",
                         true,
                         knowledge_path,
-                        None,
+                        Some((citations_json, stats.summary())),
                     )
                     .await?;
                     if result.wrote {
-                        // `update_page` has no `citations` param until Task 6
-                        // wires the growth path, so the content write resets
-                        // the column to '[]'; persist the real citation map
-                        // computed from this same body as a follow-up write
-                        // (else the backfill sweep, IS NULL only, would never
-                        // re-visit this page).
-                        let citations_json =
-                            serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-                        if let Err(e) = db.set_page_citations(&page.id, Some(&citations_json)).await
-                        {
-                            log::warn!(
-                                "[re-distill-stale] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
-                                page.title
-                            );
-                            if let Err(e2) = db.set_page_citations(&page.id, None).await {
-                                log::error!(
-                                    "[re-distill-stale] citations NULL fallback also failed for '{}': {e2}",
-                                    page.title
-                                );
-                            }
-                        }
                         db.clear_page_staleness(&page.id).await?;
                         recompiled += 1;
                         log::info!("[re-distill-stale] refreshed page '{}'", page.title);
@@ -2585,6 +2573,88 @@ mod tests {
             content.contains("refreshed body"),
             "md body should reflect LLM output, got: {}",
             content
+        );
+    }
+
+    /// Atomicity (spec §5.1): re-distill must write the page body and its
+    /// per-claim citation map in ONE transaction. The pre-fix site did a
+    /// non-atomic two-step — `update_page(.., citations=None)` (content bump,
+    /// citations reset to '[]') followed by a SEPARATE `set_page_citations`
+    /// call — so a crash between the two commits leaves the page with updated
+    /// content but un-updated ('[]') citations.
+    ///
+    /// The observable proof of atomicity: only
+    /// `try_update_page_content_with_changelog` stamps `citations_summary` into
+    /// the changelog entry, and it does so in the SAME transaction that writes
+    /// the content + citations. The two-step leaves the content-bump changelog
+    /// entry WITHOUT a `citations_summary` (set_page_citations touches only the
+    /// citations column, no changelog). Asserting the summary is present proves
+    /// citations rode the atomic content write, not a second commit.
+    #[tokio::test]
+    async fn re_distill_persists_citations_atomically_with_content() {
+        use crate::llm_provider::MockProvider;
+
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed the cited memory. The re-distilled body echoes its content so the
+        // [1] marker verifies and yields a non-empty citation map.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Tokio is an async runtime for Rust', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_stale",
+            "Tokio",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_stale", "source_updated")
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("Tokio is an async runtime for Rust [1]"));
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(recompiled, 1, "stale page should be re-distilled");
+
+        let page = db.get_page("page_stale").await.unwrap().unwrap();
+        assert!(
+            page.content.contains("Tokio is an async runtime"),
+            "content should reflect the re-distilled body, got: {}",
+            page.content
+        );
+        assert!(
+            !page.citations.is_empty(),
+            "re-distill must persist the per-claim citation map, not leave it empty"
+        );
+
+        let changelog_raw = db.get_page_changelog("page_stale").await.unwrap();
+        let changelog: Vec<serde_json::Value> = serde_json::from_str(&changelog_raw).unwrap();
+        let latest = changelog
+            .last()
+            .expect("re-distill content write must append a changelog entry");
+        assert!(
+            latest.get("citations_summary").is_some(),
+            "content+citations must commit atomically: the re-distill changelog entry must carry citations_summary (the two-step leaves it absent); changelog={changelog_raw}"
         );
     }
 }

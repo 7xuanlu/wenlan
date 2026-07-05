@@ -38,6 +38,80 @@ async fn seed_memory(db: &MemoryDB, id: &str, content: &str) {
     db.upsert_documents(vec![doc]).await.expect("seed memory");
 }
 
+/// Seed a folder-document memory: `source="memory"`, `source_agent="folder"`,
+/// and the `{source_id}::{provenance}` id shape that
+/// `sources::directory::document_source_id` stamps (directory.rs:167,372). The
+/// resolver must map this shape to `source_kind='external_file'`, not the
+/// plain-capture default `'memory'`.
+async fn seed_folder_doc(db: &MemoryDB, source_id: &str, content: &str) {
+    let doc = RawDocument {
+        source: "memory".to_string(),
+        source_id: source_id.to_string(),
+        title: source_id.to_string(),
+        summary: None,
+        content: content.to_string(),
+        url: None,
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        space: Some("technology".to_string()),
+        source_agent: Some("folder".to_string()),
+        confidence: None,
+        confirmed: None,
+        supersedes: None,
+        pending_revision: false,
+        ..Default::default()
+    };
+    db.upsert_documents(vec![doc])
+        .await
+        .expect("seed folder doc");
+}
+
+/// Spec §5.1 (True source kinds): a compiled page whose source set mixes a plain
+/// agent capture and a folder document must record the typed evidence kind per
+/// source — `'memory'` for the capture, `'external_file'` for the folder doc —
+/// instead of the pre-fix hardcoded `'memory'` at every emitter.
+#[tokio::test]
+async fn compiled_page_records_external_file_kind_for_folder_doc_source() {
+    let (db, _d) = make_db().await;
+    seed_memory(&db, "mem_a", "alpha content about rust workspaces").await;
+    seed_folder_doc(
+        &db,
+        "doc1::notes/rust.md",
+        "doc content about rust workspaces",
+    )
+    .await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        "page_1",
+        "Rust",
+        Some("rust topic"),
+        "body",
+        None,
+        None,
+        &["mem_a", "doc1::notes/rust.md"],
+        &now,
+    )
+    .await
+    .unwrap();
+
+    let ev = db.get_page_evidence("page_1").await.unwrap();
+    let kind_of = |loc: &str| -> Option<String> {
+        ev.iter()
+            .find(|e| e.locator.as_deref() == Some(loc))
+            .map(|e| e.source_kind.clone())
+    };
+    assert_eq!(
+        kind_of("mem_a").as_deref(),
+        Some("memory"),
+        "a plain agent capture must record source_kind='memory'"
+    );
+    assert_eq!(
+        kind_of("doc1::notes/rust.md").as_deref(),
+        Some("external_file"),
+        "a compiled page whose source is a folder doc must record source_kind='external_file', not 'memory'"
+    );
+}
+
 #[tokio::test]
 async fn page_evidence_backfill_matches_legacy_page_sources() {
     let (db, _d) = make_db().await;

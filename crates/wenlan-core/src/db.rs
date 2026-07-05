@@ -20809,6 +20809,57 @@ impl MemoryDB {
     /// Insert a new page. Generates an embedding from `title + summary` if available.
     /// Embedding failures are logged but do not prevent insertion.
     ///
+    /// Resolve each source memory's typed evidence `source_kind`
+    /// (`memory` | `external_url` | `external_file` | `authored`) from its
+    /// `(source, source_agent, source_id)` shape via the pure
+    /// [`crate::citations::resolve_page_evidence_source_kind`] resolver, then
+    /// `INSERT OR IGNORE` the `page_evidence` rows on the already-open
+    /// transaction `conn`. Running on the caller's open transaction keeps the
+    /// evidence rows atomic with the page-content write.
+    ///
+    /// This is the ONE site that calls the resolver — it replaces the hardcoded
+    /// `source_kind='memory'` literals at the page-evidence emitters (spec
+    /// §5.1) so book/paper/report (folder-doc) and webpage sources record
+    /// `external_file` / `external_url`. A `source_id` with no `memories` row
+    /// (pruned/orphaned) falls back to `'memory'`, matching the pre-resolver
+    /// default.
+    async fn insert_resolved_page_evidence(
+        conn: &libsql::Connection,
+        page_id: &str,
+        source_ids: &[&str],
+        linked_at: i64,
+        link_reason: &str,
+    ) -> Result<(), libsql::Error> {
+        for sid in source_ids {
+            let mut rows = conn
+                .query(
+                    "SELECT source, source_agent FROM memories WHERE source_id = ?1 LIMIT 1",
+                    libsql::params![*sid],
+                )
+                .await?;
+            let (source, source_agent) = match rows.next().await? {
+                Some(row) => (
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<Option<String>>(1).unwrap_or(None),
+                ),
+                None => (String::new(), None),
+            };
+            drop(rows);
+            let source_kind = crate::citations::resolve_page_evidence_source_kind(
+                &source,
+                source_agent.as_deref(),
+                sid,
+            );
+            conn.execute(
+                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
+                libsql::params![page_id, source_kind, *sid, linked_at, link_reason],
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Dual-writes the concept row and one `page_sources` row per
     /// `source_memory_id` inside a single BEGIN/COMMIT so the join table is
     /// always consistent with the legacy `source_memory_ids` JSON column at
@@ -20944,17 +20995,17 @@ impl MemoryDB {
             }
         }
 
-        // Dual-write to page_evidence (P2 typed provenance). INSERT OR IGNORE
-        // keeps this idempotent on re-distill.
-        for sid in source_memory_ids {
-            if let Err(e) = conn.execute(
-                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-                 VALUES (?1, 'memory', ?2, NULL, ?3, 'distill')",
-                libsql::params![id, *sid, linked_at],
-            ).await {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(WenlanError::VectorDb(format!("insert_page page_evidence: {e}")));
-            }
+        // Dual-write to page_evidence (P2 typed provenance) with each source's
+        // resolved source_kind (memory / external_url / external_file /
+        // authored). INSERT OR IGNORE keeps this idempotent on re-distill.
+        if let Err(e) =
+            Self::insert_resolved_page_evidence(&conn, id, source_memory_ids, linked_at, "distill")
+                .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "insert_page page_evidence: {e}"
+            )));
         }
 
         conn.execute("COMMIT", ())
@@ -21485,20 +21536,14 @@ impl MemoryDB {
                 )));
             }
         }
-        for sid in source_memory_ids {
-            if let Err(e) = conn
-                .execute(
-                    "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-                     VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
-                    libsql::params![id, sid, now_ts, link_reason],
-                )
+        if let Err(e) =
+            Self::insert_resolved_page_evidence(&conn, id, source_memory_ids, now_ts, link_reason)
                 .await
-            {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(WenlanError::VectorDb(format!(
-                    "update_page evidence insert: {e}"
-                )));
-            }
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "update_page evidence insert: {e}"
+            )));
         }
 
         conn.execute("COMMIT", ())
@@ -22496,13 +22541,14 @@ impl MemoryDB {
             return Err(WenlanError::VectorDb(format!("link_page_source: {e}")));
         }
 
-        if let Err(e) = conn
-            .execute(
-                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-                 VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
-                libsql::params![page_id, memory_source_id, now, link_reason],
-            )
-            .await
+        if let Err(e) = Self::insert_resolved_page_evidence(
+            &conn,
+            page_id,
+            &[memory_source_id],
+            now,
+            link_reason,
+        )
+        .await
         {
             let _ = conn.execute("ROLLBACK", ()).await;
             return Err(WenlanError::VectorDb(format!(
