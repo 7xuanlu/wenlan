@@ -1540,48 +1540,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_page_rejects_distilled_below_source_floor() {
+    async fn create_page_with_floor_rejects_distilled_below_configured_floor() {
         let (db, _dir) = test_db().await;
-        let doc_a = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: "mem-rust-floor-a".to_string(),
-            title: "mem-rust-floor-a".to_string(),
-            content: "Rust has ownership and borrowing for memory safety".to_string(),
-            last_modified: chrono::Utc::now().timestamp(),
-            memory_type: Some("fact".to_string()),
-            source_agent: Some("test".to_string()),
-            confidence: Some(0.9),
-            ..Default::default()
-        };
-        let doc_b = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: "mem-rust-floor-b".to_string(),
-            title: "mem-rust-floor-b".to_string(),
-            content: "Rust uses lifetimes to validate borrowed references".to_string(),
-            last_modified: chrono::Utc::now().timestamp(),
-            memory_type: Some("fact".to_string()),
-            source_agent: Some("test".to_string()),
-            confidence: Some(0.9),
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc_a, doc_b]).await.unwrap();
+        seed_memory(
+            &db,
+            "mem-rust-floor-a",
+            "Rust has ownership and borrowing for memory safety",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-floor-b",
+            "Rust uses lifetimes to validate borrowed references",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-floor-c",
+            "Rust tracks reference validity through lifetimes",
+        )
+        .await;
         let req = CreateConceptRequest {
             title: "Rust Memory Safety".to_string(),
-            content: "Rust has ownership, borrowing, lifetimes, and memory safety".to_string(),
+            content:
+                "Rust has ownership, borrowing, lifetimes, reference validity, and memory safety"
+                    .to_string(),
             summary: Some("Rust memory safety".to_string()),
             entity_id: None,
             space: None,
             source_memory_ids: vec![
                 "mem-rust-floor-a".to_string(),
                 "mem-rust-floor-b".to_string(),
+                "mem-rust-floor-c".to_string(),
             ],
             creation_kind: Some("distilled".to_string()),
             workspace: None,
         };
 
-        let result = create_page(&db, req, "test", None).await;
+        let result = create_page_with_floor(&db, req, "test", None, 4).await;
 
-        assert!(matches!(result, Err(WenlanError::Validation(_))));
+        match result {
+            Err(WenlanError::Validation(message)) => assert_eq!(
+                message,
+                "distilled page requires at least 4 distinct source memories (got 3)"
+            ),
+            other => panic!("expected distinct-source floor validation error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1616,7 +1620,13 @@ mod tests {
 
         let result = create_page(&db, req, "test", None).await;
 
-        assert!(matches!(result, Err(WenlanError::Validation(_))));
+        match result {
+            Err(WenlanError::Validation(message)) => assert_eq!(
+                message,
+                "distilled page requires at least 3 distinct source memories (got 2)"
+            ),
+            other => panic!("expected distinct-source floor validation error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

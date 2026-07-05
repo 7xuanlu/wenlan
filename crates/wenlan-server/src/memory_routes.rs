@@ -3615,6 +3615,13 @@ mod create_page_endpoint_tests {
     impl DataDirGuard {
         fn new() -> Self {
             let tmp = tempfile::tempdir().unwrap();
+            let pages = tmp.path().join("pages");
+            std::fs::create_dir_all(&pages).unwrap();
+            std::fs::write(
+                tmp.path().join("config.json"),
+                serde_json::json!({ "knowledge_path": pages.to_string_lossy() }).to_string(),
+            )
+            .unwrap();
             let previous = std::env::var_os("WENLAN_DATA_DIR");
             std::env::set_var("WENLAN_DATA_DIR", tmp.path());
             Self {
@@ -3633,7 +3640,9 @@ mod create_page_endpoint_tests {
         }
     }
 
-    async fn build_state_with_db() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+    async fn build_state_with_db(
+        page_min_cluster_size: usize,
+    ) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("failed to create tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
@@ -3663,11 +3672,25 @@ mod create_page_endpoint_tests {
                 confidence: Some(0.9),
                 ..Default::default()
             },
+            wenlan_core::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: "mem-page-floor-c".to_string(),
+                title: "mem-page-floor-c".to_string(),
+                content: "Rust lifetimes describe how long references remain valid".to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                source_agent: Some("test".to_string()),
+                confidence: Some(0.9),
+                ..Default::default()
+            },
         ])
         .await
         .unwrap();
+        let mut tuning = wenlan_core::tuning::TuningConfig::default();
+        tuning.distillation.page_min_cluster_size = page_min_cluster_size;
         let server_state = ServerState {
             db: Some(Arc::new(db)),
+            tuning,
             ..Default::default()
         };
         (Arc::new(RwLock::new(server_state)), tmp)
@@ -3680,7 +3703,7 @@ mod create_page_endpoint_tests {
             .lock()
             .await;
         let _env = DataDirGuard::new();
-        let (state, _tmp) = build_state_with_db().await;
+        let (state, _tmp) = build_state_with_db(3).await;
         let app = crate::router::build_router(state);
         let body = json!({
             "title": "Rust Safety",
@@ -3707,12 +3730,53 @@ mod create_page_endpoint_tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("at least 3 distinct source memories"),
-            "error should explain the source floor: {body}"
+        assert_eq!(
+            body["error"], "distilled page requires at least 3 distinct source memories (got 2)",
+            "error should explain the exact source floor: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_distilled_page_uses_configured_source_floor() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let (state, _tmp) = build_state_with_db(4).await;
+        let app = crate::router::build_router(state);
+        let body = json!({
+            "title": "Rust References",
+            "content": "Rust ownership, borrowing, and lifetimes keep references memory safe by validating references",
+            "summary": "Rust references",
+            "source_memory_ids": [
+                "mem-page-floor-a",
+                "mem-page-floor-b",
+                "mem-page-floor-c"
+            ],
+            "creation_kind": "distilled"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/pages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["error"], "distilled page requires at least 4 distinct source memories (got 3)",
+            "error should reflect ServerState tuning: {body}"
         );
     }
 }
