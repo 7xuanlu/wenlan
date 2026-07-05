@@ -2283,7 +2283,7 @@ pub async fn run_concept_distillation_batch_api(
     let token_limit = 16_000;
     let clusters = db
         .find_distillation_clusters(
-            tuning.similarity_threshold,
+            tuning.formation_threshold,
             tuning.page_min_cluster_size,
             tuning.max_clusters_per_steep,
             token_limit,
@@ -2559,6 +2559,56 @@ pub async fn base_channel_touched(
 mod tests {
     use super::*;
     use fs2::FileExt;
+
+    #[test]
+    fn eval_distillation_cluster_callers_use_formation_threshold() {
+        // Production callers must group distillation clusters at
+        // `formation_threshold` (0.60), matching what `distill_pages_scoped`
+        // ships — else eval-seed pages form at a different threshold than
+        // production and reintroduce seed<->production skew (Rule #32 / ONE
+        // route, ONE contract). Scan only the PRODUCTION region of each file
+        // (truncated at the `#[cfg(test)]` boundary) so this guard never
+        // matches its own test literals.
+        let sources = [
+            ("eval/shared.rs", include_str!("shared.rs")),
+            ("eval/lifecycle.rs", include_str!("lifecycle.rs")),
+            ("eval/pipeline.rs", include_str!("pipeline.rs")),
+        ];
+
+        let mut failures = Vec::new();
+        for (path, full_source) in sources {
+            let source = full_source
+                .split_once("\n#[cfg(test)]")
+                .map(|(prod, _)| prod)
+                .unwrap_or(full_source);
+            let lines: Vec<_> = source.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if !line.contains(".find_distillation_clusters(") {
+                    continue;
+                }
+
+                let call_window = lines
+                    .iter()
+                    .enumerate()
+                    .skip(idx)
+                    .take(8)
+                    .map(|(line_idx, line)| (line_idx + 1, *line));
+
+                for (line_no, call_line) in call_window {
+                    if call_line.contains(".similarity_threshold") {
+                        failures.push(format!("{path}:{line_no}: {call_line}"));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "eval distillation cluster discovery must use formation_threshold, \
+             matching production distill_pages cluster formation:\n{}",
+            failures.join("\n")
+        );
+    }
 
     #[test]
     fn scenario_lock_blocks_concurrent_acquire() {

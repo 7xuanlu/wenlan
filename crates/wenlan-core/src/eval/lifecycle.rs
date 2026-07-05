@@ -691,7 +691,7 @@ async fn run_lifecycle_phases(
     if let Some(llm_ref) = llm {
         let clusters = db
             .find_distillation_clusters(
-                distillation_cfg.similarity_threshold,
+                distillation_cfg.formation_threshold,
                 distillation_cfg.min_cluster_size,
                 distillation_cfg.max_clusters_per_steep,
                 3500,

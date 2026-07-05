@@ -529,7 +529,7 @@ pub async fn run_locomo_pipeline_eval(
         // Count clusters that were found (for reporting)
         let clusters = db
             .find_distillation_clusters(
-                tuning.similarity_threshold,
+                tuning.formation_threshold,
                 tuning.page_min_cluster_size,
                 tuning.max_clusters_per_steep,
                 llm.synthesis_token_limit(),
@@ -836,7 +836,7 @@ pub async fn run_longmemeval_pipeline_eval(
 
         let clusters = db
             .find_distillation_clusters(
-                tuning.similarity_threshold,
+                tuning.formation_threshold,
                 tuning.page_min_cluster_size,
                 tuning.max_clusters_per_steep,
                 llm.synthesis_token_limit(),
