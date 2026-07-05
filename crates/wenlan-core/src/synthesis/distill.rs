@@ -877,7 +877,7 @@ pub async fn distill_pages_scoped(
             // a tiny on-device window we don't have anyway.
             let raw_clusters = db
                 .find_distillation_clusters_scoped(
-                    tuning.similarity_threshold,
+                    tuning.formation_threshold,
                     tuning.page_min_cluster_size,
                     tuning.max_clusters_per_steep,
                     16_000,
@@ -920,7 +920,7 @@ pub async fn distill_pages_scoped(
     let token_limit = llm.synthesis_token_limit();
     let raw_clusters = db
         .find_distillation_clusters_scoped(
-            tuning.similarity_threshold,
+            tuning.formation_threshold,
             tuning.page_min_cluster_size,
             tuning.max_clusters_per_steep,
             token_limit,

@@ -1045,8 +1045,12 @@ struct ClusterMemRow {
     content: String,
     entity_id: Option<String>,
     entity_name: Option<String>,
-    community_id: Option<u32>,
     space: Option<String>,
+    /// True when this row is an agent capture eligible to SEED a new page.
+    /// Folder-ingested documents (`source_agent='folder'`/`'reconcile'` or
+    /// carrying a folder content-hash) are recruited as evidence but never
+    /// seed — a book must not mint pages from its own chapters (spec §4.2).
+    can_seed_page: bool,
     embedding: Vec<f32>,
 }
 
@@ -1162,9 +1166,16 @@ fn sub_cluster_by_tokens(
     memories: &[ClusterMemRow],
     cluster: DistillationCluster,
     token_limit: usize,
+    min_size: usize,
 ) -> Vec<DistillationCluster> {
     if cluster.estimated_tokens <= token_limit {
-        return vec![cluster];
+        // Floor re-check: a below-floor cluster that fit under the token
+        // limit still must not slip through as a candidate (spec §4.3).
+        return if cluster.source_ids.len() >= min_size {
+            vec![cluster]
+        } else {
+            Vec::new()
+        };
     }
 
     let k = (cluster.estimated_tokens as f64 / token_limit as f64).ceil() as usize;
@@ -1178,8 +1189,12 @@ fn sub_cluster_by_tokens(
         .collect();
 
     if indices.len() <= k {
+        // Each memory would land in its own singleton sub-cluster. Emit them
+        // only when the floor permits singletons (min_size <= 1); otherwise
+        // drop — a token split must never manufacture below-floor clusters.
         return indices
             .iter()
+            .filter(|_| min_size <= 1)
             .map(|&i| build_distillation_cluster(memories, &[i]))
             .collect();
     }
@@ -1224,9 +1239,27 @@ fn sub_cluster_by_tokens(
 
     assignments
         .into_iter()
-        .filter(|group| !group.is_empty())
+        .filter(|group| group.len() >= min_size)
         .map(|group| build_distillation_cluster(memories, &group))
         .collect()
+}
+
+/// Seeding floor (spec §4.2/§4.3, many-to-many): a candidate cluster may seed
+/// a new page only when at least `MIN_CAPTURE_SEED_MEMBERS` of its members are
+/// agent captures (`can_seed_page`). Folder documents are recruited as
+/// evidence but never count toward the seed floor.
+fn has_capture_seed_floor(memories: &[ClusterMemRow], cluster: &DistillationCluster) -> bool {
+    const MIN_CAPTURE_SEED_MEMBERS: usize = 3;
+    cluster
+        .source_ids
+        .iter()
+        .filter(|source_id| {
+            memories
+                .iter()
+                .any(|memory| memory.source_id == **source_id && memory.can_seed_page)
+        })
+        .count()
+        >= MIN_CAPTURE_SEED_MEMBERS
 }
 
 // ===== Public Types =====
@@ -18518,7 +18551,7 @@ impl MemoryDB {
     ) -> Result<Vec<ClusterMemRow>, WenlanError> {
         let conn = self.conn.lock().await;
         let mut sql = String::from(
-            "SELECT m.source_id, m.content, m.entity_id, m.space, m.embedding, e.community_id, e.name \
+            "SELECT m.source_id, m.content, m.entity_id, m.space, m.embedding, e.name, m.source_agent, m.content_hash \
              FROM memories m \
              LEFT JOIN entities e ON m.entity_id = e.id \
              WHERE m.source = 'memory' AND m.chunk_index = 0 \
@@ -18570,14 +18603,21 @@ impl MemoryDB {
                 .chunks_exact(4)
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
-            let community_id: Option<u32> = row.get::<u32>(5).ok();
-            let entity_name: Option<String> = row.get(6).unwrap_or(None);
+            let entity_name: Option<String> = row.get(5).unwrap_or(None);
+            let source_agent: Option<String> = row.get(6).unwrap_or(None);
+            let content_hash: Option<String> = row.get(7).unwrap_or(None);
+            // A row may seed a page only if it is an agent capture: no folder
+            // content-hash provenance (Migration 65) and not a folder/reconcile
+            // agent. Folder documents join clusters as recruited evidence but
+            // never seed (spec §4.2).
+            let can_seed_page = content_hash.is_none()
+                && !matches!(source_agent.as_deref(), Some("folder" | "reconcile"));
             memories.push(ClusterMemRow {
                 source_id,
                 content,
                 entity_id,
                 entity_name,
-                community_id,
+                can_seed_page,
                 space,
                 embedding,
             });
@@ -18627,47 +18667,52 @@ impl MemoryDB {
             return Ok(vec![]);
         }
 
-        // Group by community_id (preferred) or entity_id (fallback)
-        let mut community_groups: std::collections::HashMap<u32, Vec<usize>> =
-            std::collections::HashMap::new();
-        let mut entity_groups: std::collections::HashMap<String, Vec<usize>> =
+        // Space is the ONLY partition (spec §3.2/§8). The entity/community
+        // buckets are deleted: they were machine-derived and laggy (the
+        // fragmentation defect — two same-topic memories in different entity
+        // buckets were never compared). A page lives in one human-declared
+        // space, so all same-space memories are clustered together; memories
+        // with no space fall into a single unlinked catch-all with the
+        // tighter cap. The staging pool is already space-filtered when the
+        // caller passes a space; when it doesn't (full scan), we still never
+        // cross a space boundary.
+        let mut space_groups: std::collections::HashMap<String, Vec<usize>> =
             std::collections::HashMap::new();
         let mut unlinked: Vec<usize> = Vec::new();
 
         for (i, mem) in memories.iter().enumerate() {
-            if let Some(cid) = mem.community_id {
-                // Group by community_id (preferred — graph-aware grouping)
-                community_groups.entry(cid).or_default().push(i);
-            } else if let Some(ref eid) = mem.entity_id {
-                // Fallback: group by entity_id. Treat empty string as unlinked:
-                // entity_backfill writes "" as a "tried, no entities found"
-                // marker so the memory isn't re-extracted forever, but
-                // bucketing under "" would group all such memories as if they
-                // shared an entity — exactly the runaway-cluster failure mode.
-                if eid.is_empty() {
-                    unlinked.push(i);
-                } else {
-                    entity_groups.entry(eid.clone()).or_default().push(i);
+            match mem.space.as_deref() {
+                Some(space) if !space.is_empty() => {
+                    space_groups.entry(space.to_string()).or_default().push(i);
                 }
-            } else {
-                unlinked.push(i);
+                // No declared space: the grab-bag catch-all, capped tighter.
+                _ => unlinked.push(i),
             }
         }
 
         let mut clusters: Vec<DistillationCluster> = Vec::new();
 
-        // Process a single bucket's similarity-clustered groups with a hard
-        // size cap. Groups that exceed the cap re-cluster once at a tighter
-        // threshold; sub-groups still over the cap are dropped with a log
-        // line. Used by all three buckets (community, entity, unlinked) so
-        // the same grab-bag mitigation applies uniformly — community 16's
-        // 99-memory "Wenlan" pile was the original failure mode but the
-        // entity-only bucket has the same risk (e.g. one entity that swept
-        // in unrelated sub-topics over time).
+        // Process one partition's similarity-clustered groups with a hard size
+        // cap. Groups that exceed the cap re-cluster once at a tighter
+        // threshold; sub-groups still over the cap are dropped with a warn.
+        // Each surviving cluster is token-split (floor-checked) and must clear
+        // the capture seed floor (>= 3 captures) before it seeds a page —
+        // folder documents recruit as evidence but never seed (spec §4.2/§4.3).
         //
         // Cosine similarity is logarithmic in semantic distance — +0.1 from
         // 0.85 lands at 0.95 (near-duplicate), which drops most legitimate
         // sub-topics at min_size. +0.05 with a cap of 0.92 is the sweet spot.
+        // Token-split a candidate, then emit only the sub-clusters that clear
+        // the capture seed floor (>= 3 captures). Folder docs recruit but
+        // never seed (spec §4.2/§4.3).
+        let emit_split = |cluster: DistillationCluster, clusters: &mut Vec<DistillationCluster>| {
+            for split in sub_cluster_by_tokens(&memories, cluster, token_limit, min_size) {
+                if has_capture_seed_floor(&memories, &split) {
+                    clusters.push(split);
+                }
+            }
+        };
+
         let process_bucket =
             |bucket_label: &str,
              indices: &[usize],
@@ -18711,28 +18756,17 @@ impl MemoryDB {
                                 continue;
                             }
                             let cluster = build_distillation_cluster(&memories, &sub_group);
-                            let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                            clusters.extend(split);
+                            emit_split(cluster, clusters);
                         }
                         continue;
                     }
                     let cluster = build_distillation_cluster(&memories, &group);
-                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                    clusters.extend(split);
+                    emit_split(cluster, clusters);
                 }
             };
 
-        for indices in community_groups.values() {
-            process_bucket(
-                "community",
-                indices,
-                max_grouped_cluster_size,
-                &mut clusters,
-            );
-        }
-
-        for indices in entity_groups.values() {
-            process_bucket("entity", indices, max_grouped_cluster_size, &mut clusters);
+        for indices in space_groups.values() {
+            process_bucket("space", indices, max_grouped_cluster_size, &mut clusters);
         }
 
         if unlinked.len() >= min_size {
@@ -18745,9 +18779,8 @@ impl MemoryDB {
         }
 
         log::info!(
-            "[distill] community_groups={}, entity_groups={}, unlinked={}, clusters_found={}",
-            community_groups.len(),
-            entity_groups.len(),
+            "[distill] space_groups={}, unlinked={}, clusters_found={}",
+            space_groups.len(),
             unlinked.len(),
             clusters.len()
         );
@@ -31320,6 +31353,15 @@ pub(crate) mod tests {
                 false,
                 "alpha",
             ),
+            // Third capture so the cluster clears the >= 3 capture seed floor;
+            // without it the two captures + one folder doc would not seed.
+            (
+                "stage_capture_third",
+                Some(false),
+                "test-agent",
+                false,
+                "alpha",
+            ),
             (
                 "stage_page_linked",
                 Some(false),
@@ -31377,27 +31419,140 @@ pub(crate) mod tests {
         assert_eq!(
             actual,
             std::collections::BTreeSet::from([
+                "stage_capture_third".to_string(),
                 "stage_confirmed".to_string(),
                 "stage_folder_doc".to_string(),
                 "stage_unconfirmed".to_string(),
             ]),
-            "staging pool must include confirmed, unconfirmed, and folder-doc rows for the requested space, and exclude page-linked/recap artifacts"
+            "staging pool must include the three captures + recruited folder-doc for the requested space, and exclude page-linked/recap/other-space rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_distillation_clusters_requires_three_non_document_captures_to_seed() {
+        // Seeding rule (spec §4.2/§4.3): a cluster needs >= 3 staging CAPTURE
+        // (non-doc) members to seed a page. Folder documents join clusters as
+        // recruited evidence but never seed one. A book must not mint pages
+        // from its own chapters. Here: 3 folder-doc chapters + 2 captures ->
+        // only 2 captures -> no page seeds.
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let topic = "Wenlan distillation seed floor";
+        let mut docs = Vec::new();
+        for i in 0..3 {
+            docs.push(RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("seed_doc_chapter_{i}"),
+                title: format!("Seed doc chapter {i}"),
+                content: format!("{topic} folder chapter evidence section {i}"),
+                last_modified: now + i,
+                memory_type: Some("fact".to_string()),
+                space: Some("alpha".to_string()),
+                source_agent: Some("folder".to_string()),
+                entity_id: Some("ent_seed_floor".to_string()),
+                content_hash: Some("seed-floor-doc-hash".to_string()),
+                ..Default::default()
+            });
+        }
+        for i in 0..2 {
+            docs.push(RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("seed_capture_{i}"),
+                title: format!("Seed capture {i}"),
+                content: format!("{topic} captured note {i}"),
+                last_modified: now + 10 + i,
+                memory_type: Some("fact".to_string()),
+                space: Some("alpha".to_string()),
+                entity_id: Some("ent_seed_floor".to_string()),
+                content_hash: None,
+                ..Default::default()
+            });
+        }
+        db.upsert_documents(docs).await.unwrap();
+
+        let clusters = db
+            .find_distillation_clusters_scoped(0.0, 3, 10, 3500, 50, 50, None, Some("alpha"))
+            .await
+            .unwrap();
+
+        assert!(
+            clusters.is_empty(),
+            "document evidence must not seed a page with fewer than three captures: {:?}",
+            clusters
+                .iter()
+                .map(|cluster| cluster.source_ids.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn find_distillation_clusters_compares_same_space_memories_across_entity_buckets() {
+        // Space is the only partition (spec §3.2/§8): two same-topic memories
+        // that today sit in different entity buckets must now be compared and
+        // cluster together. Setup: 3 captures in space "alpha" split across
+        // two entity_ids; the old entity/community bucketing would never
+        // compare ent_alpha vs ent_beta, so they could never co-cluster.
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        for (sid, entity_id) in [
+            ("cross_bucket_alpha", "ent_alpha"),
+            ("cross_bucket_beta", "ent_beta"),
+            ("cross_bucket_anchor", "ent_alpha"),
+        ] {
+            db.upsert_documents(vec![RawDocument {
+                source: "memory".to_string(),
+                source_id: sid.to_string(),
+                title: format!("Cross bucket {sid}"),
+                content: format!("Shared cross bucket topic about Wenlan distillation {sid}"),
+                last_modified: now,
+                memory_type: Some("fact".to_string()),
+                space: Some("alpha".to_string()),
+                entity_id: Some(entity_id.to_string()),
+                content_hash: None,
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        }
+
+        let clusters = db
+            .find_distillation_clusters_scoped(0.0, 3, 10, 3500, 50, 50, None, Some("alpha"))
+            .await
+            .unwrap();
+
+        assert!(
+            clusters.iter().any(|cluster| {
+                cluster
+                    .source_ids
+                    .iter()
+                    .any(|id| id == "cross_bucket_alpha")
+                    && cluster
+                        .source_ids
+                        .iter()
+                        .any(|id| id == "cross_bucket_beta")
+                    && cluster.source_ids.len() == 3
+            }),
+            "same-space memories from different entity buckets must be compared together: {:?}",
+            clusters
+                .iter()
+                .map(|cluster| cluster.source_ids.clone())
+                .collect::<Vec<_>>()
         );
     }
 
     #[tokio::test]
     async fn find_distillation_clusters_treats_empty_entity_id_as_unlinked() {
-        // entity_backfill writes entity_id = "" as a "tried, no entities found"
-        // marker so the memory isn't re-extracted forever. Bucketing under ""
-        // would group all such memories as if they shared an entity — exactly
-        // the runaway-cluster failure mode (Mode B). They must fall into the
-        // unlinked bucket where the size cap protects against that.
+        // Space is the only partition now (entity/community buckets deleted).
+        // Memories with no declared space fall into the single unlinked
+        // catch-all, which carries the tighter `max_unlinked_cluster_size`
+        // cap. entity_id is irrelevant to partitioning here — these rows have
+        // space = None, so the unlinked cap must hold regardless of entity_id.
         //
-        // Setup: 8 highly-similar memories with empty-string entity_id, with
-        // max_unlinked_cluster_size = 5. If the bucketing bug is present, all
-        // 8 group under entity_groups[""] which has no size cap → returned as
-        // one 8-cluster, failing the <=5 assertion. With the fix, they fall
-        // into unlinked → cap kicks in → returned cluster sizes <= 5.
+        // Setup: 8 highly-similar memories with no space and empty-string
+        // entity_id, with max_unlinked_cluster_size = 5. They land in the
+        // unlinked catch-all → cap kicks in → returned cluster sizes <= 5.
         let (db, _dir) = test_db().await;
 
         let now = chrono::Utc::now().timestamp_millis();
@@ -31486,10 +31641,10 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn find_distillation_clusters_caps_oversized_entity_group() {
-        // A single entity (think "Wenlan" community cid=16 in prod) sweeps in
-        // a long tail of unrelated memories over time. Greedy clustering at
-        // 0.73 returns one big blob; the agent's coherence check rejects it
-        // as a grab-bag and the user sees nothing. The grouped-cluster cap
+        // A single space (think a "Wenlan" workspace in prod) accumulates a
+        // long tail of memories over time. Greedy clustering returns one big
+        // blob; the agent's coherence check rejects it as a grab-bag and the
+        // user sees nothing. The grouped-cluster cap (named-space partition)
         // forces a re-split so coherent sub-topics still surface.
         let (db, _dir) = test_db().await;
 
@@ -31523,8 +31678,8 @@ pub(crate) mod tests {
         for cluster in &clusters {
             assert!(
                 cluster.source_ids.len() <= 6,
-                "entity-bucket cluster of {} memories exceeded grouped cap 6 — \
-                 oversized re-split not applied to entity_groups/community_groups",
+                "space-partition cluster of {} memories exceeded grouped cap 6 — \
+                 oversized re-split not applied to the named-space partition",
                 cluster.source_ids.len(),
             );
         }
@@ -36094,7 +36249,7 @@ pub(crate) mod tests {
                     content: "x".repeat(3985),
                     entity_id: Some("entity_test".to_string()),
                     entity_name: Some("Test Entity".to_string()),
-                    community_id: None,
+                    can_seed_page: true,
                     space: Some("test".to_string()),
                     embedding: emb,
                 }
@@ -36105,7 +36260,7 @@ pub(crate) mod tests {
         let cluster = build_distillation_cluster(&memories, &indices);
         assert!(cluster.estimated_tokens > 3500);
 
-        let result = sub_cluster_by_tokens(&memories, cluster, 3500);
+        let result = sub_cluster_by_tokens(&memories, cluster, 3500, 2);
         assert!(result.len() >= 2);
         for sub in &result {
             assert!(
@@ -36120,6 +36275,51 @@ pub(crate) mod tests {
         let mut expected: Vec<String> = (0..6).map(|i| format!("mem_{}", i)).collect();
         expected.sort();
         assert_eq!(all_ids, expected);
+    }
+
+    #[test]
+    fn sub_cluster_by_tokens_drops_single_member_subclusters_after_split() {
+        // A token-split can strand a single memory in its own sub-cluster
+        // (the farthest-first orthogonal outlier). The floor re-check (spec
+        // §4.3) must drop such singletons. Setup: 3 near-identical memories +
+        // 1 orthogonal one, over a token limit that forces a k=2 split ->
+        // groups [0,1,2] and [3]; the singleton [3] must be dropped.
+        let memories: Vec<ClusterMemRow> = (0..4)
+            .map(|i| {
+                let mut emb = vec![0.0f32; 768];
+                if i < 3 {
+                    emb[0] = 1.0;
+                    emb[1] = 0.01 * i as f32;
+                } else {
+                    emb[0] = 0.0;
+                    emb[1] = 1.0;
+                }
+                ClusterMemRow {
+                    source_id: format!("mem_{}", i),
+                    content: "x".repeat(340),
+                    entity_id: Some("entity_test".to_string()),
+                    entity_name: Some("Test Entity".to_string()),
+                    can_seed_page: true,
+                    space: Some("test".to_string()),
+                    embedding: emb,
+                }
+            })
+            .collect();
+
+        let indices: Vec<usize> = (0..4).collect();
+        let cluster = build_distillation_cluster(&memories, &indices);
+        assert!(cluster.estimated_tokens > 450);
+
+        let result = sub_cluster_by_tokens(&memories, cluster, 450, 2);
+
+        assert!(
+            result.iter().all(|cluster| cluster.source_ids.len() > 1),
+            "token split must re-check the member floor and drop singleton subclusters: {:?}",
+            result
+                .iter()
+                .map(|cluster| cluster.source_ids.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
@@ -36372,7 +36572,7 @@ pub(crate) mod tests {
                 content: "short".to_string(),
                 entity_id: Some("entity_test".to_string()),
                 entity_name: Some("Test Entity".to_string()),
-                community_id: None,
+                can_seed_page: true,
                 space: Some("test".to_string()),
                 embedding: vec![0.0f32; 768],
             })
@@ -36382,7 +36582,7 @@ pub(crate) mod tests {
         let cluster = build_distillation_cluster(&memories, &indices);
         assert!(cluster.estimated_tokens <= 3500);
 
-        let result = sub_cluster_by_tokens(&memories, cluster, 3500);
+        let result = sub_cluster_by_tokens(&memories, cluster, 3500, 2);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].source_ids.len(), 3);
     }
@@ -46811,7 +47011,7 @@ pub(crate) mod tests {
                 content: "x".into(),
                 entity_id: None,
                 entity_name: None,
-                community_id: None,
+                can_seed_page: true,
                 space: None,
                 embedding: vec![1.0, 0.0, 0.0],
             },
@@ -46820,7 +47020,7 @@ pub(crate) mod tests {
                 content: "y".into(),
                 entity_id: None,
                 entity_name: None,
-                community_id: None,
+                can_seed_page: true,
                 space: None,
                 embedding: vec![0.0, 1.0, 0.0],
             },
