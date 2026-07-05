@@ -2021,11 +2021,14 @@ pub async fn handle_create_page(
     Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
     let agent = extract_agent_name(&headers, None);
-    let db = {
+    let (db, page_min_cluster_size) = {
         let s = state.read().await;
-        s.db.as_ref()
-            .cloned()
-            .ok_or(ServerError::DbNotInitialized)?
+        (
+            s.db.as_ref()
+                .cloned()
+                .ok_or(ServerError::DbNotInitialized)?,
+            s.tuning.distillation.page_min_cluster_size,
+        )
     };
 
     // Apply X-Origin-Space header as fallback only when body omits `space`.
@@ -2044,9 +2047,14 @@ pub async fn handle_create_page(
             registered_request_space(&db, &req.workspace, "create_page workspace").await?;
     }
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let result =
-        wenlan_core::post_write::create_page(&db, req, &agent, Some(knowledge_path.as_path()))
-            .await?;
+    let result = wenlan_core::post_write::create_page_with_floor(
+        &db,
+        req,
+        &agent,
+        Some(knowledge_path.as_path()),
+        page_min_cluster_size,
+    )
+    .await?;
     Ok(Json(CreatePageResponse {
         id: result.id,
         warnings: result.warnings,
@@ -3585,6 +3593,127 @@ mod recent_memory_endpoint_tests {
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+
+#[cfg(test)]
+mod create_page_endpoint_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+
+    struct DataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
+            }
+        }
+    }
+
+    async fn build_state_with_db() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new should succeed");
+        db.upsert_documents(vec![
+            wenlan_core::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: "mem-page-floor-a".to_string(),
+                title: "mem-page-floor-a".to_string(),
+                content: "Rust ownership prevents memory safety bugs".to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                source_agent: Some("test".to_string()),
+                confidence: Some(0.9),
+                ..Default::default()
+            },
+            wenlan_core::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: "mem-page-floor-b".to_string(),
+                title: "mem-page-floor-b".to_string(),
+                content: "Rust borrowing validates references at compile time".to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                source_agent: Some("test".to_string()),
+                confidence: Some(0.9),
+                ..Default::default()
+            },
+        ])
+        .await
+        .unwrap();
+        let server_state = ServerState {
+            db: Some(Arc::new(db)),
+            ..Default::default()
+        };
+        (Arc::new(RwLock::new(server_state)), tmp)
+    }
+
+    #[tokio::test]
+    async fn create_distilled_page_with_two_sources_returns_422() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let (state, _tmp) = build_state_with_db().await;
+        let app = crate::router::build_router(state);
+        let body = json!({
+            "title": "Rust Safety",
+            "content": "Rust ownership and borrowing prevent memory safety bugs by validating references",
+            "summary": "Rust safety",
+            "source_memory_ids": ["mem-page-floor-a", "mem-page-floor-b"],
+            "creation_kind": "distilled"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/pages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("at least 3 distinct source memories"),
+            "error should explain the source floor: {body}"
+        );
     }
 }
 

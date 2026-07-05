@@ -1446,7 +1446,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec![mem_v1.to_string()],
-            creation_kind: None,
+            creation_kind: Some("authored".to_string()),
             workspace: None,
         };
         let page_id = crate::post_write::create_page(&db, page_req, "test", None)

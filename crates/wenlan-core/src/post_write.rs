@@ -7,7 +7,7 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 use wenlan_types::requests::{
     AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
     UpdatePageRequest,
@@ -18,6 +18,29 @@ pub struct WriteResult {
     pub id: String,
     pub warnings: Vec<String>,
     pub wrote: bool,
+}
+
+const VALID_PAGE_CREATION_KINDS: [&str; 4] = ["distilled", "authored", "research", "imported"];
+const PAGE_BIRTH_REVIEW_STATUS: &str = "unconfirmed";
+
+pub enum PageWrite<'a> {
+    Create {
+        req: CreateConceptRequest,
+        agent: &'a str,
+        knowledge_path: Option<&'a Path>,
+        page_min_cluster_size: usize,
+    },
+}
+
+pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResult, WenlanError> {
+    match write {
+        PageWrite::Create {
+            req,
+            agent,
+            knowledge_path,
+            page_min_cluster_size,
+        } => create_page_impl(db, req, agent, knowledge_path, page_min_cluster_size).await,
+    }
 }
 
 /// Best-effort activity logger used by curation-mutate capability fns.
@@ -424,6 +447,42 @@ pub async fn create_page(
     agent: &str,
     knowledge_path: Option<&Path>,
 ) -> Result<WriteResult, WenlanError> {
+    create_page_with_floor(
+        db,
+        req,
+        agent,
+        knowledge_path,
+        crate::tuning::DistillationConfig::default().page_min_cluster_size,
+    )
+    .await
+}
+
+pub async fn create_page_with_floor(
+    db: &MemoryDB,
+    req: CreateConceptRequest,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+    page_min_cluster_size: usize,
+) -> Result<WriteResult, WenlanError> {
+    page_write(
+        db,
+        PageWrite::Create {
+            req,
+            agent,
+            knowledge_path,
+            page_min_cluster_size,
+        },
+    )
+    .await
+}
+
+async fn create_page_impl(
+    db: &MemoryDB,
+    req: CreateConceptRequest,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+    page_min_cluster_size: usize,
+) -> Result<WriteResult, WenlanError> {
     // Pre-write validation
     if req.title.trim().is_empty() {
         return Err(WenlanError::Validation(
@@ -441,17 +500,25 @@ pub async fn create_page(
             "distilled page must cite at least one source memory".into(),
         ));
     }
-    const VALID_KINDS: [&str; 4] = ["distilled", "authored", "research", "imported"];
-    if !VALID_KINDS.contains(&creation_kind) {
+    if !VALID_PAGE_CREATION_KINDS.contains(&creation_kind) {
         return Err(WenlanError::Validation(format!(
             "invalid creation_kind '{creation_kind}' (expected one of: distilled, authored, research, imported)"
         )));
     }
-    let review_status = if creation_kind == "distilled" {
-        "confirmed"
-    } else {
-        "unconfirmed"
-    };
+    if creation_kind == "distilled" {
+        let distinct_source_count = req
+            .source_memory_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>()
+            .len();
+        if distinct_source_count < page_min_cluster_size {
+            return Err(WenlanError::Validation(format!(
+                "distilled page requires at least {page_min_cluster_size} distinct source memories (got {distinct_source_count})"
+            )));
+        }
+    }
+    let review_status = PAGE_BIRTH_REVIEW_STATUS;
     // Resolution check: every source id must exist
     for sid in &req.source_memory_ids {
         if db.get_memory_detail(sid).await?.is_none() {
@@ -1396,7 +1463,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec!["mem_does_not_exist".to_string()],
-            creation_kind: None,
+            creation_kind: Some("authored".to_string()),
             workspace: None,
         };
         assert!(matches!(
@@ -1408,26 +1475,20 @@ mod tests {
     #[tokio::test]
     async fn create_page_rejects_hallucinated_body() {
         let (db, _dir) = test_db().await;
-        // Seed a memory about Rust
-        let doc = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: "mem-rust".to_string(),
-            title: "mem-rust".to_string(),
-            content: "Rust is a systems programming language".to_string(),
-            last_modified: chrono::Utc::now().timestamp(),
-            memory_type: Some("fact".to_string()),
-            source_agent: Some("test".to_string()),
-            confidence: Some(0.9),
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc]).await.unwrap();
+        seed_memory(&db, "mem-rust-a", "Rust is a systems programming language").await;
+        seed_memory(&db, "mem-rust-b", "Rust has ownership and borrowing").await;
+        seed_memory(&db, "mem-rust-c", "Rust supports memory-safe concurrency").await;
         let req = CreateConceptRequest {
             title: "Cooking".to_string(),
             content: "Pasta carbonara needs eggs and pancetta".to_string(),
             summary: None,
             entity_id: None,
             space: None,
-            source_memory_ids: vec!["mem-rust".to_string()],
+            source_memory_ids: vec![
+                "mem-rust-a".to_string(),
+                "mem-rust-b".to_string(),
+                "mem-rust-c".to_string(),
+            ],
             creation_kind: None,
             workspace: None,
         };
@@ -1441,20 +1502,24 @@ mod tests {
     #[tokio::test]
     async fn create_page_happy_path() {
         let (db, _dir) = test_db().await;
-        // Seed a memory about Rust
-        let doc = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: "mem-rust-happy".to_string(),
-            title: "mem-rust-happy".to_string(),
-            content: "Rust is a systems programming language with memory safety guarantees"
-                .to_string(),
-            last_modified: chrono::Utc::now().timestamp(),
-            memory_type: Some("fact".to_string()),
-            source_agent: Some("test".to_string()),
-            confidence: Some(0.9),
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc]).await.unwrap();
+        seed_memory(
+            &db,
+            "mem-rust-happy-a",
+            "Rust is a systems programming language with memory safety guarantees",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-happy-b",
+            "Rust provides ownership and borrowing for memory safety",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-happy-c",
+            "Rust supports systems programming with safe concurrency",
+        )
+        .await;
         let req = CreateConceptRequest {
             title: "Rust".to_string(),
             content: "Rust is a systems programming language providing memory safety guarantees"
@@ -1462,12 +1527,174 @@ mod tests {
             summary: Some("memory-safe systems language".to_string()),
             entity_id: None,
             space: None,
-            source_memory_ids: vec!["mem-rust-happy".to_string()],
+            source_memory_ids: vec![
+                "mem-rust-happy-a".to_string(),
+                "mem-rust-happy-b".to_string(),
+                "mem-rust-happy-c".to_string(),
+            ],
             creation_kind: None,
             workspace: None,
         };
         let result = create_page(&db, req, "test", None).await.unwrap();
         assert!(result.id.starts_with("page_"));
+    }
+
+    #[tokio::test]
+    async fn create_page_rejects_distilled_below_source_floor() {
+        let (db, _dir) = test_db().await;
+        let doc_a = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: "mem-rust-floor-a".to_string(),
+            title: "mem-rust-floor-a".to_string(),
+            content: "Rust has ownership and borrowing for memory safety".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        };
+        let doc_b = crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: "mem-rust-floor-b".to_string(),
+            title: "mem-rust-floor-b".to_string(),
+            content: "Rust uses lifetimes to validate borrowed references".to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![doc_a, doc_b]).await.unwrap();
+        let req = CreateConceptRequest {
+            title: "Rust Memory Safety".to_string(),
+            content: "Rust has ownership, borrowing, lifetimes, and memory safety".to_string(),
+            summary: Some("Rust memory safety".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-rust-floor-a".to_string(),
+                "mem-rust-floor-b".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await;
+
+        assert!(matches!(result, Err(WenlanError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn create_page_counts_distinct_sources_for_distilled_floor() {
+        let (db, _dir) = test_db().await;
+        seed_memory(
+            &db,
+            "mem-rust-distinct-a",
+            "Rust ownership prevents memory safety bugs",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-distinct-b",
+            "Rust borrowing validates references at compile time",
+        )
+        .await;
+        let req = CreateConceptRequest {
+            title: "Rust Safety".to_string(),
+            content: "Rust ownership and borrowing validate memory-safe references".to_string(),
+            summary: Some("Rust source floor".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-rust-distinct-a".to_string(),
+                "mem-rust-distinct-a".to_string(),
+                "mem-rust-distinct-b".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await;
+
+        assert!(matches!(result, Err(WenlanError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn create_page_allows_authored_below_distilled_floor() {
+        let (db, _dir) = test_db().await;
+        seed_memory(
+            &db,
+            "mem-rust-authored-a",
+            "Rust ownership prevents memory safety bugs",
+        )
+        .await;
+        let req = CreateConceptRequest {
+            title: "Rust Authored Note".to_string(),
+            content: "Rust ownership prevents memory safety bugs".to_string(),
+            summary: Some("Rust authored page".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec!["mem-rust-authored-a".to_string()],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert!(result.id.starts_with("page_"));
+    }
+
+    #[tokio::test]
+    async fn create_page_borns_distilled_unconfirmed() {
+        let (db, _dir) = test_db().await;
+        let docs = [
+            (
+                "mem-rust-birth-a",
+                "Rust ownership helps prevent memory safety bugs",
+            ),
+            (
+                "mem-rust-birth-b",
+                "Rust borrowing validates references at compile time",
+            ),
+            (
+                "mem-rust-birth-c",
+                "Rust lifetimes describe how long references remain valid",
+            ),
+        ]
+        .into_iter()
+        .map(|(source_id, content)| crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: source_id.to_string(),
+            content: content.to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+        db.upsert_documents(docs).await.unwrap();
+        let req = CreateConceptRequest {
+            title: "Rust References".to_string(),
+            content: "Rust ownership, borrowing, and lifetimes keep references memory safe"
+                .to_string(),
+            summary: Some("Rust reference safety".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-rust-birth-a".to_string(),
+                "mem-rust-birth-b".to_string(),
+                "mem-rust-birth-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+        let page = db.get_page(&result.id).await.unwrap().unwrap();
+
+        assert_eq!(page.review_status, "unconfirmed");
     }
 
     // ── update_page ──────────────────────────────────────────────────────────
@@ -1497,7 +1724,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec![source_id.to_string()],
-            creation_kind: None,
+            creation_kind: Some("authored".to_string()),
             workspace: None,
         };
         create_page(db, req, "test", None).await.unwrap().id
