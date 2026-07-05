@@ -25,6 +25,50 @@ pub struct NumberedSource {
     pub text: String,
 }
 
+/// Resolve the typed `page_evidence.source_kind` for a source row shape.
+///
+/// Maps a citing source row (`source` / `source_agent` / `source_id` columns)
+/// to the `page_evidence.source_kind` CHECK domain
+/// (`'memory' | 'external_url' | 'external_file' | 'authored'`, db.rs:5873).
+/// Replaces the ten hardcoded `'memory'` literals at the page-evidence
+/// emitters; PageWrite (the atomic-citations task) is the one wiring site.
+///
+/// Precedence (first match wins):
+/// 1. `authored` — `source` or `source_agent` == `"authored"` (human-owned
+///    content promoted into evidence).
+/// 2. `external_url` — a URL-shaped `source_id` (webpage captures set
+///    `source_id = url`, ingest_routes.rs:118).
+/// 3. `external_file` — a folder document: `source_agent == "folder"` with the
+///    `{source_id}::{provenance}` id shape stamped by
+///    `sources::directory::document_source_id` (directory.rs:372).
+/// 4. `memory` — everything else (plain agent captures).
+///
+/// Intentionally pure so PageWrite can call it while holding no DB lock and
+/// doing no I/O.
+pub fn resolve_page_evidence_source_kind(
+    source: &str,
+    source_agent: Option<&str>,
+    source_id: &str,
+) -> &'static str {
+    if source.eq_ignore_ascii_case("authored")
+        || source_agent.is_some_and(|agent| agent.eq_ignore_ascii_case("authored"))
+    {
+        return "authored";
+    }
+
+    if source_id.starts_with("http://") || source_id.starts_with("https://") {
+        return "external_url";
+    }
+
+    if source_agent.is_some_and(|agent| agent.eq_ignore_ascii_case("folder"))
+        && source_id.contains("::")
+    {
+        return "external_file";
+    }
+
+    "memory"
+}
+
 /// Render the numbered source block fed to the LLM prompt: `"[1] text\n\n[2] text"`.
 /// Source text is capped at `SOURCE_TEXT_CAP` chars (char-safe).
 pub fn build_numbered_block(sources: &[NumberedSource]) -> String {
@@ -482,6 +526,48 @@ mod tests {
                 text: "FastEmbed uses BGE-Base embeddings with 768 dimensions".into(),
             },
         ]
+    }
+
+    #[test]
+    fn resolves_page_evidence_source_kind_from_source_row_shape() {
+        let cases = [
+            (
+                "folder document",
+                "memory",
+                Some("folder"),
+                "notes::/Users/lucian/Notes/report.pdf",
+                "external_file",
+            ),
+            (
+                "webpage capture",
+                "webpage",
+                None,
+                "https://example.com/research",
+                "external_url",
+            ),
+            (
+                "authored source",
+                "authored",
+                None,
+                "page_manual_summary",
+                "authored",
+            ),
+            (
+                "plain memory",
+                "memory",
+                Some("claude-code"),
+                "mem_plain",
+                "memory",
+            ),
+        ];
+
+        for (label, source, source_agent, source_id, expected) in cases {
+            assert_eq!(
+                resolve_page_evidence_source_kind(source, source_agent, source_id),
+                expected,
+                "{label}"
+            );
+        }
     }
 
     #[test]
