@@ -18509,63 +18509,45 @@ impl MemoryDB {
         .await
     }
 
-    /// Like `find_distillation_clusters` but restricts the candidate memories
-    /// to a single entity or domain when the caller supplies a filter.
-    /// Both filters can be `None` (full scan, equivalent to the unscoped
-    /// function above) or one can be set; supplying both is allowed and
-    /// applies as an AND.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn find_distillation_clusters_scoped(
+    /// Query the distillation staging pool. With `space_filter = Some(_)`,
+    /// this is the space-scoped pool formation reads before clustering.
+    async fn query_distillation_staging_pool(
         &self,
-        similarity_threshold: f64,
-        min_size: usize,
-        max_clusters: usize,
-        token_limit: usize,
-        max_unlinked_cluster_size: usize,
-        max_grouped_cluster_size: usize,
         entity_id_filter: Option<&str>,
-        domain_filter: Option<&str>,
-    ) -> Result<Vec<DistillationCluster>, WenlanError> {
+        space_filter: Option<&str>,
+    ) -> Result<Vec<ClusterMemRow>, WenlanError> {
         let conn = self.conn.lock().await;
-
-        // No covered_ids exclusion — memories can participate in multiple pages.
-        // Dedup happens in distill_concepts via Jaccard overlap check.
-
-        // No `EXISTS enrichment_steps` gate: the filter assumed the daemon's
-        // LLM would always run enrichment before clustering. Basic Memory
-        // mode invalidates that assumption (enrichment_steps stays empty
-        // forever without an LLM), and the agent-driven path doesn't need
-        // entity_id/memory_type since it reads memory contents directly to
-        // cluster. Embedding similarity is enough as the floor; LLM-equipped
-        // refinery still gets entity_id when present and skips when not.
         let mut sql = String::from(
             "SELECT m.source_id, m.content, m.entity_id, m.space, m.embedding, e.community_id, e.name \
              FROM memories m \
              LEFT JOIN entities e ON m.entity_id = e.id \
              WHERE m.source = 'memory' AND m.chunk_index = 0 \
-               AND (m.confirmed = 0 OR m.confirmed IS NULL) \
                AND (m.pinned = 0 OR m.pinned IS NULL) \
-               AND m.supersede_mode <> 'archive' \
+               AND m.supersede_mode NOT IN ('archive', 'evicted') \
                AND m.source_id NOT LIKE 'merged_%' \
                AND m.source_id NOT LIKE 'recap_%' \
                AND m.is_recap = 0 \
-               AND m.embedding IS NOT NULL",
+               AND m.embedding IS NOT NULL \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM page_evidence pe \
+                   WHERE pe.locator = m.source_id \
+               )",
         );
         let mut bind: Vec<libsql::Value> = Vec::new();
         if let Some(eid) = entity_id_filter {
             sql.push_str(" AND m.entity_id = ?");
             bind.push(libsql::Value::Text(eid.to_string()));
         }
-        if let Some(d) = domain_filter {
+        if let Some(space) = space_filter {
             sql.push_str(" AND m.space = ?");
-            bind.push(libsql::Value::Text(d.to_string()));
+            bind.push(libsql::Value::Text(space.to_string()));
         }
-        sql.push_str(" ORDER BY m.entity_id, m.space, m.last_modified DESC");
+        sql.push_str(" ORDER BY m.space, m.entity_id, m.last_modified DESC");
 
         let mut rows = conn
             .query(&sql, bind)
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("distillation fetch: {}", e)))?;
+            .map_err(|e| WenlanError::VectorDb(format!("distillation staging pool: {e}")))?;
 
         let mut memories: Vec<ClusterMemRow> = Vec::new();
         while let Some(row) = rows
@@ -18581,7 +18563,6 @@ impl MemoryDB {
                 .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
             let entity_id: Option<String> = row.get(2).unwrap_or(None);
             let space: Option<String> = row.get(3).unwrap_or(None);
-            // Parse embedding from F32_BLOB — stored as little-endian f32 bytes
             let emb_bytes: Vec<u8> = row
                 .get(4)
                 .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
@@ -18603,6 +18584,40 @@ impl MemoryDB {
         }
         drop(rows);
         drop(conn);
+
+        Ok(memories)
+    }
+
+    /// Like `find_distillation_clusters` but restricts the candidate memories
+    /// to a single entity or domain when the caller supplies a filter.
+    /// Both filters can be `None` (full scan, equivalent to the unscoped
+    /// function above) or one can be set; supplying both is allowed and
+    /// applies as an AND.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_distillation_clusters_scoped(
+        &self,
+        similarity_threshold: f64,
+        min_size: usize,
+        max_clusters: usize,
+        token_limit: usize,
+        max_unlinked_cluster_size: usize,
+        max_grouped_cluster_size: usize,
+        entity_id_filter: Option<&str>,
+        domain_filter: Option<&str>,
+    ) -> Result<Vec<DistillationCluster>, WenlanError> {
+        // No covered_ids exclusion — memories can participate in multiple pages.
+        // Dedup happens in distill_concepts via Jaccard overlap check.
+
+        // No `EXISTS enrichment_steps` gate: the filter assumed the daemon's
+        // LLM would always run enrichment before clustering. Basic Memory
+        // mode invalidates that assumption (enrichment_steps stays empty
+        // forever without an LLM), and the agent-driven path doesn't need
+        // entity_id/memory_type since it reads memory contents directly to
+        // cluster. Embedding similarity is enough as the floor; LLM-equipped
+        // refinery still gets entity_id when present and skips when not.
+        let memories = self
+            .query_distillation_staging_pool(entity_id_filter, domain_filter)
+            .await?;
 
         log::info!(
             "[distill] found {} eligible memories for clustering (raw excluded)",
@@ -31288,6 +31303,86 @@ pub(crate) mod tests {
                 all_source_ids
             );
         }
+    }
+
+    #[tokio::test]
+    async fn find_distillation_clusters_reads_space_scoped_staging_pool() {
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp();
+        let mut docs = Vec::new();
+        for (sid, confirmed, source_agent, is_recap, space) in [
+            ("stage_confirmed", Some(true), "test-agent", false, "alpha"),
+            (
+                "stage_unconfirmed",
+                Some(false),
+                "test-agent",
+                false,
+                "alpha",
+            ),
+            (
+                "stage_page_linked",
+                Some(false),
+                "test-agent",
+                false,
+                "alpha",
+            ),
+            ("recap_stage", Some(false), "test-agent", true, "alpha"),
+            ("stage_folder_doc", None, "folder", false, "alpha"),
+            (
+                "stage_other_space",
+                Some(false),
+                "test-agent",
+                false,
+                "beta",
+            ),
+        ] {
+            let mut doc = make_memory_doc(
+                sid,
+                &format!("Shared staging pool memory content for {sid}"),
+                "fact",
+                space,
+                source_agent,
+            );
+            doc.confirmed = confirmed;
+            doc.is_recap = is_recap;
+            doc.entity_id = Some("stage_entity".to_string());
+            doc.last_modified = now;
+            docs.push(doc);
+        }
+        db.upsert_documents(docs).await.unwrap();
+
+        db.insert_page(
+            "stage_page",
+            "Stage Page",
+            Some("Already linked page"),
+            "Already linked page body",
+            None,
+            Some("alpha"),
+            &["stage_page_linked"],
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .await
+        .unwrap();
+
+        let clusters = db
+            .find_distillation_clusters_scoped(0.0, 1, 10, 3500, 50, 50, None, Some("alpha"))
+            .await
+            .unwrap();
+        let actual: std::collections::BTreeSet<String> = clusters
+            .iter()
+            .flat_map(|cluster| cluster.source_ids.iter().cloned())
+            .collect();
+
+        assert_eq!(
+            actual,
+            std::collections::BTreeSet::from([
+                "stage_confirmed".to_string(),
+                "stage_folder_doc".to_string(),
+                "stage_unconfirmed".to_string(),
+            ]),
+            "staging pool must include confirmed, unconfirmed, and folder-doc rows for the requested space, and exclude page-linked/recap artifacts"
+        );
     }
 
     #[tokio::test]
