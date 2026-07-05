@@ -1318,23 +1318,124 @@ pub async fn deep_distill_pages(
     Ok(total)
 }
 
-/// Recompile a single page from its source memories via LLM.
-pub(crate) async fn recompile_single_page(
+/// Why a page is being refreshed. Selects the `edited_by` provenance tag the
+/// changelog + ownership gate see. All refresh writes are machine writes (gated
+/// to a revision card on human-owned pages) and skip the embedding
+/// hallucination guard — `refresh_page` runs its own lexical fail-closed check
+/// (`synthesis_faithful_to_sources`) instead.
+///
+/// Post-merge rebuilds flow through `SourceChanged`: a merge marks the page
+/// stale, and the stale-page sweep refreshes it on the same path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshReason {
+    /// A source memory changed (or a merge marked the page stale). Written as
+    /// `re_distill`.
+    SourceChanged,
+    /// Explicit human/agent request (`POST /api/distill/{id}`, force rebuild).
+    /// Written as `distill`.
+    Explicit,
+}
+
+impl RefreshReason {
+    /// Provenance tag written to the changelog and read by the ownership gate.
+    fn edited_by(self) -> &'static str {
+        match self {
+            RefreshReason::SourceChanged => "re_distill",
+            RefreshReason::Explicit => "distill",
+        }
+    }
+}
+
+/// Outcome of a [`refresh_page`] call.
+#[derive(Debug, Default, Clone)]
+pub struct RefreshOutcome {
+    /// The page prose was rewritten in place.
+    pub wrote: bool,
+    /// The page is human-owned; a revision card was staged instead of a write.
+    pub gated: bool,
+    /// Id of the staged revision card, present iff `gated`.
+    pub revision_card_id: Option<String>,
+}
+
+/// Fail-closed faithfulness gate (spec §7): the synthesized body must be
+/// lexically grounded in the numbered sources. Mirrors the page-faithfulness
+/// bench (`eval::page_faithfulness`): split the body into sentences, score each
+/// by content-token overlap against the union of source texts (≥ 0.5 =
+/// grounded), and require a majority of sentences to be grounded. A
+/// wholesale-hallucinated body (no overlap) fails; a faithful synthesis passes.
+fn synthesis_faithful_to_sources(
+    body: &str,
+    numbered: &[crate::citations::NumberedSource],
+) -> bool {
+    let union = numbered
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let sentences = crate::faithfulness::split_sentences(body);
+    if sentences.is_empty() {
+        return false;
+    }
+    let faithful = sentences
+        .iter()
+        .filter(|s| crate::faithfulness::score_sentence_faithful(s, &union))
+        .count();
+    faithful as f64 / sentences.len() as f64 >= 0.5
+}
+
+/// Rebuild a page's prose from its CURRENT sources via the DISTILL_PAGE prompt,
+/// verify per-claim `[N]` citations against the numbered sources, and write the
+/// result atomically through the canonical PageWrite path.
+///
+/// This is the ONE re-distill / repair op. `recompile_single_page`,
+/// `deep_distill_single`, and `re_distill_stale_pages` all delegate here so the
+/// synthesis, citation verification, atomic content+citations+changelog write,
+/// and fail-closed guard live in exactly one place.
+///
+/// - **Sources.** Prefers the `page_sources` join table (kept accurate across
+///   topic-key upserts), falling back to the page's `source_memory_ids` JSON
+///   column for legacy pages with no join rows.
+/// - **Ownership.** A machine write to a human-owned page (`user_edited` or
+///   `creation_kind = "authored"`) is gated by `update_page` into a pending
+///   revision card — the prose is never overwritten in place. The card id is
+///   returned on [`RefreshOutcome::revision_card_id`].
+/// - **Fail-closed.** If the synthesized body is not lexically grounded in the
+///   numbered sources, the synthesis is discarded and the page is left
+///   unchanged — nothing half-written.
+///
+/// Never holds a DB lock across the LLM call.
+pub async fn refresh_page(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
-    page: &crate::pages::Page,
+    page_id: &str,
+    reason: RefreshReason,
     knowledge_path: Option<&std::path::Path>,
-) -> Result<bool, WenlanError> {
-    let memories = db
-        .get_memory_contents_by_ids(&page.source_memory_ids)
-        .await?;
+) -> Result<RefreshOutcome, WenlanError> {
+    let page = db
+        .get_page(page_id)
+        .await?
+        .ok_or_else(|| WenlanError::VectorDb(format!("page {page_id} not found")))?;
+
+    // Rebuild from the page's CURRENT sources: join table first, JSON column
+    // fallback for legacy pages.
+    let sources = db.get_page_sources(page_id).await?;
+    let mut source_ids: Vec<String> = sources.iter().map(|s| s.memory_source_id.clone()).collect();
+    if source_ids.is_empty() {
+        source_ids = page.source_memory_ids.clone();
+    }
+    if source_ids.is_empty() {
+        log::warn!("[refresh] page '{}' has no sources, skipping", page.id);
+        return Ok(RefreshOutcome::default());
+    }
+
+    let memories = db.get_memory_contents_by_ids(&source_ids).await?;
     if memories.is_empty() {
         log::warn!(
-            "[re-distill] page '{}' has no source memories, skipping",
+            "[refresh] page '{}' sources are all orphaned, skipping",
             page.id
         );
-        return Ok(false);
+        return Ok(RefreshOutcome::default());
     }
 
     const MEM_SNIPPET_CAP: usize = 800;
@@ -1350,90 +1451,98 @@ pub(crate) async fn recompile_single_page(
         .collect();
     let memories_block = crate::citations::build_numbered_block(&numbered);
     let user_prompt =
-        build_page_compile_user_prompt(db, &page.title, page_workspace(page), &memories_block)
+        build_page_compile_user_prompt(db, &page.title, page_workspace(&page), &memories_block)
             .await;
 
-    let response = llm
+    let raw = llm
         .generate(LlmRequest {
             system_prompt: Some(prompts.distill_page.clone()),
             user_prompt,
             max_tokens: llm.recommended_max_output(),
             temperature: 0.1,
-            label: Some("distill_body".into()),
+            label: Some("refresh_page".into()),
             timeout_secs: None,
         })
-        .await;
+        .await
+        .map_err(|e| WenlanError::Llm(format!("refresh_page LLM: {e}")))?;
 
-    match response {
-        Ok(raw) if !raw.trim().is_empty() => {
-            let content = crate::llm_provider::strip_think_tags(&raw)
-                .trim()
-                .to_string();
-            if !content.is_empty() {
-                // Verify [N] markers against the numbered sources; out-of-range
-                // markers are stripped from the body before it is saved.
-                let (content, cites, stats) =
-                    crate::citations::process_citation_output(&content, &numbered);
-                log::info!(
-                    "[re-distill] page '{}' citations: {}",
-                    page.title,
-                    stats.summary()
-                );
-                let result = crate::post_write::update_page(
-                    db,
-                    &page.id,
-                    UpdatePageRequest {
-                        content,
-                        source_memory_ids: page.source_memory_ids.clone(),
-                    },
-                    "re_distill",
-                    true,
-                    knowledge_path,
-                    None,
-                )
-                .await?;
-                if result.wrote {
-                    // `update_page` (post_write.rs) has no `citations` param
-                    // until Task 6 wires the growth path, so a content write
-                    // resets the column to '[]'; persist the real citation
-                    // map computed from this same body as a follow-up write.
-                    let citations_json =
-                        serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-                    if let Err(e) = db.set_page_citations(&page.id, Some(&citations_json)).await {
-                        log::warn!(
-                            "[re-distill] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
-                            page.title
-                        );
-                        if let Err(e2) = db.set_page_citations(&page.id, None).await {
-                            log::error!(
-                                "[re-distill] citations NULL fallback also failed for '{}': {e2}",
-                                page.title
-                            );
-                        }
-                    }
-                    log::info!("[re-distill] refreshed page '{}'", page.title);
-                    return Ok(true);
-                } else {
-                    if let Err(e) = db
-                        .log_agent_activity(
-                            "system",
-                            "page_skip_user_edited",
-                            std::slice::from_ref(&page.id),
-                            None,
-                            &format!("re_distill yielded for '{}'", page.title),
-                        )
-                        .await
-                    {
-                        log::warn!("[re-distill] activity log failed: {e}");
-                    }
-                    return Ok(false);
-                }
-            }
-        }
-        Ok(_) => log::warn!("[re-distill] empty output for '{}'", page.title),
-        Err(e) => log::warn!("[re-distill] LLM error for '{}': {}", page.title, e),
+    let body = crate::llm_provider::strip_think_tags(&raw)
+        .trim()
+        .to_string();
+    if body.is_empty() {
+        log::warn!("[refresh] empty LLM output for '{}', skipping", page.title);
+        return Ok(RefreshOutcome::default());
     }
-    Ok(false)
+
+    // Verify [N] markers against the numbered sources; out-of-range markers are
+    // stripped from the body before it is saved.
+    let (content, cites, stats) = crate::citations::process_citation_output(&body, &numbered);
+
+    // Fail-closed (spec §7): discard a synthesis not lexically grounded in the
+    // cited sources. Leaves the page unchanged — nothing half-written.
+    if !synthesis_faithful_to_sources(&content, &numbered) {
+        log::warn!(
+            "[refresh] page '{}' synthesis failed the faithfulness gate ({}); discarding",
+            page.title,
+            stats.summary()
+        );
+        return Ok(RefreshOutcome::default());
+    }
+
+    log::info!(
+        "[refresh] page '{}' citations: {}",
+        page.title,
+        stats.summary()
+    );
+    // Atomicity (spec §5.1): pass the freshly verified [N] citation map INTO
+    // update_page so content, citations, and changelog commit in ONE
+    // transaction (mirrors grow_page). CAS: for source-changed refreshes
+    // `require_stale = true` means the write only lands while `stale_reason IS
+    // NOT NULL`, so a concurrent agent PUT that cleared staleness wins the race
+    // without TOCTOU.
+    let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
+    let result = crate::post_write::update_page(
+        db,
+        page_id,
+        UpdatePageRequest {
+            content,
+            source_memory_ids: source_ids,
+        },
+        reason.edited_by(),
+        true,
+        knowledge_path,
+        Some((citations_json, stats.summary())),
+    )
+    .await?;
+
+    Ok(RefreshOutcome {
+        wrote: result.wrote,
+        gated: result.gated,
+        revision_card_id: result.revision_card_id,
+    })
+}
+
+/// Recompile a single page from its source memories. Thin delegator to
+/// [`refresh_page`] (the ONE re-distill path); returns `true` when the page was
+/// rewritten in place, `false` on any no-op (no sources, empty output,
+/// fail-closed discard, human-owned gate, or lost CAS).
+pub(crate) async fn recompile_single_page(
+    db: &MemoryDB,
+    llm: &Arc<dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    page: &crate::pages::Page,
+    knowledge_path: Option<&std::path::Path>,
+) -> Result<bool, WenlanError> {
+    let outcome = refresh_page(
+        db,
+        llm,
+        prompts,
+        &page.id,
+        RefreshReason::SourceChanged,
+        knowledge_path,
+    )
+    .await?;
+    Ok(outcome.wrote)
 }
 
 /// Re-distill a single page by reloading all source memories and recompiling
@@ -1462,119 +1571,16 @@ pub async fn deep_distill_single(
         }
     };
 
-    let page = db
-        .get_page(page_id)
-        .await?
-        .ok_or_else(|| WenlanError::VectorDb(format!("Concept {} not found", page_id)))?;
-
-    let memories = db
-        .get_memory_contents_by_ids(&page.source_memory_ids)
-        .await?;
-    if memories.is_empty() {
-        log::warn!("[distill] no source memories found for page {}", page_id);
-        return Ok(false);
-    }
-
-    const MEM_SNIPPET_CAP: usize = 800;
-    let numbered: Vec<crate::citations::NumberedSource> = memories
-        .iter()
-        .enumerate()
-        .map(|(i, (id, content))| crate::citations::NumberedSource {
-            index: (i + 1) as u32,
-            source_kind: "memory".to_string(),
-            locator: id.clone(),
-            text: content.chars().take(MEM_SNIPPET_CAP).collect(),
-        })
-        .collect();
-    let memories_block = crate::citations::build_numbered_block(&numbered);
-    let user_prompt =
-        build_page_compile_user_prompt(db, &page.title, page_workspace(&page), &memories_block)
-            .await;
-
-    let response = llm
-        .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_page.clone()),
-            user_prompt,
-            max_tokens: llm.recommended_max_output(),
-            temperature: 0.1,
-            label: Some("distill_body".into()),
-            timeout_secs: None,
-        })
-        .await
-        .map_err(|e| WenlanError::Llm(format!("re-distill LLM: {}", e)))?;
-
-    let content = crate::llm_provider::strip_think_tags(&response)
-        .trim()
-        .to_string();
-
-    if content.is_empty() {
-        log::warn!("[distill] empty output for page '{}', skipping", page.title);
-        return Ok(false);
-    }
-
-    // Verify [N] markers against the numbered sources; out-of-range markers
-    // are stripped from the body before it is saved.
-    let (content, cites, stats) = crate::citations::process_citation_output(&content, &numbered);
-    log::info!(
-        "[distill] page '{}' citations: {}",
-        page.title,
-        stats.summary()
-    );
-
-    let result = crate::post_write::update_page(
+    let outcome = refresh_page(
         db,
+        llm,
+        prompts,
         page_id,
-        UpdatePageRequest {
-            content,
-            source_memory_ids: page.source_memory_ids.clone(),
-        },
-        "distill",
-        true,
+        RefreshReason::Explicit,
         knowledge_path,
-        None,
     )
     .await?;
-
-    if result.wrote {
-        // See recompile_single_page above: `update_page` has no `citations`
-        // param until Task 6, so persist the real citation map as a
-        // follow-up write rather than let the content write's '[]' reset
-        // stick (which the backfill sweep, IS NULL only, would never re-visit).
-        let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-        if let Err(e) = db.set_page_citations(page_id, Some(&citations_json)).await {
-            log::warn!(
-                "[distill] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
-                page.title
-            );
-            if let Err(e2) = db.set_page_citations(page_id, None).await {
-                log::error!(
-                    "[distill] citations NULL fallback also failed for '{}': {e2}",
-                    page.title
-                );
-            }
-        }
-        log::info!(
-            "[distill] re-distilled page '{}' (v{}->v{})",
-            page.title,
-            page.version,
-            page.version + 1
-        );
-        Ok(true)
-    } else {
-        if let Err(e) = db
-            .log_agent_activity(
-                "system",
-                "page_skip_user_edited",
-                &[page_id.to_string()],
-                None,
-                &format!("distill yielded for '{}'", page.title),
-            )
-            .await
-        {
-            log::warn!("[distill] activity log failed: {e}");
-        }
-        Ok(false)
-    }
+    Ok(outcome.wrote)
 }
 
 /// Apply a merge result based on the stability tier of the involved memories.
@@ -1743,12 +1749,14 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
 
-        // Insert a seed memory row directly so get_memory_contents_by_ids returns it.
+        // Insert a seed memory row directly so get_memory_contents_by_ids
+        // returns it. Content shares tokens with the mock body ("recompiled
+        // body") so the fail-closed faithfulness gate passes.
         {
             let conn = db.conn.lock().await;
             conn.execute(
                 "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
-                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                 VALUES (?1, ?1, ?1, 'recompiled body reference material', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_seed".to_string(), now_ts],
             )
             .await
@@ -1881,6 +1889,237 @@ mod tests {
             page.content.contains("[[Related Page]]"),
             "refresh should retain already-valid wikilinks when the prompt exposes the real title, got:\n{}",
             page.content
+        );
+    }
+
+    // ── refresh_page: the ONE re-distill/repair op ──────────────────────────
+
+    #[tokio::test]
+    async fn refresh_page_rebuilds_machine_page_and_bumps_changelog() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed the cited memory. The synthesized body echoes it so both the
+        // faithfulness gate and the [1] marker verify.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Tokio is an async runtime for Rust programs', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+        db.insert_page(
+            "page_m",
+            "Tokio",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_m", "source_updated").await.unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "Tokio is an async runtime for Rust programs [1]",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let outcome = refresh_page(
+            &db,
+            &llm,
+            &prompts,
+            "page_m",
+            RefreshReason::SourceChanged,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(outcome.wrote, "machine page should be rewritten in place");
+        assert!(!outcome.gated);
+        assert!(outcome.revision_card_id.is_none());
+
+        let page = db.get_page("page_m").await.unwrap().unwrap();
+        assert!(
+            page.content.contains("Tokio is an async runtime"),
+            "prose rebuilt from evidence, got: {}",
+            page.content
+        );
+        assert!(
+            !page.citations.is_empty(),
+            "per-claim citations persisted with the content"
+        );
+
+        let changelog_raw = db.get_page_changelog("page_m").await.unwrap();
+        let changelog: Vec<serde_json::Value> = serde_json::from_str(&changelog_raw).unwrap();
+        let latest = changelog
+            .last()
+            .expect("refresh must append a changelog entry");
+        assert_eq!(
+            latest.get("edited_by").and_then(|v| v.as_str()),
+            Some("re_distill"),
+            "changelog records the refresh provenance"
+        );
+        assert!(
+            latest.get("citations_summary").is_some(),
+            "citations committed atomically with the content bump"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_page_on_human_owned_page_stages_card_without_overwrite() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Tokio is an async runtime for Rust programs', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+        db.insert_page(
+            "page_h",
+            "Tokio",
+            None,
+            "human-authored body",
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_h", "source_updated").await.unwrap();
+        // Mark the page human-owned so a machine write is gated to a card.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET user_edited = 1 WHERE id = ?1",
+                libsql::params!["page_h".to_string()],
+            )
+            .await
+            .unwrap();
+        }
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "Tokio is an async runtime for Rust programs [1]",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let before = db.get_page("page_h").await.unwrap().unwrap();
+        let outcome = refresh_page(
+            &db,
+            &llm,
+            &prompts,
+            "page_h",
+            RefreshReason::SourceChanged,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !outcome.wrote,
+            "human-owned page must not be overwritten in place"
+        );
+        assert!(outcome.gated, "a machine write to a human page is gated");
+        let card_id = outcome
+            .revision_card_id
+            .expect("a revision card id is returned");
+
+        let after = db.get_page("page_h").await.unwrap().unwrap();
+        assert_eq!(after.content, before.content, "human prose left intact");
+        assert_eq!(
+            after.version, before.version,
+            "no version bump on a gated write"
+        );
+
+        // The staged card is a pending revision that supersedes the page.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT supersedes FROM memories WHERE source_id = ?1 AND pending_revision = 1",
+                libsql::params![card_id.clone()],
+            )
+            .await
+            .unwrap();
+        let row = rows
+            .next()
+            .await
+            .unwrap()
+            .expect("the staged revision card row exists");
+        let supersedes: String = row.get(0).unwrap();
+        assert_eq!(supersedes, "page_h", "card supersedes the target page");
+    }
+
+    #[tokio::test]
+    async fn refresh_page_discards_unfaithful_synthesis_leaving_page_unchanged() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Tokio is an async runtime for Rust programs', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+        db.insert_page(
+            "page_c",
+            "Tokio",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_c", "source_updated").await.unwrap();
+
+        // A wholesale-hallucinated body sharing no content tokens with the source.
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "Penguins migrate across Antarctic ice shelves during polar winter months [1]",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let before = db.get_page("page_c").await.unwrap().unwrap();
+        let outcome = refresh_page(
+            &db,
+            &llm,
+            &prompts,
+            "page_c",
+            RefreshReason::SourceChanged,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!outcome.wrote, "unfaithful synthesis must be discarded");
+        assert!(!outcome.gated);
+
+        let after = db.get_page("page_c").await.unwrap().unwrap();
+        assert_eq!(
+            after.content, before.content,
+            "page content unchanged after fail-closed discard"
+        );
+        assert_eq!(
+            after.version, before.version,
+            "no version bump on a discarded synthesis"
         );
     }
 
@@ -2150,11 +2389,13 @@ mod tests {
         let now_ts = chrono::Utc::now().timestamp();
 
         // Insert a seed memory row so get_memory_contents_by_ids returns it.
+        // Content shares the mock body's token ("recompiled") so the
+        // fail-closed faithfulness gate passes.
         {
             let conn = db.conn.lock().await;
             conn.execute(
                 "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
-                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                 VALUES (?1, ?1, ?1, 'recompiled seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_1".to_string(), now_ts],
             )
             .await

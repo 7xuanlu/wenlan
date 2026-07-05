@@ -26,9 +26,8 @@ pub use crate::kg::reweave::reweave_entity_links;
 // distillation helpers (distill_one_cluster + refine_clusters_with_llm +
 // recompile_single_page from other refinery phases).
 use crate::synthesis::detect::detect_page_candidates;
-use crate::synthesis::distill::{build_page_compile_user_prompt, recompile_single_page};
+use crate::synthesis::distill::{recompile_single_page, refresh_page, RefreshReason};
 use crate::synthesis::refinement_queue::process_refinement_queue;
-use wenlan_types::requests::UpdatePageRequest;
 
 use crate::activity::ACTIVITY_GAP_SECS;
 use crate::db::MemoryDB;
@@ -886,111 +885,44 @@ pub(crate) async fn re_distill_stale_pages(
             continue;
         }
 
-        // Fetch current sources via join table (more accurate than JSON column after upserts).
-        let sources = db.get_page_sources(&page.id).await?;
-        let source_id_strings: Vec<String> =
-            sources.iter().map(|s| s.memory_source_id.clone()).collect();
-        if source_id_strings.is_empty() {
-            log::warn!(
-                "[re-distill-stale] page '{}' has no sources in join table, clearing staleness",
-                page.title
-            );
-            db.clear_page_staleness(&page.id).await?;
-            continue;
-        }
-
-        // Fetch memory contents.
-        let memories = db.get_memories_by_source_ids(&source_id_strings).await?;
-        if memories.is_empty() {
-            log::warn!(
-                "[re-distill-stale] page '{}' sources are all orphaned, clearing staleness",
-                page.title
-            );
-            db.clear_page_staleness(&page.id).await?;
-            continue;
-        }
-
-        const MEM_SNIPPET_CAP: usize = 800;
-        let numbered: Vec<crate::citations::NumberedSource> = memories
-            .iter()
-            .enumerate()
-            .map(|(i, m)| crate::citations::NumberedSource {
-                index: (i + 1) as u32,
-                source_kind: "memory".to_string(),
-                locator: m.source_id.clone(),
-                text: m.content.chars().take(MEM_SNIPPET_CAP).collect(),
-            })
-            .collect();
-        let memories_block = crate::citations::build_numbered_block(&numbered);
-
-        let workspace = page.workspace.as_deref().or(page.space.as_deref());
-        let user_prompt =
-            build_page_compile_user_prompt(db, &page.title, workspace, &memories_block).await;
-        let response = llm_ref
-            .generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompts.distill_page.clone()),
-                user_prompt,
-                max_tokens: llm_ref.recommended_max_output(),
-                temperature: 0.1,
-                label: Some("re-distill-stale".into()),
-                timeout_secs: None,
-            })
-            .await;
-
-        match response {
-            Ok(raw) if !raw.trim().is_empty() => {
-                let content = crate::llm_provider::strip_think_tags(&raw)
-                    .trim()
-                    .to_string();
-                if !content.is_empty() {
-                    // Verify [N] markers against the numbered sources; out-of-
-                    // range markers are stripped from the body before saving.
-                    let (content, cites, stats) =
-                        crate::citations::process_citation_output(&content, &numbered);
+        // Synthesis, citation verification, the fail-closed guard, and the
+        // atomic content+citations+changelog write all live in the ONE
+        // re-distill op (`refresh_page`); this loop just owns the staleness
+        // lifecycle. `refresh_page` reads the page's current sources (join
+        // table first) itself, so no per-site source assembly here.
+        match refresh_page(
+            db,
+            llm_ref,
+            prompts,
+            &page.id,
+            RefreshReason::SourceChanged,
+            knowledge_path,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                // Any non-error outcome clears staleness: a successful rewrite,
+                // a human-owned gate (a revision card was staged — don't
+                // re-propose it every cycle), or a no-op (orphaned sources /
+                // empty output / fail-closed discard — a later source change
+                // re-marks it stale). Only wrote counts as a recompile.
+                db.clear_page_staleness(&page.id).await?;
+                if outcome.wrote {
+                    recompiled += 1;
+                    log::info!("[re-distill-stale] refreshed page '{}'", page.title);
+                } else if outcome.gated {
                     log::info!(
-                        "[re-distill-stale] page '{}' citations: {}",
-                        page.title,
-                        stats.summary()
+                        "[re-distill-stale] '{}' human-owned; staged revision card, cleared staleness",
+                        page.title
                     );
-                    // Atomicity (spec §5.1): pass the freshly verified [N]
-                    // citation map INTO update_page so the content, citations,
-                    // and changelog commit in ONE transaction (mirrors
-                    // grow_page). The old two-step — update_page(.., None) then
-                    // a separate set_page_citations — left the page with updated
-                    // content but un-updated ('[]') citations if the second
-                    // write failed or the process crashed between them.
-                    // Real CAS: require_stale=true means the write only lands
-                    // when stale_reason IS NOT NULL, so a concurrent agent-side
-                    // PUT that cleared staleness wins the race without TOCTOU.
-                    let citations_json =
-                        serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-                    let result = crate::post_write::update_page(
-                        db,
-                        &page.id,
-                        UpdatePageRequest {
-                            content,
-                            source_memory_ids: source_id_strings.clone(),
-                        },
-                        "re_distill",
-                        true,
-                        knowledge_path,
-                        Some((citations_json, stats.summary())),
-                    )
-                    .await?;
-                    if result.wrote {
-                        db.clear_page_staleness(&page.id).await?;
-                        recompiled += 1;
-                        log::info!("[re-distill-stale] refreshed page '{}'", page.title);
-                    } else {
-                        log::info!(
-                            "[re-distill-stale] '{}' staleness already cleared, yielding",
-                            page.title
-                        );
-                    }
+                } else {
+                    log::info!(
+                        "[re-distill-stale] '{}' yielded no write; cleared staleness",
+                        page.title
+                    );
                 }
             }
-            Ok(_) => log::warn!("[re-distill-stale] empty LLM output for '{}'", page.title),
-            Err(e) => log::warn!("[re-distill-stale] LLM error for '{}': {}", page.id, e),
+            Err(e) => log::warn!("[re-distill-stale] refresh error for '{}': {}", page.id, e),
         }
     }
 
@@ -2625,12 +2557,14 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
 
-        // Seed memory row so get_memories_by_source_ids returns it.
+        // Seed memory row so the re-distill can read a source. Content shares
+        // tokens with the mock body ("refreshed body") so the fail-closed
+        // faithfulness gate passes.
         {
             let conn = db.conn.lock().await;
             conn.execute(
                 "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
-                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                 VALUES (?1, ?1, ?1, 'refreshed body reference material', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_seed".to_string(), now_ts],
             )
             .await
