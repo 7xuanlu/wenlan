@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import {
+  getProfile,
+  updateProfile,
+  setAvatar,
+  removeAvatar,
   getClipboardEnabled,
   setClipboardEnabled,
   getScreenCaptureEnabled,
@@ -30,6 +35,7 @@ import { ImportFlow } from "../ChatImport/ImportFlow";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
 import { ApiKeyCard, OnDeviceModelCard, useApiKeyStatus } from "../intelligence/IntelligenceSetup";
 import DiagnosticsSection from "./settings/DiagnosticsSection";
+import ProfileAvatar from "./ProfileAvatar";
 
 type ThemeLabelKey =
   | "settings.theme.auto"
@@ -143,6 +149,178 @@ function SectionHeader({ icon, label }: { icon: React.ReactNode; label: string }
         {label}
       </h3>
     </div>
+  );
+}
+
+function formatProfileMonth(ts: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(ts * 1000);
+}
+
+interface ProfileUpdateFields {
+  name?: string;
+  displayName?: string;
+  bio?: string;
+}
+
+function ProfileSettingsBlock() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const { data: profile } = useQuery({
+    queryKey: ["profile"],
+    queryFn: getProfile,
+  });
+  const [nameDraft, setNameDraft] = useState("");
+
+  const displayName = profile?.display_name || profile?.name || "";
+
+  useEffect(() => {
+    setNameDraft(displayName);
+  }, [displayName]);
+
+  const profileMutation = useMutation({
+    mutationFn: (fields: ProfileUpdateFields) => {
+      if (!profile) return Promise.resolve();
+      return updateProfile(profile.id, fields.name, fields.displayName, undefined, fields.bio);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["profile"] }),
+  });
+
+  const avatarMutation = useMutation({
+    mutationFn: (path: string) => setAvatar(path),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["profile"] }),
+  });
+
+  const removeAvatarMutation = useMutation({
+    mutationFn: removeAvatar,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["profile"] }),
+  });
+
+  const saveName = () => {
+    if (!profile) return;
+    const next = nameDraft.trim();
+    const current = displayName.trim();
+    if (!next || next === current) {
+      setNameDraft(displayName);
+      return;
+    }
+    profileMutation.mutate({ name: next, displayName: next });
+  };
+
+  const handlePickAvatar = async () => {
+    const selected = await open({
+      title: t("settings.profile.choosePhoto"),
+      filters: [{ name: t("settings.profile.images"), extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+    });
+    if (typeof selected === "string") {
+      avatarMutation.mutate(selected);
+    }
+  };
+
+  if (!profile) return null;
+
+  return (
+    <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
+      <SectionHeader
+        label={t("settings.profile.label")}
+        icon={
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 21a8 8 0 10-16 0" />
+            <circle cx="12" cy="7" r="4" strokeWidth={1.5} />
+          </svg>
+        }
+      />
+      <div className="bg-[var(--mem-surface)] rounded-xl border border-[var(--mem-border)] px-5 py-4">
+        <div className="flex items-start gap-4">
+          <div className="flex shrink-0 flex-col items-center gap-2">
+            <ProfileAvatar
+              avatarPath={profile.avatar_path}
+              displayName={displayName}
+              size={56}
+              fontSize={20}
+            />
+            <button
+              type="button"
+              onClick={handlePickAvatar}
+              className="rounded-md px-2 py-1 transition-colors duration-150 hover:bg-[var(--mem-hover)]"
+              style={{
+                fontFamily: "var(--mem-font-body)",
+                fontSize: "11px",
+                color: "var(--mem-text-secondary)",
+              }}
+            >
+              {t("settings.profile.changePhoto")}
+            </button>
+            {profile.avatar_path && (
+              <button
+                type="button"
+                onClick={() => removeAvatarMutation.mutate()}
+                className="rounded-md px-2 py-1 transition-colors duration-150 hover:bg-[var(--mem-hover)]"
+                style={{
+                  fontFamily: "var(--mem-font-body)",
+                  fontSize: "11px",
+                  color: "var(--mem-text-tertiary)",
+                }}
+              >
+                {t("settings.profile.removePhoto")}
+              </button>
+            )}
+          </div>
+
+          <div className="min-w-0 flex-1 space-y-3">
+            <label className="block">
+              <span
+                style={{
+                  display: "block",
+                  fontFamily: "var(--mem-font-mono)",
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  letterSpacing: "0.05em",
+                  textTransform: "uppercase",
+                  color: "var(--mem-text-tertiary)",
+                  marginBottom: 4,
+                }}
+              >
+                {t("settings.profile.displayName")}
+              </span>
+              <input
+                value={nameDraft}
+                onChange={(event) => setNameDraft(event.target.value)}
+                onBlur={saveName}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                  if (event.key === "Escape") {
+                    setNameDraft(displayName);
+                    event.currentTarget.blur();
+                  }
+                }}
+                className="w-full rounded-lg border px-3 py-2 outline-none transition-colors duration-150 focus:border-[var(--mem-accent-indigo)]"
+                style={{
+                  borderColor: "var(--mem-border)",
+                  backgroundColor: "var(--mem-bg)",
+                  color: "var(--mem-text)",
+                  fontFamily: "var(--mem-font-body)",
+                  fontSize: "14px",
+                }}
+              />
+            </label>
+
+            <p
+              style={{
+                fontFamily: "var(--mem-font-mono)",
+                fontSize: "11px",
+                color: "var(--mem-text-tertiary)",
+              }}
+            >
+              {t("settings.profile.joined", { date: formatProfileMonth(profile.created_at) })}
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -273,9 +451,11 @@ export default function SettingsPage({
       {/* ── Appearance ───────────────────────────────────────────── */}
       {/* ── General ─────────────────────────────────────────────── */}
       {section === "general" && (
+      <>
+      <ProfileSettingsBlock />
       <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
         <SectionHeader
-          label={t("settings.groups.general.label")}
+          label={t("settings.general.appSection")}
           icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" /></svg>}
         />
         <div className="bg-[var(--mem-surface)] rounded-xl overflow-hidden border border-[var(--mem-border)]">
@@ -387,6 +567,7 @@ export default function SettingsPage({
           </button>
         </div>
       </section>
+      </>
       )}
 
       {/* ── Capture ─────────────────────────────────────────────── */}

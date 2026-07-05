@@ -125,20 +125,23 @@ describe("dark theme brand tokens", () => {
 });
 
 describe("light theme brand tokens", () => {
-  it("uses a cool lichen-paper scale instead of lavender or beige-heavy chrome", () => {
-    expect(lightToken("--bg-primary")).toBe("#F7F9F5");
+  it("keeps the light workspace slightly warm with a lighter sidebar", () => {
+    expect(lightToken("--bg-primary")).toBe("#FCFCFB");
     expect(lightToken("--bg-secondary")).toBe("#FFFFFF");
-    expect(lightToken("--border")).toBe("#D8E0D8");
+    expect(lightToken("--bg-tertiary")).toBe("#FFFFFF");
+    expect(lightToken("--border")).toBe("#E3E7EE");
 
-    expect(lightToken("--mem-bg")).toBe("#FBFCF8");
+    expect(lightToken("--mem-bg")).toBe("#FCFCFB");
     expect(lightToken("--mem-surface")).toBe("#FFFFFF");
-    expect(lightToken("--mem-sidebar")).toBe("#F3F6F1");
-    expect(lightToken("--mem-border")).toBe("#D8E0D8");
-    expect(lightToken("--mem-brand-text")).toBe("#2D372E");
-    expect(lightToken("--mem-accent-page")).toBe("#4B8394");
-    expect(lightToken("--mem-accent-warm")).toBe("#9F7059");
-    expect(lightToken("--mem-page-icon")).toBe("#C4733B");
-    expect(lightToken("--mem-page-icon-hover")).toBe("#A65F34");
+    expect(lightToken("--mem-sidebar")).toBe("#FFFFFF");
+    expect(lightToken("--mem-account-card")).toBe("#FCFCFB");
+    expect(lightToken("--mem-popover")).toBe("#FFFFFF");
+    expect(lightToken("--mem-border")).toBe("#E3E7EE");
+    expect(lightToken("--mem-brand-text")).toBe("#1A1A2E");
+    expect(lightToken("--mem-accent-page")).toBe("#5E58C8");
+    expect(lightToken("--mem-accent-warm")).toBe("#B46A3A");
+    expect(lightToken("--mem-page-icon")).toBe("#B46A3A");
+    expect(lightToken("--mem-page-icon-hover")).toBe("#9F5C32");
   });
 
   it("keeps light structural surfaces out of the lavender family", () => {

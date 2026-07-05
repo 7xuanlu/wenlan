@@ -30,9 +30,9 @@ import { subscribe as heartbeatSubscribe, getLastCapture } from "../lib/captureH
 import { getCollapsedSections, toggleSection, expandSection } from "../lib/collapsedSections";
 import { readPreference, writePreference } from "../lib/preferenceStorage";
 import ViewToggle from "./ViewToggle";
-import ProfilePage from "./memory/ProfilePage";
 import SettingsPage from "./memory/SettingsPage";
 import Sidebar, { SidebarToggleButton } from "./memory/Sidebar";
+import AboutWenlanDialog from "./memory/AboutWenlanDialog";
 import { searchResultTarget } from "../lib/searchResultTarget";
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -269,8 +269,8 @@ export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSele
       return next;
     });
   };
-  const [showProfile, setShowProfile] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [activeSpaceFilter, _setActiveSpaceFilter] = useState<string | null>(null);
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
   const [sourceTypeFilter, setSourceTypeFilter] = useState<string | null>(null);
@@ -991,7 +991,9 @@ export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSele
       <Sidebar
         collapsed={sidebarCollapsed}
         onSelectSpace={(name) => { setSelectedDomain(name); }}
-        onEntityClick={(id) => { if (id === "__create_profile__") setShowProfile(true); }}
+        onEntityClick={(id) => { if (id === "__create_profile__") setShowSettings(true); }}
+        onNavigateSettings={() => setShowSettings(true)}
+        onOpenAbout={() => setAboutOpen(true)}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -999,10 +1001,6 @@ export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSele
       {showSettings ? (
         <div className="flex-1 overflow-y-auto px-10 py-7">
           <SettingsPage onBack={() => setShowSettings(false)} />
-        </div>
-      ) : showProfile ? (
-        <div className="flex-1 overflow-y-auto px-10 py-7">
-          <ProfilePage onBack={() => setShowProfile(false)} />
         </div>
       ) : query.length > 0 ? (
         <div className="flex-1 overflow-y-auto px-10 py-7">
@@ -1030,8 +1028,8 @@ export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSele
         </div>
       )}
 
-      {/* Content — hidden when searching or viewing profile */}
-      <div className={`flex-1 overflow-y-auto px-10 py-7 space-y-8 ${query.length > 0 || showProfile || showSettings ? "hidden" : ""}`}>
+      {/* Content — hidden when searching or viewing settings */}
+      <div className={`flex-1 overflow-y-auto px-10 py-7 space-y-8 ${query.length > 0 || showSettings ? "hidden" : ""}`}>
         {/* Toolbar: Stats + Recaps label + Sort + Filter — single row */}
         <div className="flex items-center gap-2">
           {captureStats && totalCount > 0 && (
@@ -1564,6 +1562,7 @@ export default function MemoryView({ onBack, onSelectFile, onSelectRecap, onSele
         isOpen={showQuickCapture}
         onClose={() => setShowQuickCapture(false)}
       />
+      <AboutWenlanDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </div>
     </div>
     </div>

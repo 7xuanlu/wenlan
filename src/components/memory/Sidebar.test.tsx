@@ -95,20 +95,22 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("button", { name: "Sources" })).not.toBeInTheDocument();
   });
 
-  it("keeps the Wenlan brand in the sidebar footer", () => {
+  it("uses the account card as the only sidebar footer item", () => {
     renderSidebar();
 
     const spaces = screen.getByTestId("space-list");
-    const brand = screen.getByRole("button", { name: "Wenlan" });
+    const account = screen.getByTestId("identity-card");
 
-    expect(spaces.compareDocumentPosition(brand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(spaces.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Wenlan" })).not.toBeInTheDocument();
   });
 
-  it("localizes the sidebar footer brand", async () => {
+  it("keeps the account card as the footer after locale changes", async () => {
     await i18n.changeLanguage("zh-Hant");
     renderSidebar();
 
-    expect(screen.getByRole("button", { name: "Wenlan 文瀾" })).toBeInTheDocument();
+    expect(screen.getByTestId("identity-card")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Wenlan 文瀾" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Wenlan" })).not.toBeInTheDocument();
   });
 
@@ -120,7 +122,7 @@ describe("Sidebar", () => {
 
     renderSidebar();
 
-    expect(await screen.findByRole("button", { name: "Wenlan" })).toBeInTheDocument();
+    expect(await screen.findByTestId("identity-card")).toBeInTheDocument();
     expect(screen.queryByText(/agents? connected/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/No agents connected/i)).not.toBeInTheDocument();
   });

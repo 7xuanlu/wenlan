@@ -58,6 +58,32 @@ describe("runtime product identity", () => {
     expect(capability.description).toBe("Default capability for Wenlan");
   });
 
+  it("keeps the light sidebar brighter than the main workspace", () => {
+    const css = readFileSync(resolve(root, "src/index.css"), "utf8");
+
+    expect(css).toContain("--bg-primary: #FCFCFB;");
+    expect(css).toContain("--bg-tertiary: #FFFFFF;");
+    expect(css).toContain("--accent: #5E58C8;");
+    expect(css).toContain("--mem-bg: #FCFCFB;");
+    expect(css).toContain("--mem-sidebar: #FFFFFF;");
+    expect(css).toContain("--mem-surface: #FFFFFF;");
+    expect(css).toContain("--mem-account-card: #FCFCFB;");
+    expect(css).toContain("--mem-popover: #FFFFFF;");
+    expect(css).toContain("--mem-border: #E3E7EE;");
+    expect(css).toContain("--mem-accent-warm: #B46A3A;");
+    expect(css).toContain("--mem-accent-indigo: #5E58C8;");
+    expect(css).toContain("--mem-accent-sage: #6F8F76;");
+    expect(css).not.toContain("--mem-bg: #FBFCFD;");
+    expect(css).not.toContain("--bg-primary: #FBFCFD;");
+    expect(css).not.toContain("--mem-bg: #F7F8FA;");
+    expect(css).not.toContain("--bg-primary: #F7F8FA;");
+    expect(css).not.toContain("--mem-sidebar: #F2F4F7;");
+    expect(css).not.toContain("--mem-account-card: #FFFFFF;");
+    expect(css).not.toContain("--mem-bg: #FEFCF9;");
+    expect(css).not.toContain("--mem-sidebar: #F5F0E8;");
+    expect(css).not.toContain("--mem-surface: #F8F5F0;");
+  });
+
   it("declares the main window visible at launch and keeps a backend reveal fallback", () => {
     const tauri = JSON.parse(
       readFileSync(resolve(root, "app/tauri.conf.json"), "utf8"),
@@ -120,7 +146,7 @@ describe("runtime product identity", () => {
   it("keeps product-owned visible copy on Wenlan", () => {
     const productOwnedFiles = [
       "src/components/memory/SettingsPage.tsx",
-      "src/components/memory/ProfilePage.tsx",
+      "src/components/memory/AboutWenlanDialog.tsx",
       "src/components/memory/ConnectionsList.tsx",
       "src/components/memory/sources/AddSourceDialog.tsx",
       "src/components/memory/sources/SourcesSection.tsx",

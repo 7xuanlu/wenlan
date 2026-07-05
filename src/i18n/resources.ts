@@ -1,6 +1,9 @@
 export const supportedAppLocales = ["en", "zh-Hans", "zh-Hant"] as const;
 
 const en = {
+  common: {
+    close: "Close",
+  },
   setup: {
     welcomeTitle: "Welcome to Wenlan",
     tagline: "Wenlan. Where understanding compounds.",
@@ -138,7 +141,7 @@ const en = {
     groups: {
       general: {
         label: "General",
-        hint: "Startup and background behavior",
+        hint: "Profile, startup, and appearance",
       },
       intelligence: {
         label: "Intelligence",
@@ -173,12 +176,22 @@ const en = {
       dark: "Dark",
     },
     general: {
+      appSection: "App",
       runAtLoginTitle: "Run Wenlan in background at login",
       runAtLoginDescription:
         "Keeps the daemon and tray icon running even when the app window is closed. Quit from the tray menu to stop everything.",
       rerunSetup: "Re-run setup wizard",
       rerunSetupConfirm:
         "Re-run setup? Your data is preserved — this only replays the wizard.",
+    },
+    profile: {
+      label: "Profile",
+      choosePhoto: "Choose a profile photo",
+      images: "Images",
+      changePhoto: "Change photo",
+      removePhoto: "Remove",
+      displayName: "Display name",
+      joined: "Joined {{date}}",
     },
     capture: {
       label: "Capture",
@@ -247,6 +260,15 @@ const en = {
   },
   identityCard: {
     setupProfile: "Set up your profile",
+    account: "Account",
+    accountMenu: "Account menu",
+    namedAccountMenu: "{{name}} account menu",
+    settings: "Settings",
+    aboutWenlan: "About Wenlan",
+  },
+  aboutWenlan: {
+    title: "About Wenlan",
+    description: "Memory and wiki for AI tools.",
   },
   activity: {
     memory_one: "memory",
@@ -531,6 +553,9 @@ const en = {
 };
 
 const zhHans = {
+  common: {
+    close: "关闭",
+  },
   setup: {
     welcomeTitle: "欢迎使用文澜",
     tagline: "文澜，让理解持续累积。",
@@ -663,7 +688,7 @@ const zhHans = {
     groups: {
       general: {
         label: "通用",
-        hint: "启动和后台行为",
+        hint: "个人资料、启动和外观",
       },
       intelligence: {
         label: "智能",
@@ -698,12 +723,22 @@ const zhHans = {
       dark: "深色",
     },
     general: {
+      appSection: "应用",
       runAtLoginTitle: "登录时在后台运行文澜",
       runAtLoginDescription:
         "即使应用窗口已关闭，也保持守护进程和托盘图标运行。要停止全部内容，请从托盘菜单退出。",
       rerunSetup: "重新运行设置向导",
       rerunSetupConfirm:
         "重新运行设置？你的数据会保留，这只会重新播放设置向导。",
+    },
+    profile: {
+      label: "个人资料",
+      choosePhoto: "选择个人照片",
+      images: "图片",
+      changePhoto: "更换照片",
+      removePhoto: "移除",
+      displayName: "显示名称",
+      joined: "加入于 {{date}}",
     },
     capture: {
       label: "捕捉",
@@ -772,6 +807,15 @@ const zhHans = {
   },
   identityCard: {
     setupProfile: "设置你的个人资料",
+    account: "账户",
+    accountMenu: "账户菜单",
+    namedAccountMenu: "{{name}} 账户菜单",
+    settings: "设置",
+    aboutWenlan: "关于文澜",
+  },
+  aboutWenlan: {
+    title: "关于文澜",
+    description: "AI 工具的记忆和 wiki。",
   },
   activity: {
     memory_one: "记忆",
@@ -1056,6 +1100,9 @@ const zhHans = {
 };
 
 const zhHant = {
+  common: {
+    close: "關閉",
+  },
   setup: {
     welcomeTitle: "歡迎使用文瀾",
     tagline: "文瀾，讓理解持續累積。",
@@ -1188,7 +1235,7 @@ const zhHant = {
     groups: {
       general: {
         label: "一般",
-        hint: "啟動和背景行為",
+        hint: "個人資料、啟動和外觀",
       },
       intelligence: {
         label: "智慧",
@@ -1223,12 +1270,22 @@ const zhHant = {
       dark: "深色",
     },
     general: {
+      appSection: "應用程式",
       runAtLoginTitle: "登入時在背景執行文瀾",
       runAtLoginDescription:
         "即使應用程式視窗已關閉，也保持守護程式和選單列圖示執行。要停止全部內容，請從選單列退出。",
       rerunSetup: "重新執行設定精靈",
       rerunSetupConfirm:
         "重新執行設定？你的資料會保留，這只會重新播放設定精靈。",
+    },
+    profile: {
+      label: "個人資料",
+      choosePhoto: "選擇個人照片",
+      images: "圖片",
+      changePhoto: "更換照片",
+      removePhoto: "移除",
+      displayName: "顯示名稱",
+      joined: "加入於 {{date}}",
     },
     capture: {
       label: "捕捉",
@@ -1297,6 +1354,15 @@ const zhHant = {
   },
   identityCard: {
     setupProfile: "設定你的個人資料",
+    account: "帳戶",
+    accountMenu: "帳戶選單",
+    namedAccountMenu: "{{name}} 帳戶選單",
+    settings: "設定",
+    aboutWenlan: "關於文瀾",
+  },
+  aboutWenlan: {
+    title: "關於文瀾",
+    description: "AI 工具的記憶和 wiki。",
   },
   activity: {
     memory_one: "記憶",

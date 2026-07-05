@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { i18n } from "../../i18n";
@@ -35,7 +36,6 @@ vi.mock("../../lib/tauri", () => ({
 
 vi.mock("./ActivityFeed", () => ({ default: () => <div /> }));
 vi.mock("./IdentityDetail", () => ({ default: () => <div /> }));
-vi.mock("./ProfilePage", () => ({ default: () => <div /> }));
 vi.mock("./MemoryStream", () => ({ default: () => <div /> }));
 vi.mock("./HomePage", () => ({ default: () => <div data-testid="home-page" /> }));
 vi.mock("./ConstellationMap", () => ({ default: () => <div /> }));
@@ -44,11 +44,17 @@ vi.mock("./MemorySearchResult", () => ({ default: () => <div /> }));
 vi.mock("./MemoryDetail", () => ({ default: () => <div data-testid="memory-detail" /> }));
 vi.mock("./PageDetail", () => ({ default: () => <div /> }));
 vi.mock("./DistillReviewPanel", () => ({ default: () => <div /> }));
-vi.mock("./SettingsPage", () => ({ default: () => <div /> }));
+vi.mock("./SettingsPage", () => ({ default: () => <div data-testid="settings-page" /> }));
 vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div /> }));
 vi.mock("../ViewToggle", () => ({ default: () => <div /> }));
 vi.mock("./Sidebar", () => ({
-  default: () => <aside />,
+  default: (props: { onEntityClick: (entityId: string) => void }) => (
+    <aside>
+      <button type="button" onClick={() => props.onEntityClick("__create_profile__")}>
+        Open avatar menu destination
+      </button>
+    </aside>
+  ),
   SidebarToggleButton: () => <button type="button" aria-label="Toggle sidebar" />,
 }));
 vi.mock("./settings/SettingsSidebar", () => ({ default: () => <aside /> }));
@@ -79,10 +85,26 @@ describe("Main search", () => {
     expect(screen.queryByRole("button", { name: "Go to home" })).toBeNull();
   });
 
+  it("keeps Settings out of the top chrome because the account menu owns it", () => {
+    renderMain();
+
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+  });
+
   it("labels the global search around wiki pages, entities, and sources", () => {
     renderMain();
 
     expect(screen.getByPlaceholderText("Search pages, entities, sources...")).toBeInTheDocument();
+  });
+
+  it("routes the former profile sentinel to General settings instead of the old profile page", async () => {
+    const user = userEvent.setup();
+    renderMain();
+
+    await user.click(screen.getByRole("button", { name: "Open avatar menu destination" }));
+
+    expect(await screen.findByTestId("settings-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("profile-page")).not.toBeInTheDocument();
   });
 
   it("focuses search from the Tauri event when the placeholder is translated", async () => {

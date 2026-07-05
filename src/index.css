@@ -36,21 +36,21 @@
 }
 
 html[data-theme="light"] {
-  --bg-primary: #F7F9F5;
+  --bg-primary: #FCFCFB;
   --bg-secondary: #FFFFFF;
-  --bg-tertiary: #EEF3ED;
-  --text-primary: #232A24;
-  --text-secondary: #616D63;
-  --text-tertiary: #859083;
-  --accent: #587F8D;
-  --accent-hover: #3F6876;
-  --border: #D8E0D8;
-  --separator: rgba(54, 70, 61, 0.14);
-  --overlay-subtle: rgba(54, 70, 61, 0.035);
-  --overlay-hover: rgba(54, 70, 61, 0.055);
-  --overlay-active: rgba(54, 70, 61, 0.085);
-  --overlay-ring: rgba(54, 70, 61, 0.06);
-  --overlay-border: rgba(54, 70, 61, 0.12);
+  --bg-tertiary: #FFFFFF;
+  --text-primary: #1A1A2E;
+  --text-secondary: #586174;
+  --text-tertiary: #8B93A3;
+  --accent: #5E58C8;
+  --accent-hover: #514BB5;
+  --border: #E3E7EE;
+  --separator: rgba(101, 116, 139, 0.20);
+  --overlay-subtle: rgba(101, 116, 139, 0.05);
+  --overlay-hover: rgba(101, 116, 139, 0.09);
+  --overlay-active: rgba(101, 116, 139, 0.14);
+  --overlay-ring: rgba(94, 88, 200, 0.10);
+  --overlay-border: rgba(101, 116, 139, 0.18);
 
   /* Spotlight badge & highlight tokens */
   --badge-entity: rgba(16, 185, 129, 0.10);
@@ -137,6 +137,10 @@ html[data-theme="dark"] {
   --mem-bg: #10161A;
   --mem-surface: #171E22;
   --mem-sidebar: #0C1216;
+  --mem-account-card: #121A1F;
+  --mem-account-card-border: #2E3B40;
+  --mem-popover: #171E22;
+  --mem-popover-border: #2A373B;
   --mem-text: #EEF2EA;
   --mem-text-secondary: #C3CBC0;
   --mem-text-tertiary: #8C968B;
@@ -163,36 +167,40 @@ html[data-theme="dark"] {
     0 2px 6px rgba(2, 4, 2, 0.40);
 }
 
-/* Light (cool lichen paper) */
+/* Light (cool paper workspace with restrained brand warmth) */
 html[data-theme="light"] {
-  --mem-bg: #FBFCF8;
+  --mem-bg: #FCFCFB;
   --mem-surface: #FFFFFF;
-  --mem-sidebar: #F3F6F1;
-  --mem-text: #232A24;
-  --mem-text-secondary: #616D63;
-  --mem-text-tertiary: #859083;
-  --mem-brand-text: #2D372E;
-  --mem-accent-warm: #9F7059;
-  --mem-accent-amber: #AA8542;
-  --mem-accent-indigo: #596FC7;
-  --mem-accent-page: #4B8394;
-  --mem-page-icon: #C4733B;
-  --mem-page-icon-hover: #A65F34;
-  --mem-accent-sage: #678F6B;
-  --mem-accent-glow: #C2A65A;
-  --mem-border: #D8E0D8;
-  --mem-hover: rgba(82, 105, 88, 0.06);
-  --mem-hover-strong: rgba(82, 105, 88, 0.10);
-  --mem-confirm-bg: rgba(159, 112, 89, 0.10);
-  --mem-indigo-bg: rgba(89, 111, 199, 0.07);
-  --mem-distilled-border: rgba(89, 111, 199, 0.30);
-  --mem-distilled-bg: rgba(89, 111, 199, 0.05);
-  --mem-shimmer-color: rgba(75, 131, 148, 0.12);
+  --mem-sidebar: #FFFFFF;
+  --mem-account-card: #FCFCFB;
+  --mem-account-card-border: #E3E7EE;
+  --mem-popover: #FFFFFF;
+  --mem-popover-border: #DDE2EA;
+  --mem-text: #1A1A2E;
+  --mem-text-secondary: #586174;
+  --mem-text-tertiary: #8B93A3;
+  --mem-brand-text: #1A1A2E;
+  --mem-accent-warm: #B46A3A;
+  --mem-accent-amber: #B5842E;
+  --mem-accent-indigo: #5E58C8;
+  --mem-accent-page: #5E58C8;
+  --mem-page-icon: #B46A3A;
+  --mem-page-icon-hover: #9F5C32;
+  --mem-accent-sage: #6F8F76;
+  --mem-accent-glow: #B5842E;
+  --mem-border: #E3E7EE;
+  --mem-hover: rgba(101, 116, 139, 0.08);
+  --mem-hover-strong: rgba(101, 116, 139, 0.14);
+  --mem-confirm-bg: rgba(180, 106, 58, 0.09);
+  --mem-indigo-bg: rgba(94, 88, 200, 0.08);
+  --mem-distilled-border: rgba(94, 88, 200, 0.28);
+  --mem-distilled-bg: rgba(94, 88, 200, 0.06);
+  --mem-shimmer-color: rgba(94, 88, 200, 0.12);
   /* Depth on light: a warm ink-toned shadow (anchored in the body text hue
      rather than flat grey) so the toast feels letterpressed on cream. */
   --mem-shadow-toast:
-    0 14px 36px rgba(34, 40, 28, 0.10),
-    0 2px 6px rgba(34, 40, 28, 0.06);
+    0 14px 36px rgba(26, 26, 46, 0.10),
+    0 2px 6px rgba(26, 26, 46, 0.06);
 }
 
 @keyframes mem-fade-up {

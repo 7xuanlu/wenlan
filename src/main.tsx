@@ -12,38 +12,42 @@ import "./index.css";
 // Apply theme before first render to prevent flash
 applyTheme();
 
-await initializeI18n();
+void bootstrap();
 
-const isToast = window.location.hash === "#toast";
-const isQuickCapture = window.location.hash === "#quick-capture";
+async function bootstrap() {
+  await initializeI18n();
 
-if (isToast) {
-  // No StrictMode for the toast overlay — its double-mount behavior causes
-  // Tauri event listener registration races in the hidden webview window.
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <ToastOverlay />,
-  );
-} else if (isQuickCapture) {
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>
-      <QuickCaptureWindow />
-    </React.StrictMode>,
-  );
-} else {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        refetchOnWindowFocus: false,
+  const isToast = window.location.hash === "#toast";
+  const isQuickCapture = window.location.hash === "#quick-capture";
+
+  if (isToast) {
+    // No StrictMode for the toast overlay — its double-mount behavior causes
+    // Tauri event listener registration races in the hidden webview window.
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <ToastOverlay />,
+    );
+  } else if (isQuickCapture) {
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <React.StrictMode>
+        <QuickCaptureWindow />
+      </React.StrictMode>,
+    );
+  } else {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          refetchOnWindowFocus: false,
+        },
       },
-    },
-  });
+    });
 
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </React.StrictMode>,
-  );
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <React.StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </React.StrictMode>,
+    );
+  }
 }

@@ -14,7 +14,6 @@ const localeCases: Record<Exclude<AppLocale, "en">, {
   home: string;
   activity: string;
   action: string;
-  brand: string;
   spaces: string;
   actionLabels: string[];
 }> = {
@@ -22,7 +21,6 @@ const localeCases: Record<Exclude<AppLocale, "en">, {
     home: "首页",
     activity: "活动",
     action: "动作",
-    brand: "Wenlan 文瀾",
     spaces: "空间",
     actionLabels: [
       "跳过页面更新",
@@ -35,7 +33,6 @@ const localeCases: Record<Exclude<AppLocale, "en">, {
     home: "首頁",
     activity: "活動",
     action: "動作",
-    brand: "Wenlan 文瀾",
     spaces: "空間",
     actionLabels: [
       "略過頁面更新",
@@ -64,8 +61,8 @@ test.describe("Chinese interface localization", () => {
       const header = page.getByRole("banner");
       await expect(header.getByRole("button", { name: labels.home })).toBeVisible();
       await expect(header.getByRole("button", { name: labels.activity })).toBeVisible();
-      await expect(page.getByText(labels.brand, { exact: true })).toBeVisible();
       await expect(page.getByText(labels.spaces, { exact: true })).toBeVisible();
+      await expect(page.getByText("Wenlan 文瀾", { exact: true })).toHaveCount(0);
       await expect(page.getByText("SPACES", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Home", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Activity", { exact: true })).toHaveCount(0);
