@@ -849,8 +849,11 @@ pub(crate) async fn redistill_changed_pages(
 /// upsert path in handle_store_memory.
 ///
 /// - `source_updated`: LLM re-distills using the join table's current source list.
-/// - `source_conflict`: user-edited page — escalates to `source_conflict` only,
-///   does not overwrite user content.
+///   Every stale page (human-owned or not) routes through `refresh_page`, which
+///   owns the ownership gate itself: a human-owned page (`user_edited` or
+///   `creation_kind = "authored"`) never gets its prose overwritten — the
+///   sweep stages a revision card instead (spec §5.1/§5.2) and clears
+///   staleness so the card isn't re-proposed every cycle.
 pub(crate) async fn re_distill_stale_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
@@ -875,16 +878,6 @@ pub(crate) async fn re_distill_stale_pages(
 
     let mut recompiled = 0usize;
     for page in &stale {
-        if page.user_edited {
-            // Never auto-overwrite user edits — escalate to conflict so a human sees it.
-            db.set_page_stale(&page.id, "source_conflict").await?;
-            log::info!(
-                "[re-distill-stale] user-edited page '{}' escalated to source_conflict",
-                page.title
-            );
-            continue;
-        }
-
         // Synthesis, citation verification, the fail-closed guard, and the
         // atomic content+citations+changelog write all live in the ONE
         // re-distill op (`refresh_page`); this loop just owns the staleness
@@ -2609,6 +2602,87 @@ mod tests {
             "md body should reflect LLM output, got: {}",
             content
         );
+    }
+
+    /// Spec §5.1/§5.2/§6.3: a human-owned page must always get a revision
+    /// card, never an in-place write, for EVERY machine write path -- the
+    /// daemon staleness sweep included. Pins the gate at the sweep's own
+    /// boundary so a future edit to the sweep can't silently reintroduce a
+    /// bypass around `refresh_page`'s ownership check.
+    #[tokio::test]
+    async fn re_distill_stale_pages_user_edited_stages_revision_card_not_source_conflict() {
+        use crate::llm_provider::MockProvider;
+
+        let (db, _db_dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed source memory so refresh_page has content to synthesize from.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'refreshed body reference material', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_owned".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_owned",
+            "Owned Topic",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_owned"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Human edits the page (sets user_edited=1); the source changes again
+        // afterward, marking it stale -- exactly the scenario the sweep exists
+        // to handle.
+        db.update_page_content("page_owned", "human-edited body", &["mem_owned"], "fs_edit")
+            .await
+            .unwrap();
+        db.set_page_stale("page_owned", "source_updated")
+            .await
+            .unwrap();
+
+        let before = db.get_page("page_owned").await.unwrap().unwrap();
+        assert!(before.user_edited, "precondition: page is human-owned");
+
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("refreshed body reference material"));
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(recompiled, 0, "a gated write must not count as a recompile");
+
+        let after = db.get_page("page_owned").await.unwrap().unwrap();
+        assert_eq!(
+            after.content, before.content,
+            "the staleness sweep must never overwrite human-owned page prose"
+        );
+        assert_eq!(
+            after.stale_reason, None,
+            "the sweep must clear staleness via the ownership gate outcome, not escalate \
+             to a dead-end 'source_conflict' state that no human-facing surface reads"
+        );
+
+        let revisions = db.list_pending_revisions(10).await.unwrap();
+        assert_eq!(
+            revisions.len(),
+            1,
+            "the staleness sweep must stage a revision card for a human-owned page \
+             instead of silently escalating to source_conflict"
+        );
+        assert_eq!(revisions[0].target_source_id, "page_owned");
     }
 
     #[tokio::test]

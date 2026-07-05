@@ -21385,8 +21385,9 @@ impl MemoryDB {
         // row but before this UPDATE) takes priority. Without the
         // user_edited check the refinery would clobber an in-flight
         // human write since stale_reason stays set: the watcher
-        // deliberately doesn't clear staleness on apply (refinery
-        // escalates to source_conflict on the next sweep instead).
+        // deliberately doesn't clear staleness on apply (the refinery's
+        // ownership gate stages a revision card on the next sweep instead,
+        // per `post_write::update_page`).
         let affected = if let Some(cl) = changelog {
             // Changelog-aware variant: write changelog atomically with content.
             let sql = if require_stale {
