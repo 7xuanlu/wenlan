@@ -25,7 +25,7 @@ pub use crate::kg::reweave::reweave_entity_links;
 // Internal re-imports for refinery code that still calls into the moved
 // distillation helpers (distill_one_cluster + refine_clusters_with_llm +
 // recompile_single_page from other refinery phases).
-use crate::synthesis::distill::recompile_single_page;
+use crate::synthesis::distill::{build_page_compile_user_prompt, recompile_single_page};
 use crate::synthesis::refinement_queue::process_refinement_queue;
 use wenlan_types::requests::UpdatePageRequest;
 
@@ -893,7 +893,9 @@ pub(crate) async fn re_distill_stale_pages(
             .collect();
         let memories_block = crate::citations::build_numbered_block(&numbered);
 
-        let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
+        let workspace = page.workspace.as_deref().or(page.space.as_deref());
+        let user_prompt =
+            build_page_compile_user_prompt(db, &page.title, workspace, &memories_block).await;
         let response = llm_ref
             .generate(crate::llm_provider::LlmRequest {
                 system_prompt: Some(prompts.distill_page.clone()),
@@ -1204,6 +1206,57 @@ pub struct SteepResult {
 mod tests {
     use super::*;
     use crate::db::tests::test_db;
+
+    struct RecordingDistillProvider {
+        prompts: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingDistillProvider {
+        fn new() -> Self {
+            Self {
+                prompts: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn prompts(&self) -> Vec<String> {
+            self.prompts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RecordingDistillProvider {
+        async fn generate(
+            &self,
+            request: crate::llm_provider::LlmRequest,
+        ) -> Result<String, crate::llm_provider::LlmError> {
+            let prompt = request.user_prompt;
+            self.prompts.lock().unwrap().push(prompt.clone());
+            if prompt.contains("[[Related Page]]") {
+                Ok(
+                    "Refreshed page prose keeps the valid [[Related Page]] wikilink. [1]"
+                        .to_string(),
+                )
+            } else {
+                Ok("Refreshed page prose drops the valid wikilink. [1]".to_string())
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "recording-distill"
+        }
+
+        fn backend(&self) -> crate::llm_provider::LlmBackend {
+            crate::llm_provider::LlmBackend::OnDevice
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
     use crate::sources::{RawDocument, StabilityTier};
     use crate::synthesis::distill::apply_merge_by_tier;
 
@@ -2573,6 +2626,97 @@ mod tests {
             content.contains("refreshed body"),
             "md body should reflect LLM output, got: {}",
             content
+        );
+    }
+
+    #[tokio::test]
+    async fn re_distill_stale_pages_prompt_includes_same_space_existing_titles_hint() {
+        let (db, _db_dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'The target topic should retain the valid wikilink to Related Page when refreshed.', 0, 'text', 'fact', 'work', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_target".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_related",
+            "Related Page",
+            None,
+            "A work-space page that should be offered as a real wikilink target.",
+            None,
+            Some("work"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_private",
+            "Private Page",
+            None,
+            "A personal-space page that must not be offered in a work refresh prompt.",
+            None,
+            Some("personal"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_target",
+            "Target Page",
+            None,
+            "Original body links to [[Related Page]].",
+            None,
+            Some("work"),
+            &["mem_target"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_target", "source_updated")
+            .await
+            .unwrap();
+
+        let provider = Arc::new(RecordingDistillProvider::new());
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(recompiled, 1, "stale page should be re-distilled");
+
+        let seen = provider.prompts();
+        let user_prompt = seen
+            .first()
+            .expect("stale re-distill must send one compile prompt");
+        assert!(
+            user_prompt.starts_with("Existing pages you may reference with exact-match wikilinks:"),
+            "PageWrite refresh prompt must start with existing-title hint, got:\n{user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("[[Related Page]]"),
+            "same-space existing title must be offered as a valid wikilink target, got:\n{user_prompt}"
+        );
+        assert!(
+            !user_prompt.contains("[[Private Page]]"),
+            "cross-space existing title must not be offered in a work refresh prompt, got:\n{user_prompt}"
+        );
+
+        let page = db.get_page("page_target").await.unwrap().unwrap();
+        assert!(
+            page.content.contains("[[Related Page]]"),
+            "refresh should retain already-valid wikilinks when the prompt exposes the real title, got:\n{}",
+            page.content
         );
     }
 

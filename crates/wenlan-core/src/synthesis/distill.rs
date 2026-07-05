@@ -21,6 +21,7 @@ use wenlan_types::requests::UpdatePageRequest;
 
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_NUMERATOR: usize = 1;
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_DENOMINATOR: usize = 2;
+const EXISTING_TITLES_HINT_LIMIT: usize = 100;
 
 /// What a distillation pass is scoped to. Resolved from a free-form string
 /// supplied by the user (page id, entity name, or domain value).
@@ -65,14 +66,31 @@ pub async fn resolve_distill_target(
 }
 
 /// Build the "existing page titles" hint prefix that gets prepended to
-/// every distill user prompt so the LLM emits exact-match `[[Title]]`
+/// every page compile user prompt so the LLM emits exact-match `[[Title]]`
 /// wikilinks instead of inventing labels. Returns an empty string when
 /// the page set is empty or the DB call errors (best-effort — the worst
 /// case is the LLM invents a label that the orphan-by-count feed will
-/// surface later). Capped at 100 most-recent titles so the prompt stays
-/// bounded on large vaults.
-pub(crate) async fn build_existing_titles_hint(db: &MemoryDB) -> String {
-    let titles = db.list_active_page_titles(100).await.unwrap_or_default();
+/// surface later). Capped to keep prompts bounded on large vaults.
+pub(crate) async fn build_existing_titles_hint(
+    db: &MemoryDB,
+    topic: &str,
+    workspace: Option<&str>,
+) -> String {
+    let mut titles = db
+        .list_relevant_active_page_titles(topic, workspace, EXISTING_TITLES_HINT_LIMIT)
+        .await
+        .unwrap_or_default();
+    if titles.is_empty() {
+        titles = db
+            .list_pages("active", 1000, 0)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|page| workspace.is_none_or(|w| page_workspace(page) == Some(w)))
+            .map(|page| page.title)
+            .take(EXISTING_TITLES_HINT_LIMIT)
+            .collect();
+    }
     if titles.is_empty() {
         return String::new();
     }
@@ -86,6 +104,20 @@ pub(crate) async fn build_existing_titles_hint(db: &MemoryDB) -> String {
          Use these labels verbatim when linking; only invent a new label \
          when the topic isn't already covered.\n\n"
     )
+}
+
+fn page_workspace(page: &crate::pages::Page) -> Option<&str> {
+    page.workspace.as_deref().or(page.space.as_deref())
+}
+
+pub(crate) async fn build_page_compile_user_prompt(
+    db: &MemoryDB,
+    topic: &str,
+    workspace: Option<&str>,
+    memories_block: &str,
+) -> String {
+    let titles_hint = build_existing_titles_hint(db, topic, workspace).await;
+    format!("{titles_hint}Topic: {topic}\n\n{memories_block}")
 }
 
 /// LLM cluster refinement: for entities with multiple clusters, ask the LLM to merge/split/rename.
@@ -613,8 +645,8 @@ async fn distill_one_cluster_with_tuning(
         })
         .collect();
     let memories_block = crate::citations::build_numbered_block(&numbered);
-    let titles_hint = build_existing_titles_hint(db).await;
-    let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
+    let user_prompt =
+        build_page_compile_user_prompt(db, topic, cluster.space.as_deref(), &memories_block).await;
 
     let response = llm
         .generate(LlmRequest {
@@ -1039,8 +1071,9 @@ pub async fn distill_pages_scoped(
             })
             .collect();
         let memories_block = crate::citations::build_numbered_block(&numbered);
-        let titles_hint = build_existing_titles_hint(db).await;
-        let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", topic, memories_block);
+        let user_prompt =
+            build_page_compile_user_prompt(db, topic, cluster.space.as_deref(), &memories_block)
+                .await;
 
         let response = llm
             .generate(LlmRequest {
@@ -1316,8 +1349,9 @@ pub(crate) async fn recompile_single_page(
         })
         .collect();
     let memories_block = crate::citations::build_numbered_block(&numbered);
-    let titles_hint = build_existing_titles_hint(db).await;
-    let user_prompt = format!("{titles_hint}Topic: {}\n\n{}", page.title, memories_block);
+    let user_prompt =
+        build_page_compile_user_prompt(db, &page.title, page_workspace(page), &memories_block)
+            .await;
 
     let response = llm
         .generate(LlmRequest {
@@ -1453,7 +1487,9 @@ pub async fn deep_distill_single(
         })
         .collect();
     let memories_block = crate::citations::build_numbered_block(&numbered);
-    let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
+    let user_prompt =
+        build_page_compile_user_prompt(db, &page.title, page_workspace(&page), &memories_block)
+            .await;
 
     let response = llm
         .generate(LlmRequest {
@@ -1583,10 +1619,58 @@ pub(crate) async fn apply_merge_by_tier(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm_provider::MockProvider;
+    use crate::llm_provider::{LlmBackend, LlmError, MockProvider};
     use crate::sources::RawDocument;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+
+    struct PromptRecordingProvider {
+        prompts: Mutex<Vec<String>>,
+    }
+
+    impl PromptRecordingProvider {
+        fn new() -> Self {
+            Self {
+                prompts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn prompts(&self) -> Vec<String> {
+            self.prompts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for PromptRecordingProvider {
+        async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+            let user_prompt = request.user_prompt;
+            self.prompts.lock().unwrap().push(user_prompt.clone());
+            if user_prompt.contains("[[Related Page]]") {
+                Ok("Refreshed page prose keeps the valid [[Related Page]] wikilink from the prior page body. [1]".to_string())
+            } else {
+                Ok(
+                    "Refreshed page prose drops the valid wikilink from the prior page body. [1]"
+                        .to_string(),
+                )
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "prompt-recording"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::OnDevice
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
 
     #[tokio::test]
     async fn resolve_distill_target_ignores_unregistered_memory_space() {
@@ -1706,6 +1790,97 @@ mod tests {
         assert!(
             content.contains("recompiled body"),
             "md body should reflect LLM output"
+        );
+    }
+
+    #[tokio::test]
+    async fn deep_distill_single_prompt_includes_same_space_existing_titles_hint() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'The target topic should retain the valid wikilink to Related Page when refreshed.', 0, 'text', 'fact', 'work', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_target".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_related",
+            "Related Page",
+            None,
+            "A work-space page that should be offered as a real wikilink target.",
+            None,
+            Some("work"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_private",
+            "Private Page",
+            None,
+            "A personal-space page that must not be offered in a work refresh prompt.",
+            None,
+            Some("personal"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_target",
+            "Target Page",
+            None,
+            "Original body links to [[Related Page]].",
+            None,
+            Some("work"),
+            &["mem_target"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_target", "source_updated")
+            .await
+            .unwrap();
+
+        let provider = Arc::new(PromptRecordingProvider::new());
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let updated = deep_distill_single(&db, Some(&llm), &prompts, "page_target", None)
+            .await
+            .unwrap();
+        assert!(updated, "deep refresh should write the provider output");
+
+        let seen = provider.prompts();
+        let user_prompt = seen
+            .first()
+            .expect("deep refresh must send one compile prompt");
+        assert!(
+            user_prompt.starts_with("Existing pages you may reference with exact-match wikilinks:"),
+            "PageWrite refresh prompt must start with existing-title hint, got:\n{user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("[[Related Page]]"),
+            "same-space existing title must be offered as a valid wikilink target, got:\n{user_prompt}"
+        );
+        assert!(
+            !user_prompt.contains("[[Private Page]]"),
+            "cross-space existing title must not be offered in a work refresh prompt, got:\n{user_prompt}"
+        );
+
+        let page = db.get_page("page_target").await.unwrap().unwrap();
+        assert!(
+            page.content.contains("[[Related Page]]"),
+            "refresh should retain already-valid wikilinks when the prompt exposes the real title, got:\n{}",
+            page.content
         );
     }
 

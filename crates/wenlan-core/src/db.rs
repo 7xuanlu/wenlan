@@ -21940,6 +21940,67 @@ impl MemoryDB {
         Ok(out)
     }
 
+    /// Return active page titles ranked by embedding similarity to `query`,
+    /// optionally constrained to the same workspace. Falls back to `space`
+    /// for legacy pages created before the dedicated workspace column.
+    pub async fn list_relevant_active_page_titles(
+        &self,
+        query: &str,
+        workspace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, WenlanError> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
+
+        let embedding = self.get_or_compute_embedding(query)?;
+        let vec_str = Self::vec_to_sql(&embedding);
+        let conn = self.conn.lock().await;
+
+        let (sql, params): (String, Vec<libsql::Value>) = match workspace {
+            Some(workspace) => (
+                "SELECT title FROM pages \
+                 WHERE status = 'active' \
+                   AND embedding IS NOT NULL \
+                   AND COALESCE(workspace, space) = ?2 \
+                 ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
+                 LIMIT ?3"
+                    .to_string(),
+                vec![
+                    libsql::Value::Text(vec_str),
+                    libsql::Value::Text(workspace.to_string()),
+                    libsql::Value::Integer(limit as i64),
+                ],
+            ),
+            None => (
+                "SELECT title FROM pages \
+                 WHERE status = 'active' \
+                   AND embedding IS NOT NULL \
+                 ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
+                 LIMIT ?2"
+                    .to_string(),
+                vec![
+                    libsql::Value::Text(vec_str),
+                    libsql::Value::Integer(limit as i64),
+                ],
+            ),
+        };
+
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list relevant page titles: {e}")))?;
+        let mut out = Vec::with_capacity(limit);
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            out.push(row.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
     /// Find an active page id whose title matches `label` (case-insensitive,
     /// trimmed). Used by the wikilink resolver. Returns None when no active
     /// page matches; archived pages are deliberately ignored so a deleted-
