@@ -1779,7 +1779,7 @@ mod tests {
     async fn overlapping_cluster_attaches_to_source_less_seed_no_duplicate() {
         let (db, _dir) = crate::db::tests::test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        // 1. Source-less CONFIRMED authored seed on topic "Tokio", in space "work".
+        // 1. Source-less CONFIRMED distilled seed on topic "Tokio", in space "work".
         //    insert_page_with_kind embeds title+summary; make summary ~= the cluster
         //    centroid text so cosine >= 0.85. Long body just to be realistic.
         db.insert_page_with_kind(
@@ -1791,7 +1791,7 @@ mod tests {
             Some("work"),
             &[],
             &now,
-            "authored",
+            "distilled",
             "confirmed",
             None, // workspace
             None, // citations

@@ -21591,10 +21591,10 @@ impl MemoryDB {
     ///  - `workspace` (when Some): only pages whose `workspace` matches are eligible,
     ///    falling back to `space` for legacy pages that predate the workspace column.
     ///    `None` = no workspace constraint.
-    ///  - only `review_status='confirmed'` pages are dedup targets (an unconfirmed
-    ///    authored page is not a consolidation anchor).
-    ///  - when `allow_user_edited=false`, a `user_edited` match is REFUSED (returns
-    ///    None) so the caller never silently rewrites hand-edited prose.
+    ///  - only `review_status='confirmed'` pages are dedup targets.
+    ///  - when `allow_user_edited=false`, human-owned pages (`user_edited=1` or
+    ///    `creation_kind='authored'`) are REFUSED so the caller never silently
+    ///    rewrites hand-owned prose.
     pub async fn find_matching_page_scoped(
         &self,
         entity_id: Option<&str>,
@@ -21609,13 +21609,15 @@ impl MemoryDB {
                 let page_workspace = page.workspace.as_deref().or(page.space.as_deref());
                 let ws_ok = workspace.is_none_or(|w| page_workspace == Some(w));
                 let status_ok = page.review_status == "confirmed";
-                if ws_ok && status_ok && (allow_user_edited || !page.user_edited) {
+                let human_owned = page.user_edited || page.creation_kind == "authored";
+                if ws_ok && status_ok && (allow_user_edited || !human_owned) {
                     return Ok(Some(page));
                 }
             }
         }
-        // Embedding cosine, scoped in SQL on space + review_status.
+        // Embedding cosine, scoped in SQL on space + review_status + ownership.
         let emb_sql = Self::vec_to_sql(embedding);
+        let allow_human_owned = i64::from(allow_user_edited);
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -21629,8 +21631,9 @@ impl MemoryDB {
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
                    AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
                    AND (?2 IS NULL OR COALESCE(c.workspace, c.space) = ?2)
+                   AND (?3 != 0 OR (COALESCE(c.user_edited, 0) = 0 AND COALESCE(c.creation_kind, 'distilled') <> 'authored'))
                  ORDER BY dist ASC LIMIT 1",
-                libsql::params![emb_sql, workspace],
+                libsql::params![emb_sql, workspace, allow_human_owned],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("scoped page similarity: {e}")))?;
@@ -21642,7 +21645,7 @@ impl MemoryDB {
             let dist: f64 = row.get(20).unwrap_or(1.0);
             if 1.0 - dist >= threshold {
                 let page = Self::row_to_page(&row)?;
-                if !allow_user_edited && page.user_edited {
+                if !allow_user_edited && (page.user_edited || page.creation_kind == "authored") {
                     return Ok(None);
                 }
                 return Ok(Some(page));
@@ -41371,7 +41374,7 @@ pub(crate) mod tests {
             Some("recap"),
             &[],
             &now,
-            "authored",
+            "distilled",
             "confirmed",
             Some("work"),
             None,
@@ -41403,6 +41406,145 @@ pub(crate) mod tests {
         assert!(
             mismatched.is_none(),
             "workspace-scoped matching must not match pages from other workspaces"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_matching_page_scoped_excludes_human_owned_pages_from_auto_match() {
+        let (db, _td) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let embedding = [0.0f32; EMBEDDING_DIM];
+
+        db.insert_page_with_kind(
+            "page_user_edited_owned",
+            "User Edited Owned",
+            None,
+            "original distilled content",
+            Some("entity_user_edited_owned"),
+            Some("recap"),
+            &[],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        db.update_page_content(
+            "page_user_edited_owned",
+            "human edited content",
+            &[],
+            "manual_edit",
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status("page_user_edited_owned", "confirmed")
+            .await
+            .unwrap();
+
+        let user_edited_page = db
+            .get_page("page_user_edited_owned")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            user_edited_page.user_edited,
+            "precondition: manual_edit should set user_edited=1"
+        );
+        assert_eq!(
+            user_edited_page.review_status, "confirmed",
+            "precondition: this case must isolate user_edited, not review_status"
+        );
+
+        let skipped_user_edited = db
+            .find_matching_page_scoped(
+                Some("entity_user_edited_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(
+            skipped_user_edited.is_none(),
+            "allow_user_edited=false must exclude user_edited pages from auto-match"
+        );
+
+        let allowed_user_edited = db
+            .find_matching_page_scoped(
+                Some("entity_user_edited_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed_user_edited.as_ref().map(|page| page.id.as_str()),
+            Some("page_user_edited_owned"),
+            "allow_user_edited=true should keep the legacy manual override path available"
+        );
+
+        db.insert_page_with_kind(
+            "page_authored_owned",
+            "Authored Owned",
+            None,
+            "human authored content",
+            Some("entity_authored_owned"),
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let authored_page = db.get_page("page_authored_owned").await.unwrap().unwrap();
+        assert_eq!(
+            authored_page.creation_kind, "authored",
+            "precondition: authored pages are human-owned even without user_edited=1"
+        );
+        assert!(
+            !authored_page.user_edited,
+            "precondition: authored ownership must not depend on user_edited"
+        );
+        assert_eq!(authored_page.review_status, "confirmed");
+
+        let skipped_authored = db
+            .find_matching_page_scoped(
+                Some("entity_authored_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(
+            skipped_authored.is_none(),
+            "allow_user_edited=false must treat creation_kind='authored' as human-owned"
+        );
+
+        let allowed_authored = db
+            .find_matching_page_scoped(
+                Some("entity_authored_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed_authored.as_ref().map(|page| page.id.as_str()),
+            Some("page_authored_owned"),
+            "allow_user_edited=true should still permit explicit matching against authored pages"
         );
     }
 
