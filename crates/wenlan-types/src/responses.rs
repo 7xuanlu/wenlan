@@ -298,6 +298,8 @@ pub struct AddObservationResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreatePageResponse {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached_to: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }

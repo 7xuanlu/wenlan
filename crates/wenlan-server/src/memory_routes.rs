@@ -2021,13 +2021,14 @@ pub async fn handle_create_page(
     Json(mut req): Json<CreateConceptRequest>,
 ) -> Result<Json<CreatePageResponse>, ServerError> {
     let agent = extract_agent_name(&headers, None);
-    let (db, page_min_cluster_size) = {
+    let (db, page_min_cluster_size, page_match_threshold) = {
         let s = state.read().await;
         (
             s.db.as_ref()
                 .cloned()
                 .ok_or(ServerError::DbNotInitialized)?,
             s.tuning.distillation.page_min_cluster_size,
+            s.tuning.distillation.page_match_threshold,
         )
     };
 
@@ -2047,16 +2048,18 @@ pub async fn handle_create_page(
             registered_request_space(&db, &req.workspace, "create_page workspace").await?;
     }
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let result = wenlan_core::post_write::create_page_with_floor(
+    let result = wenlan_core::post_write::create_page_with_tuning(
         &db,
         req,
         &agent,
         Some(knowledge_path.as_path()),
         page_min_cluster_size,
+        page_match_threshold,
     )
     .await?;
     Ok(Json(CreatePageResponse {
         id: result.id,
+        attached_to: result.attached_to,
         warnings: result.warnings,
     }))
 }
@@ -3643,6 +3646,17 @@ mod create_page_endpoint_tests {
     async fn build_state_with_db(
         page_min_cluster_size: usize,
     ) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        build_state_with_db_and_page_match_threshold(
+            page_min_cluster_size,
+            wenlan_core::tuning::DistillationConfig::default().page_match_threshold,
+        )
+        .await
+    }
+
+    async fn build_state_with_db_and_page_match_threshold(
+        page_min_cluster_size: usize,
+        page_match_threshold: f64,
+    ) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("failed to create tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
@@ -3688,6 +3702,7 @@ mod create_page_endpoint_tests {
         .unwrap();
         let mut tuning = wenlan_core::tuning::TuningConfig::default();
         tuning.distillation.page_min_cluster_size = page_min_cluster_size;
+        tuning.distillation.page_match_threshold = page_match_threshold;
         let server_state = ServerState {
             db: Some(Arc::new(db)),
             tuning,
@@ -3777,6 +3792,153 @@ mod create_page_endpoint_tests {
         assert_eq!(
             body["error"], "distilled page requires at least 4 distinct source memories (got 3)",
             "error should reflect ServerState tuning: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_distilled_near_duplicate_returns_attached_to() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let (state, _tmp) = build_state_with_db(3).await;
+        let db = {
+            let s = state.read().await;
+            s.db.as_ref().cloned().unwrap()
+        };
+        db.create_space("work", None, false).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_http_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &["mem-page-floor-a", "mem-page-floor-b", "mem-page-floor-c"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let app = crate::router::build_router(state);
+        let body = json!({
+            "title": "Rust Workspace Operations",
+            "content": "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            "summary": "Rust workspace operations",
+            "space": "work",
+            "source_memory_ids": [
+                "mem-page-floor-a",
+                "mem-page-floor-b",
+                "mem-page-floor-c"
+            ],
+            "creation_kind": "distilled"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/pages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["id"], "page_pagewrite_http_existing");
+        assert_eq!(
+            body["attached_to"], "page_pagewrite_http_existing",
+            "create_page response must expose the attach target: {body}"
+        );
+        let pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(pages.len(), 1, "HTTP near-duplicate attach must not mint");
+    }
+
+    #[tokio::test]
+    async fn create_distilled_near_duplicate_uses_configured_page_match_threshold() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let (state, _tmp) = build_state_with_db_and_page_match_threshold(3, 1.1).await;
+        let db = {
+            let s = state.read().await;
+            s.db.as_ref().cloned().unwrap()
+        };
+        db.create_space("work", None, false).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_http_threshold_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &["mem-page-floor-a", "mem-page-floor-b", "mem-page-floor-c"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let app = crate::router::build_router(state);
+        let body = json!({
+            "title": "Rust Workspace Operations",
+            "content": "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            "summary": "Rust workspace operations",
+            "space": "work",
+            "source_memory_ids": [
+                "mem-page-floor-a",
+                "mem-page-floor-b",
+                "mem-page-floor-c"
+            ],
+            "creation_kind": "distilled"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/pages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_ne!(
+            body["id"], "page_pagewrite_http_threshold_existing",
+            "configured threshold above possible cosine must force a new page: {body}"
+        );
+        assert!(
+            body.get("attached_to").is_none(),
+            "new page response must omit attached_to: {body}"
+        );
+        let pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(
+            pages.len(),
+            2,
+            "below configured threshold should mint a new page"
         );
     }
 }

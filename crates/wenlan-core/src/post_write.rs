@@ -16,6 +16,8 @@ use wenlan_types::requests::{
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WriteResult {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached_to: Option<String>,
     pub warnings: Vec<String>,
     pub wrote: bool,
 }
@@ -29,6 +31,7 @@ pub enum PageWrite<'a> {
         agent: &'a str,
         knowledge_path: Option<&'a Path>,
         page_min_cluster_size: usize,
+        page_match_threshold: f64,
     },
 }
 
@@ -39,7 +42,18 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             agent,
             knowledge_path,
             page_min_cluster_size,
-        } => create_page_impl(db, req, agent, knowledge_path, page_min_cluster_size).await,
+            page_match_threshold,
+        } => {
+            create_page_impl(
+                db,
+                req,
+                agent,
+                knowledge_path,
+                page_min_cluster_size,
+                page_match_threshold,
+            )
+            .await
+        }
     }
 }
 
@@ -105,6 +119,7 @@ pub async fn create_entity(
     if let Some(id) = db.resolve_entity_by_alias(&name_lower).await? {
         return Ok(WriteResult {
             id,
+            attached_to: None,
             warnings: vec![],
             wrote: false,
         });
@@ -116,6 +131,7 @@ pub async fn create_entity(
         let _ = db.add_entity_alias(&name_lower, &existing.id, "auto").await;
         return Ok(WriteResult {
             id: existing.id.clone(),
+            attached_to: None,
             warnings: vec![],
             wrote: false,
         });
@@ -132,6 +148,7 @@ pub async fn create_entity(
             let _ = db.add_entity_alias(&name_lower, &cand_id, "minhash").await;
             return Ok(WriteResult {
                 id: cand_id,
+                attached_to: None,
                 warnings: vec![],
                 wrote: false,
             });
@@ -147,6 +164,7 @@ pub async fn create_entity(
                 .await;
             return Ok(WriteResult {
                 id: result.entity.id.clone(),
+                attached_to: None,
                 warnings: vec![],
                 wrote: false,
             });
@@ -234,6 +252,7 @@ pub async fn create_entity(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings,
         wrote: true,
     })
@@ -276,6 +295,7 @@ pub async fn create_relation(
         if let Some((existing_id, _)) = existing.into_iter().find(|(_, t)| t == rt) {
             return Ok(WriteResult {
                 id: existing_id,
+                attached_to: None,
                 warnings: vec![],
                 wrote: false,
             });
@@ -375,6 +395,7 @@ pub async fn create_relation(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings,
         wrote: true,
     })
@@ -434,6 +455,7 @@ pub async fn add_observation(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings: vec![],
         wrote: true,
     })
@@ -447,12 +469,14 @@ pub async fn create_page(
     agent: &str,
     knowledge_path: Option<&Path>,
 ) -> Result<WriteResult, WenlanError> {
-    create_page_with_floor(
+    let distillation = crate::tuning::DistillationConfig::default();
+    create_page_with_tuning(
         db,
         req,
         agent,
         knowledge_path,
-        crate::tuning::DistillationConfig::default().page_min_cluster_size,
+        distillation.page_min_cluster_size,
+        distillation.page_match_threshold,
     )
     .await
 }
@@ -464,6 +488,25 @@ pub async fn create_page_with_floor(
     knowledge_path: Option<&Path>,
     page_min_cluster_size: usize,
 ) -> Result<WriteResult, WenlanError> {
+    create_page_with_tuning(
+        db,
+        req,
+        agent,
+        knowledge_path,
+        page_min_cluster_size,
+        crate::tuning::DistillationConfig::default().page_match_threshold,
+    )
+    .await
+}
+
+pub async fn create_page_with_tuning(
+    db: &MemoryDB,
+    req: CreateConceptRequest,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+    page_min_cluster_size: usize,
+    page_match_threshold: f64,
+) -> Result<WriteResult, WenlanError> {
     page_write(
         db,
         PageWrite::Create {
@@ -471,9 +514,19 @@ pub async fn create_page_with_floor(
             agent,
             knowledge_path,
             page_min_cluster_size,
+            page_match_threshold,
         },
     )
     .await
+}
+
+fn page_embedding_text(title: &str, summary: Option<&str>, content: &str) -> String {
+    const PAGE_EMBED_CONTENT_CAP: usize = 1500;
+    let capped_body: String = content.chars().take(PAGE_EMBED_CONTENT_CAP).collect();
+    match summary {
+        Some(summary) => format!("{title} {summary} {capped_body}"),
+        None => format!("{title} {capped_body}"),
+    }
 }
 
 async fn create_page_impl(
@@ -482,6 +535,7 @@ async fn create_page_impl(
     agent: &str,
     knowledge_path: Option<&Path>,
     page_min_cluster_size: usize,
+    page_match_threshold: f64,
 ) -> Result<WriteResult, WenlanError> {
     // Pre-write validation
     if req.title.trim().is_empty() {
@@ -536,6 +590,42 @@ async fn create_page_impl(
             return Err(WenlanError::Validation(
                 "page body diverges from cited sources (cos sim < 0.6)".into(),
             ));
+        }
+    }
+
+    if creation_kind == "distilled" {
+        let embed_text = page_embedding_text(&req.title, req.summary.as_deref(), &req.content);
+        let embedding = match db.generate_embeddings(&[embed_text]) {
+            Ok(mut embeddings) => embeddings.pop(),
+            Err(e) => {
+                log::warn!("[create_page] dedup embedding failed: {e}");
+                None
+            }
+        };
+        let workspace = req.workspace.as_deref().or(req.space.as_deref());
+        if let (Some(embedding), Some(workspace)) = (embedding, workspace) {
+            if let Some(matched) = db
+                .find_matching_page_scoped(
+                    req.entity_id.as_deref(),
+                    &embedding,
+                    page_match_threshold,
+                    Some(workspace),
+                    false,
+                )
+                .await?
+            {
+                let matched_id = matched.id;
+                for sid in &req.source_memory_ids {
+                    db.link_page_source(&matched_id, sid, "page_write_attach")
+                        .await?;
+                }
+                return Ok(WriteResult {
+                    id: matched_id.clone(),
+                    attached_to: Some(matched_id),
+                    warnings: vec![],
+                    wrote: true,
+                });
+            }
         }
     }
 
@@ -640,6 +730,7 @@ async fn create_page_impl(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings,
         wrote: true,
     })
@@ -791,6 +882,7 @@ pub async fn update_page(
     if delta_summary.is_none() && old_set == new_set {
         return Ok(WriteResult {
             id: page_id.to_string(),
+            attached_to: None,
             warnings: vec![],
             wrote: false,
         });
@@ -841,6 +933,7 @@ pub async fn update_page(
         // CAS skipped — page was not stale; return empty warnings (no-op)
         return Ok(WriteResult {
             id: page_id.to_string(),
+            attached_to: None,
             warnings: vec![],
             wrote: false,
         });
@@ -864,6 +957,7 @@ pub async fn update_page(
 
     Ok(WriteResult {
         id: page_id.to_string(),
+        attached_to: None,
         warnings,
         wrote: true,
     })
@@ -1705,6 +1799,302 @@ mod tests {
         let page = db.get_page(&result.id).await.unwrap().unwrap();
 
         assert_eq!(page.review_status, "unconfirmed");
+    }
+
+    #[tokio::test]
+    async fn create_page_attaches_same_workspace_near_duplicate_without_new_page() {
+        let (db, _dir) = test_db().await;
+        let existing_sources = [
+            (
+                "mem-pagewrite-existing-a",
+                "Rust workspaces can share a single Cargo lockfile across related crates",
+            ),
+            (
+                "mem-pagewrite-existing-b",
+                "Rust workspace members inherit shared package metadata from the root",
+            ),
+            (
+                "mem-pagewrite-existing-c",
+                "Rust workspace builds can check all member crates together",
+            ),
+        ];
+        for (source_id, content) in existing_sources {
+            seed_memory(&db, source_id, content).await;
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &[
+                "mem-pagewrite-existing-a",
+                "mem-pagewrite-existing-b",
+                "mem-pagewrite-existing-c",
+            ],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        for (source_id, content) in [
+            (
+                "mem-pagewrite-candidate-a",
+                "Rust workspaces share one Cargo lockfile for related crates",
+            ),
+            (
+                "mem-pagewrite-candidate-b",
+                "Rust workspace members can inherit shared package metadata",
+            ),
+            (
+                "mem-pagewrite-candidate-c",
+                "Rust workspace checks can validate every member crate together",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let before_pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(before_pages.len(), 1, "precondition: one active page");
+        let req = CreateConceptRequest {
+            title: "Rust Workspace Operations".to_string(),
+            content:
+                "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks"
+                    .to_string(),
+            summary: Some("Rust workspace operations".to_string()),
+            entity_id: None,
+            space: Some("recap".to_string()),
+            source_memory_ids: vec![
+                "mem-pagewrite-candidate-a".to_string(),
+                "mem-pagewrite-candidate-b".to_string(),
+                "mem-pagewrite-candidate-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: Some("work".to_string()),
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert_eq!(
+            result.id, "page_pagewrite_existing",
+            "near-duplicate create must resolve to the existing page id"
+        );
+        let result_json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            result_json.get("attached_to").and_then(|v| v.as_str()),
+            Some("page_pagewrite_existing"),
+            "response must expose the attach target"
+        );
+        let after_pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(
+            after_pages.len(),
+            1,
+            "same-workspace near-duplicate must not mint a second page"
+        );
+        let evidence = db
+            .get_page_evidence("page_pagewrite_existing")
+            .await
+            .unwrap();
+        let locators = evidence
+            .iter()
+            .filter(|ev| ev.source_kind == "memory")
+            .filter_map(|ev| ev.locator.as_deref())
+            .collect::<HashSet<_>>();
+        for expected in [
+            "mem-pagewrite-existing-a",
+            "mem-pagewrite-existing-b",
+            "mem-pagewrite-existing-c",
+            "mem-pagewrite-candidate-a",
+            "mem-pagewrite-candidate-b",
+            "mem-pagewrite-candidate-c",
+        ] {
+            assert!(
+                locators.contains(expected),
+                "page_evidence must include {expected}; got {locators:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_page_does_not_attach_no_space_candidate_to_workspace_page() {
+        let (db, _dir) = test_db().await;
+        for (source_id, content) in [
+            (
+                "mem-pagewrite-cross-existing-a",
+                "Rust workspaces can share a single Cargo lockfile across related crates",
+            ),
+            (
+                "mem-pagewrite-cross-existing-b",
+                "Rust workspace members inherit shared package metadata from the root",
+            ),
+            (
+                "mem-pagewrite-cross-existing-c",
+                "Rust workspace builds can check all member crates together",
+            ),
+            (
+                "mem-pagewrite-cross-candidate-a",
+                "Rust workspaces share one Cargo lockfile for related crates",
+            ),
+            (
+                "mem-pagewrite-cross-candidate-b",
+                "Rust workspace members can inherit shared package metadata",
+            ),
+            (
+                "mem-pagewrite-cross-candidate-c",
+                "Rust workspace checks can validate every member crate together",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_cross_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &[
+                "mem-pagewrite-cross-existing-a",
+                "mem-pagewrite-cross-existing-b",
+                "mem-pagewrite-cross-existing-c",
+            ],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let req = CreateConceptRequest {
+            title: "Rust Workspace Operations".to_string(),
+            content:
+                "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks"
+                    .to_string(),
+            summary: Some("Rust workspace operations".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-pagewrite-cross-candidate-a".to_string(),
+                "mem-pagewrite-cross-candidate-b".to_string(),
+                "mem-pagewrite-cross-candidate-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert_ne!(
+            result.id, "page_pagewrite_cross_existing",
+            "space-scoped dedup must not attach a no-space candidate to a workspace page"
+        );
+        assert_eq!(
+            result.attached_to, None,
+            "cross-space create must report a new page, not an attachment"
+        );
+        let pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(
+            pages.len(),
+            2,
+            "cross-space near-duplicate must mint a second page"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_page_does_not_attach_different_space_candidate() {
+        let (db, _dir) = test_db().await;
+        for (source_id, content) in [
+            (
+                "mem-pagewrite-diffspace-existing-a",
+                "Rust workspaces can share a single Cargo lockfile across related crates",
+            ),
+            (
+                "mem-pagewrite-diffspace-existing-b",
+                "Rust workspace members inherit shared package metadata from the root",
+            ),
+            (
+                "mem-pagewrite-diffspace-existing-c",
+                "Rust workspace builds can check all member crates together",
+            ),
+            (
+                "mem-pagewrite-diffspace-candidate-a",
+                "Rust workspaces share one Cargo lockfile for related crates",
+            ),
+            (
+                "mem-pagewrite-diffspace-candidate-b",
+                "Rust workspace members can inherit shared package metadata",
+            ),
+            (
+                "mem-pagewrite-diffspace-candidate-c",
+                "Rust workspace checks can validate every member crate together",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_diffspace_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &[
+                "mem-pagewrite-diffspace-existing-a",
+                "mem-pagewrite-diffspace-existing-b",
+                "mem-pagewrite-diffspace-existing-c",
+            ],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        // Same content, but scoped to a DIFFERENT workspace ("personal") — the
+        // scoped matcher's `COALESCE(workspace, space) = ?` filter must exclude
+        // the "work" page, so this mints a new page rather than attaching.
+        let req = CreateConceptRequest {
+            title: "Rust Workspace Operations".to_string(),
+            content:
+                "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks"
+                    .to_string(),
+            summary: Some("Rust workspace operations".to_string()),
+            entity_id: None,
+            space: Some("recap".to_string()),
+            source_memory_ids: vec![
+                "mem-pagewrite-diffspace-candidate-a".to_string(),
+                "mem-pagewrite-diffspace-candidate-b".to_string(),
+                "mem-pagewrite-diffspace-candidate-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: Some("personal".to_string()),
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert_ne!(
+            result.id, "page_pagewrite_diffspace_existing",
+            "space-scoped dedup must not attach a different-space candidate to a work page"
+        );
+        assert_eq!(
+            result.attached_to, None,
+            "different-space create must report a new page, not an attachment"
+        );
+        let pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(
+            pages.len(),
+            2,
+            "different-space near-duplicate must mint a second page"
+        );
     }
 
     // ── update_page ──────────────────────────────────────────────────────────

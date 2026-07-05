@@ -75,6 +75,7 @@ pub async fn resolve_proposal(
 
     Ok(WriteResult {
         id: id.to_string(),
+        attached_to: None,
         warnings: Vec::new(),
         wrote: true,
     })
