@@ -435,6 +435,18 @@ pub async fn distill_one_cluster(
     cluster: &crate::db::DistillationCluster,
     knowledge_writer: Option<&crate::export::knowledge::KnowledgeWriter>,
 ) -> Result<Option<String>, WenlanError> {
+    let tuning = crate::tuning::DistillationConfig::default();
+    distill_one_cluster_with_tuning(db, llm, prompts, cluster, &tuning, knowledge_writer).await
+}
+
+async fn distill_one_cluster_with_tuning(
+    db: &MemoryDB,
+    llm: &Arc<dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    cluster: &crate::db::DistillationCluster,
+    tuning: &crate::tuning::DistillationConfig,
+    knowledge_writer: Option<&crate::export::knowledge::KnowledgeWriter>,
+) -> Result<Option<String>, WenlanError> {
     let topic = cluster
         .entity_name
         .as_deref()
@@ -492,7 +504,7 @@ pub async fn distill_one_cluster(
             .find_matching_page_scoped(
                 cluster.entity_id.as_deref(),
                 centroid,
-                0.85,
+                tuning.page_match_threshold,
                 cluster.space.as_deref(),
                 false, // never rewrite/attach onto hand-edited prose
             )
@@ -911,7 +923,9 @@ pub async fn distill_pages_scoped(
         for chunk in clusters.chunks(cluster_concurrency) {
             let futs: Vec<_> = chunk
                 .iter()
-                .map(|cluster| distill_one_cluster(db, llm, prompts, cluster, kw))
+                .map(|cluster| {
+                    distill_one_cluster_with_tuning(db, llm, prompts, cluster, tuning, kw)
+                })
                 .collect();
             let results = futures::future::join_all(futs).await;
             for r in results {
@@ -1888,6 +1902,69 @@ mod tests {
         assert!(
             ev.contains(&"mem_x".to_string()),
             "cluster source attached to seed evidence"
+        );
+    }
+
+    #[tokio::test]
+    async fn distill_one_cluster_uses_configured_page_match_threshold() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "seed_tokio_high_threshold",
+            "Tokio async runtime",
+            Some("Tokio asynchronous runtime Rust tasks scheduler reactor"),
+            "Tokio is an asynchronous runtime for Rust with a scheduler and reactor.",
+            None,
+            Some("work"),
+            &[],
+            &now,
+            "distilled",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let centroid = db
+            .generate_embeddings(&[
+                "Tokio asynchronous runtime Rust tasks scheduler reactor".to_string()
+            ])
+            .unwrap()
+            .remove(0);
+        let long_content = "Tokio is an asynchronous runtime for the Rust programming language. \
+            It provides a multi-threaded work-stealing scheduler, an async TCP and UDP socket API, \
+            and a reactor backed by the operating system event queue for scalable network services."
+            .to_string();
+        let cluster = crate::db::DistillationCluster {
+            source_ids: vec!["mem_high_threshold".into()],
+            contents: vec![long_content],
+            entity_id: None,
+            entity_name: Some("Tokio".into()),
+            space: Some("work".into()),
+            estimated_tokens: 80,
+            centroid_embedding: Some(centroid),
+        };
+
+        let tuning = crate::tuning::DistillationConfig {
+            page_match_threshold: 1.1,
+            ..Default::default()
+        };
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "- Tokio is an asynchronous runtime for the Rust programming language.\n\
+             - It provides a multi-threaded work-stealing scheduler, an async TCP and UDP \
+             socket API, and a reactor backed by the operating system event queue.",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let r = distill_one_cluster_with_tuning(&db, &llm, &prompts, &cluster, &tuning, None)
+            .await
+            .unwrap();
+
+        assert!(
+            r.is_some(),
+            "threshold above cosine max should prevent attach and allow synthesis"
         );
     }
 
