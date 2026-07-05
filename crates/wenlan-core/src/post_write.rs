@@ -2123,6 +2123,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_page_rejects_zero_source_distilled_with_preexisting_message() {
+        let (db, _dir) = test_db().await;
+        let req = CreateConceptRequest {
+            title: "Rust".to_string(),
+            content: "Rust is a systems programming language".to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await;
+
+        match result {
+            Err(WenlanError::Validation(message)) => assert_eq!(
+                message, "distilled page must cite at least one source memory",
+                "zero-source distilled must keep the pre-existing message, not the distinct-source floor message"
+            ),
+            other => panic!("expected zero-source validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_page_allows_authored_with_zero_sources() {
+        let (db, _dir) = test_db().await;
+        let req = CreateConceptRequest {
+            title: "Rust Authored Note".to_string(),
+            content: "Rust ownership prevents memory safety bugs".to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert!(result.id.starts_with("page_"));
+    }
+
+    #[tokio::test]
     async fn create_page_borns_distilled_unconfirmed() {
         let (db, _dir) = test_db().await;
         let docs = [

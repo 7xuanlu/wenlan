@@ -52,7 +52,10 @@ pub struct Page {
     pub creation_kind: String,
     /// Trust boundary: whether this page has been confirmed as accurate.
     /// One of: "unconfirmed" | "confirmed".
-    /// Distilled pages start confirmed; authored/research pages start unconfirmed.
+    /// Every newly-created page is born "unconfirmed" regardless of
+    /// `creation_kind` (spec 3.1/5.2). `default_review_status()` below is a
+    /// wire/deserialization fallback for rows predating this column (backfilled
+    /// "confirmed" by migration 62), not the birth value for new pages.
     #[serde(default = "default_review_status")]
     pub review_status: String,
     /// Per-occurrence [N] citation records for this page's body (spec §3).
