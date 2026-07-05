@@ -14,13 +14,52 @@
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
 use wenlan_server::router::build_router;
 use wenlan_server::state::ServerState;
+use wenlan_types::RawDocument;
+
+fn data_dir_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+struct WritableKnowledgeConfig {
+    previous: Option<std::ffi::OsString>,
+    _tmp: tempfile::TempDir,
+}
+
+impl WritableKnowledgeConfig {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let pages = tmp.path().join("pages");
+        std::fs::create_dir_all(&pages).unwrap();
+        std::fs::write(
+            tmp.path().join("config.json"),
+            serde_json::json!({ "knowledge_path": pages.to_string_lossy() }).to_string(),
+        )
+        .unwrap();
+        let previous = std::env::var_os("WENLAN_DATA_DIR");
+        std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+        Self {
+            previous,
+            _tmp: tmp,
+        }
+    }
+}
+
+impl Drop for WritableKnowledgeConfig {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+            None => std::env::remove_var("WENLAN_DATA_DIR"),
+        }
+    }
+}
 
 async fn test_app() -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -238,6 +277,111 @@ async fn json_get(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Va
         serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
     };
     (status, val)
+}
+
+async fn json_put(
+    app: &axum::Router,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let req = Request::builder()
+        .method(Method::PUT)
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = if bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+    };
+    (status, val)
+}
+
+#[tokio::test]
+async fn refresh_page_user_edited_page_stages_revision_card_without_overwrite() {
+    let _guard = data_dir_lock().lock().await;
+    let _config = WritableKnowledgeConfig::new();
+    let (app, db, _dir) = test_app_with_db().await;
+    let mem_id = "mem_route_pagewrite_owned";
+    let source_content = "Rust ownership keeps memory safety rules explicit in systems code";
+    db.upsert_documents(vec![RawDocument {
+        source: "memory".to_string(),
+        source_id: mem_id.to_string(),
+        title: "Rust ownership source".to_string(),
+        content: source_content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        source_agent: Some("test".to_string()),
+        confirmed: Some(true),
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+
+    let page_id = "page_route_pagewrite_owned";
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        page_id,
+        "Rust Ownership",
+        None,
+        source_content,
+        None,
+        None,
+        &[mem_id],
+        &now,
+    )
+    .await
+    .unwrap();
+
+    let human_content =
+        "Rust ownership keeps memory safety rules explicit in systems code, with human notes";
+    db.update_page_content(page_id, human_content, &[mem_id], "fs_edit")
+        .await
+        .unwrap();
+    let before = db.get_page(page_id).await.unwrap().unwrap();
+    assert!(before.user_edited, "precondition: page is human-owned");
+
+    let proposed_content =
+        "Rust ownership lets the compiler enforce memory safety during page refresh";
+    let (status, body) = json_put(
+        &app,
+        &format!("/api/pages/{page_id}"),
+        serde_json::json!({
+            "content": proposed_content,
+            "source_memory_ids": [mem_id]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body["gated"], serde_json::json!(true), "body: {body}");
+    let revision_card_id = body["revision_card_id"]
+        .as_str()
+        .expect("gated response must include revision_card_id");
+
+    let after = db.get_page(page_id).await.unwrap().unwrap();
+    assert_eq!(
+        after.content, before.content,
+        "PageWrite refresh must not overwrite human-owned page prose"
+    );
+    assert_eq!(
+        after.version, before.version,
+        "gated PageWrite refresh must not bump the protected page version"
+    );
+
+    let revisions = db.list_pending_revisions(10).await.unwrap();
+    let card = revisions
+        .iter()
+        .find(|r| r.revision_source_id == revision_card_id)
+        .expect("revision card must be visible in pending revisions");
+    assert_eq!(card.target_source_id, page_id);
+    assert_eq!(card.revision_content, proposed_content);
 }
 
 /// Non-existent source_id returns 200 with an empty entries array.

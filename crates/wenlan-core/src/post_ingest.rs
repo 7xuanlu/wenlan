@@ -1446,7 +1446,12 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec![mem_v1.to_string()],
-            creation_kind: Some("authored".to_string()),
+            // Machine-owned kind on purpose: this test exercises the in-place
+            // grow + citation-persistence path. An `authored` (human-owned) page
+            // would be intercepted by the PageWrite ownership gate (spec §5.2)
+            // into a revision card and never grown in place. `research` is
+            // floor-exempt (single source ok) and not human-owned.
+            creation_kind: Some("research".to_string()),
             workspace: None,
         };
         let page_id = crate::post_write::create_page(&db, page_req, "test", None)

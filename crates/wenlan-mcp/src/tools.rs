@@ -1158,12 +1158,26 @@ impl WenlanMcpServer {
         // Typed end-to-end: a wire-shape drift on the daemon side fails at
         // deserialize instead of silently returning the no-op "Refreshed"
         // line. Same discipline as PR #77's search_pages / list_pages_recent.
-        let _: wenlan_types::responses::SuccessResponse =
+        let resp: wenlan_types::responses::PageWriteResponse =
             try_call!(self.client.put(&path, &req), "update_page");
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Refreshed page {}",
-            params.page_id
-        ))]))
+        // Ownership gate (spec §5.2): a human-owned page is never overwritten in
+        // place; the daemon stages a revision card. Surface that so the caller
+        // does not believe the prose was rewritten.
+        let msg = if resp.gated {
+            match resp.revision_card_id {
+                Some(card) => format!(
+                    "Page {} is human-owned; staged revision card {} for review — prose left unchanged.",
+                    params.page_id, card
+                ),
+                None => format!(
+                    "Page {} is human-owned; staged a revision card for review — prose left unchanged.",
+                    params.page_id
+                ),
+            }
+        } else {
+            format!("Refreshed page {}", params.page_id)
+        };
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     pub async fn delete_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {

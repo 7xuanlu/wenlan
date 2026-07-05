@@ -41,7 +41,7 @@ pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
     ListPageRevisionsResponse, ListRefinementsResponse, MemoryDetail, MemoryRevisionEntry,
     OnDeviceModelEntry, OnDeviceModelResponse, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
-    PendingRevision, PendingRevisionItem, ProposalAction, RefinementPayload,
+    PageWriteResponse, PendingRevision, PendingRevisionItem, ProposalAction, RefinementPayload,
     RefinementProposalSummary, RejectRefinementResponse, RevisionAcceptResponse,
     RevisionDismissResponse,
 };

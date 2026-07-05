@@ -8,9 +8,12 @@
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use std::{collections::HashSet, path::Path};
-use wenlan_types::requests::{
-    AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
-    UpdatePageRequest,
+use wenlan_types::{
+    requests::{
+        AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
+        UpdatePageRequest,
+    },
+    RawDocument,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -20,6 +23,14 @@ pub struct WriteResult {
     pub attached_to: Option<String>,
     pub warnings: Vec<String>,
     pub wrote: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_card_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gated: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 const VALID_PAGE_CREATION_KINDS: [&str; 4] = ["distilled", "authored", "research", "imported"];
@@ -32,6 +43,14 @@ pub enum PageWrite<'a> {
         knowledge_path: Option<&'a Path>,
         page_min_cluster_size: usize,
         page_match_threshold: f64,
+    },
+    Update {
+        page_id: &'a str,
+        req: UpdatePageRequest,
+        edited_by: &'a str,
+        require_stale: bool,
+        knowledge_path: Option<&'a Path>,
+        citations: Option<(String, String)>,
     },
 }
 
@@ -51,6 +70,25 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 knowledge_path,
                 page_min_cluster_size,
                 page_match_threshold,
+            )
+            .await
+        }
+        PageWrite::Update {
+            page_id,
+            req,
+            edited_by,
+            require_stale,
+            knowledge_path,
+            citations,
+        } => {
+            update_page_impl(
+                db,
+                page_id,
+                req,
+                edited_by,
+                require_stale,
+                knowledge_path,
+                citations,
             )
             .await
         }
@@ -122,6 +160,8 @@ pub async fn create_entity(
             attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -134,6 +174,8 @@ pub async fn create_entity(
             attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -151,6 +193,8 @@ pub async fn create_entity(
                 attached_to: None,
                 warnings: vec![],
                 wrote: false,
+                revision_card_id: None,
+                gated: false,
             });
         }
     }
@@ -167,6 +211,8 @@ pub async fn create_entity(
                 attached_to: None,
                 warnings: vec![],
                 wrote: false,
+                revision_card_id: None,
+                gated: false,
             });
         }
     }
@@ -255,6 +301,8 @@ pub async fn create_entity(
         attached_to: None,
         warnings,
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -298,6 +346,8 @@ pub async fn create_relation(
                 attached_to: None,
                 warnings: vec![],
                 wrote: false,
+                revision_card_id: None,
+                gated: false,
             });
         }
     }
@@ -398,6 +448,8 @@ pub async fn create_relation(
         attached_to: None,
         warnings,
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -458,6 +510,8 @@ pub async fn add_observation(
         attached_to: None,
         warnings: vec![],
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -616,6 +670,8 @@ async fn create_page_impl(
                     attached_to: Some(matched_id),
                     warnings: vec![],
                     wrote: true,
+                    revision_card_id: None,
+                    gated: false,
                 });
             }
         }
@@ -725,6 +781,8 @@ async fn create_page_impl(
         attached_to: None,
         warnings,
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -746,6 +804,94 @@ fn is_llm_rewrite(edited_by: &str) -> bool {
         edited_by,
         "distill" | "re_distill" | "page_growth" | "refinery_merge"
     )
+}
+
+pub fn page_is_human_owned(page: &crate::pages::Page) -> bool {
+    page.user_edited || page.creation_kind == "authored"
+}
+
+fn is_machine_page_write(edited_by: &str) -> bool {
+    !matches!(edited_by, "manual_edit" | "fs_edit")
+}
+
+/// Stage a machine write to a human-owned page as a pending revision card
+/// instead of overwriting the page's prose. Uses the same grammar as L3
+/// doc-grounded revisions (`crate::reconcile::write_revision`): a
+/// `source='memory'`, `pending_revision=1`, `supersedes=<page id>` row that
+/// `list_pending_revisions` surfaces on the `/curate revisions` queue. The page
+/// itself is never mutated here — the human accepts or dismisses the card.
+/// Returns a gated `WriteResult` carrying the new card id.
+pub async fn stage_page_revision_card(
+    db: &MemoryDB,
+    page: &crate::pages::Page,
+    content: &str,
+    source_memory_ids: &[String],
+    edited_by: &str,
+) -> Result<WriteResult, WenlanError> {
+    let revision_card_id = format!(
+        "mem_{}",
+        uuid::Uuid::new_v4()
+            .to_string()
+            .replace('-', "")
+            .chars()
+            .take(12)
+            .collect::<String>()
+    );
+    let structured = serde_json::json!({
+        "revision_kind": "page_write",
+        "target_kind": "page",
+        "revises_page": page.id,
+        "page_version": page.version,
+        "edited_by": edited_by,
+        "source_memory_ids": source_memory_ids,
+    })
+    .to_string();
+    let title: String = format!("Revision: {}", page.title)
+        .chars()
+        .take(80)
+        .collect();
+    let row = RawDocument {
+        source: "memory".to_string(),
+        source_id: revision_card_id.clone(),
+        title,
+        content: content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        space: page.space.clone().or_else(|| page.workspace.clone()),
+        source_agent: Some("page_write".to_string()),
+        confidence: Some(0.9),
+        confirmed: Some(false),
+        stability: Some("new".to_string()),
+        supersedes: Some(page.id.clone()),
+        pending_revision: true,
+        structured_fields: Some(structured.clone()),
+        source_text: Some(content.to_string()),
+        ..Default::default()
+    };
+    db.upsert_documents(vec![row]).await?;
+    if let Err(e) = db
+        .log_agent_activity(
+            edited_by,
+            "page_revision_card",
+            &[page.id.clone(), revision_card_id.clone()],
+            None,
+            &structured,
+        )
+        .await
+    {
+        log::warn!("[page_revision_card] activity log failed: {e}");
+    }
+
+    Ok(WriteResult {
+        id: page.id.clone(),
+        attached_to: None,
+        warnings: vec![
+            "human-owned page; staged revision card instead of overwriting content".to_string(),
+        ],
+        wrote: false,
+        revision_card_id: Some(revision_card_id),
+        gated: true,
+    })
 }
 
 /// Parse WENLAN_MERGE_SHRINK_GUARD env var as f64 threshold.
@@ -788,6 +934,30 @@ pub async fn update_page(
     knowledge_path: Option<&Path>,
     citations: Option<(String, String)>,
 ) -> Result<WriteResult, WenlanError> {
+    page_write(
+        db,
+        PageWrite::Update {
+            page_id,
+            req,
+            edited_by,
+            require_stale,
+            knowledge_path,
+            citations,
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn update_page_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    req: UpdatePageRequest,
+    edited_by: &str,
+    require_stale: bool,
+    knowledge_path: Option<&Path>,
+    citations: Option<(String, String)>,
+) -> Result<WriteResult, WenlanError> {
     // ── Pre-write validation ────────────────────────────────────────────────
     if req.content.trim().is_empty() {
         return Err(WenlanError::Validation(
@@ -822,6 +992,16 @@ pub async fn update_page(
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
+    if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
+        return stage_page_revision_card(
+            db,
+            &current,
+            &req.content,
+            &req.source_memory_ids,
+            edited_by,
+        )
+        .await;
+    }
     let current_version = current.version;
     let new_version = current_version + 1;
 
@@ -877,6 +1057,8 @@ pub async fn update_page(
             attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -928,6 +1110,8 @@ pub async fn update_page(
             attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -952,6 +1136,8 @@ pub async fn update_page(
         attached_to: None,
         warnings,
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -2116,7 +2302,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec![source_id.to_string()],
-            creation_kind: Some("authored".to_string()),
+            creation_kind: Some("research".to_string()),
             workspace: None,
         };
         create_page(db, req, "test", None).await.unwrap().id
@@ -2447,6 +2633,93 @@ mod tests {
             page_after.version, version_before,
             "version must not bump on no-op"
         );
+    }
+
+    #[tokio::test]
+    async fn update_page_user_edited_machine_write_creates_revision_card_without_overwrite() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-pagewrite-owned";
+        let source_content = "Rust ownership keeps memory safety rules explicit in systems code";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_pagewrite_owned";
+        db.insert_page(
+            page_id,
+            "Rust Ownership",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let human_content =
+            "Rust ownership keeps memory safety rules explicit in systems code, with human notes";
+        update_page(
+            &db,
+            page_id,
+            UpdatePageRequest {
+                content: human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            before.user_edited,
+            "precondition: fs_edit marks human ownership"
+        );
+
+        let machine_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+        let result = update_page(
+            &db,
+            page_id,
+            UpdatePageRequest {
+                content: machine_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, before.content,
+            "machine PageWrite must not overwrite human-owned page prose"
+        );
+        assert_eq!(
+            after.version, before.version,
+            "gated PageWrite must not bump the protected page version"
+        );
+
+        let result_json = serde_json::to_value(&result).unwrap();
+        assert_eq!(result_json.get("gated"), Some(&serde_json::json!(true)));
+        let revision_card_id = result_json
+            .get("revision_card_id")
+            .and_then(|v| v.as_str())
+            .expect("gated response must include revision_card_id");
+
+        let revisions = db.list_pending_revisions(10).await.unwrap();
+        let card = revisions
+            .iter()
+            .find(|r| r.revision_source_id == revision_card_id)
+            .expect("revision card must be visible in pending revisions");
+        assert_eq!(card.target_source_id, page_id);
+        assert_eq!(card.revision_content, machine_content);
     }
 
     // ── accept_pending_revision ──────────────────────────────────────────────

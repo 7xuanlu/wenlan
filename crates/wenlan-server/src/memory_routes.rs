@@ -3297,7 +3297,7 @@ pub async fn handle_refresh_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
     Json(req): Json<wenlan_types::requests::RefreshPageRequest>,
-) -> Result<Json<wenlan_types::responses::SuccessResponse>, ServerError> {
+) -> Result<Json<wenlan_types::responses::PageWriteResponse>, ServerError> {
     // Validate the body before touching the filesystem. Empty content would
     // produce an empty md; empty source list would orphan the page from its
     // provenance trail — both contradict the route's documented contract.
@@ -3324,6 +3324,27 @@ pub async fn handle_refresh_page(
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .ok_or_else(|| ServerError::ValidationError(format!("page {} not found", id)))?;
+
+    // Ownership gate (spec §5.1/§5.2): agent refresh is a machine write, so a
+    // human-owned page (user_edited=1 OR creation_kind='authored') must never be
+    // overwritten in place. Stage a pending revision card instead and return the
+    // gating flag; the page prose stays byte-unchanged until the human accepts.
+    if wenlan_core::post_write::page_is_human_owned(&existing) {
+        let result = wenlan_core::post_write::stage_page_revision_card(
+            &db,
+            &existing,
+            &req.content,
+            &req.source_memory_ids,
+            "agent_refresh",
+        )
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        return Ok(Json(wenlan_types::responses::PageWriteResponse {
+            ok: true,
+            revision_card_id: result.revision_card_id,
+            gated: true,
+        }));
+    }
 
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
     let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone());
@@ -3422,7 +3443,11 @@ pub async fn handle_refresh_page(
         return Err(ServerError::IngestFailed(e.to_string()));
     }
 
-    Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
+    Ok(Json(wenlan_types::responses::PageWriteResponse {
+        ok: true,
+        revision_card_id: None,
+        gated: false,
+    }))
 }
 
 // ===== Recent activity feed =====

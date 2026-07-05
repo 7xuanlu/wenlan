@@ -78,6 +78,8 @@ pub async fn resolve_proposal(
         attached_to: None,
         warnings: Vec::new(),
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 

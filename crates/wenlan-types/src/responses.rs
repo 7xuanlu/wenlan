@@ -457,6 +457,19 @@ pub struct SuccessResponse {
     pub ok: bool,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageWriteResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_card_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gated: bool,
+}
+
 // ===== Memory detail =====
 
 #[derive(Debug, Serialize, Deserialize)]
