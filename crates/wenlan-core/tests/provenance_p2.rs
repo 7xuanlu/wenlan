@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! P2 typed-evidence integration tests.
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use wenlan_core::db::MemoryDB;
 use wenlan_core::sources::RawDocument;
 use wenlan_core::{EventEmitter, NoopEmitter};
+use wenlan_types::requests::CreateConceptRequest;
 
 async fn make_db() -> (Arc<MemoryDB>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -66,35 +67,70 @@ async fn seed_folder_doc(db: &MemoryDB, source_id: &str, content: &str) {
         .expect("seed folder doc");
 }
 
-/// Spec §5.1 (True source kinds): a compiled page whose source set mixes a plain
-/// agent capture and a folder document must record the typed evidence kind per
-/// source — `'memory'` for the capture, `'external_file'` for the folder doc —
-/// instead of the pre-fix hardcoded `'memory'` at every emitter.
+/// Spec §5.1 (True source kinds): PageWrite must create typed evidence for
+/// every source kind it carries into the DB write. This goes through the
+/// public PageWrite create path, not the raw `insert_page` helper; hardcoding
+/// every emitted row to `'memory'` leaves the folder doc and URL rows wrong.
 #[tokio::test]
-async fn compiled_page_records_external_file_kind_for_folder_doc_source() {
+async fn pagewrite_create_records_resolved_source_kinds_for_file_and_url_sources() {
     let (db, _d) = make_db().await;
-    seed_memory(&db, "mem_a", "alpha content about rust workspaces").await;
+    seed_memory(&db, "mem_a", "Rust workspaces share Cargo configuration.").await;
     seed_folder_doc(
         &db,
-        "doc1::notes/rust.md",
-        "doc content about rust workspaces",
+        "folder-notes::rust/workspace.md",
+        "Folder documents describe Rust workspace layouts.",
     )
     .await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_1",
-        "Rust",
-        Some("rust topic"),
-        "body",
-        None,
-        None,
-        &["mem_a", "doc1::notes/rust.md"],
-        &now,
+    seed_memory(
+        &db,
+        "https://example.com/rust-workspaces",
+        "Web docs explain Rust workspace member crates.",
     )
-    .await
-    .unwrap();
+    .await;
+    let req = CreateConceptRequest {
+        title: "Rust Workspaces".to_string(),
+        content: "Rust workspaces share Cargo configuration. Folder documents describe Rust workspace layouts. Web docs explain Rust workspace member crates.".to_string(),
+        summary: Some("Rust workspace sources".to_string()),
+        entity_id: None,
+        space: Some("technology".to_string()),
+        source_memory_ids: vec![
+            "mem_a".to_string(),
+            "folder-notes::rust/workspace.md".to_string(),
+            "https://example.com/rust-workspaces".to_string(),
+        ],
+        creation_kind: Some("distilled".to_string()),
+        workspace: None,
+    };
 
-    let ev = db.get_page_evidence("page_1").await.unwrap();
+    let result = wenlan_core::post_write::create_page(&db, req, "test", None)
+        .await
+        .unwrap();
+
+    let ev = db.get_page_evidence(&result.id).await.unwrap();
+    let actual: BTreeMap<String, String> = ev
+        .iter()
+        .filter_map(|e| Some((e.locator.clone()?, e.source_kind.clone())))
+        .collect();
+    let expected = BTreeMap::from([
+        ("mem_a".to_string(), "memory".to_string()),
+        (
+            "folder-notes::rust/workspace.md".to_string(),
+            "external_file".to_string(),
+        ),
+        (
+            "https://example.com/rust-workspaces".to_string(),
+            "external_url".to_string(),
+        ),
+    ]);
+    assert_eq!(
+        actual, expected,
+        "PageWrite create must resolve page_evidence.source_kind per source"
+    );
+    assert_eq!(
+        ev.len(),
+        expected.len(),
+        "PageWrite create should emit one evidence row per source"
+    );
     let kind_of = |loc: &str| -> Option<String> {
         ev.iter()
             .find(|e| e.locator.as_deref() == Some(loc))
@@ -106,9 +142,14 @@ async fn compiled_page_records_external_file_kind_for_folder_doc_source() {
         "a plain agent capture must record source_kind='memory'"
     );
     assert_eq!(
-        kind_of("doc1::notes/rust.md").as_deref(),
+        kind_of("folder-notes::rust/workspace.md").as_deref(),
         Some("external_file"),
-        "a compiled page whose source is a folder doc must record source_kind='external_file', not 'memory'"
+        "a PageWrite-created page whose source is a folder doc must record source_kind='external_file', not 'memory'"
+    );
+    assert_eq!(
+        kind_of("https://example.com/rust-workspaces").as_deref(),
+        Some("external_url"),
+        "a PageWrite-created page whose source is a URL must record source_kind='external_url', not 'memory'"
     );
 }
 
@@ -356,8 +397,6 @@ async fn distilled_page_defaults_review_status_confirmed() {
     let p = db.get_page("page_1").await.unwrap().unwrap();
     assert_eq!(p.review_status, "confirmed");
 }
-
-use wenlan_types::requests::CreateConceptRequest;
 
 #[tokio::test]
 async fn distilled_zero_source_page_rejected() {
