@@ -83,7 +83,7 @@ fn on_device_compile_preferred() -> bool {
 ///   the safe default for any code path that doesn't know better.
 /// - `BurstEnd`: only `recaps` + `refinement_queue`.
 /// - `Idle`: only synthesis phases (`community_detection`, `emergence`,
-///   `re-distill`, `decision_logs`).
+///   `re-distill`, `overview`, `decision_logs`).
 /// - `Daily`: only maintenance phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerKind {
@@ -108,6 +108,7 @@ impl TriggerKind {
                     | Phase::Emergence
                     | Phase::SummaryRollup
                     | Phase::ReDistill
+                    | Phase::Overview
                     | Phase::DecisionLogs
             ),
             Self::Daily => matches!(
@@ -117,6 +118,7 @@ impl TriggerKind {
                     | Phase::Reweave
                     | Phase::Reembed
                     | Phase::EntityExtraction
+                    | Phase::Overview
                     | Phase::PruneRejections
                     | Phase::Evict
                     | Phase::KgRethink
@@ -635,11 +637,34 @@ pub async fn run_periodic_steep_with_api(
             let changed = redistill_changed_pages(db_ref, compile_llm, prompts, kp_ref).await?;
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
             let stale = re_distill_stale_pages(db_ref, compile_llm, prompts, kp_ref).await?;
-            // Spec §5.3: keep the reserved Overview page in sync with the
-            // wiki's current top pages every maintenance tick.
-            let overview =
-                maybe_refresh_overview_page(db_ref, compile_llm, prompts, kp_ref).await?;
-            let count = changed + stale + overview;
+            let count = changed + stale;
+            let (nudge, headline) = classify_redistill(count);
+            Ok(PhaseOutput {
+                items_processed: count,
+                nudge,
+                headline,
+            })
+        })
+        .await;
+        phases.push(phase);
+    }
+
+    if trigger.runs_phase(Phase::Overview)
+        && {
+            let elapsed = steep_start.elapsed().as_secs();
+            if elapsed >= deadline {
+                if !deadline_hit {
+                    log::warn!("[refinery] deadline exceeded ({}s >= {}s) — skipping remaining deadline-gated phases", elapsed, deadline);
+                    deadline_hit = true;
+                }
+                false
+            } else {
+                true
+            }
+        }
+    {
+        let phase = run_phase(Phase::Overview, || async {
+            let count = maybe_refresh_overview_page(db_ref, compile_llm, prompts, kp_ref).await?;
             let (nudge, headline) = classify_redistill(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -1439,6 +1464,7 @@ mod tests {
         assert!(t.runs_phase(Phase::Detect));
         assert!(t.runs_phase(Phase::Emergence));
         assert!(t.runs_phase(Phase::ReDistill));
+        assert!(t.runs_phase(Phase::Overview));
         assert!(t.runs_phase(Phase::DecisionLogs));
         // Should NOT run burst/maintenance/backfill phases
         assert!(!t.runs_phase(Phase::Recaps));
@@ -1460,6 +1486,7 @@ mod tests {
         assert!(t.runs_phase(Phase::Reweave));
         assert!(t.runs_phase(Phase::Reembed));
         assert!(t.runs_phase(Phase::EntityExtraction));
+        assert!(t.runs_phase(Phase::Overview));
         assert!(t.runs_phase(Phase::PruneRejections));
         assert!(t.runs_phase(Phase::Evict));
         // Should NOT run synthesis or burst phases
@@ -1769,6 +1796,7 @@ mod tests {
             "detect",
             "emergence",
             "re-distill",
+            "overview",
             "decision_logs",
         ];
         for &exp in expected {
@@ -1847,6 +1875,7 @@ mod tests {
             "reweave",
             "reembed",
             "entity_extraction",
+            "overview",
             "prune_rejections",
             "kg_rethink",
         ];
@@ -1922,6 +1951,7 @@ mod tests {
             "detect",
             "emergence",
             "re-distill",
+            "overview",
             "refinement_queue",
             "decision_logs",
             "prune_rejections",
@@ -2532,10 +2562,10 @@ mod tests {
     /// must actually fire in production, not just in `synthesis::overview`'s
     /// own unit tests. Drives the real maintenance entrypoint
     /// (`run_periodic_steep_with_api`, the function the daemon scheduler
-    /// calls) with a trigger that runs `Phase::ReDistill` and an available
+    /// calls) with a trigger that runs `Phase::Overview` and an available
     /// LLM, and asserts the reserved "Overview" page exists afterward.
     #[tokio::test]
-    async fn test_re_distill_phase_refreshes_reserved_overview_page() {
+    async fn test_overview_phase_refreshes_reserved_overview_page() {
         let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let data_dir = tempfile::tempdir().unwrap();
@@ -2597,23 +2627,99 @@ mod tests {
             .await
             .unwrap();
 
-        let redistill = result
+        let overview = result
             .phases
             .iter()
-            .find(|p| p.name == "re-distill")
-            .expect("Idle trigger must run the re-distill phase");
+            .find(|p| p.name == "overview")
+            .expect("Idle trigger must run the overview phase");
         assert!(
-            redistill.error.is_none(),
-            "re-distill phase must not error: {:?}",
-            redistill.error
+            overview.error.is_none(),
+            "overview phase must not error: {:?}",
+            overview.error
         );
 
         let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
         assert!(
             overview_id.is_some(),
-            "the maintenance re-distill phase must create/refresh the reserved Overview page \
+            "the overview phase must create/refresh the reserved Overview page \
              (spec §5.3) — this is the 'wiki is alive' signal and must fire from the real \
              steep cycle, not just from synthesis::overview's own unit tests"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daily_maintenance_refreshes_reserved_overview_page() {
+        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
+        let knowledge_path = knowledge_dir.path().to_path_buf();
+
+        let mem_content = "Rust ownership lets the compiler enforce aliasing and mutation rules";
+        db.upsert_documents(vec![make_memory(
+            "overview_daily_rust",
+            mem_content,
+            "fact",
+            "engineering",
+        )])
+        .await
+        .unwrap();
+        let req = wenlan_types::requests::CreateConceptRequest {
+            title: "Rust Ownership".to_string(),
+            content: mem_content.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec!["overview_daily_rust".to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        crate::post_write::create_page(&db, req, "test", None)
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(crate::llm_provider::MockProvider::new(&format!(
+            "{mem_content}.[1]"
+        )));
+
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    knowledge_path: Some(knowledge_path),
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    Some(&llm),
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    TriggerKind::Daily,
+                )
+                .await
+            })
+            .await
+            .unwrap();
+
+        let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            phase_names.contains(&"overview"),
+            "Daily maintenance must run the reserved Overview refresh phase, got {:?}",
+            phase_names
+        );
+
+        let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
+        assert!(
+            overview_id.is_some(),
+            "the Daily maintenance pass must create/refresh the reserved Overview page \
+             (spec §5.3) through the real steep cycle"
         );
     }
 
