@@ -1265,6 +1265,73 @@ mod tests {
             "mock"
         }
     }
+
+    /// Records the `(system_prompt, label)` of every `generate` call, so a
+    /// test driving the FULL `run_periodic_steep_with_api` Emergence phase
+    /// (not the `distill_pages_scoped_gated` primitive directly) can assert
+    /// whether the coherence-gate system prompt (`prompts.refine_clusters`)
+    /// was ever sent — proving the backend-based routing decision at the
+    /// Emergence call site, not just the gate parameter it forwards.
+    /// Responds compile-plausibly enough to synthesize a real page: echoes
+    /// the `distill_body`-labeled user prompt back with a trailing citation
+    /// marker (passes the hallucination/faithfulness check trivially) and
+    /// returns a short fixed title for any other (title-gen) call.
+    struct EmergenceRoutingProvider {
+        calls: std::sync::Mutex<Vec<(Option<String>, Option<String>)>>,
+        backend: crate::llm_provider::LlmBackend,
+    }
+
+    impl EmergenceRoutingProvider {
+        fn new(backend: crate::llm_provider::LlmBackend) -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                backend,
+            }
+        }
+
+        fn saw_system_prompt(&self, needle: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(sys, _)| sys.as_deref() == Some(needle))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for EmergenceRoutingProvider {
+        async fn generate(
+            &self,
+            request: crate::llm_provider::LlmRequest,
+        ) -> Result<String, crate::llm_provider::LlmError> {
+            let label = request.label.clone();
+            self.calls
+                .lock()
+                .unwrap()
+                .push((request.system_prompt.clone(), label.clone()));
+            if label.as_deref() == Some("distill_body") {
+                Ok(format!("{} [1]", request.user_prompt))
+            } else {
+                Ok("Test Topic".to_string())
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "emergence-routing"
+        }
+
+        fn backend(&self) -> crate::llm_provider::LlmBackend {
+            self.backend
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
     use crate::sources::{RawDocument, StabilityTier};
     use crate::synthesis::distill::apply_merge_by_tier;
 
@@ -2161,6 +2228,151 @@ mod tests {
             depth,
             result.pending.len(),
             "/api/status must be able to read back the persisted compile queue depth"
+        );
+    }
+
+    /// Drives the ACTUAL Emergence phase routing decision inside
+    /// `run_periodic_steep_with_api` (not `distill_pages_scoped_gated`
+    /// directly, which only proves the gate PARAMETER works, not the
+    /// backend-based decision that picks it). An OnDevice-backend provider
+    /// must (a) never see the `refine_clusters` coherence-gate system prompt
+    /// and (b) still synthesize pages. Inverting the `Api`/`OnDevice` match at
+    /// the Emergence call site would make assertion (a) fail — the two
+    /// well-separated topics below share the "unlinked" refine-clusters
+    /// grouping key, so the gate WOULD fire if wrongly left on (mirrors the
+    /// fixture in `synthesis::distill::tests::on_device_only_compile_skips_coherence_gate`).
+    #[tokio::test]
+    async fn emergence_tick_ondevice_backend_skips_coherence_gate_and_creates_pages() {
+        let (db, _dir) = test_db().await;
+
+        let db_topic: Vec<(&str, &str)> = vec![
+            ("topic_db", "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store."),
+            ("topic_db", "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code."),
+            ("topic_db", "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query."),
+            ("topic_bread", "A sourdough levain needs to be fed with equal parts flour and water twice a day to stay active enough to leaven a loaf, and it should roughly double in volume within four to six hours after each feeding."),
+            ("topic_bread", "Increasing the hydration of a bread dough to around eighty percent produces a much more open, irregular crumb structure once it is baked, though it also makes the dough considerably harder to shape by hand."),
+            ("topic_bread", "Kneading a wheat dough develops long gluten strands that trap the carbon dioxide bubbles produced by yeast fermentation, which is what allows the loaf to rise instead of collapsing in the oven."),
+        ];
+        for (i, (space, content)) in db_topic.iter().enumerate() {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("emergence_gate_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some(space.to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let provider = Arc::new(EmergenceRoutingProvider::new(LlmBackend::OnDevice));
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let result = run_periodic_steep_with_api(
+            &db,
+            None,
+            None,
+            Some(&llm),
+            &prompts,
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::ConfidenceConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            TriggerKind::Idle,
+        )
+        .await
+        .unwrap();
+
+        let emergence = result
+            .phases
+            .iter()
+            .find(|p| p.name == "emergence")
+            .expect("Idle trigger must run the emergence phase");
+        assert!(
+            emergence.error.is_none(),
+            "emergence phase must not error: {:?}",
+            emergence.error
+        );
+        assert!(
+            !provider.saw_system_prompt(&prompts.refine_clusters),
+            "an OnDevice-backend compile routed through run_periodic_steep_with_api must skip the LLM coherence gate"
+        );
+        let pages_after = db.count_active_pages().await.unwrap();
+        assert!(
+            pages_after > 0,
+            "on-device compile must still synthesize pages, got {pages_after} active pages"
+        );
+    }
+
+    /// Companion to the OnDevice case above: drives the SAME Emergence call
+    /// site with no available lane (configured on-device engine that is
+    /// unhealthy) and asserts the queue-depth persist call at the end of the
+    /// Emergence phase actually ran. Dropping `persist_compile_queue_depth`
+    /// from the Emergence phase would leave `compile_queue_depth` at its
+    /// default-0 read and make this test fail.
+    #[tokio::test]
+    async fn emergence_tick_with_unhealthy_engine_persists_pending_queue_depth() {
+        let (db, _dir) = test_db().await;
+
+        // A well-formed, eligible cluster (3+ memories, shared space).
+        for (i, content) in [
+            "libSQL stores vectors using F32_BLOB columns",
+            "libSQL uses DiskANN for vector indexing",
+            "libSQL supports FTS5 full-text search via triggers",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("emergence_nolane_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        assert_eq!(
+            compile_queue_depth(&db).await.unwrap(),
+            0,
+            "queue depth should read back 0 before any compile tick has run"
+        );
+
+        let unhealthy: Arc<dyn LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::unavailable());
+        let prompts = PromptRegistry::default();
+
+        let result = run_periodic_steep_with_api(
+            &db,
+            None,
+            None,
+            Some(&unhealthy),
+            &prompts,
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::ConfidenceConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            TriggerKind::Idle,
+        )
+        .await
+        .unwrap();
+
+        let emergence = result
+            .phases
+            .iter()
+            .find(|p| p.name == "emergence")
+            .expect("Idle trigger must run the emergence phase");
+        assert!(
+            emergence.error.is_none(),
+            "emergence phase must not error: {:?}",
+            emergence.error
+        );
+
+        let depth = compile_queue_depth(&db).await.unwrap();
+        assert!(
+            depth > 0,
+            "a full Emergence tick with no available lane must persist a non-zero compile queue depth, got {depth}"
         );
     }
 
