@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod duplicates;
+mod page_merge_order;
+
+#[cfg(test)]
+mod survivor_tests;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -105,10 +109,16 @@ async fn emit_page_merge_card(
     if db.get_refinement_proposal(&id).await?.is_some() {
         return Ok(false);
     }
+    let Some(order) = page_merge_order::order_survivor(db, &pair.left_id, &pair.right_id).await?
+    else {
+        return Ok(false);
+    };
+    let survivor_id = order.survivor_id;
+    let absorbed_id = order.absorbed_id;
 
     let payload = serde_json::json!({
-        "left_page_id": pair.left_id,
-        "right_page_id": pair.right_id,
+        "left_page_id": &survivor_id,
+        "right_page_id": &absorbed_id,
         "similarity": pair.similarity,
         "source_overlap": pair.source_overlap,
         "source_overlap_ratio": pair.source_overlap_ratio,
@@ -121,7 +131,7 @@ async fn emit_page_merge_card(
     db.insert_refinement_proposal(
         &id,
         "page_merge",
-        &[pair.left_id.clone(), pair.right_id.clone()],
+        &[survivor_id, absorbed_id],
         Some(&payload),
         confidence,
     )
