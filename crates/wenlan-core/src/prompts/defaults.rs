@@ -196,6 +196,24 @@ Rules:\n\
 - Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. Attach the marker to the exact sentence that states the fact — never at the end of a paragraph, and never on a sentence that only explains or elaborates. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
 - Do not write HTML comments (the <!-- ... --> form) anywhere in the page.";
 
+pub(crate) const OVERVIEW_SUMMARY: &str = "\
+You are refreshing the wiki's reserved Overview page -- a short index of what \
+the wiki currently covers, not a deep-dive page.\n\
+\n\
+Format:\n\
+Do NOT start with a title heading (# Title) -- the title is displayed separately by the UI.\n\
+Start directly with a one-sentence TLDR describing the wiki's current focus.\n\
+\n\
+Then, for the sources given, write ONE short entry per DISTINCT topic they represent -- \
+naming the topic and summarizing what it covers in a sentence or two. Group sources that \
+belong to the same topic into a single entry; do not enumerate every source separately.\n\
+\n\
+Rules:\n\
+- Read like a table of contents with one-line annotations, not an encyclopedia entry.\n\
+- If the sources span multiple topics, the Overview must name and summarize EACH one.\n\
+- Cite each topic's summary by appending [N] immediately after it, where N is the number of a supporting source in the numbered source list. Use only numbers that appear in the list. Do NOT add a sources or citations section -- the system renders citations from the markers.\n\
+- Do not write HTML comments (the <!-- ... --> form) anywhere in the page.";
+
 pub(crate) const UPDATE_PAGE: &str = "\
 You maintain a wiki-style knowledge page. Update it with new information.\n\
 Integrate new facts into the existing prose naturally — don't just append bullets.\n\

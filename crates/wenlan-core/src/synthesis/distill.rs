@@ -1456,6 +1456,34 @@ pub async fn refresh_page(
     reason: RefreshReason,
     knowledge_path: Option<&std::path::Path>,
 ) -> Result<RefreshOutcome, WenlanError> {
+    refresh_page_with_prompt(
+        db,
+        llm,
+        &prompts.distill_page,
+        page_id,
+        reason,
+        knowledge_path,
+    )
+    .await
+}
+
+/// Same op as [`refresh_page`], parameterized on the system prompt. Lets a
+/// caller synthesize with a different prompt than the generic `distill_page`
+/// template while still going through the ONE re-distill path (citation
+/// verification, fail-closed faithfulness gate, atomic `update_page`,
+/// staleness CAS) rather than a bespoke write.
+///
+/// Used by the reserved Overview page (spec §5.3), which needs its own
+/// summary-style prompt (`overview_summary`) instead of the deep-dive
+/// `distill_page` prompt every other page refresh uses.
+pub(crate) async fn refresh_page_with_prompt(
+    db: &MemoryDB,
+    llm: &Arc<dyn LlmProvider>,
+    system_prompt: &str,
+    page_id: &str,
+    reason: RefreshReason,
+    knowledge_path: Option<&std::path::Path>,
+) -> Result<RefreshOutcome, WenlanError> {
     let page = db
         .get_page(page_id)
         .await?
@@ -1508,7 +1536,7 @@ pub async fn refresh_page(
 
     let raw = llm
         .generate(LlmRequest {
-            system_prompt: Some(prompts.distill_page.clone()),
+            system_prompt: Some(system_prompt.to_string()),
             user_prompt,
             max_tokens: llm.recommended_max_output(),
             temperature: 0.1,

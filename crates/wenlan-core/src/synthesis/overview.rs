@@ -2,10 +2,12 @@
 //! Spec §5.3: the reserved machine-owned Overview page (nashsu `overview.md`
 //! parity). One well-known title, never duplicated; the maintenance pass
 //! syncs its evidence to the currently most-active pages and refreshes it in
-//! place through the ONE re-distill op (`refresh_page`) -- no new write
-//! primitive, no new table, no new prompt: creation goes through
-//! `post_write::create_page` (floor-exempt `research` kind, same guard as
-//! any machine-owned page) and the refresh IS `refresh_page`.
+//! place through the ONE re-distill op -- no new write primitive, no new
+//! table: creation goes through `post_write::create_page` (floor-exempt
+//! `research` kind, same guard as any machine-owned page) and the refresh IS
+//! `refresh_page` (via `refresh_page_with_prompt`, parameterized on the
+//! dedicated `overview_summary` prompt -- the "+ a summary prompt" the spec
+//! calls for -- instead of the generic deep-dive `distill_page` template).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,7 +16,7 @@ use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::LlmProvider;
 use crate::prompts::PromptRegistry;
-use crate::synthesis::distill::{refresh_page, RefreshOutcome, RefreshReason};
+use crate::synthesis::distill::{refresh_page_with_prompt, RefreshOutcome, RefreshReason};
 
 /// Reserved, well-known title for the single machine-owned overview page.
 /// Looked up case-insensitively via `find_active_page_id_by_title` so the
@@ -113,10 +115,15 @@ pub async fn refresh_overview_page(
         .await?;
 
     db.set_page_stale(&page_id, "overview_sync").await?;
-    let outcome = refresh_page(
+    // The Overview needs a "table of contents" style summary, not the
+    // deep-dive `distill_page` prompt every other page refresh uses -- so it
+    // goes through `refresh_page_with_prompt` (the same re-distill op,
+    // parameterized on the system prompt) with the dedicated
+    // `overview_summary` template.
+    let outcome = refresh_page_with_prompt(
         db,
         llm,
-        prompts,
+        &prompts.overview_summary,
         &page_id,
         RefreshReason::SourceChanged,
         knowledge_path,
@@ -131,9 +138,56 @@ mod tests {
     use super::*;
     use crate::db::MemoryDB;
     use crate::events::NoopEmitter;
-    use crate::llm_provider::{LlmProvider, MockProvider};
+    use crate::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest, MockProvider};
     use crate::prompts::PromptRegistry;
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+
+    /// Records the system prompt of every `generate` call, so a test can
+    /// assert the Overview refresh used the dedicated `overview_summary`
+    /// prompt rather than the generic `distill_page` prompt every other page
+    /// refresh uses.
+    struct RecordingProvider {
+        response: String,
+        system_prompt: StdMutex<Option<String>>,
+    }
+
+    impl RecordingProvider {
+        fn new(response: &str) -> Self {
+            Self {
+                response: response.to_string(),
+                system_prompt: StdMutex::new(None),
+            }
+        }
+
+        fn captured_system_prompt(&self) -> Option<String> {
+            self.system_prompt.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RecordingProvider {
+        async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+            *self.system_prompt.lock().unwrap() = request.system_prompt.clone();
+            Ok(self.response.clone())
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "overview-recording"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::OnDevice
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
 
     async fn test_db() -> (MemoryDB, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -315,6 +369,75 @@ mod tests {
         assert!(
             !linked_ids.contains(&mem_ids[1].as_str()),
             "second-earliest cycling page's source must also be pruned, evidence: {:?}",
+            linked_ids
+        );
+    }
+
+    /// The Overview refresh must use its OWN dedicated summary prompt, not
+    /// the generic `distill_page` prompt every other page refresh uses, and
+    /// its synthesis input must span ALL of the wiki's current top pages at
+    /// once (not just the most recently touched one).
+    #[tokio::test]
+    async fn refresh_overview_page_uses_dedicated_summary_prompt_and_spans_all_top_pages() {
+        let (db, _dir) = test_db().await;
+        let prompts = PromptRegistry::default();
+
+        let rust_content = "Rust is a systems programming language with memory safety guarantees";
+        create_research_page(&db, "Rust", "mem_overview_prompt_rust", rust_content).await;
+        let python_content =
+            "Python is a dynamically typed programming language emphasizing readability";
+        create_research_page(&db, "Python", "mem_overview_prompt_python", python_content).await;
+
+        // Both memories' own sentences, verbatim -- trivially grounded
+        // against the faithfulness gate regardless of which page cites which.
+        let response = format!("{rust_content}. [1] {python_content}. [2]");
+        let recorder = Arc::new(RecordingProvider::new(&response));
+        let llm: Arc<dyn LlmProvider> = recorder.clone();
+
+        let outcome = refresh_overview_page(&db, &llm, &prompts, "test", None)
+            .await
+            .unwrap();
+        assert!(outcome.wrote, "overview refresh should write in place");
+
+        assert_eq!(
+            recorder.captured_system_prompt(),
+            Some(prompts.overview_summary.clone()),
+            "the Overview refresh must use the dedicated overview_summary prompt"
+        );
+        assert_ne!(
+            recorder.captured_system_prompt(),
+            Some(prompts.distill_page.clone()),
+            "the Overview refresh must NOT use the generic distill_page prompt"
+        );
+
+        let overview_id = db
+            .find_active_page_id_by_title(OVERVIEW_PAGE_TITLE)
+            .await
+            .unwrap()
+            .expect("reserved overview page must exist");
+        let page = db.get_page(&overview_id).await.unwrap().unwrap();
+        assert!(
+            page.content.contains("Rust") && page.content.contains("Python"),
+            "with two current top pages, the overview must summarize BOTH, not just one: {}",
+            page.content
+        );
+
+        // Both pages' member memories must be in the evidence set at once --
+        // proving the synthesis input spans every current top page, not just
+        // whichever was touched most recently.
+        let evidence = db.get_page_sources(&overview_id).await.unwrap();
+        let linked_ids: Vec<&str> = evidence
+            .iter()
+            .map(|s| s.memory_source_id.as_str())
+            .collect();
+        assert!(
+            linked_ids.contains(&"mem_overview_prompt_rust"),
+            "evidence must include the Rust page's source, got {:?}",
+            linked_ids
+        );
+        assert!(
+            linked_ids.contains(&"mem_overview_prompt_python"),
+            "evidence must include the Python page's source, got {:?}",
             linked_ids
         );
     }

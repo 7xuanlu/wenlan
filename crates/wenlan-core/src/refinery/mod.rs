@@ -617,7 +617,11 @@ pub async fn run_periodic_steep_with_api(
             let changed = redistill_changed_pages(db_ref, compile_llm, prompts, kp_ref).await?;
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
             let stale = re_distill_stale_pages(db_ref, compile_llm, prompts, kp_ref).await?;
-            let count = changed + stale;
+            // Spec §5.3: keep the reserved Overview page in sync with the
+            // wiki's current top pages every maintenance tick.
+            let overview =
+                maybe_refresh_overview_page(db_ref, compile_llm, prompts, kp_ref).await?;
+            let count = changed + stale + overview;
             let (nudge, headline) = classify_redistill(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -976,6 +980,32 @@ pub(crate) async fn re_distill_stale_pages(
         log::info!("[re-distill-stale] refreshed {} stale concepts", recompiled);
     }
     Ok(recompiled)
+}
+
+/// Spec §5.3: refresh the reserved, machine-owned Overview page as part of
+/// the maintenance re-distill phase — the "wiki is alive" signal. No-op
+/// (returns 0, creates nothing) when no LLM lane is available, mirroring the
+/// `redistill_changed_pages` guard above: a steep cycle with no LLM must not
+/// create the placeholder row just to leave it unrefreshed.
+async fn maybe_refresh_overview_page(
+    db: &MemoryDB,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    knowledge_path: Option<&std::path::Path>,
+) -> Result<usize, WenlanError> {
+    let llm = match llm {
+        Some(l) if l.is_available() => l,
+        _ => return Ok(0),
+    };
+    let outcome = crate::synthesis::overview::refresh_overview_page(
+        db,
+        llm,
+        prompts,
+        "refinery",
+        knowledge_path,
+    )
+    .await?;
+    Ok(if outcome.wrote { 1 } else { 0 })
 }
 
 /// Group memories by activity bursts (30-min gap → new burst).
@@ -2373,6 +2403,79 @@ mod tests {
         assert!(
             depth > 0,
             "a full Emergence tick with no available lane must persist a non-zero compile queue depth, got {depth}"
+        );
+    }
+
+    /// Spec §5.3: the reserved Overview page is a "wiki is alive" signal that
+    /// must actually fire in production, not just in `synthesis::overview`'s
+    /// own unit tests. Drives the real maintenance entrypoint
+    /// (`run_periodic_steep_with_api`, the function the daemon scheduler
+    /// calls) with a trigger that runs `Phase::ReDistill` and an available
+    /// LLM, and asserts the reserved "Overview" page exists afterward.
+    #[tokio::test]
+    async fn test_re_distill_phase_refreshes_reserved_overview_page() {
+        let (db, _dir) = test_db().await;
+
+        // A pre-existing page for the Overview to summarize — mirrors
+        // `synthesis::overview`'s own fixture helper.
+        let mem_content = "Rust is a systems programming language with memory safety guarantees";
+        db.upsert_documents(vec![make_memory(
+            "overview_wiring_rust",
+            mem_content,
+            "fact",
+            "engineering",
+        )])
+        .await
+        .unwrap();
+        let req = wenlan_types::requests::CreateConceptRequest {
+            title: "Rust".to_string(),
+            content: mem_content.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec!["overview_wiring_rust".to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        crate::post_write::create_page(&db, req, "test", None)
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(crate::llm_provider::MockProvider::new(&format!(
+            "{mem_content}.[1]"
+        )));
+
+        let result = run_periodic_steep_with_api(
+            &db,
+            None,
+            None,
+            Some(&llm),
+            &PromptRegistry::default(),
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::ConfidenceConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            TriggerKind::Idle,
+        )
+        .await
+        .unwrap();
+
+        let redistill = result
+            .phases
+            .iter()
+            .find(|p| p.name == "re-distill")
+            .expect("Idle trigger must run the re-distill phase");
+        assert!(
+            redistill.error.is_none(),
+            "re-distill phase must not error: {:?}",
+            redistill.error
+        );
+
+        let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
+        assert!(
+            overview_id.is_some(),
+            "the maintenance re-distill phase must create/refresh the reserved Overview page \
+             (spec §5.3) — this is the 'wiki is alive' signal and must fire from the real \
+             steep cycle, not just from synthesis::overview's own unit tests"
         );
     }
 
