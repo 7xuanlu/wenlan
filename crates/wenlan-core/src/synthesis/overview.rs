@@ -1,0 +1,262 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Spec §5.3: the reserved machine-owned Overview page (nashsu `overview.md`
+//! parity). One well-known title, never duplicated; the maintenance pass
+//! syncs its evidence to the currently most-active pages and refreshes it in
+//! place through the ONE re-distill op (`refresh_page`) -- no new write
+//! primitive, no new table, no new prompt: creation goes through
+//! `post_write::create_page` (floor-exempt `research` kind, same guard as
+//! any machine-owned page) and the refresh IS `refresh_page`.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::db::MemoryDB;
+use crate::error::WenlanError;
+use crate::llm_provider::LlmProvider;
+use crate::prompts::PromptRegistry;
+use crate::synthesis::distill::{refresh_page, RefreshOutcome, RefreshReason};
+
+/// Reserved, well-known title for the single machine-owned overview page.
+/// Looked up case-insensitively via `find_active_page_id_by_title` so the
+/// row is created once and refreshed in place forever after -- never
+/// duplicated.
+pub const OVERVIEW_PAGE_TITLE: &str = "Overview";
+
+/// How many of the most recently touched active pages feed the overview's
+/// evidence set. Small and fixed on purpose -- spec says "no new machinery".
+const OVERVIEW_TOP_PAGES: i64 = 5;
+
+/// Placeholder body for the reserved row before its first refresh populates
+/// real content. `create_page` requires non-empty content; `refresh_page`
+/// overwrites this on the first maintenance tick.
+const OVERVIEW_PLACEHOLDER_CONTENT: &str =
+    "This page is refreshed automatically to summarize the wiki's current top pages.";
+
+/// Source memory ids of the current top pages, for the overview's own
+/// evidence set. `exclude_page_id` keeps the overview page from citing its
+/// own prior summary as if it were a memory.
+async fn top_page_source_ids(
+    db: &MemoryDB,
+    exclude_page_id: Option<&str>,
+) -> Result<Vec<String>, WenlanError> {
+    let pages = db.list_pages("active", OVERVIEW_TOP_PAGES + 1, 0).await?;
+    let mut ids = Vec::new();
+    let mut included = 0i64;
+    for page in pages {
+        if included >= OVERVIEW_TOP_PAGES {
+            break;
+        }
+        if Some(page.id.as_str()) == exclude_page_id
+            || page.title.eq_ignore_ascii_case(OVERVIEW_PAGE_TITLE)
+        {
+            continue;
+        }
+        let sources = db.get_page_sources(&page.id).await?;
+        if !sources.is_empty() {
+            ids.extend(sources.into_iter().map(|s| s.memory_source_id));
+        } else {
+            ids.extend(page.source_memory_ids.clone());
+        }
+        included += 1;
+    }
+    Ok(ids)
+}
+
+/// Looks up the reserved overview row by title, creating a floor-exempt
+/// placeholder if it doesn't exist yet. Returns the page id. Idempotent: the
+/// title lookup means a second call never creates a second row.
+async fn ensure_overview_page(
+    db: &MemoryDB,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+) -> Result<String, WenlanError> {
+    if let Some(id) = db.find_active_page_id_by_title(OVERVIEW_PAGE_TITLE).await? {
+        return Ok(id);
+    }
+    let req = wenlan_types::requests::CreateConceptRequest {
+        title: OVERVIEW_PAGE_TITLE.to_string(),
+        content: OVERVIEW_PLACEHOLDER_CONTENT.to_string(),
+        summary: None,
+        entity_id: None,
+        space: None,
+        source_memory_ids: Vec::new(),
+        // "research" is machine-owned (never `user_edited`/"authored") and
+        // floor-exempt (spec §5.1: only `distilled` requires >=
+        // page_min_cluster_size sources) -- the reserved row can exist with
+        // zero sources until the first refresh populates it.
+        creation_kind: Some("research".to_string()),
+        workspace: None,
+    };
+    let result = crate::post_write::create_page(db, req, agent, knowledge_path).await?;
+    Ok(result.id)
+}
+
+/// Spec §5.3: refresh the reserved overview page in place. Called by the
+/// maintenance pass. Ensures the reserved row exists, syncs its evidence to
+/// the current top pages (additive -- `link_page_source` never prunes, so
+/// the evidence set accumulates rather than being replaced each tick), then
+/// goes through the same stale-mark / `refresh_page` / clear-staleness
+/// sequence as `refinery::re_distill_stale_pages`.
+pub async fn refresh_overview_page(
+    db: &MemoryDB,
+    llm: &Arc<dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+) -> Result<RefreshOutcome, WenlanError> {
+    let page_id = ensure_overview_page(db, agent, knowledge_path).await?;
+
+    let top_sources = top_page_source_ids(db, Some(&page_id)).await?;
+    for source_id in &top_sources {
+        db.link_page_source(&page_id, source_id, "overview_sync")
+            .await?;
+    }
+
+    db.set_page_stale(&page_id, "overview_sync").await?;
+    let outcome = refresh_page(
+        db,
+        llm,
+        prompts,
+        &page_id,
+        RefreshReason::SourceChanged,
+        knowledge_path,
+    )
+    .await?;
+    db.clear_page_staleness(&page_id).await?;
+    Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::MemoryDB;
+    use crate::events::NoopEmitter;
+    use crate::llm_provider::{LlmProvider, MockProvider};
+    use crate::prompts::PromptRegistry;
+    use std::sync::Arc;
+
+    async fn test_db() -> (MemoryDB, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let db = MemoryDB::new(&path, Arc::new(NoopEmitter)).await.unwrap();
+        (db, dir)
+    }
+
+    fn make_doc(source_id: &str, content: &str) -> crate::sources::RawDocument {
+        crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: content.chars().take(40).collect(),
+            summary: None,
+            content: content.to_string(),
+            url: None,
+            last_modified: chrono::Utc::now().timestamp(),
+            metadata: std::collections::HashMap::new(),
+            memory_type: Some("fact".to_string()),
+            space: None,
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.7),
+            confirmed: Some(false),
+            stability: None,
+            supersedes: None,
+            pending_revision: false,
+            entity_id: None,
+            quality: None,
+            importance: None,
+            is_recap: false,
+            enrichment_status: "raw".to_string(),
+            supersede_mode: "hide".to_string(),
+            structured_fields: None,
+            retrieval_cue: None,
+            source_text: None,
+            content_hash: None,
+        }
+    }
+
+    async fn create_research_page(db: &MemoryDB, title: &str, mem_id: &str, content: &str) {
+        db.upsert_documents(vec![make_doc(mem_id, content)])
+            .await
+            .unwrap();
+        let req = wenlan_types::requests::CreateConceptRequest {
+            title: title.to_string(),
+            content: content.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![mem_id.to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        crate::post_write::create_page(db, req, "test", None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_overview_page_creates_reserved_row_summarizing_top_pages() {
+        let (db, _dir) = test_db().await;
+
+        let mem_content = "Rust is a systems programming language with memory safety guarantees";
+        create_research_page(&db, "Rust", "mem_overview_rust", mem_content).await;
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(&format!("{mem_content}.[1]")));
+        let prompts = PromptRegistry::default();
+
+        let outcome = refresh_overview_page(&db, &llm, &prompts, "test", None)
+            .await
+            .unwrap();
+        assert!(outcome.wrote, "overview refresh should write in place");
+        assert!(
+            !outcome.gated,
+            "overview page must be machine-owned, never gated to a revision card"
+        );
+
+        let overview_id = db
+            .find_active_page_id_by_title(OVERVIEW_PAGE_TITLE)
+            .await
+            .unwrap()
+            .expect("reserved overview page must exist after refresh");
+        let page = db.get_page(&overview_id).await.unwrap().unwrap();
+        assert!(!page.user_edited, "overview page must be machine-owned");
+        assert_ne!(
+            page.creation_kind, "authored",
+            "overview page must never be human-owned (would gate refreshes into revision cards)"
+        );
+        assert!(
+            page.content.contains("Rust"),
+            "overview should summarize the current top page's evidence, got: {}",
+            page.content
+        );
+
+        // A second maintenance tick, with a NEW top page in play, must refresh
+        // the SAME reserved row in place -- never a second "Overview" page.
+        let mem_content2 =
+            "Python is a dynamically typed programming language emphasizing readability";
+        create_research_page(&db, "Python", "mem_overview_python", mem_content2).await;
+        let llm2: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new(&format!("{mem_content2}.[1]")));
+
+        let outcome2 = refresh_overview_page(&db, &llm2, &prompts, "test", None)
+            .await
+            .unwrap();
+        assert!(
+            outcome2.wrote,
+            "second maintenance tick should refresh again"
+        );
+
+        let all_active = db.list_pages("active", 100, 0).await.unwrap();
+        let overview_pages: Vec<_> = all_active
+            .iter()
+            .filter(|p| p.title.eq_ignore_ascii_case(OVERVIEW_PAGE_TITLE))
+            .collect();
+        assert_eq!(
+            overview_pages.len(),
+            1,
+            "overview page must never duplicate across maintenance ticks"
+        );
+        assert_eq!(
+            overview_pages[0].id, overview_id,
+            "the SAME reserved row must be refreshed in place"
+        );
+    }
+}

@@ -9,6 +9,7 @@ pub mod decision_logs;
 pub mod detect;
 pub mod distill;
 pub mod emergence;
+pub mod overview;
 pub mod recaps;
 pub mod refinement_queue;
 pub mod wikilinks;
