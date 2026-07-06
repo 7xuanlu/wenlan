@@ -26,16 +26,43 @@ pub use crate::kg::reweave::reweave_entity_links;
 // distillation helpers (distill_one_cluster + refine_clusters_with_llm +
 // recompile_single_page from other refinery phases).
 use crate::synthesis::detect::detect_page_candidates;
-use crate::synthesis::distill::{recompile_single_page, refresh_page, RefreshReason};
+use crate::synthesis::distill::{
+    distill_pages_scoped_gated, recompile_single_page, refresh_page, RefreshReason,
+};
 use crate::synthesis::refinement_queue::process_refinement_queue;
 
 use crate::activity::ACTIVITY_GAP_SECS;
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use crate::llm_provider::{LlmProvider, LlmRequest};
+use crate::llm_provider::{LlmBackend, LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
 use serde::Serialize;
 use std::sync::Arc;
+
+/// app_metadata key backing the compile queue depth gauge (spec §3.1/§7): the
+/// count of clusters the last routed compile left pending because no lane
+/// (cloud or healthy on-device) was available to write them. Surfaced on
+/// `/api/status`. A gauge, not a counter — each compile tick overwrites it
+/// with the pending count discovered THIS tick (the staging pool is
+/// re-queried fresh every time, not a persisted queue).
+const COMPILE_QUEUE_DEPTH_KEY: &str = "compile_queue_depth_v1";
+
+/// Persist the compile queue depth so `/api/status` can report it without
+/// re-running cluster discovery. Called after every routed compile.
+pub async fn persist_compile_queue_depth(db: &MemoryDB, depth: usize) -> Result<(), WenlanError> {
+    db.set_app_metadata(COMPILE_QUEUE_DEPTH_KEY, &depth.to_string())
+        .await
+}
+
+/// Read the last-persisted compile queue depth. Defaults to 0 (idle) when
+/// never set or unparseable.
+pub async fn compile_queue_depth(db: &MemoryDB) -> Result<usize, WenlanError> {
+    Ok(db
+        .get_app_metadata(COMPILE_QUEUE_DEPTH_KEY)
+        .await?
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0))
+}
 
 /// What triggered a refinery cycle. Different triggers run different subsets
 /// of phases — the goal is to do the right work at the right time.
@@ -501,7 +528,32 @@ pub async fn run_periodic_steep_with_api(
     let kp_ref = knowledge_path.as_deref();
     if trigger.runs_phase(Phase::Emergence) {
         let phase = run_phase(Phase::Emergence, || async {
-            let count = distill_pages(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
+            // Compile routing (spec §3.1): the LLM coherence gate (merge/
+            // split/rename cluster review) only runs for a cloud/API
+            // provider. An on-device-only compile skips it — the page's
+            // keep-card carries that judgment instead. No provider at all
+            // (or an unhealthy on-device engine) hits the existing zero-LLM
+            // path inside `distill_pages_scoped_gated`, which leaves clusters
+            // pending rather than half-writing a page — that pending count
+            // is what feeds the queue depth below, realizing "no lane ->
+            // clusters WAIT" (agent lane / no lane are the same pending
+            // state; an agent later drains it via the existing
+            // `POST /api/distill` pending-clusters path).
+            let run_coherence_gate =
+                matches!(compile_llm.map(|l| l.backend()), Some(LlmBackend::Api));
+            let result = distill_pages_scoped_gated(
+                db_ref,
+                compile_llm,
+                prompts,
+                distillation,
+                kp_ref,
+                None,
+                run_coherence_gate,
+            )
+            .await?;
+            if let Err(e) = persist_compile_queue_depth(db_ref, result.pending.len()).await {
+                log::warn!("[emergence] failed to persist compile queue depth: {e}");
+            }
             // Re-resolve orphan wikilinks now that distill may have created
             // new pages. Cheap: one SELECT DISTINCT + per-label UPDATE for
             // hits; no LLM. Captures the case where page A linked to
@@ -514,6 +566,7 @@ pub async fn run_periodic_steep_with_api(
                 Ok(_) => {}
                 Err(e) => log::warn!("[emergence] orphan link resolve failed: {e}"),
             }
+            let count = result.created.len();
             let (nudge, headline) = classify_emergence(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -2023,6 +2076,66 @@ mod tests {
         let pending = db.get_pending_refinements().await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].status, "awaiting_review");
+    }
+
+    #[tokio::test]
+    async fn no_lane_compile_leaves_pending_and_persists_queue_depth() {
+        let (db, _dir) = test_db().await;
+
+        // A well-formed, eligible cluster (3+ memories, shared space).
+        for (i, content) in [
+            "libSQL stores vectors using F32_BLOB columns",
+            "libSQL uses DiskANN for vector indexing",
+            "libSQL supports FTS5 full-text search via triggers",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("nolane_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        // No cloud, no agent-lane consumer yet, and the on-device engine is
+        // configured but unhealthy (is_available() == false) — the "no lane"
+        // case per spec §3.1/§7: clusters must WAIT as pending, nothing
+        // half-written.
+        let unhealthy: Arc<dyn LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::unavailable());
+        let result = distill_pages_scoped(
+            &db,
+            Some(&unhealthy),
+            &PromptRegistry::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.created.is_empty(),
+            "no-lane compile must not write a partial page"
+        );
+        assert!(
+            !result.pending.is_empty(),
+            "fixture cluster should be queued as pending, not silently dropped"
+        );
+
+        persist_compile_queue_depth(&db, result.pending.len())
+            .await
+            .unwrap();
+        let depth = compile_queue_depth(&db).await.unwrap();
+        assert_eq!(
+            depth,
+            result.pending.len(),
+            "/api/status must be able to read back the persisted compile queue depth"
+        );
     }
 
     #[tokio::test]

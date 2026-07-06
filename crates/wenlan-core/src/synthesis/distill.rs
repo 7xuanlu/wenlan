@@ -861,6 +861,25 @@ pub async fn distill_pages_scoped(
     knowledge_path: Option<&std::path::Path>,
     target: Option<DistillTarget>,
 ) -> Result<DistillResult, WenlanError> {
+    distill_pages_scoped_gated(db, llm, prompts, tuning, knowledge_path, target, true).await
+}
+
+/// Same as `distill_pages_scoped`, with an explicit switch for the LLM
+/// coherence gate (merge/split/rename cluster review, spec §3.1). The compile
+/// router (`refinery::run_periodic_steep_with_api`) skips the gate for an
+/// on-device-only compile — the page's keep-card carries that judgment
+/// instead of an LLM review. Every other caller goes through the
+/// `distill_pages_scoped` wrapper above, which always runs the gate
+/// (unchanged behavior).
+pub(crate) async fn distill_pages_scoped_gated(
+    db: &MemoryDB,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    tuning: &crate::tuning::DistillationConfig,
+    knowledge_path: Option<&std::path::Path>,
+    target: Option<DistillTarget>,
+    run_coherence_gate: bool,
+) -> Result<DistillResult, WenlanError> {
     if let Some(DistillTarget::Page(ref page_id)) = target {
         let updated = deep_distill_single(db, llm, prompts, page_id, knowledge_path).await?;
         return Ok(DistillResult {
@@ -943,8 +962,13 @@ pub async fn distill_pages_scoped(
     let raw_clusters =
         cap_document_majority_clusters(db, raw_clusters, tuning.page_min_cluster_size).await?;
 
-    // LLM cluster refinement: let LLM merge/split/rename clusters per entity
-    let clusters = refine_clusters_with_llm(llm, prompts, raw_clusters, token_limit).await;
+    // LLM cluster refinement: let LLM merge/split/rename clusters per entity.
+    // Coherence gate (spec §3.1) — skipped for an on-device-only compile.
+    let clusters = if run_coherence_gate {
+        refine_clusters_with_llm(llm, prompts, raw_clusters, token_limit).await
+    } else {
+        raw_clusters
+    };
     let clusters =
         cap_document_majority_clusters(db, clusters, tuning.page_min_cluster_size).await?;
 
@@ -1704,6 +1728,119 @@ mod tests {
         fn kind(&self) -> &'static str {
             "mock"
         }
+    }
+
+    /// Records every `(system_prompt, user_prompt)` pair `generate` was
+    /// called with, so a test can assert a specific system prompt (e.g. the
+    /// refine-clusters coherence gate) was never invoked. Echoes the input
+    /// content back (citation-marked) for the distill-body call so the
+    /// hallucination/faithfulness check passes trivially, and a short fixed
+    /// title otherwise.
+    struct GateRecordingProvider {
+        calls: Mutex<Vec<(Option<String>, String)>>,
+    }
+
+    impl GateRecordingProvider {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn saw_system_prompt(&self, needle: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(sys, _)| sys.as_deref() == Some(needle))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for GateRecordingProvider {
+        async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+            let label = request.label.clone();
+            self.calls
+                .lock()
+                .unwrap()
+                .push((request.system_prompt.clone(), request.user_prompt.clone()));
+            if label.as_deref() == Some("distill_body") {
+                Ok(format!("{} [1]", request.user_prompt))
+            } else {
+                Ok("Test Topic".to_string())
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "gate-recording"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::OnDevice
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    #[tokio::test]
+    async fn on_device_only_compile_skips_coherence_gate() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+
+        // Two well-separated topics, each a real cluster (space is the ONLY
+        // partition, so two distinct spaces guarantee two distinct clusters).
+        // Neither sets entity_id/entity_name, so both clusters share the
+        // refine-clusters "unlinked" grouping key — with the gate ON, this
+        // group has 2+ clusters and `refine_clusters_with_llm` would fire.
+        let db_topic: Vec<(&str, &str)> = vec![
+            ("topic_db", "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store."),
+            ("topic_db", "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code."),
+            ("topic_db", "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query."),
+            ("topic_bread", "A sourdough levain needs to be fed with equal parts flour and water twice a day to stay active enough to leaven a loaf, and it should roughly double in volume within four to six hours after each feeding."),
+            ("topic_bread", "Increasing the hydration of a bread dough to around eighty percent produces a much more open, irregular crumb structure once it is baked, though it also makes the dough considerably harder to shape by hand."),
+            ("topic_bread", "Kneading a wheat dough develops long gluten strands that trap the carbon dioxide bubbles produced by yeast fermentation, which is what allows the loaf to rise instead of collapsing in the oven."),
+        ];
+        for (i, (space, content)) in db_topic.iter().enumerate() {
+            let doc = RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("gate_test_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some(space.to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let provider = Arc::new(GateRecordingProvider::new());
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let result = distill_pages_scoped_gated(
+            &db,
+            Some(&llm),
+            &prompts,
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            None,
+            false, // on-device-only: coherence gate OFF
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !provider.saw_system_prompt(&prompts.refine_clusters),
+            "on-device-only compile must not invoke the LLM coherence gate"
+        );
+        assert!(
+            !result.created.is_empty(),
+            "compile should still synthesize pages despite skipping the coherence gate"
+        );
     }
 
     #[tokio::test]

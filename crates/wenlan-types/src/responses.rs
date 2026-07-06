@@ -152,6 +152,13 @@ pub struct StatusResponse {
     /// defaults to `Idle` so older daemons (which omit it) deserialize cleanly.
     #[serde(default)]
     pub queue: QueueStatus,
+    /// Compile-routing queue depth (spec §3.1/§7): clusters the last routed
+    /// compile left pending because no lane (cloud or healthy on-device) was
+    /// available. `Active { pending }` when nonzero, `Idle` otherwise; never
+    /// `Paused` (no retry/backoff concept for this gauge). Additive: defaults
+    /// to `Idle` so older daemons (which omit it) deserialize cleanly.
+    #[serde(default)]
+    pub compile_queue: QueueStatus,
     /// Reranker on the DEEP path (`/api/memory/search` with `rerank=true`). Legacy
     /// field — for `WENLAN_RERANKER_ENABLED=1` it is the configured model, exactly as before.
     #[serde(default)]
@@ -1294,6 +1301,7 @@ mod reranker_status_tests {
             files_total: 0,
             sources_connected: vec![],
             queue: QueueStatus::Idle,
+            compile_queue: QueueStatus::Idle,
             reranker: RerankerStatus::Active {
                 model_id: "BGERerankerBase".into(),
             },

@@ -93,16 +93,26 @@ pub async fn handle_status(
 ) -> Result<Json<wenlan_types::responses::StatusResponse>, ServerError> {
     let s = state.read().await;
 
-    let (files_indexed, queue) = if let Some(db) = &s.db {
+    let (files_indexed, queue, compile_queue) = if let Some(db) = &s.db {
         let files_indexed = db.count().await.unwrap_or(0);
         let queue = db
             .document_enrichment_queue_status()
             .await
             .map(queue_status_wire)
             .unwrap_or_default();
-        (files_indexed, queue)
+        let compile_queue = match wenlan_core::refinery::compile_queue_depth(db).await {
+            Ok(0) | Err(_) => wenlan_types::responses::QueueStatus::Idle,
+            Ok(pending) => wenlan_types::responses::QueueStatus::Active {
+                pending: pending as u64,
+            },
+        };
+        (files_indexed, queue, compile_queue)
     } else {
-        (0, wenlan_types::responses::QueueStatus::Idle)
+        (
+            0,
+            wenlan_types::responses::QueueStatus::Idle,
+            wenlan_types::responses::QueueStatus::Idle,
+        )
     };
 
     Ok(Json(wenlan_types::responses::StatusResponse {
@@ -111,6 +121,7 @@ pub async fn handle_status(
         files_total: 0,
         sources_connected: vec![],
         queue,
+        compile_queue,
         reranker: s.reranker_status.clone(),
         reranker_light: s.reranker_light_status.clone(),
         reranker_mode: s.reranker_mode.clone(),
@@ -1301,6 +1312,68 @@ mod recent_endpoints_tests {
         let parsed: wenlan_types::responses::StatusResponse =
             serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.queue, wenlan_types::responses::QueueStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn status_reports_compile_queue_idle_by_default() {
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let raw = std::str::from_utf8(&bytes).unwrap();
+        assert!(
+            raw.contains("\"compile_queue\""),
+            "status JSON must include a compile_queue field, got: {raw}"
+        );
+        let parsed: wenlan_types::responses::StatusResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            parsed.compile_queue,
+            wenlan_types::responses::QueueStatus::Idle
+        );
+    }
+
+    #[tokio::test]
+    async fn status_reports_compile_queue_depth_when_clusters_are_pending() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new");
+        wenlan_core::refinery::persist_compile_queue_depth(&db, 3)
+            .await
+            .unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(Arc::new(db)),
+            ..Default::default()
+        }));
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: wenlan_types::responses::StatusResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            parsed.compile_queue,
+            wenlan_types::responses::QueueStatus::Active { pending: 3 }
+        );
     }
 }
 
