@@ -123,6 +123,7 @@ fn parse_action(s: &str) -> Option<ProposalAction> {
         "detect_contradiction" => Some(ProposalAction::DetectContradiction),
         "suggest_entity" => Some(ProposalAction::SuggestEntity),
         "dedup_merge" => Some(ProposalAction::DedupMerge),
+        "page_merge" => Some(ProposalAction::PageMerge),
         _ => None,
     }
 }

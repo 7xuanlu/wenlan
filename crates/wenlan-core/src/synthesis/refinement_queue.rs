@@ -162,6 +162,12 @@ pub async fn apply_refinement(
                 "action 'dedup_merge' has no accept path (deprecated stale-v1 variant)".into(),
             ));
         }
+        "page_merge" => {
+            return Err(WenlanError::Validation(
+                "action 'page_merge' has no accept path yet (reserved for page-merge accept)"
+                    .into(),
+            ));
+        }
         other => {
             return Err(WenlanError::Validation(format!("unknown action: {other}")));
         }

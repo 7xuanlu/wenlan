@@ -676,6 +676,7 @@ pub enum ProposalAction {
     DetectContradiction,
     SuggestEntity,
     DedupMerge,
+    PageMerge,
 }
 
 /// Tagged-union payload emitted by the background refinery.
@@ -705,6 +706,14 @@ pub enum RefinementPayload {
         name_hint: Option<String>,
     },
     DedupMerge,
+    PageMerge {
+        left_page_id: String,
+        right_page_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        similarity: Option<f64>,
+        source_overlap: usize,
+        source_overlap_ratio: f64,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
