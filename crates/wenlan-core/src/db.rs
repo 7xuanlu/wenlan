@@ -1311,6 +1311,12 @@ pub struct PageSourceIndex {
     pub source_set: std::collections::HashSet<String>,
 }
 
+struct PageMergeRow {
+    title: String,
+    status: String,
+    source_ids: Vec<String>,
+}
+
 /// A T18 summary node loaded for the read-time global-context prelude.
 /// `level=0` is a per-bucket rollup (keyed on `community_id`); `level=1` is the
 /// single root rollup over all buckets.
@@ -21903,6 +21909,224 @@ impl MemoryDB {
         Ok(())
     }
 
+    pub async fn accept_page_merge(
+        &self,
+        proposal_id: &str,
+        survivor_id: &str,
+        absorbed_id: &str,
+    ) -> Result<(), WenlanError> {
+        if survivor_id == absorbed_id {
+            return Err(WenlanError::Validation(
+                "page_merge requires two distinct page ids".into(),
+            ));
+        }
+
+        let now = chrono::Utc::now();
+        let now_rfc3339 = now.to_rfc3339();
+        let now_ts = now.timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge begin: {e}")))?;
+
+        let result: Result<(), WenlanError> = async {
+            let survivor = Self::page_merge_row(&conn, survivor_id).await?;
+            let absorbed = Self::page_merge_row(&conn, absorbed_id).await?;
+            if survivor.status != "active" {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge survivor {survivor_id} is not active"
+                )));
+            }
+            if absorbed.status != "active" {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge absorbed page {absorbed_id} is not active"
+                )));
+            }
+
+            let survivor_original: HashSet<String> = survivor.source_ids.iter().cloned().collect();
+            let mut union = survivor.source_ids;
+            for sid in absorbed.source_ids {
+                if !union.iter().any(|existing| existing == &sid) {
+                    union.push(sid);
+                }
+            }
+
+            let mut rows = conn
+                .query(
+                    "SELECT memory_source_id FROM page_sources \
+                     WHERE page_id IN (?1, ?2) \
+                     ORDER BY CASE WHEN page_id = ?1 THEN 0 ELSE 1 END, linked_at ASC",
+                    libsql::params![survivor_id, absorbed_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge sources: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge source row: {e}")))?
+            {
+                let sid: String = row.get(0).map_err(|e| {
+                    WenlanError::VectorDb(format!("accept_page_merge source id: {e}"))
+                })?;
+                if !union.iter().any(|existing| existing == &sid) {
+                    union.push(sid);
+                }
+            }
+            drop(rows);
+
+            let added_count = union
+                .iter()
+                .filter(|sid| !survivor_original.contains(*sid))
+                .count()
+                .max(1) as i64;
+            let source_ids_json = serde_json::to_string(&union).map_err(|e| {
+                WenlanError::VectorDb(format!("accept_page_merge source json: {e}"))
+            })?;
+            let affected = conn
+                .execute(
+                    "UPDATE pages SET \
+                       source_memory_ids = ?1, \
+                       stale_reason = 'source_updated', \
+                       sources_updated_count = COALESCE(sources_updated_count, 0) + ?2, \
+                       last_modified = ?3 \
+                     WHERE id = ?4 AND status = 'active'",
+                    libsql::params![
+                        source_ids_json,
+                        added_count,
+                        now_rfc3339.as_str(),
+                        survivor_id
+                    ],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge survivor: {e}")))?;
+            if affected != 1 {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge survivor {survivor_id} could not be updated"
+                )));
+            }
+
+            for sid in &union {
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_sources \
+                       (page_id, memory_source_id, linked_at, link_reason) \
+                     VALUES (?1, ?2, ?3, 'page_merge')",
+                    libsql::params![survivor_id, sid.as_str(), now_ts],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("accept_page_merge page_sources: {e}"))
+                })?;
+            }
+
+            conn.execute(
+                "INSERT OR IGNORE INTO page_evidence \
+                   (page_id, source_kind, locator, title, linked_at, link_reason) \
+                 SELECT ?1, source_kind, locator, title, ?2, 'page_merge' \
+                 FROM page_evidence WHERE page_id = ?3",
+                libsql::params![survivor_id, now_ts, absorbed_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge evidence copy: {e}")))?;
+
+            let source_refs: Vec<&str> = union.iter().map(String::as_str).collect();
+            Self::insert_resolved_page_evidence(
+                &conn,
+                survivor_id,
+                &source_refs,
+                now_ts,
+                "page_merge",
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("accept_page_merge evidence insert: {e}"))
+            })?;
+
+            let archived = conn
+                .execute(
+                    "UPDATE pages SET status = 'archived', last_modified = ?1 \
+                     WHERE id = ?2 AND status = 'active'",
+                    libsql::params![now_rfc3339.as_str(), absorbed_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge archive: {e}")))?;
+            if archived != 1 {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge absorbed page {absorbed_id} could not be archived"
+                )));
+            }
+
+            let absorbed_title_key = absorbed.title.to_lowercase();
+            conn.execute(
+                "UPDATE page_links SET target_page_id = ?1 \
+                 WHERE target_page_id = ?2 OR label_key = ?3",
+                libsql::params![survivor_id, absorbed_id, absorbed_title_key],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge links: {e}")))?;
+
+            let resolved = conn
+                .execute(
+                    "UPDATE refinement_queue \
+                     SET status = 'resolved', resolved_at = ?1 \
+                     WHERE id = ?2 \
+                       AND action = 'page_merge' \
+                       AND status NOT IN ('dismissed', 'auto_applied', 'resolved')",
+                    libsql::params![now_ts, proposal_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge resolve: {e}")))?;
+            if resolved != 1 {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge proposal {proposal_id} already resolved"
+                )));
+            }
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge commit: {e}")))?;
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+        Ok(())
+    }
+
+    async fn page_merge_row(
+        conn: &libsql::Connection,
+        page_id: &str,
+    ) -> Result<PageMergeRow, WenlanError> {
+        let mut rows = conn
+            .query(
+                "SELECT title, status, source_memory_ids FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page_merge row query: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page_merge row next: {e}")))?
+            .ok_or_else(|| WenlanError::NotFound(format!("page {page_id} not found")))?;
+        let source_ids_json: String = row.get::<String>(2).unwrap_or_else(|_| "[]".to_string());
+        Ok(PageMergeRow {
+            title: row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(format!("page_merge row title: {e}")))?,
+            status: row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(format!("page_merge row status: {e}")))?,
+            source_ids: serde_json::from_str(&source_ids_json).unwrap_or_default(),
+        })
+    }
+
     /// Find the existing active page whose source memories overlap the most
     /// with the supplied cluster. Returns the page metadata plus Jaccard
     /// similarity and the raw intersection count, so callers can decide
@@ -22596,6 +22820,7 @@ impl MemoryDB {
         let changelog_str = row.get::<String>(15).unwrap_or_else(|_| "[]".to_string());
         let (last_edited_by, last_edited_at, last_delta_summary) =
             Self::parse_changelog_tail(&changelog_str);
+        let stale_reason = row.get::<Option<String>>(13).unwrap_or(None);
         let citations: Vec<wenlan_types::pages::PageCitation> = row
             .get::<Option<String>>(19)
             .unwrap_or(None)
@@ -22629,7 +22854,10 @@ impl MemoryDB {
                 .get::<String>(11)
                 .map_err(|e| WenlanError::VectorDb(format!("page last_modified: {e}")))?,
             sources_updated_count: row.get::<i64>(12).unwrap_or(0),
-            stale_reason: row.get::<Option<String>>(13).unwrap_or(None),
+            pending_rebuild: wenlan_types::pages::pending_rebuild_for_stale_reason(
+                stale_reason.as_deref(),
+            ),
+            stale_reason,
             user_edited: row.get::<i64>(14).unwrap_or(0) != 0,
             relevance_score: 0.0, // populated by search_pages after RRF fusion
             last_edited_by,
@@ -26063,6 +26291,7 @@ pub(crate) mod tests {
             last_modified: String::new(),
             sources_updated_count: 0,
             stale_reason: None,
+            pending_rebuild: None,
             user_edited: false,
             relevance_score: 0.5,
             last_edited_by: None,
@@ -42810,6 +43039,7 @@ pub(crate) mod tests {
             last_modified: "2026-05-20T12:34:56Z".into(),
             sources_updated_count: 0,
             stale_reason: None,
+            pending_rebuild: None,
             user_edited: false,
             relevance_score: 0.42,
             last_edited_by: None,

@@ -284,6 +284,7 @@ mod tests {
             last_modified: "2026-04-09T00:00:00+00:00".to_string(),
             sources_updated_count: 0,
             stale_reason: None,
+            pending_rebuild: None,
             user_edited: false,
             relevance_score: 0.0,
             last_edited_by: None,

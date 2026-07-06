@@ -121,6 +121,7 @@ pub async fn apply_refinement(
         )));
     }
 
+    let mut resolved_inside_action = false;
     match prop.action.as_str() {
         "entity_merge" => {
             let new_id = prop.source_ids.first().ok_or_else(|| {
@@ -163,21 +164,37 @@ pub async fn apply_refinement(
             ));
         }
         "page_merge" => {
-            return Err(WenlanError::Validation(
-                "action 'page_merge' has no accept path yet (reserved for page-merge accept)"
-                    .into(),
-            ));
+            let survivor_id = prop.source_ids.first().cloned().ok_or_else(|| {
+                WenlanError::Validation("page_merge missing source_ids[0]".into())
+            })?;
+            let absorbed_id = prop.source_ids.get(1).cloned().ok_or_else(|| {
+                WenlanError::Validation("page_merge missing source_ids[1]".into())
+            })?;
+            db.accept_page_merge(id, &survivor_id, &absorbed_id).await?;
+            resolved_inside_action = true;
         }
         other => {
             return Err(WenlanError::Validation(format!("unknown action: {other}")));
         }
     }
 
-    resolve_proposal(db, id, ResolveStatus::Resolved, agent).await?;
+    if resolved_inside_action {
+        let resolve_payload = serde_json::json!({
+            "action": &prop.action,
+            "new_status": ResolveStatus::Resolved.as_str(),
+            "source_ids": &prop.source_ids,
+        })
+        .to_string();
+        let _ = db
+            .log_agent_activity(agent, "refinement_resolve", &[], None, &resolve_payload)
+            .await;
+    } else {
+        resolve_proposal(db, id, ResolveStatus::Resolved, agent).await?;
+    }
 
     let payload = serde_json::json!({
-        "action": prop.action,
-        "source_ids": prop.source_ids,
+        "action": &prop.action,
+        "source_ids": &prop.source_ids,
     })
     .to_string();
     let _ = db
@@ -1035,6 +1052,125 @@ mod tests {
             .unwrap();
         let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(f, 0, "new memory should NOT be flagged either");
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_page_merge_unions_evidence_archives_absorbed_and_repoints_links() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_survivor",
+            "Survivor Topic",
+            None,
+            "Survivor prose.",
+            None,
+            None,
+            &["mem_keep"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_absorbed",
+            "Absorbed Topic",
+            None,
+            "Absorbed prose.",
+            None,
+            None,
+            &["mem_absorbed", "mem_extra"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_referrer",
+            "Referrer",
+            None,
+            "See [[Absorbed Topic]] for the current notes.",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_refinement_proposal(
+            "ref_page_merge_1",
+            "page_merge",
+            &["page_survivor".to_string(), "page_absorbed".to_string()],
+            Some(
+                r#"{"action":"page_merge","left_page_id":"page_survivor","right_page_id":"page_absorbed","source_overlap":1,"source_overlap_ratio":0.5}"#,
+            ),
+            0.95,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params!["ref_page_merge_1"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let outcome = apply_refinement(&db, "ref_page_merge_1", "test-agent")
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.action_applied, "page_merge");
+        let survivor = db
+            .get_page("page_survivor")
+            .await
+            .unwrap()
+            .expect("survivor page remains active");
+        assert_eq!(survivor.status, "active");
+        assert_eq!(survivor.stale_reason.as_deref(), Some("source_updated"));
+        assert!(
+            ["mem_keep", "mem_absorbed", "mem_extra"]
+                .iter()
+                .all(|sid| survivor.source_memory_ids.iter().any(|s| s == sid)),
+            "survivor must carry the unioned source evidence, got {:?}",
+            survivor.source_memory_ids
+        );
+
+        let absorbed = db
+            .get_page("page_absorbed")
+            .await
+            .unwrap()
+            .expect("absorbed page is archived, not deleted");
+        assert_eq!(absorbed.status, "archived");
+
+        let survivor_sources = db.get_page_sources("page_survivor").await.unwrap();
+        assert!(
+            ["mem_keep", "mem_absorbed", "mem_extra"].iter().all(|sid| {
+                survivor_sources
+                    .iter()
+                    .any(|source| source.memory_source_id == *sid)
+            }),
+            "page_sources must carry the unioned evidence, got {:?}",
+            survivor_sources
+        );
+
+        let survivor_links = db.get_page_inbound_links("page_survivor").await.unwrap();
+        assert!(
+            survivor_links
+                .iter()
+                .any(|(source_page_id, label)| source_page_id == "page_referrer"
+                    && label == "Absorbed Topic"),
+            "wikilinks to the absorbed title must point at the survivor now, got {:?}",
+            survivor_links
+        );
+        let absorbed_links = db.get_page_inbound_links("page_absorbed").await.unwrap();
+        assert!(
+            !absorbed_links
+                .iter()
+                .any(|(source_page_id, _)| source_page_id == "page_referrer"),
+            "absorbed page must not retain backlinks after merge, got {:?}",
+            absorbed_links
+        );
     }
 
     #[tokio::test]

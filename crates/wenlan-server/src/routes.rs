@@ -1754,6 +1754,7 @@ mod context_page_selection_tests {
             last_modified: String::new(),
             sources_updated_count: 0,
             stale_reason: None,
+            pending_rebuild: None,
             user_edited: false,
             relevance_score,
             last_edited_by: None,

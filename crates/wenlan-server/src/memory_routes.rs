@@ -1890,8 +1890,10 @@ pub async fn handle_get_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
     match db.get_page(&id).await {
         Ok(Some(page)) => Ok(Json(serde_json::json!({ "page": page }))),
         Ok(None) => Err(ServerError::NotFound("page not found".to_string())),
@@ -3390,6 +3392,7 @@ pub async fn handle_refresh_page(
         last_modified: now.clone(),
         sources_updated_count: 0,
         stale_reason: None,
+        pending_rebuild: None,
         user_edited: existing.user_edited,
         relevance_score: 0.0,
         last_edited_by: None,
