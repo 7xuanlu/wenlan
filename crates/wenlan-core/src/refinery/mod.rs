@@ -64,6 +64,34 @@ pub async fn compile_queue_depth(db: &MemoryDB) -> Result<usize, WenlanError> {
         .unwrap_or(0))
 }
 
+/// True iff `WENLAN_PREFER_AGENT_LANE` is truthy. OPT-IN, default OFF.
+///
+/// Spec §3.1 orders compile routing (1) cloud -> daemon compiles; (2) else
+/// agent lane; (3) else on-device compile if healthy. The daemon has no
+/// synchronous way to detect "an agent is watching" the pending-clusters
+/// surface (`POST /api/distill` + the `/distill` skill), so with this flag
+/// OFF (the default, matching every pre-existing Emergence regression test)
+/// a healthy on-device engine compiles directly rather than parking eligible
+/// clusters behind a lane that may never drain them. Turning this ON makes
+/// tier (2) an explicit, operator-chosen preference instead of tier (3)
+/// silently winning by default whenever no cloud provider is configured: an
+/// on-device-only compile (no cloud/API provider in the routing chain) then
+/// always defers to the agent lane — clusters are left pending, exactly the
+/// existing no-lane path — even when the local engine loads healthy. A
+/// cloud/API provider is unaffected either way; it always compiles with the
+/// LLM coherence gate.
+fn agent_lane_preferred() -> bool {
+    std::env::var("WENLAN_PREFER_AGENT_LANE")
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 /// What triggered a refinery cycle. Different triggers run different subsets
 /// of phases — the goal is to do the right work at the right time.
 ///
@@ -535,27 +563,38 @@ pub async fn run_periodic_steep_with_api(
             // provider. An on-device-only compile skips it — the page's
             // keep-card carries that judgment instead.
             //
-            // Resolved ordering: (2) and (3) are lane-AVAILABILITY tiers, not
-            // a strict sequential gate evaluated per tick. The daemon has no
-            // synchronous way to detect "an agent is watching" — the agent
-            // lane is realized passively, by whatever this call could not
-            // finish landing in `result.pending`, which is exactly what the
-            // existing `POST /api/distill` pending-clusters endpoint +
-            // `/distill` skill already surface (no new machinery, per spec).
-            // So when no cloud is configured and the on-device engine loads
-            // healthy, it compiles directly rather than parking eligible
-            // clusters behind a human/agent first; only a true no-lane tick
-            // (no provider, or `is_available()` false) leaves clusters
-            // pending. That pending count feeds the queue depth below,
-            // realizing "no lane -> clusters WAIT". Both properties (compiles
-            // now when healthy; queues cleanly when not) are pinned by
+            // (2) vs (3) is a genuine judgment call, not a mechanical
+            // derivation: the daemon has no synchronous way to detect "an
+            // agent is watching" the pending-clusters surface (`POST
+            // /api/distill` + the `/distill` skill), so it cannot decide
+            // per-tick whether the agent lane is actually available. Default
+            // (OFF, `agent_lane_preferred()` below) lets a healthy on-device
+            // engine compile directly rather than parking eligible clusters
+            // behind a lane that may never drain them — every pre-existing
+            // Emergence regression test pins this. `WENLAN_PREFER_AGENT_LANE`
+            // makes tier (2) an explicit, operator-chosen override instead of
+            // tier (3) always winning by default whenever no cloud is
+            // configured: when ON, an on-device-only compile always defers to
+            // the agent lane (clusters pending) even if the engine is
+            // healthy. Either way, a true no-lane tick (no provider, or
+            // `is_available()` false) leaves clusters pending — that pending
+            // count feeds the queue depth below, realizing "no lane ->
+            // clusters WAIT". Pinned by
             // `emergence_tick_ondevice_backend_skips_coherence_gate_and_creates_pages`
-            // and `emergence_tick_with_unhealthy_engine_persists_pending_queue_depth`.
+            // (flag OFF: compiles now), `emergence_tick_with_agent_lane_preferred_defers_healthy_ondevice_engine`
+            // (flag ON: defers to pending despite a healthy engine), and
+            // `emergence_tick_with_unhealthy_engine_persists_pending_queue_depth`
+            // (unhealthy engine: always defers, flag irrelevant).
             let run_coherence_gate =
                 matches!(compile_llm.map(|l| l.backend()), Some(LlmBackend::Api));
+            let routed_llm = if !run_coherence_gate && agent_lane_preferred() {
+                None
+            } else {
+                compile_llm
+            };
             let result = distill_pages_scoped_gated(
                 db_ref,
-                compile_llm,
+                routed_llm,
                 prompts,
                 distillation,
                 kp_ref,
@@ -1337,6 +1376,14 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|(sys, _)| sys.as_deref() == Some(needle))
+        }
+
+        fn saw_label(&self, needle: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, label)| label.as_deref() == Some(needle))
         }
     }
 
@@ -2273,6 +2320,19 @@ mod tests {
         );
     }
 
+    // `WENLAN_PREFER_AGENT_LANE` is a process-global env var read
+    // synchronously by `agent_lane_preferred()` inside the Emergence phase's
+    // compile-routing decision. Only the two tests below actually depend on
+    // its value: `..._creates_pages` asserts the flag-OFF (default) behavior
+    // and `..._defers_healthy_ondevice_engine` sets it ON via
+    // `temp_env::async_with_vars`. Every other Emergence-phase test in this
+    // module passes `llm=None` at every provider slot, so `compile_llm` is
+    // already `None` and this flag cannot change the outcome (`routed_llm`
+    // stays `None` either way) — no lock needed there. Mirrors the
+    // `EVICT_ENV_LOCK` precedent: every reader AND mutator that DOES depend
+    // on the flag's value shares one lock.
+    static AGENT_LANE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Drives the ACTUAL Emergence phase routing decision inside
     /// `run_periodic_steep_with_api` (not `distill_pages_scoped_gated`
     /// directly, which only proves the gate PARAMETER works, not the
@@ -2284,14 +2344,15 @@ mod tests {
     /// below share the "unlinked" refine-clusters grouping key, so the gate
     /// WOULD fire if wrongly left on (mirrors the fixture in
     /// `synthesis::distill::tests::on_device_only_compile_skips_coherence_gate`).
-    /// Assertion (c) resolves spec §3.1's ordering language: "(2) agent-lane"
-    /// and "(3) on-device-if-healthy" are lane-AVAILABILITY tiers, not a
-    /// strict per-tick preference — a healthy on-device engine compiles now
-    /// instead of parking eligible clusters behind a human/agent (see the
-    /// routing comment at the Emergence call site above for the full
-    /// rationale).
+    /// Assertion (c) pins the DEFAULT (`WENLAN_PREFER_AGENT_LANE` unset/OFF)
+    /// resolution of spec §3.1's ordering language: with the flag off, a
+    /// healthy on-device engine compiles now instead of parking eligible
+    /// clusters behind a human/agent lane (see the routing comment at the
+    /// Emergence call site above for the full rationale, and the companion
+    /// `..._defers_healthy_ondevice_engine` test below for the flag-ON case).
     #[tokio::test]
     async fn emergence_tick_ondevice_backend_skips_coherence_gate_and_creates_pages() {
+        let _serial = AGENT_LANE_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
         let db_topic: Vec<(&str, &str)> = vec![
@@ -2351,17 +2412,110 @@ mod tests {
             pages_after > 0,
             "on-device compile must still synthesize pages, got {pages_after} active pages"
         );
-        // Pins the §3.1 ordering resolution (see the routing comment at the
-        // Emergence call site): a healthy on-device engine resolves eligible
-        // clusters itself in the SAME tick rather than parking them behind the
-        // agent lane's pending queue. If this ever regresses to "queue first,
-        // let an agent/human drain it later" even though the engine is
-        // healthy, this assertion catches it.
+        // Pins the DEFAULT (`WENLAN_PREFER_AGENT_LANE` unset/OFF) resolution
+        // (see the routing comment at the Emergence call site): a healthy
+        // on-device engine resolves eligible clusters itself in the SAME
+        // tick rather than parking them behind the agent lane's pending
+        // queue. If this ever regresses to "queue first, let an agent/human
+        // drain it later" even though the engine is healthy — WITHOUT the
+        // flag being set — this assertion catches it. The companion test
+        // below proves the opposite is true when the flag IS set.
         let queue_depth_after = compile_queue_depth(&db).await.unwrap();
         assert_eq!(
             queue_depth_after, 0,
-            "a healthy on-device compile must resolve both eligible clusters itself, \
+            "a healthy on-device compile must resolve both eligible clusters itself by default, \
              not defer them to the agent-lane pending queue, got queue depth {queue_depth_after}"
+        );
+    }
+
+    /// Companion to the OnDevice case above, with `WENLAN_PREFER_AGENT_LANE`
+    /// explicitly set: the SAME healthy OnDevice-backend provider must now
+    /// leave the eligible cluster pending instead of compiling it, proving
+    /// the flag actually overrides the default in the Emergence phase's
+    /// routing decision (spec §3.1) rather than being dead configuration.
+    #[tokio::test]
+    async fn emergence_tick_with_agent_lane_preferred_defers_healthy_ondevice_engine() {
+        let _serial = AGENT_LANE_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+
+        // A well-formed, eligible cluster (3+ memories, shared space) — same
+        // shape as the unhealthy-engine companion test below, but this time
+        // the provider IS available.
+        for (i, content) in [
+            "libSQL stores vectors using F32_BLOB columns",
+            "libSQL uses DiskANN for vector indexing",
+            "libSQL supports FTS5 full-text search via triggers",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("agent_lane_preferred_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let provider = Arc::new(EmergenceRoutingProvider::new(LlmBackend::OnDevice));
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let result = temp_env::async_with_vars(
+            [("WENLAN_PREFER_AGENT_LANE", Some("1"))],
+            run_periodic_steep_with_api(
+                &db,
+                None,
+                None,
+                Some(&llm),
+                &prompts,
+                &crate::tuning::RefineryConfig::default(),
+                &crate::tuning::ConfidenceConfig::default(),
+                &crate::tuning::DistillationConfig::default(),
+                TriggerKind::Idle,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let emergence = result
+            .phases
+            .iter()
+            .find(|p| p.name == "emergence")
+            .expect("Idle trigger must run the emergence phase");
+        assert!(
+            emergence.error.is_none(),
+            "emergence phase must not error: {:?}",
+            emergence.error
+        );
+        // Isolates the Emergence-specific compile decision from the SAME
+        // Idle trigger's independent ReDistill/Overview-refresh phase, which
+        // also runs `compile_llm` (this same provider) unconditionally to
+        // keep the reserved Overview page in sync (spec §5.3) and is NOT
+        // gated by `WENLAN_PREFER_AGENT_LANE` — a plain page-count or
+        // call-count assertion would conflate the two. "distill_body" is the
+        // label ONLY the cluster-compile path uses (see
+        // `EmergenceRoutingProvider::generate` above); Overview refresh uses
+        // "refresh_page" instead.
+        assert!(
+            !provider.saw_label("distill_body"),
+            "WENLAN_PREFER_AGENT_LANE=1 must defer the eligible cluster to the agent lane \
+             instead of ever invoking the healthy on-device provider to compile it"
+        );
+        let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
+        assert!(
+            cluster_page.is_none(),
+            "WENLAN_PREFER_AGENT_LANE=1 must not synthesize a page from the eligible cluster \
+             via a healthy on-device engine — it must be left for the agent lane instead"
+        );
+        let queue_depth_after = compile_queue_depth(&db).await.unwrap();
+        assert!(
+            queue_depth_after > 0,
+            "WENLAN_PREFER_AGENT_LANE=1 must persist a non-zero compile queue depth for the \
+             cluster it deferred, got {queue_depth_after}"
         );
     }
 
