@@ -64,8 +64,8 @@ pub async fn compile_queue_depth(db: &MemoryDB) -> Result<usize, WenlanError> {
         .unwrap_or(0))
 }
 
-fn on_device_compile_preferred() -> bool {
-    std::env::var("WENLAN_PREFER_ON_DEVICE_COMPILE")
+fn agent_lane_preferred() -> bool {
+    std::env::var("WENLAN_PREFER_AGENT_LANE")
         .ok()
         .map(|v| {
             matches!(
@@ -543,15 +543,6 @@ pub async fn run_periodic_steep_with_api(
     let kp_ref = knowledge_path.as_deref();
     if trigger.runs_phase(Phase::Emergence) {
         let phase = run_phase(Phase::Emergence, || async {
-            // Compile routing (spec §3.1) keys off provider BACKEND, not the
-            // slot a provider arrived in: a cloud/API provider (LlmBackend::Api)
-            // compiles in-daemon with the LLM coherence gate; otherwise the only
-            // provider is on-device, which by default defers to the agent lane
-            // (clusters left pending) and compiles directly in the same tick only
-            // under `WENLAN_PREFER_ON_DEVICE_COMPILE`. A true no-lane tick (no
-            // provider, unhealthy on-device engine, or on-device without the
-            // opt-in) leaves clusters pending — that count feeds the queue depth
-            // persisted below, realizing spec §7's "no lane -> clusters WAIT".
             let cloud_compile_llm = [synthesis_llm, api_llm, external_llm, llm]
                 .into_iter()
                 .flatten()
@@ -563,10 +554,10 @@ pub async fn run_periodic_steep_with_api(
             let run_coherence_gate = cloud_compile_llm.is_some();
             let routed_llm = if cloud_compile_llm.is_some() {
                 cloud_compile_llm
-            } else if on_device_compile_preferred() {
-                on_device_llm.filter(|provider| provider.is_available())
-            } else {
+            } else if agent_lane_preferred() {
                 None
+            } else {
+                on_device_llm.filter(|provider| provider.is_available())
             };
             let result = distill_pages_scoped_gated(
                 db_ref,
@@ -2252,9 +2243,9 @@ mod tests {
 
         // A well-formed, eligible cluster (3+ memories, shared space).
         for (i, content) in [
-            "libSQL stores vectors using F32_BLOB columns",
-            "libSQL uses DiskANN for vector indexing",
-            "libSQL supports FTS5 full-text search via triggers",
+            "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store.",
+            "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code.",
+            "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query.",
         ]
         .iter()
         .enumerate()
@@ -2309,7 +2300,7 @@ mod tests {
     static COMPILE_ROUTING_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
-    async fn emergence_tick_with_ondevice_preferred_skips_coherence_gate_and_creates_pages() {
+    async fn emergence_tick_with_agent_lane_preferred_defers_healthy_ondevice_engine() {
         let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
@@ -2338,7 +2329,7 @@ mod tests {
         let prompts = PromptRegistry::default();
 
         let result = temp_env::async_with_vars(
-            [("WENLAN_PREFER_ON_DEVICE_COMPILE", Some("1"))],
+            [("WENLAN_PREFER_AGENT_LANE", Some("1"))],
             run_periodic_steep_with_api(
                 &db,
                 None,
@@ -2366,39 +2357,43 @@ mod tests {
             emergence.error
         );
         assert!(
-            !provider.saw_system_prompt(&prompts.refine_clusters),
-            "an OnDevice-backend compile routed through run_periodic_steep_with_api must skip the LLM coherence gate"
+            !provider.saw_label("distill_body"),
+            "explicit agent-lane preference must defer eligible clusters instead of invoking the healthy on-device provider"
         );
-        let pages_after = db.count_active_pages().await.unwrap();
+        // The eligible cluster must NOT have grown a page: check the cluster
+        // page by title, not total active-page count. The ReDistill phase's
+        // reserved "Overview" page (`ensure_overview_page`) is always minted
+        // when an LLM is available, so a raw count is never 0 and would test
+        // the wrong thing. Mirrors the sibling default-routing test, which
+        // asserts the same "Test Topic" cluster page IS present.
+        let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
         assert!(
-            pages_after > 0,
-            "on-device compile must still synthesize pages, got {pages_after} active pages"
+            cluster_page.is_none(),
+            "agent-lane preference must not synthesize the cluster page via the healthy on-device engine — it must be deferred to the agent lane"
         );
         let queue_depth_after = compile_queue_depth(&db).await.unwrap();
-        assert_eq!(
-            queue_depth_after, 0,
-            "a preferred healthy on-device compile must resolve both eligible clusters itself, \
-             not defer them to the agent-lane pending queue, got queue depth {queue_depth_after}"
+        assert!(
+            queue_depth_after > 0,
+            "agent-lane preference must persist queued clusters for /distill, got queue depth {queue_depth_after}"
         );
     }
 
     #[tokio::test]
-    async fn emergence_tick_without_cloud_defers_healthy_ondevice_engine_to_agent_lane_by_default()
-    {
+    async fn emergence_tick_without_cloud_uses_healthy_ondevice_engine_by_default() {
         let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
         for (i, content) in [
-            "libSQL stores vectors using F32_BLOB columns",
-            "libSQL uses DiskANN for vector indexing",
-            "libSQL supports FTS5 full-text search via triggers",
+            "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store.",
+            "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code.",
+            "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query.",
         ]
         .iter()
         .enumerate()
         {
             let doc = crate::sources::RawDocument {
                 source: "memory".to_string(),
-                source_id: format!("defer_ondevice_default_{}", i),
+                source_id: format!("ondevice_default_{}", i),
                 title: content.to_string(),
                 content: content.to_string(),
                 space: Some("architecture".to_string()),
@@ -2437,21 +2432,25 @@ mod tests {
             emergence.error
         );
         assert!(
-            !provider.saw_label("distill_body"),
-            "without a cloud provider, default routing must defer the eligible cluster to the agent lane \
-             instead of ever invoking the healthy on-device provider to compile it"
+            !provider.saw_system_prompt(&prompts.refine_clusters),
+            "a default healthy on-device compile must skip the LLM coherence gate"
+        );
+        assert!(
+            provider.saw_label("distill_body"),
+            "without a cloud provider, default routing must invoke the healthy on-device provider \
+             to compile eligible clusters when no agent lane is explicitly preferred"
         );
         let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
         assert!(
-            cluster_page.is_none(),
-            "default routing must not synthesize a page from the eligible cluster \
-             via a healthy on-device engine — it must be left for the agent lane instead"
+            cluster_page.is_some(),
+            "default routing must synthesize a page from the eligible cluster \
+             via the healthy on-device engine"
         );
         let queue_depth_after = compile_queue_depth(&db).await.unwrap();
-        assert!(
-            queue_depth_after > 0,
-            "default routing must persist a non-zero compile queue depth for the \
-             cluster it deferred, got {queue_depth_after}"
+        assert_eq!(
+            queue_depth_after, 0,
+            "default routing must resolve eligible clusters through the healthy on-device engine, \
+             got queue depth {queue_depth_after}"
         );
     }
 
