@@ -528,17 +528,29 @@ pub async fn run_periodic_steep_with_api(
     let kp_ref = knowledge_path.as_deref();
     if trigger.runs_phase(Phase::Emergence) {
         let phase = run_phase(Phase::Emergence, || async {
-            // Compile routing (spec §3.1): the LLM coherence gate (merge/
+            // Compile routing (spec §3.1, preference order: (1) cloud ->
+            // daemon compiles; (2) else agent lane; (3) else on-device if
+            // healthy; no lane -> wait). The LLM coherence gate (merge/
             // split/rename cluster review) only runs for a cloud/API
             // provider. An on-device-only compile skips it — the page's
-            // keep-card carries that judgment instead. No provider at all
-            // (or an unhealthy on-device engine) hits the existing zero-LLM
-            // path inside `distill_pages_scoped_gated`, which leaves clusters
-            // pending rather than half-writing a page — that pending count
-            // is what feeds the queue depth below, realizing "no lane ->
-            // clusters WAIT" (agent lane / no lane are the same pending
-            // state; an agent later drains it via the existing
-            // `POST /api/distill` pending-clusters path).
+            // keep-card carries that judgment instead.
+            //
+            // Resolved ordering: (2) and (3) are lane-AVAILABILITY tiers, not
+            // a strict sequential gate evaluated per tick. The daemon has no
+            // synchronous way to detect "an agent is watching" — the agent
+            // lane is realized passively, by whatever this call could not
+            // finish landing in `result.pending`, which is exactly what the
+            // existing `POST /api/distill` pending-clusters endpoint +
+            // `/distill` skill already surface (no new machinery, per spec).
+            // So when no cloud is configured and the on-device engine loads
+            // healthy, it compiles directly rather than parking eligible
+            // clusters behind a human/agent first; only a true no-lane tick
+            // (no provider, or `is_available()` false) leaves clusters
+            // pending. That pending count feeds the queue depth below,
+            // realizing "no lane -> clusters WAIT". Both properties (compiles
+            // now when healthy; queues cleanly when not) are pinned by
+            // `emergence_tick_ondevice_backend_skips_coherence_gate_and_creates_pages`
+            // and `emergence_tick_with_unhealthy_engine_persists_pending_queue_depth`.
             let run_coherence_gate =
                 matches!(compile_llm.map(|l| l.backend()), Some(LlmBackend::Api));
             let result = distill_pages_scoped_gated(
@@ -2265,12 +2277,19 @@ mod tests {
     /// `run_periodic_steep_with_api` (not `distill_pages_scoped_gated`
     /// directly, which only proves the gate PARAMETER works, not the
     /// backend-based decision that picks it). An OnDevice-backend provider
-    /// must (a) never see the `refine_clusters` coherence-gate system prompt
-    /// and (b) still synthesize pages. Inverting the `Api`/`OnDevice` match at
-    /// the Emergence call site would make assertion (a) fail — the two
-    /// well-separated topics below share the "unlinked" refine-clusters
-    /// grouping key, so the gate WOULD fire if wrongly left on (mirrors the
-    /// fixture in `synthesis::distill::tests::on_device_only_compile_skips_coherence_gate`).
+    /// must (a) never see the `refine_clusters` coherence-gate system prompt,
+    /// (b) still synthesize pages, and (c) leave the compile queue empty
+    /// afterward. Inverting the `Api`/`OnDevice` match at the Emergence call
+    /// site would make assertion (a) fail — the two well-separated topics
+    /// below share the "unlinked" refine-clusters grouping key, so the gate
+    /// WOULD fire if wrongly left on (mirrors the fixture in
+    /// `synthesis::distill::tests::on_device_only_compile_skips_coherence_gate`).
+    /// Assertion (c) resolves spec §3.1's ordering language: "(2) agent-lane"
+    /// and "(3) on-device-if-healthy" are lane-AVAILABILITY tiers, not a
+    /// strict per-tick preference — a healthy on-device engine compiles now
+    /// instead of parking eligible clusters behind a human/agent (see the
+    /// routing comment at the Emergence call site above for the full
+    /// rationale).
     #[tokio::test]
     async fn emergence_tick_ondevice_backend_skips_coherence_gate_and_creates_pages() {
         let (db, _dir) = test_db().await;
@@ -2331,6 +2350,18 @@ mod tests {
         assert!(
             pages_after > 0,
             "on-device compile must still synthesize pages, got {pages_after} active pages"
+        );
+        // Pins the §3.1 ordering resolution (see the routing comment at the
+        // Emergence call site): a healthy on-device engine resolves eligible
+        // clusters itself in the SAME tick rather than parking them behind the
+        // agent lane's pending queue. If this ever regresses to "queue first,
+        // let an agent/human drain it later" even though the engine is
+        // healthy, this assertion catches it.
+        let queue_depth_after = compile_queue_depth(&db).await.unwrap();
+        assert_eq!(
+            queue_depth_after, 0,
+            "a healthy on-device compile must resolve both eligible clusters itself, \
+             not defer them to the agent-lane pending queue, got queue depth {queue_depth_after}"
         );
     }
 
