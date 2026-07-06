@@ -1262,6 +1262,132 @@ fn has_capture_seed_floor(memories: &[ClusterMemRow], cluster: &DistillationClus
         >= MIN_CAPTURE_SEED_MEMBERS
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DistillationClusterMode {
+    SpaceScoped,
+    Global,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cluster_distillation_rows(
+    memories: &[ClusterMemRow],
+    similarity_threshold: f64,
+    min_size: usize,
+    max_clusters: usize,
+    token_limit: usize,
+    max_unlinked_cluster_size: usize,
+    max_grouped_cluster_size: usize,
+    mode: DistillationClusterMode,
+) -> Vec<DistillationCluster> {
+    let mut clusters: Vec<DistillationCluster> = Vec::new();
+
+    let emit_split = |cluster: DistillationCluster, clusters: &mut Vec<DistillationCluster>| {
+        for split in sub_cluster_by_tokens(memories, cluster, token_limit, min_size) {
+            if has_capture_seed_floor(memories, &split) {
+                clusters.push(split);
+            }
+        }
+    };
+
+    let process_bucket = |bucket_label: &str,
+                          indices: &[usize],
+                          cap: usize,
+                          clusters: &mut Vec<DistillationCluster>| {
+        let sub = cluster_by_similarity(memories, indices, similarity_threshold);
+        for group in sub {
+            if group.len() < min_size {
+                continue;
+            }
+            if group.len() > cap {
+                let tighter = (similarity_threshold + 0.05).min(0.92);
+                log::info!(
+                    "[distill] re-splitting oversized {} cluster: \
+                         {} memories at threshold {:.2} (cap = {})",
+                    bucket_label,
+                    group.len(),
+                    tighter,
+                    cap,
+                );
+                let resplit = cluster_by_similarity(memories, &group, tighter);
+                for sub_group in resplit {
+                    if sub_group.len() < min_size {
+                        continue;
+                    }
+                    if sub_group.len() > cap {
+                        log::warn!(
+                            "[distill] dropping {} sub-cluster after re-split: \
+                                 {} memories still > cap {} -- raise \
+                                 max_{}_cluster_size if this is a genuine page",
+                            bucket_label,
+                            sub_group.len(),
+                            cap,
+                            bucket_label,
+                        );
+                        continue;
+                    }
+                    let cluster = build_distillation_cluster(memories, &sub_group);
+                    emit_split(cluster, clusters);
+                }
+                continue;
+            }
+            let cluster = build_distillation_cluster(memories, &group);
+            emit_split(cluster, clusters);
+        }
+    };
+
+    match mode {
+        DistillationClusterMode::SpaceScoped => {
+            let mut space_groups: std::collections::HashMap<String, Vec<usize>> =
+                std::collections::HashMap::new();
+            let mut unlinked: Vec<usize> = Vec::new();
+
+            for (i, mem) in memories.iter().enumerate() {
+                match mem.space.as_deref() {
+                    Some(space) if !space.is_empty() => {
+                        space_groups.entry(space.to_string()).or_default().push(i);
+                    }
+                    _ => unlinked.push(i),
+                }
+            }
+
+            for indices in space_groups.values() {
+                process_bucket("space", indices, max_grouped_cluster_size, &mut clusters);
+            }
+
+            if unlinked.len() >= min_size {
+                process_bucket(
+                    "unlinked",
+                    &unlinked,
+                    max_unlinked_cluster_size,
+                    &mut clusters,
+                );
+            }
+
+            log::info!(
+                "[distill] space_groups={}, unlinked={}, clusters_found={}",
+                space_groups.len(),
+                unlinked.len(),
+                clusters.len()
+            );
+        }
+        DistillationClusterMode::Global => {
+            let indices: Vec<usize> = (0..memories.len()).collect();
+            if indices.len() >= min_size {
+                process_bucket("global", &indices, max_grouped_cluster_size, &mut clusters);
+            }
+            log::info!(
+                "[distill] global_candidates={}, clusters_found={}",
+                indices.len(),
+                clusters.len()
+            );
+        }
+    }
+
+    clusters.sort_by_key(|c| std::cmp::Reverse(c.source_ids.len()));
+    clusters.truncate(max_clusters);
+    clusters
+}
+
 // ===== Public Types =====
 //
 // Most DTOs now live in `wenlan-types` so the server crate and downstream
@@ -18673,129 +18799,42 @@ impl MemoryDB {
             return Ok(vec![]);
         }
 
-        // Space is the ONLY partition (spec §3.2/§8). The entity/community
-        // buckets are deleted: they were machine-derived and laggy (the
-        // fragmentation defect — two same-topic memories in different entity
-        // buckets were never compared). A page lives in one human-declared
-        // space, so all same-space memories are clustered together; memories
-        // with no space fall into a single unlinked catch-all with the
-        // tighter cap. The staging pool is already space-filtered when the
-        // caller passes a space; when it doesn't (full scan), we still never
-        // cross a space boundary.
-        let mut space_groups: std::collections::HashMap<String, Vec<usize>> =
-            std::collections::HashMap::new();
-        let mut unlinked: Vec<usize> = Vec::new();
+        Ok(cluster_distillation_rows(
+            &memories,
+            similarity_threshold,
+            min_size,
+            max_clusters,
+            token_limit,
+            max_unlinked_cluster_size,
+            max_grouped_cluster_size,
+            DistillationClusterMode::SpaceScoped,
+        ))
+    }
 
-        for (i, mem) in memories.iter().enumerate() {
-            match mem.space.as_deref() {
-                Some(space) if !space.is_empty() => {
-                    space_groups.entry(space.to_string()).or_default().push(i);
-                }
-                // No declared space: the grab-bag catch-all, capped tighter.
-                _ => unlinked.push(i),
-            }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_cross_space_distillation_clusters(
+        &self,
+        similarity_threshold: f64,
+        min_size: usize,
+        max_clusters: usize,
+        token_limit: usize,
+        max_unlinked_cluster_size: usize,
+        max_grouped_cluster_size: usize,
+    ) -> Result<Vec<DistillationCluster>, WenlanError> {
+        let memories = self.query_distillation_staging_pool(None, None).await?;
+        if memories.is_empty() {
+            return Ok(vec![]);
         }
-
-        let mut clusters: Vec<DistillationCluster> = Vec::new();
-
-        // Process one partition's similarity-clustered groups with a hard size
-        // cap. Groups that exceed the cap re-cluster once at a tighter
-        // threshold; sub-groups still over the cap are dropped with a warn.
-        // Each surviving cluster is token-split (floor-checked) and must clear
-        // the capture seed floor (>= 3 captures) before it seeds a page —
-        // folder documents recruit as evidence but never seed (spec §4.2/§4.3).
-        //
-        // Cosine similarity is logarithmic in semantic distance — +0.1 from
-        // 0.85 lands at 0.95 (near-duplicate), which drops most legitimate
-        // sub-topics at min_size. +0.05 with a cap of 0.92 is the sweet spot.
-        // Token-split a candidate, then emit only the sub-clusters that clear
-        // the capture seed floor (>= 3 captures). Folder docs recruit but
-        // never seed (spec §4.2/§4.3).
-        let emit_split = |cluster: DistillationCluster, clusters: &mut Vec<DistillationCluster>| {
-            for split in sub_cluster_by_tokens(&memories, cluster, token_limit, min_size) {
-                if has_capture_seed_floor(&memories, &split) {
-                    clusters.push(split);
-                }
-            }
-        };
-
-        let process_bucket =
-            |bucket_label: &str,
-             indices: &[usize],
-             cap: usize,
-             clusters: &mut Vec<DistillationCluster>| {
-                let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
-                for group in sub {
-                    if group.len() < min_size {
-                        continue;
-                    }
-                    if group.len() > cap {
-                        let tighter = (similarity_threshold + 0.05).min(0.92);
-                        log::info!(
-                            "[distill] re-splitting oversized {} cluster: \
-                         {} memories at threshold {:.2} (cap = {})",
-                            bucket_label,
-                            group.len(),
-                            tighter,
-                            cap,
-                        );
-                        let resplit = cluster_by_similarity(&memories, &group, tighter);
-                        for sub_group in resplit {
-                            if sub_group.len() < min_size {
-                                continue;
-                            }
-                            if sub_group.len() > cap {
-                                // warn! not info! — log filter default is
-                                // warn (per CLAUDE.md), so a silently
-                                // dropped cluster of legitimately related
-                                // memories actually surfaces in operator
-                                // logs instead of vanishing.
-                                log::warn!(
-                                    "[distill] dropping {} sub-cluster after re-split: \
-                                 {} memories still > cap {} — raise \
-                                 max_{}_cluster_size if this is a genuine page",
-                                    bucket_label,
-                                    sub_group.len(),
-                                    cap,
-                                    bucket_label,
-                                );
-                                continue;
-                            }
-                            let cluster = build_distillation_cluster(&memories, &sub_group);
-                            emit_split(cluster, clusters);
-                        }
-                        continue;
-                    }
-                    let cluster = build_distillation_cluster(&memories, &group);
-                    emit_split(cluster, clusters);
-                }
-            };
-
-        for indices in space_groups.values() {
-            process_bucket("space", indices, max_grouped_cluster_size, &mut clusters);
-        }
-
-        if unlinked.len() >= min_size {
-            process_bucket(
-                "unlinked",
-                &unlinked,
-                max_unlinked_cluster_size,
-                &mut clusters,
-            );
-        }
-
-        log::info!(
-            "[distill] space_groups={}, unlinked={}, clusters_found={}",
-            space_groups.len(),
-            unlinked.len(),
-            clusters.len()
-        );
-
-        // Sort by size descending (larger clusters = more value)
-        clusters.sort_by_key(|c| std::cmp::Reverse(c.source_ids.len()));
-        clusters.truncate(max_clusters);
-
-        Ok(clusters)
+        Ok(cluster_distillation_rows(
+            &memories,
+            similarity_threshold,
+            min_size,
+            max_clusters,
+            token_limit,
+            max_unlinked_cluster_size,
+            max_grouped_cluster_size,
+            DistillationClusterMode::Global,
+        ))
     }
 
     // ==================== Recent Memories (for recap generation) ====================

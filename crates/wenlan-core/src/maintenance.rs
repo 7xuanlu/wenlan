@@ -19,6 +19,11 @@ use crate::synthesis::distill::{refresh_page, RefreshReason};
 #[derive(Debug, Clone)]
 pub struct MaintenanceTickConfig {
     pub page_match_threshold: f64,
+    pub formation_threshold: f64,
+    pub page_min_cluster_size: usize,
+    pub token_limit: usize,
+    pub max_unlinked_cluster_size: usize,
+    pub max_grouped_cluster_size: usize,
     pub max_per_tick: usize,
 }
 
@@ -31,6 +36,7 @@ pub struct MaintenanceTickResult {
     pub stale_human_queued: usize,
     pub orphan_labels_checked: usize,
     pub overview_refreshed: usize,
+    pub discovery_cards_emitted: usize,
 }
 
 pub async fn run_maintenance_tick(
@@ -53,6 +59,22 @@ pub async fn run_maintenance_tick(
     }
 
     result.orphan_labels_checked = db.list_orphan_link_labels(1).await?.len();
+
+    let discovery_clusters = db
+        .find_cross_space_distillation_clusters(
+            config.formation_threshold,
+            config.page_min_cluster_size,
+            max_per_tick,
+            config.token_limit,
+            config.max_unlinked_cluster_size,
+            config.max_grouped_cluster_size,
+        )
+        .await?;
+    for cluster in discovery_clusters.iter().take(max_per_tick) {
+        if emit_cross_space_discovery_card(db, &cluster.source_ids).await? {
+            result.discovery_cards_emitted += 1;
+        }
+    }
 
     let Some(provider) = llm.filter(|provider| provider.is_available()) else {
         let stale = db.list_stale_pages("source_updated").await?;
@@ -154,6 +176,69 @@ fn page_merge_card_id(left: &str, right: &str) -> String {
     )
 }
 
+async fn emit_cross_space_discovery_card(
+    db: &MemoryDB,
+    source_ids: &[String],
+) -> Result<bool, WenlanError> {
+    let spaces = spaces_for_sources(db, source_ids).await?;
+    if spaces.len() < 2 {
+        return Ok(false);
+    }
+
+    let id = cross_space_discovery_card_id(source_ids);
+    if db.get_refinement_proposal(&id).await?.is_some() {
+        return Ok(false);
+    }
+
+    let payload = serde_json::json!({
+        "memory_count": source_ids.len(),
+        "spaces": spaces,
+        "allowed_actions": ["dismiss", "pick_space"],
+    })
+    .to_string();
+    db.insert_refinement_proposal(
+        &id,
+        "cross_space_discovery",
+        source_ids,
+        Some(&payload),
+        1.0,
+    )
+    .await?;
+    db.resolve_refinement_if_open(&id, "awaiting_review")
+        .await?;
+    Ok(true)
+}
+
+async fn spaces_for_sources(
+    db: &MemoryDB,
+    source_ids: &[String],
+) -> Result<Vec<String>, WenlanError> {
+    let mut spaces = std::collections::BTreeSet::new();
+    for source_id in source_ids {
+        if let Some(space) = db.get_memory_space(source_id).await? {
+            if !space.is_empty() {
+                spaces.insert(space);
+            }
+        }
+    }
+    Ok(spaces.into_iter().collect())
+}
+
+fn cross_space_discovery_card_id(source_ids: &[String]) -> String {
+    let mut ids = source_ids.to_vec();
+    ids.sort();
+    let mut hash = 0xcbf29ce484222325u64;
+    for id in ids {
+        for byte in id.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("cross_space_discovery_{hash:016x}")
+}
+
 fn stable_fragment(id: &str) -> String {
     id.chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -243,8 +328,220 @@ mod tests {
     fn config() -> MaintenanceTickConfig {
         MaintenanceTickConfig {
             page_match_threshold: 0.85,
+            formation_threshold: 0.60,
+            page_min_cluster_size: 3,
+            token_limit: 3500,
+            max_unlinked_cluster_size: 20,
+            max_grouped_cluster_size: 20,
             max_per_tick: 5,
         }
+    }
+
+    fn discovery_config() -> MaintenanceTickConfig {
+        MaintenanceTickConfig {
+            page_match_threshold: 0.85,
+            formation_threshold: 0.80,
+            page_min_cluster_size: 3,
+            token_limit: 3500,
+            max_unlinked_cluster_size: 20,
+            max_grouped_cluster_size: 20,
+            max_per_tick: 5,
+        }
+    }
+
+    fn vec_to_sql(v: &[f32]) -> String {
+        let mut out = String::with_capacity(v.len() * 10);
+        out.push('[');
+        for (i, value) in v.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            use std::fmt::Write;
+            let _ = write!(out, "{value:.6}");
+        }
+        out.push(']');
+        out
+    }
+
+    fn unit_vec(axis: usize) -> Vec<f32> {
+        let mut v = vec![0.0; 768];
+        v[axis] = 1.0;
+        v
+    }
+
+    async fn insert_staging_memory(
+        db: &MemoryDB,
+        source_id: &str,
+        content: &str,
+        space: &str,
+        embedding: &[f32],
+        last_modified: i64,
+    ) {
+        let embedding_sql = vec_to_sql(embedding);
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (
+                id, content, source, source_id, title, chunk_index, last_modified,
+                chunk_type, memory_type, space, source_agent, confidence,
+                confirmed, word_count, enrichment_status, quality, is_recap,
+                supersede_mode, stability, embedding
+             )
+             VALUES (
+                ?1, ?2, 'memory', ?1, ?3, 0, ?4, 'document', 'fact',
+                ?5, 'codex-test', 0.9, 1, 8, 'enriched', 'high', 0,
+                'hide', 'learned', vector32(?6)
+             )",
+            libsql::params![
+                source_id,
+                content,
+                content.chars().take(40).collect::<String>(),
+                last_modified,
+                space,
+                embedding_sql.as_str(),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn active_page_count(db: &MemoryDB) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM pages WHERE status = 'active'", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    async fn page_source_count(db: &MemoryDB) -> i64 {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM page_sources", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn cross_space_topic_emits_one_discovery_card_without_page_mutation() {
+        let (db, _db_dir) = new_test_db().await;
+        let embedding = unit_vec(42);
+        let now = chrono::Utc::now().timestamp();
+        for (source_id, space) in [
+            ("cross_disc_work_a", "work"),
+            ("cross_disc_personal_a", "personal"),
+            ("cross_disc_work_b", "work"),
+        ] {
+            insert_staging_memory(
+                &db,
+                source_id,
+                "Incremental Rust compilation cache tuning for shared developer machines.",
+                space,
+                &embedding,
+                now,
+            )
+            .await;
+        }
+
+        let result = run_maintenance_tick(
+            &db,
+            None,
+            &PromptRegistry::default(),
+            &discovery_config(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.discovery_cards_emitted, 1);
+        assert_eq!(active_page_count(&db).await, 0);
+        assert_eq!(page_source_count(&db).await, 0);
+
+        let discovery_cards: Vec<_> = db
+            .get_pending_refinements()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.action == "cross_space_discovery")
+            .collect();
+        assert_eq!(
+            discovery_cards.len(),
+            1,
+            "one cross-space cluster should produce exactly one discovery card"
+        );
+        assert_eq!(discovery_cards[0].source_ids.len(), 3);
+        let payload = discovery_cards[0]
+            .payload
+            .as_deref()
+            .expect("discovery card should carry a typed payload");
+        assert!(
+            payload.contains("\"memory_count\":3"),
+            "payload should describe the card prompt facts, got {payload}"
+        );
+        assert!(
+            payload.contains("\"work\"") && payload.contains("\"personal\""),
+            "payload should name every space involved, got {payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dismissed_cross_space_discovery_card_stays_dismissed_across_next_tick() {
+        let (db, _db_dir) = new_test_db().await;
+        let embedding = unit_vec(43);
+        let now = chrono::Utc::now().timestamp();
+        for (source_id, space) in [
+            ("cross_dismiss_work_a", "work"),
+            ("cross_dismiss_personal_a", "personal"),
+            ("cross_dismiss_work_b", "work"),
+        ] {
+            insert_staging_memory(
+                &db,
+                source_id,
+                "Cross-space topic cards should not resurrect after dismissal.",
+                space,
+                &embedding,
+                now,
+            )
+            .await;
+        }
+
+        let first = run_maintenance_tick(
+            &db,
+            None,
+            &PromptRegistry::default(),
+            &discovery_config(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.discovery_cards_emitted, 1);
+        let card = db
+            .get_pending_refinements()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.action == "cross_space_discovery")
+            .expect("cross-space discovery card exists");
+        db.resolve_refinement_if_open(&card.id, "dismissed")
+            .await
+            .unwrap();
+
+        let second = run_maintenance_tick(
+            &db,
+            None,
+            &PromptRegistry::default(),
+            &discovery_config(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.discovery_cards_emitted, 0);
+        let dismissed = db
+            .get_refinement_proposal(&card.id)
+            .await
+            .unwrap()
+            .expect("dismissed discovery card remains");
+        assert_eq!(dismissed.status, "dismissed");
     }
 
     #[tokio::test]

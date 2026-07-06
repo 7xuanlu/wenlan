@@ -260,6 +260,20 @@ pub struct CreateConceptRequest {
     pub workspace: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum AcceptRefinementRequest {
+    Accept {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notes: Option<String>,
+    },
+    PickSpace {
+        space: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notes: Option<String>,
+    },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchPagesRequest {
     pub query: String,

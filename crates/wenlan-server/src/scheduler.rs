@@ -574,6 +574,11 @@ async fn fire_maintenance_safe(
 ) {
     let config = wenlan_core::maintenance::MaintenanceTickConfig {
         page_match_threshold: distillation_cfg.page_match_threshold,
+        formation_threshold: distillation_cfg.formation_threshold,
+        page_min_cluster_size: distillation_cfg.page_min_cluster_size,
+        token_limit: distillation_cfg.ondevice_token_limit,
+        max_unlinked_cluster_size: distillation_cfg.max_unlinked_cluster_size,
+        max_grouped_cluster_size: distillation_cfg.max_grouped_cluster_size,
         max_per_tick: 5,
     };
     match wenlan_core::maintenance::run_maintenance_tick(db, llm, prompts, &config, knowledge_path)
@@ -581,8 +586,9 @@ async fn fire_maintenance_safe(
     {
         Ok(result) => {
             tracing::info!(
-                "[scheduler] {label} maintenance: {} merge card(s), {} machine refresh(es), {} human card(s), {} orphan label(s), {} overview refresh(es)",
+                "[scheduler] {label} maintenance: {} merge card(s), {} discovery card(s), {} machine refresh(es), {} human card(s), {} orphan label(s), {} overview refresh(es)",
                 result.merge_cards_emitted,
+                result.discovery_cards_emitted,
                 result.stale_machine_refreshed,
                 result.stale_human_cards,
                 result.orphan_labels_checked,
@@ -1237,6 +1243,11 @@ mod tests {
             &prompts,
             &wenlan_core::maintenance::MaintenanceTickConfig {
                 page_match_threshold: 0.85,
+                formation_threshold: 0.60,
+                page_min_cluster_size: 3,
+                token_limit: 3500,
+                max_unlinked_cluster_size: 20,
+                max_grouped_cluster_size: 20,
                 max_per_tick: 5,
             },
             None,

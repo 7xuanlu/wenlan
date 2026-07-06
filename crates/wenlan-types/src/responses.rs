@@ -677,6 +677,15 @@ pub enum ProposalAction {
     SuggestEntity,
     DedupMerge,
     PageMerge,
+    CrossSpaceDiscovery,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefinementCardAction {
+    Accept,
+    Dismiss,
+    PickSpace,
 }
 
 /// Tagged-union payload emitted by the background refinery.
@@ -713,6 +722,11 @@ pub enum RefinementPayload {
         similarity: Option<f64>,
         source_overlap: usize,
         source_overlap_ratio: f64,
+    },
+    CrossSpaceDiscovery {
+        memory_count: usize,
+        spaces: Vec<String>,
+        allowed_actions: Vec<RefinementCardAction>,
     },
 }
 
@@ -758,6 +772,10 @@ mod refinement_wire_tests {
             ),
             ("\"suggest_entity\"", ProposalAction::SuggestEntity),
             ("\"dedup_merge\"", ProposalAction::DedupMerge),
+            (
+                "\"cross_space_discovery\"",
+                ProposalAction::CrossSpaceDiscovery,
+            ),
         ];
         for (json, expected) in cases {
             let parsed: ProposalAction = serde_json::from_str(json).unwrap();
@@ -794,6 +812,33 @@ mod refinement_wire_tests {
         let json = r#"{"action":"dedup_merge"}"#;
         let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
         assert!(matches!(parsed, RefinementPayload::DedupMerge));
+    }
+
+    #[test]
+    fn refinement_payload_cross_space_discovery_round_trip() {
+        let json = r#"{"action":"cross_space_discovery","memory_count":3,"spaces":["personal","work"],"allowed_actions":["dismiss","pick_space"]}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::CrossSpaceDiscovery {
+                memory_count,
+                ref spaces,
+                ref allowed_actions,
+            } => {
+                assert_eq!(memory_count, 3);
+                assert_eq!(spaces, &vec!["personal".to_string(), "work".to_string()]);
+                assert_eq!(
+                    allowed_actions,
+                    &vec![
+                        RefinementCardAction::Dismiss,
+                        RefinementCardAction::PickSpace
+                    ]
+                );
+            }
+            _ => panic!("expected CrossSpaceDiscovery"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["action"], "cross_space_discovery");
+        assert_eq!(back["memory_count"], 3);
     }
 
     #[test]

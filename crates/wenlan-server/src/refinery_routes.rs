@@ -3,13 +3,17 @@
 //!
 //! Convergent with daemon-side `synthesis::refinement_queue::resolve_proposal`.
 
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use wenlan_core::synthesis::refinement_queue::{apply_refinement, resolve_proposal, ResolveStatus};
+use wenlan_core::synthesis::refinement_queue::{
+    apply_refinement_with_decision, resolve_proposal, RefinementDecision, ResolveStatus,
+};
+use wenlan_types::requests::AcceptRefinementRequest;
 use wenlan_types::responses::{
     AcceptRefinementResponse, ListRefinementsResponse, ProposalAction, RefinementPayload,
     RefinementProposalSummary, RejectRefinementResponse,
@@ -98,6 +102,7 @@ pub async fn handle_accept_refinement(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    body: Bytes,
 ) -> Result<Json<AcceptRefinementResponse>, ServerError> {
     let agent = extract_agent_name(&headers, None);
 
@@ -106,7 +111,8 @@ pub async fn handle_accept_refinement(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
-    let outcome = apply_refinement(&db, &id, &agent)
+    let decision = parse_accept_decision(&body)?;
+    let outcome = apply_refinement_with_decision(&db, &id, &agent, decision)
         .await
         .map_err(ServerError::from)?;
 
@@ -124,8 +130,23 @@ fn parse_action(s: &str) -> Option<ProposalAction> {
         "suggest_entity" => Some(ProposalAction::SuggestEntity),
         "dedup_merge" => Some(ProposalAction::DedupMerge),
         "page_merge" => Some(ProposalAction::PageMerge),
+        "cross_space_discovery" => Some(ProposalAction::CrossSpaceDiscovery),
         _ => None,
     }
+}
+
+fn parse_accept_decision(body: &[u8]) -> Result<RefinementDecision, ServerError> {
+    if body.is_empty() {
+        return Ok(RefinementDecision::Accept { notes: None });
+    }
+    let request: AcceptRefinementRequest = serde_json::from_slice(body)
+        .map_err(|e| ServerError::ValidationError(format!("invalid accept body: {e}")))?;
+    Ok(match request {
+        AcceptRefinementRequest::Accept { notes } => RefinementDecision::Accept { notes },
+        AcceptRefinementRequest::PickSpace { space, notes } => {
+            RefinementDecision::PickSpace { space, notes }
+        }
+    })
 }
 
 /// Convert the raw daemon payload string into the typed wire enum.
@@ -214,6 +235,38 @@ mod parse_payload_tests {
     fn dedup_merge_unit_with_no_payload() {
         let parsed = parse_payload(None, "dedup_merge").unwrap();
         assert!(matches!(parsed, RefinementPayload::DedupMerge));
+    }
+
+    #[test]
+    fn parses_cross_space_discovery_payload() {
+        let raw = r#"{"memory_count":3,"spaces":["personal","work"],"allowed_actions":["dismiss","pick_space"]}"#;
+        let parsed = parse_payload(Some(raw), "cross_space_discovery").unwrap();
+        match parsed {
+            RefinementPayload::CrossSpaceDiscovery {
+                memory_count,
+                spaces,
+                ..
+            } => {
+                assert_eq!(memory_count, 3);
+                assert_eq!(spaces, vec!["personal".to_string(), "work".to_string()]);
+            }
+            _ => panic!("expected CrossSpaceDiscovery"),
+        }
+    }
+
+    #[test]
+    fn parses_pick_space_accept_body() {
+        let decision = parse_accept_decision(
+            br#"{"action":"pick_space","space":"work","notes":"keep it with engineering"}"#,
+        )
+        .unwrap();
+        match decision {
+            RefinementDecision::PickSpace { space, notes } => {
+                assert_eq!(space, "work");
+                assert_eq!(notes.as_deref(), Some("keep it with engineering"));
+            }
+            _ => panic!("expected PickSpace decision"),
+        }
     }
 
     #[test]

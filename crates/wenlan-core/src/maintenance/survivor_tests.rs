@@ -67,6 +67,11 @@ async fn set_page_selection_fixtures(
 fn config() -> MaintenanceTickConfig {
     MaintenanceTickConfig {
         page_match_threshold: 0.85,
+        formation_threshold: 0.60,
+        page_min_cluster_size: 3,
+        token_limit: 3500,
+        max_unlinked_cluster_size: 20,
+        max_grouped_cluster_size: 20,
         max_per_tick: 5,
     }
 }
