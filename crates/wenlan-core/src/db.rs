@@ -31993,9 +31993,27 @@ pub(crate) mod tests {
         row.get::<i64>(0).unwrap()
     }
 
+    // `WENLAN_ENABLE_EVICTION` is a process-global env var read synchronously
+    // by `eviction_enabled()` inside the refinery's Evict phase gate AND by
+    // every eviction test below via `evict_stale`. `temp_env::async_with_vars`
+    // mutates that global for the duration of a future but does not
+    // serialize against other tests doing the same (or against tests that
+    // merely read the ambient value across an `.await`) — two such tests
+    // running concurrently can corrupt each other's view of the flag mid-run.
+    // This is the ONE crate-shared lock (`pub(crate)` so
+    // `crate::refinery::tests` can import and share it too — see that
+    // module's Daily/Backstop trigger tests, which read this same ambient
+    // flag) that every reader AND mutator of `WENLAN_ENABLE_EVICTION` must
+    // take, mirroring the `PRF_ENV_LOCK` / `SALIENCE_ENV_LOCK` /
+    // `RERANK_BLEND_ENV_LOCK` / `MAGNITUDE_ENV_LOCK` precedent above (a
+    // `tokio::sync::Mutex` avoids the `await_holding_lock` lint a
+    // `std::sync::Mutex` would trip).
+    pub(crate) static EVICT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     // A1 — stale low-confidence aged rows get archived, never deleted.
     #[tokio::test]
     async fn test_evict_stale_archives_low_confidence_aged_rows() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         for i in 0..3 {
             seed_evict_row(
@@ -32035,6 +32053,7 @@ pub(crate) mod tests {
     // A2 — confirmed / pinned / Protected-tier rows are immune (load-bearing).
     #[tokio::test]
     async fn test_evict_stale_spares_confirmed_pinned_protected() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // confirmed=1 (note: setting confirmed without unconfirm trigger keeps pinned state)
         seed_evict_row(
@@ -32089,6 +32108,7 @@ pub(crate) mod tests {
     // A3 — age gate holds independently of confidence: fresh low-conf survives.
     #[tokio::test]
     async fn test_evict_stale_respects_age_gate() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         seed_evict_row(
             &db,
@@ -32116,6 +32136,7 @@ pub(crate) mod tests {
     // A4 — confidence floor holds independently of age: old valuable survives.
     #[tokio::test]
     async fn test_evict_stale_respects_confidence_floor() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         seed_evict_row(
             &db,
@@ -32143,6 +32164,7 @@ pub(crate) mod tests {
     // A5 — per_space_cap archives the lowest-confidence overflow first.
     #[tokio::test]
     async fn test_evict_stale_per_space_cap_evicts_lowest_first() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let confs = [0.9_f64, 0.8, 0.2, 0.15, 0.1];
         for (i, c) in confs.iter().enumerate() {
@@ -32194,6 +32216,7 @@ pub(crate) mod tests {
     // Without the age gate, fresh_lowconf (0.05) would be the first row archived.
     #[tokio::test]
     async fn test_evict_stale_per_space_cap_spares_fresh_rows() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // Three aged rows (cap-eligible) + one fresh row in the same space.
         for (i, c) in [0.8_f64, 0.6, 0.4].iter().enumerate() {
@@ -32272,6 +32295,7 @@ pub(crate) mod tests {
     // A6 — default OFF is a no-op; flag ON runs.
     #[tokio::test]
     async fn test_evict_stale_disabled_by_default_is_noop() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         seed_evict_row(
             &db,
@@ -32319,6 +32343,7 @@ pub(crate) mod tests {
     // A7 — empty DB is a clean no-op when enabled.
     #[tokio::test]
     async fn test_evict_stale_empty_db_is_clean_noop() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
@@ -32338,6 +32363,7 @@ pub(crate) mod tests {
     // that the retrieval exclusion (not just the marker flip) is wired up.
     #[tokio::test]
     async fn test_evict_stale_is_reversible_and_excluded_from_search() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // Two rows with DISTINCT (so they survive search's near-dup collapse)
         // but topically-related content, both matching a "kubernetes" query.
@@ -32450,6 +32476,75 @@ pub(crate) mod tests {
             rec_ids.contains(&"rev_row"),
             "un-evicted rev_row must REAPPEAR in search, got {:?}",
             rec_ids
+        );
+    }
+
+    // Regression test for a prior incomplete flaky-test fix: `EVICT_ENV_LOCK`
+    // must be the ONE process-wide lock that every reader AND mutator of
+    // `WENLAN_ENABLE_EVICTION` shares. A "reader" future (mirroring
+    // `refinery::tests::test_daily_trigger_runs_only_maintenance_phases`,
+    // which holds the lock and depends on the ambient flag staying unset
+    // across an `.await`) races a "mutator" future that mirrors one of the 9
+    // `db.rs` `evict_stale` tests, which (per the same fix applied to those
+    // tests just above) now ALSO takes `EVICT_ENV_LOCK` before mutating —
+    // closing the gap the earlier fix left open (it serialized
+    // `refinery::tests`'s 5 call sites against each other, but not against
+    // `db::tests`'s own 9 tests mutating the same process-global env var).
+    // Note this is NOT protected by `temp_env`'s own internal `SERIAL_TEST`
+    // mutex either: that mutex only excludes OTHER `temp_env` callers, but
+    // the reader here (like the real Daily/Backstop tests) reads the ambient
+    // flag via a plain `eviction_enabled()` call, never going through
+    // `temp_env` itself. Uses `tokio::join!` (not `tokio::spawn`, which would
+    // require the `temp_env` future to be `Send` — it isn't, it holds a
+    // `parking_lot::ReentrantMutexGuard`) so both futures are polled
+    // cooperatively on the current task; the sleep windows are sized with
+    // generous margin (a 5x ratio between the mutator's active-flip duration
+    // and the reader's single check point) so the interleaving the test
+    // exercises is not scheduler-luck. Deleting the mutator's
+    // `EVICT_ENV_LOCK.lock().await` line reproduces the original gap and
+    // fails this test (verified before this fix landed).
+    #[tokio::test]
+    async fn test_evict_env_lock_shared_excludes_unlocked_mutator() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let observed_flip = Arc::new(AtomicBool::new(false));
+        let observed_flip_reader = observed_flip.clone();
+
+        // Reader: acquires EVICT_ENV_LOCK, unsets the flag, and checks it
+        // ONCE after a 50ms window — mirroring a Daily/Backstop trigger test
+        // that reads the ambient flag after its own multi-phase `.await` run.
+        let reader = async {
+            let _serial = EVICT_ENV_LOCK.lock().await;
+            temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", None::<&str>)], async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if eviction_enabled() {
+                    observed_flip_reader.store(true, Ordering::SeqCst);
+                }
+            })
+            .await;
+        };
+
+        // Mutator: mirrors one of the (now-fixed) `db.rs` eviction tests —
+        // takes EVICT_ENV_LOCK too, so it must wait for the reader's window
+        // to close before it can flip the flag.
+        let mutator = async {
+            let _serial = EVICT_ENV_LOCK.lock().await;
+            temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+            })
+            .await;
+        };
+
+        tokio::join!(reader, mutator);
+
+        assert!(
+            !observed_flip.load(Ordering::SeqCst),
+            "reader observed WENLAN_ENABLE_EVICTION flip to '1' mid-window: an \
+             unlocked mutator raced a lock-holding reader — exactly the \
+             corruption class left open when only refinery::tests declared its \
+             own EVICT_ENV_LOCK instead of sharing db::tests's"
         );
     }
 

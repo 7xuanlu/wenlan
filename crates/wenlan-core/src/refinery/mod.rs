@@ -1213,7 +1213,7 @@ pub struct SteepResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::tests::test_db;
+    use crate::db::tests::{test_db, EVICT_ENV_LOCK};
 
     struct RecordingDistillProvider {
         prompts: std::sync::Mutex<Vec<String>>,
@@ -1507,12 +1507,12 @@ mod tests {
     // future, but does not serialize against other tests doing the same (or
     // against tests that merely read the ambient value across an `.await`) —
     // two such tests running concurrently can corrupt each other's view of
-    // the flag mid-run. Serialize every test that sets OR depends on this
-    // flag's stability on a process-local async lock, mirroring the
-    // `PRF_ENV_LOCK` / `SALIENCE_ENV_LOCK` / `RERANK_BLEND_ENV_LOCK` /
-    // `MAGNITUDE_ENV_LOCK` precedent in `db.rs` (a `tokio::sync::Mutex` avoids
-    // the `await_holding_lock` lint a `std::sync::Mutex` would trip).
-    static EVICT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    // the flag mid-run. `EVICT_ENV_LOCK` (imported above from
+    // `crate::db::tests`, where `db.rs`'s own eviction tests also take it) is
+    // the ONE process-wide lock every reader AND mutator of this flag shares
+    // — not a second, module-local lock that would not exclude the db.rs
+    // call sites. Mirrors the `PRF_ENV_LOCK` / `SALIENCE_ENV_LOCK` /
+    // `RERANK_BLEND_ENV_LOCK` / `MAGNITUDE_ENV_LOCK` precedent in `db.rs`.
 
     // B1 — with WENLAN_ENABLE_EVICTION=1, Backstop runs 'evict' as a phase.
     #[tokio::test]
