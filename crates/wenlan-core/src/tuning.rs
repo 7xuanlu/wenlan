@@ -248,8 +248,6 @@ pub struct RefineryConfig {
     pub max_reweave_per_steep: usize,
     #[serde(default = "d_120")]
     pub steep_deadline_secs: u64,
-    #[serde(default = "d_085")]
-    pub dedup_similarity_threshold: f64,
     #[serde(default = "d_015_f64")]
     pub entity_link_distance: f64,
     #[serde(default = "d_03")]
@@ -278,8 +276,6 @@ pub struct DistillationConfig {
     pub similarity_threshold: f64,
     #[serde(default = "d_060")]
     pub formation_threshold: f64,
-    #[serde(default = "d_2_usize")]
-    pub min_cluster_size: usize,
     /// Max tokens per distillation cluster for on-device models (Qwen3-4B: 8K,
     /// Qwen3.5-9B: 16K effective synthesis window per research). Default 8000.
     #[serde(default = "d_8000_usize")]
@@ -554,7 +550,6 @@ impl Default for RefineryConfig {
             recap_lookback_secs: d_86400(),
             max_reweave_per_steep: d_20_usize(),
             steep_deadline_secs: d_120(),
-            dedup_similarity_threshold: d_085(),
             entity_link_distance: d_015_f64(),
             consolidation_confidence_threshold: d_03(),
             consolidation_batch_size: d_10_usize(),
@@ -650,7 +645,6 @@ impl Default for DistillationConfig {
         Self {
             similarity_threshold: d_073(),
             formation_threshold: d_060(),
-            min_cluster_size: d_2_usize(),
             ondevice_token_limit: d_8000_usize(),
             api_token_limit: d_50000_usize(),
             max_retries: d_3_usize(),
@@ -726,7 +720,6 @@ mod tests {
         assert_eq!(cfg.refinery.recap_lookback_secs, 86400);
         assert_eq!(cfg.refinery.max_reweave_per_steep, 20);
         assert_eq!(cfg.refinery.steep_deadline_secs, 120);
-        assert_eq!(cfg.refinery.dedup_similarity_threshold, 0.85);
         assert_eq!(cfg.refinery.entity_link_distance, 0.15);
         assert_eq!(cfg.refinery.consolidation_confidence_threshold, 0.3);
         assert_eq!(cfg.refinery.consolidation_batch_size, 10);

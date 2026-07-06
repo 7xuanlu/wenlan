@@ -232,29 +232,6 @@ Change NOTHING else: do not rewrite, reorder, add, or remove any text. \
 If you are unsure a source supports a claim, leave the claim unmarked. \
 Output the complete page body with the markers inserted.";
 
-pub(crate) const ASSIGN_ORPHANS: &str = r#"You are a knowledge organization assistant. Given a list of unassigned memories and existing concepts, for each memory:
-1. If it clearly belongs to an existing page, assign it (return the page_id)
-2. If 3+ unassigned memories share a theme not covered by existing pages, propose a new page (return a title and the memory indices)
-3. Skip memories that are too isolated to group
-
-Return a JSON object with two arrays:
-- "assignments": [{"memory_index": 0, "page_id": "existing_page_id"}]
-- "proposals": [{"title": "Proposed Page Title", "memory_indices": [1, 3, 5]}]
-
-Only return valid JSON. No explanation text."#;
-
-pub(crate) const GLOBAL_PAGE_REVIEW: &str = r#"You are reviewing a knowledge base for organization quality. Given all page titles and summaries, identify:
-1. Pages that should merge (overlapping topics) — return pairs of page_ids
-2. Cross-cutting themes missing — return proposed titles with related page_ids
-3. Pages that should split (too broad) — return page_id with proposed sub-titles
-
-Return a JSON object:
-- "merges": [{"keep": "page_id_1", "remove": "page_id_2", "reason": "..."}]
-- "missing": [{"title": "...", "related_pages": ["id1", "id2"]}]
-- "splits": [{"page_id": "...", "sub_titles": ["...", "..."]}]
-
-Be conservative. Only suggest changes with high confidence. Return empty arrays if nothing needs changing."#;
-
 pub(crate) const REFINE_CLUSTERS: &str = r#"You are organizing memory clusters for wiki compilation. Each cluster will become a separate concept page.
 
 Given clusters for an entity, decide for each:

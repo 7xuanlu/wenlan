@@ -692,7 +692,7 @@ async fn run_lifecycle_phases(
         let clusters = db
             .find_distillation_clusters(
                 distillation_cfg.formation_threshold,
-                distillation_cfg.min_cluster_size,
+                distillation_cfg.page_min_cluster_size,
                 distillation_cfg.max_clusters_per_steep,
                 3500,
                 distillation_cfg.max_unlinked_cluster_size,
