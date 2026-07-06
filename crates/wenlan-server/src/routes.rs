@@ -699,26 +699,41 @@ pub async fn handle_pipeline_status(
 pub async fn handle_steep(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<SteepResponse>, ServerError> {
-    let s = state.read().await;
-    let db =
-        s.db.as_ref()
-            .ok_or(ServerError::Internal("DB not initialized".into()))?;
-    let llm = s.llm.as_ref();
-    let api_llm = s.api_llm.as_ref();
-    let synthesis_llm = s.synthesis_llm.as_ref();
-    let prompts = &s.prompts;
-    let tuning = &s.tuning.refinery;
-    let confidence_cfg = &s.tuning.confidence;
-    let distillation_cfg = &s.tuning.distillation;
-    let result = wenlan_core::refinery::run_periodic_steep_with_api(
+    let (
         db,
         llm,
         api_llm,
         synthesis_llm,
+        external_llm,
         prompts,
         tuning,
         confidence_cfg,
         distillation_cfg,
+    ) = {
+        let s = state.read().await;
+        (
+            s.db.clone()
+                .ok_or(ServerError::Internal("DB not initialized".into()))?,
+            s.llm.clone(),
+            s.api_llm.clone(),
+            s.synthesis_llm.clone(),
+            s.external_llm.clone(),
+            s.prompts.clone(),
+            s.tuning.refinery.clone(),
+            s.tuning.confidence.clone(),
+            s.tuning.distillation.clone(),
+        )
+    };
+    let result = wenlan_core::refinery::run_periodic_steep_with_api(
+        &db,
+        llm.as_ref(),
+        api_llm.as_ref(),
+        synthesis_llm.as_ref(),
+        external_llm.as_ref(),
+        &prompts,
+        &tuning,
+        &confidence_cfg,
+        &distillation_cfg,
         wenlan_core::refinery::TriggerKind::Backstop,
     )
     .await
@@ -1174,11 +1189,56 @@ pub async fn handle_shutdown() -> &'static str {
 mod recent_endpoints_tests {
     use axum::body::Body;
     use axum::http::Request;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 
     use crate::state::ServerState;
+
+    struct ExternalCompileProvider {
+        state: Arc<RwLock<ServerState>>,
+        distill_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ExternalCompileProvider {
+        async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+            if request.label.as_deref() == Some("distill_body") {
+                self.distill_calls.fetch_add(1, Ordering::SeqCst);
+                let guard =
+                    tokio::time::timeout(std::time::Duration::from_millis(200), self.state.write())
+                        .await
+                        .map_err(|_| {
+                            LlmError::InferenceFailed(
+                                "/api/steep held ServerState read lock across compile await"
+                                    .to_string(),
+                            )
+                        })?;
+                drop(guard);
+                Ok(format!("{} [1]", request.user_prompt))
+            } else {
+                Ok("External Compile Topic".to_string())
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "external-compile-test"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
 
     #[tokio::test]
     async fn get_recent_retrievals_without_db_returns_503() {
@@ -1258,6 +1318,70 @@ mod recent_endpoints_tests {
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), 503);
+    }
+
+    #[tokio::test]
+    async fn steep_routes_external_provider_without_holding_state_lock_across_compile() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+                .await
+                .expect("MemoryDB::new"),
+        );
+
+        for (i, content) in [
+            "libSQL stores vector embeddings in F32_BLOB columns for each memory chunk, giving the Wenlan daemon a local semantic index over durable agent notes.",
+            "DiskANN indexes the libSQL embedding column so Wenlan can perform approximate nearest-neighbor lookup without shipping private memory data to a hosted service.",
+            "FTS5 triggers keep a lexical index synchronized with the chunks table, letting Wenlan combine full-text matches with vector similarity through reciprocal rank fusion.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            db.upsert_documents(vec![wenlan_core::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("external_route_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        }
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        let provider = Arc::new(ExternalCompileProvider {
+            state: state.clone(),
+            distill_calls: AtomicUsize::new(0),
+        });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(provider.clone());
+        }
+
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/steep")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+
+        assert!(
+            provider.distill_calls.load(Ordering::SeqCst) > 0,
+            "/api/steep must route configured external/API-compatible LLMs into the compile lane"
+        );
+        let pages_after = db.count_active_pages().await.unwrap();
+        assert!(
+            pages_after > 0,
+            "external compile lane must synthesize a page, got {pages_after}"
+        );
     }
 
     #[tokio::test]
