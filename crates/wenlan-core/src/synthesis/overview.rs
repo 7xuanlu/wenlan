@@ -92,11 +92,12 @@ async fn ensure_overview_page(
 }
 
 /// Spec §5.3: refresh the reserved overview page in place. Called by the
-/// maintenance pass. Ensures the reserved row exists, syncs its evidence to
-/// the current top pages (additive -- `link_page_source` never prunes, so
-/// the evidence set accumulates rather than being replaced each tick), then
-/// goes through the same stale-mark / `refresh_page` / clear-staleness
-/// sequence as `refinery::re_distill_stale_pages`.
+/// maintenance pass. Ensures the reserved row exists, REPLACES its evidence
+/// with the current top pages' sources (`replace_page_sources` -- prunes
+/// anything no longer top-ranked, so the set tracks "the current top pages"
+/// instead of accumulating the union of every page ever top-ranked over the
+/// wiki's lifetime), then goes through the same stale-mark / `refresh_page` /
+/// clear-staleness sequence as `refinery::re_distill_stale_pages`.
 pub async fn refresh_overview_page(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
@@ -107,10 +108,9 @@ pub async fn refresh_overview_page(
     let page_id = ensure_overview_page(db, agent, knowledge_path).await?;
 
     let top_sources = top_page_source_ids(db, Some(&page_id)).await?;
-    for source_id in &top_sources {
-        db.link_page_source(&page_id, source_id, "overview_sync")
-            .await?;
-    }
+    let top_source_refs: Vec<&str> = top_sources.iter().map(String::as_str).collect();
+    db.replace_page_sources(&page_id, &top_source_refs, "overview_sync")
+        .await?;
 
     db.set_page_stale(&page_id, "overview_sync").await?;
     let outcome = refresh_page(
@@ -257,6 +257,65 @@ mod tests {
         assert_eq!(
             overview_pages[0].id, overview_id,
             "the SAME reserved row must be refreshed in place"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_overview_page_bounds_evidence_across_many_cycling_top_pages() {
+        let (db, _dir) = test_db().await;
+        let prompts = PromptRegistry::default();
+
+        // Cycle through 7 top pages -- more than OVERVIEW_TOP_PAGES (5) -- to
+        // prove the overview's evidence set tracks the CURRENT top pages
+        // instead of accumulating the union of every page that was ever
+        // top-ranked.
+        let mut mem_ids = Vec::new();
+        for i in 1..=7 {
+            let title = format!("Topic{i}");
+            let mem_id = format!("mem_overview_cycle_{i}");
+            let content =
+                format!("Topic{i} is a specific programming concept with unique details.");
+            create_research_page(&db, &title, &mem_id, &content).await;
+            mem_ids.push(mem_id);
+
+            let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(&format!("{content}[1]")));
+            let outcome = refresh_overview_page(&db, &llm, &prompts, "test", None)
+                .await
+                .unwrap();
+            assert!(outcome.wrote, "tick {i} should refresh the overview body");
+        }
+
+        let overview_id = db
+            .find_active_page_id_by_title(OVERVIEW_PAGE_TITLE)
+            .await
+            .unwrap()
+            .expect("reserved overview page must exist");
+
+        let evidence = db.get_page_sources(&overview_id).await.unwrap();
+        assert_eq!(
+            evidence.len(),
+            OVERVIEW_TOP_PAGES as usize,
+            "overview evidence set must stay bounded to OVERVIEW_TOP_PAGES after {} cycling top pages, got {:?}",
+            mem_ids.len(),
+            evidence.iter().map(|s| &s.memory_source_id).collect::<Vec<_>>()
+        );
+
+        // The earliest cycling pages must have been pruned once they dropped
+        // out of the current top-N -- proves replace semantics, not
+        // additive-forever accumulation.
+        let linked_ids: Vec<&str> = evidence
+            .iter()
+            .map(|s| s.memory_source_id.as_str())
+            .collect();
+        assert!(
+            !linked_ids.contains(&mem_ids[0].as_str()),
+            "earliest cycling page's source must be pruned once no longer top-ranked, evidence: {:?}",
+            linked_ids
+        );
+        assert!(
+            !linked_ids.contains(&mem_ids[1].as_str()),
+            "second-earliest cycling page's source must also be pruned, evidence: {:?}",
+            linked_ids
         );
     }
 }

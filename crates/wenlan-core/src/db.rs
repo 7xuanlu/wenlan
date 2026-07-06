@@ -22715,6 +22715,137 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Replace the full evidence set for a page with exactly
+    /// `memory_source_ids` -- REPLACE semantics, unlike `link_page_source`
+    /// (additive, INSERT OR IGNORE only, never prunes). Any currently-linked
+    /// source not in the new set is unlinked from both `page_sources` and
+    /// `page_evidence`; mirrors the same reconcile pattern `update_page_content`
+    /// already applies when a page's source list changes. Content/version are
+    /// untouched -- callers whose evidence set should track "the current N"
+    /// rather than accumulate forever (e.g. the reserved Overview page's
+    /// maintenance refresh, spec §5.3) call this before `refresh_page` so the
+    /// evidence `refresh_page` reads back is already bounded.
+    pub async fn replace_page_sources(
+        &self,
+        page_id: &str,
+        memory_source_ids: &[&str],
+        link_reason: &str,
+    ) -> Result<(), WenlanError> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources begin: {e}")))?;
+
+        if memory_source_ids.is_empty() {
+            if let Err(e) = conn
+                .execute(
+                    "DELETE FROM page_sources WHERE page_id = ?1",
+                    libsql::params![page_id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources prune: {e}"
+                )));
+            }
+        } else {
+            let placeholders: String = (0..memory_source_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_sql = format!(
+                "DELETE FROM page_sources WHERE page_id = ?1 AND memory_source_id NOT IN ({})",
+                placeholders
+            );
+            let mut bind: Vec<libsql::Value> = Vec::with_capacity(1 + memory_source_ids.len());
+            bind.push(libsql::Value::Text(page_id.to_string()));
+            for sid in memory_source_ids {
+                bind.push(libsql::Value::Text((*sid).to_string()));
+            }
+            if let Err(e) = conn
+                .execute(&delete_sql, libsql::params_from_iter(bind))
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources prune: {e}"
+                )));
+            }
+        }
+
+        for sid in memory_source_ids {
+            if let Err(e) = conn
+                .execute(
+                    "INSERT OR IGNORE INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
+                    libsql::params![page_id, *sid, now, link_reason],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources insert: {e}"
+                )));
+            }
+        }
+
+        // Mirror the same reconcile onto page_evidence (memory-kind rows only;
+        // external/authored evidence, if any, is preserved).
+        if memory_source_ids.is_empty() {
+            if let Err(e) = conn
+                .execute(
+                    "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory'",
+                    libsql::params![page_id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources evidence prune: {e}"
+                )));
+            }
+        } else {
+            let placeholders: String = (0..memory_source_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_sql = format!(
+                "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory' AND locator NOT IN ({})",
+                placeholders
+            );
+            let mut bind: Vec<libsql::Value> = Vec::with_capacity(1 + memory_source_ids.len());
+            bind.push(libsql::Value::Text(page_id.to_string()));
+            for sid in memory_source_ids {
+                bind.push(libsql::Value::Text((*sid).to_string()));
+            }
+            if let Err(e) = conn
+                .execute(&delete_sql, libsql::params_from_iter(bind))
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources evidence prune: {e}"
+                )));
+            }
+        }
+
+        if let Err(e) =
+            Self::insert_resolved_page_evidence(&conn, page_id, memory_source_ids, now, link_reason)
+                .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "replace_page_sources evidence insert: {e}"
+            )));
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources commit: {e}")))?;
+        Ok(())
+    }
+
     /// Get all source memories linked to a page, ordered by linked_at ascending.
     pub async fn get_page_sources(
         &self,
