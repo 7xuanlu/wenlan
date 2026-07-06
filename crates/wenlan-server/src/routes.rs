@@ -91,9 +91,17 @@ fn queue_status_wire(
 pub async fn handle_status(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<wenlan_types::responses::StatusResponse>, ServerError> {
-    let s = state.read().await;
+    let (db, reranker_status, reranker_light_status, reranker_mode) = {
+        let s = state.read().await;
+        (
+            s.db.clone(),
+            s.reranker_status.clone(),
+            s.reranker_light_status.clone(),
+            s.reranker_mode.clone(),
+        )
+    };
 
-    let (files_indexed, queue, compile_queue) = if let Some(db) = &s.db {
+    let (files_indexed, queue, compile_queue) = if let Some(db) = &db {
         let files_indexed = db.count().await.unwrap_or(0);
         let queue = db
             .document_enrichment_queue_status()
@@ -122,9 +130,9 @@ pub async fn handle_status(
         sources_connected: vec![],
         queue,
         compile_queue,
-        reranker: s.reranker_status.clone(),
-        reranker_light: s.reranker_light_status.clone(),
-        reranker_mode: s.reranker_mode.clone(),
+        reranker: reranker_status,
+        reranker_light: reranker_light_status,
+        reranker_mode,
     }))
 }
 
@@ -1436,6 +1444,24 @@ mod recent_endpoints_tests {
         let parsed: wenlan_types::responses::StatusResponse =
             serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.queue, wenlan_types::responses::QueueStatus::Idle);
+    }
+
+    #[test]
+    fn status_handler_snapshots_state_before_awaiting_db() {
+        let source = include_str!("routes.rs");
+        let start = source
+            .find("pub async fn handle_status")
+            .expect("handle_status should exist");
+        let end = source[start..]
+            .find("/// POST /api/search")
+            .map(|offset| start + offset)
+            .expect("handle_search marker should follow handle_status");
+        let body = &source[start..end];
+
+        assert!(
+            body.contains("let (db, reranker_status, reranker_light_status, reranker_mode) = {"),
+            "handle_status must snapshot cloned state out of ServerState before awaiting DB work"
+        );
     }
 
     #[tokio::test]

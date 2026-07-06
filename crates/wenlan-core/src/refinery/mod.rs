@@ -64,8 +64,8 @@ pub async fn compile_queue_depth(db: &MemoryDB) -> Result<usize, WenlanError> {
         .unwrap_or(0))
 }
 
-fn agent_lane_preferred() -> bool {
-    std::env::var("WENLAN_PREFER_AGENT_LANE")
+fn on_device_compile_preferred() -> bool {
+    std::env::var("WENLAN_PREFER_ON_DEVICE_COMPILE")
         .ok()
         .map(|v| {
             matches!(
@@ -554,10 +554,10 @@ pub async fn run_periodic_steep_with_api(
             let run_coherence_gate = cloud_compile_llm.is_some();
             let routed_llm = if cloud_compile_llm.is_some() {
                 cloud_compile_llm
-            } else if agent_lane_preferred() {
-                None
-            } else {
+            } else if on_device_compile_preferred() {
                 on_device_llm.filter(|provider| provider.is_available())
+            } else {
+                None
             };
             let result = distill_pages_scoped_gated(
                 db_ref,
@@ -2300,7 +2300,8 @@ mod tests {
     static COMPILE_ROUTING_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
-    async fn emergence_tick_with_agent_lane_preferred_defers_healthy_ondevice_engine() {
+    async fn emergence_tick_without_cloud_defers_healthy_ondevice_engine_to_agent_lane_by_default()
+    {
         let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
@@ -2319,84 +2320,6 @@ mod tests {
                 title: content.to_string(),
                 content: content.to_string(),
                 space: Some(space.to_string()),
-                ..Default::default()
-            };
-            db.upsert_documents(vec![doc]).await.unwrap();
-        }
-
-        let provider = Arc::new(EmergenceRoutingProvider::new(LlmBackend::OnDevice));
-        let llm: Arc<dyn LlmProvider> = provider.clone();
-        let prompts = PromptRegistry::default();
-
-        let result = temp_env::async_with_vars(
-            [("WENLAN_PREFER_AGENT_LANE", Some("1"))],
-            run_periodic_steep_with_api(
-                &db,
-                None,
-                None,
-                Some(&llm),
-                None,
-                &prompts,
-                &crate::tuning::RefineryConfig::default(),
-                &crate::tuning::ConfidenceConfig::default(),
-                &crate::tuning::DistillationConfig::default(),
-                TriggerKind::Idle,
-            ),
-        )
-        .await
-        .unwrap();
-
-        let emergence = result
-            .phases
-            .iter()
-            .find(|p| p.name == "emergence")
-            .expect("Idle trigger must run the emergence phase");
-        assert!(
-            emergence.error.is_none(),
-            "emergence phase must not error: {:?}",
-            emergence.error
-        );
-        assert!(
-            !provider.saw_label("distill_body"),
-            "explicit agent-lane preference must defer eligible clusters instead of invoking the healthy on-device provider"
-        );
-        // The eligible cluster must NOT have grown a page: check the cluster
-        // page by title, not total active-page count. The ReDistill phase's
-        // reserved "Overview" page (`ensure_overview_page`) is always minted
-        // when an LLM is available, so a raw count is never 0 and would test
-        // the wrong thing. Mirrors the sibling default-routing test, which
-        // asserts the same "Test Topic" cluster page IS present.
-        let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
-        assert!(
-            cluster_page.is_none(),
-            "agent-lane preference must not synthesize the cluster page via the healthy on-device engine — it must be deferred to the agent lane"
-        );
-        let queue_depth_after = compile_queue_depth(&db).await.unwrap();
-        assert!(
-            queue_depth_after > 0,
-            "agent-lane preference must persist queued clusters for /distill, got queue depth {queue_depth_after}"
-        );
-    }
-
-    #[tokio::test]
-    async fn emergence_tick_without_cloud_uses_healthy_ondevice_engine_by_default() {
-        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
-        let (db, _dir) = test_db().await;
-
-        for (i, content) in [
-            "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store.",
-            "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code.",
-            "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query.",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let doc = crate::sources::RawDocument {
-                source: "memory".to_string(),
-                source_id: format!("ondevice_default_{}", i),
-                title: content.to_string(),
-                content: content.to_string(),
-                space: Some("architecture".to_string()),
                 ..Default::default()
             };
             db.upsert_documents(vec![doc]).await.unwrap();
@@ -2432,24 +2355,102 @@ mod tests {
             emergence.error
         );
         assert!(
+            !provider.saw_label("distill_body"),
+            "without cloud, default routing must leave eligible clusters pending for the agent lane instead of invoking the healthy on-device provider"
+        );
+        // The eligible cluster must NOT have grown a page: check the cluster
+        // page by title, not total active-page count. The ReDistill phase's
+        // reserved "Overview" page (`ensure_overview_page`) is always minted
+        // when an LLM is available, so a raw count is never 0 and would test
+        // the wrong thing. Mirrors the sibling default-routing test, which
+        // asserts the same "Test Topic" cluster page IS present.
+        let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
+        assert!(
+            cluster_page.is_none(),
+            "default routing must not synthesize the cluster page via the healthy on-device engine"
+        );
+        let queue_depth_after = compile_queue_depth(&db).await.unwrap();
+        assert!(
+            queue_depth_after > 0,
+            "default routing must persist queued clusters for /distill, got queue depth {queue_depth_after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn emergence_tick_with_on_device_preference_uses_healthy_ondevice_engine() {
+        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+
+        for (i, content) in [
+            "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store.",
+            "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code.",
+            "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("ondevice_default_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let provider = Arc::new(EmergenceRoutingProvider::new(LlmBackend::OnDevice));
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let result = temp_env::async_with_vars(
+            [("WENLAN_PREFER_ON_DEVICE_COMPILE", Some("1"))],
+            run_periodic_steep_with_api(
+                &db,
+                None,
+                None,
+                Some(&llm),
+                None,
+                &prompts,
+                &crate::tuning::RefineryConfig::default(),
+                &crate::tuning::ConfidenceConfig::default(),
+                &crate::tuning::DistillationConfig::default(),
+                TriggerKind::Idle,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let emergence = result
+            .phases
+            .iter()
+            .find(|p| p.name == "emergence")
+            .expect("Idle trigger must run the emergence phase");
+        assert!(
+            emergence.error.is_none(),
+            "emergence phase must not error: {:?}",
+            emergence.error
+        );
+        assert!(
             !provider.saw_system_prompt(&prompts.refine_clusters),
-            "a default healthy on-device compile must skip the LLM coherence gate"
+            "an opted-in healthy on-device compile must skip the LLM coherence gate"
         );
         assert!(
             provider.saw_label("distill_body"),
-            "without a cloud provider, default routing must invoke the healthy on-device provider \
-             to compile eligible clusters when no agent lane is explicitly preferred"
+            "without a cloud provider, opted-in on-device routing must invoke the healthy on-device provider \
+             to compile eligible clusters"
         );
         let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
         assert!(
             cluster_page.is_some(),
-            "default routing must synthesize a page from the eligible cluster \
+            "opted-in on-device routing must synthesize a page from the eligible cluster \
              via the healthy on-device engine"
         );
         let queue_depth_after = compile_queue_depth(&db).await.unwrap();
         assert_eq!(
             queue_depth_after, 0,
-            "default routing must resolve eligible clusters through the healthy on-device engine, \
+            "opted-in on-device routing must resolve eligible clusters through the healthy on-device engine, \
              got queue depth {queue_depth_after}"
         );
     }
@@ -2535,7 +2536,12 @@ mod tests {
     /// LLM, and asserts the reserved "Overview" page exists afterward.
     #[tokio::test]
     async fn test_re_distill_phase_refreshes_reserved_overview_page() {
+        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
+        let knowledge_path = knowledge_dir.path().to_path_buf();
 
         // A pre-existing page for the Overview to summarize — mirrors
         // `synthesis::overview`'s own fixture helper.
@@ -2566,20 +2572,30 @@ mod tests {
             "{mem_content}.[1]"
         )));
 
-        let result = run_periodic_steep_with_api(
-            &db,
-            None,
-            None,
-            Some(&llm),
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-            &crate::tuning::ConfidenceConfig::default(),
-            &crate::tuning::DistillationConfig::default(),
-            TriggerKind::Idle,
-        )
-        .await
-        .unwrap();
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    knowledge_path: Some(knowledge_path),
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    Some(&llm),
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    TriggerKind::Idle,
+                )
+                .await
+            })
+            .await
+            .unwrap();
 
         let redistill = result
             .phases
