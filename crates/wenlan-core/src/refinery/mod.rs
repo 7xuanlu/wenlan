@@ -1501,9 +1501,23 @@ mod tests {
 
     // ── T21 Eviction phase wiring (B1-B3) ────────────────────────────────────
 
+    // `WENLAN_ENABLE_EVICTION` is a process-global env var read synchronously
+    // by `crate::db::eviction_enabled()` inside the Evict phase gate.
+    // `temp_env::async_with_vars` mutates that global for the duration of a
+    // future, but does not serialize against other tests doing the same (or
+    // against tests that merely read the ambient value across an `.await`) —
+    // two such tests running concurrently can corrupt each other's view of
+    // the flag mid-run. Serialize every test that sets OR depends on this
+    // flag's stability on a process-local async lock, mirroring the
+    // `PRF_ENV_LOCK` / `SALIENCE_ENV_LOCK` / `RERANK_BLEND_ENV_LOCK` /
+    // `MAGNITUDE_ENV_LOCK` precedent in `db.rs` (a `tokio::sync::Mutex` avoids
+    // the `await_holding_lock` lint a `std::sync::Mutex` would trip).
+    static EVICT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     // B1 — with WENLAN_ENABLE_EVICTION=1, Backstop runs 'evict' as a phase.
     #[tokio::test]
     async fn test_evict_runs_as_phase_when_enabled() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             run_periodic_steep_with_api(
@@ -1533,6 +1547,7 @@ mod tests {
     // double-gated by trigger membership AND env flag).
     #[tokio::test]
     async fn test_evict_absent_when_flag_unset() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", None::<&str>)], async {
             run_periodic_steep_with_api(
@@ -1562,6 +1577,7 @@ mod tests {
     // belongs on Backstop/Daily only, like PruneRejections).
     #[tokio::test]
     async fn test_evict_not_run_on_burstend() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             run_periodic_steep_with_api(
@@ -1658,6 +1674,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_daily_trigger_runs_only_maintenance_phases() {
+        // Daily runs the Evict phase gate (`TriggerKind::Daily.runs_phase`
+        // includes `Phase::Evict`) and asserts an exact maintenance-phase
+        // set that excludes 'evict' — it depends on the ambient
+        // `WENLAN_ENABLE_EVICTION` staying unset for the test's duration, so
+        // it must hold the same lock as the B1-B3 tests that mutate it.
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
         db.upsert_documents(vec![make_memory(
@@ -1722,6 +1744,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_backstop_trigger_runs_all_phases() {
+        // Backstop always runs the Evict phase gate and this test asserts
+        // an EXACT phase count — same ambient-`WENLAN_ENABLE_EVICTION`
+        // dependency as the Daily test above, same lock required.
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
         db.upsert_documents(vec![make_memory(
