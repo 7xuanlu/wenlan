@@ -131,6 +131,7 @@ fn parse_action(s: &str) -> Option<ProposalAction> {
         "dedup_merge" => Some(ProposalAction::DedupMerge),
         "page_merge" => Some(ProposalAction::PageMerge),
         "cross_space_discovery" => Some(ProposalAction::CrossSpaceDiscovery),
+        "page_keep_or_archive" => Some(ProposalAction::PageKeepOrArchive),
         _ => None,
     }
 }
@@ -251,6 +252,31 @@ mod parse_payload_tests {
                 assert_eq!(spaces, vec!["personal".to_string(), "work".to_string()]);
             }
             _ => panic!("expected CrossSpaceDiscovery"),
+        }
+    }
+
+    #[test]
+    fn parses_page_keep_or_archive_payload() {
+        let raw =
+            r#"{"page_id":"page_stub","source_count":1,"allowed_actions":["dismiss","accept"]}"#;
+        let parsed = parse_payload(Some(raw), "page_keep_or_archive").unwrap();
+        match parsed {
+            RefinementPayload::PageKeepOrArchive {
+                page_id,
+                source_count,
+                allowed_actions,
+            } => {
+                assert_eq!(page_id, "page_stub");
+                assert_eq!(source_count, 1);
+                assert_eq!(
+                    allowed_actions,
+                    vec![
+                        wenlan_types::responses::RefinementCardAction::Dismiss,
+                        wenlan_types::responses::RefinementCardAction::Accept
+                    ]
+                );
+            }
+            _ => panic!("expected PageKeepOrArchive"),
         }
     }
 

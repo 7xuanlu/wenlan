@@ -204,6 +204,19 @@ pub async fn apply_refinement_with_decision(
                 ));
             }
         },
+        "page_keep_or_archive" => match decision {
+            RefinementDecision::Accept { notes: _ } => {
+                let page_id = prop.source_ids.first().ok_or_else(|| {
+                    WenlanError::Validation("page_keep_or_archive missing source_ids[0]".into())
+                })?;
+                db.archive_page(page_id).await?;
+            }
+            RefinementDecision::PickSpace { space: _, notes: _ } => {
+                return Err(WenlanError::Validation(
+                    "page_keep_or_archive requires accept or dismiss".into(),
+                ));
+            }
+        },
         other => {
             return Err(WenlanError::Validation(format!("unknown action: {other}")));
         }
@@ -1369,6 +1382,61 @@ mod tests {
         );
         let resolved = db
             .get_refinement_proposal("ref_cross_space_discovery_1")
+            .await
+            .unwrap()
+            .expect("proposal remains after resolution");
+        assert_eq!(resolved.status, "resolved");
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_page_keep_or_archive_accept_archives_page() {
+        let (db, _tmp) = test_db().await;
+        insert_page_source_memory(&db, "stub_source", "Small source.", "work").await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "stub_page",
+            "Stub Page",
+            None,
+            "Thin machine-owned page.",
+            None,
+            None,
+            &["stub_source"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            Some("[]"),
+        )
+        .await
+        .unwrap();
+        db.insert_refinement_proposal(
+            "ref_keep_or_archive_1",
+            "page_keep_or_archive",
+            &["stub_page".to_string()],
+            Some(
+                r#"{"action":"page_keep_or_archive","page_id":"stub_page","source_count":1,"allowed_actions":["dismiss","accept"]}"#,
+            ),
+            1.0,
+        )
+        .await
+        .unwrap();
+        db.resolve_refinement_if_open("ref_keep_or_archive_1", "awaiting_review")
+            .await
+            .unwrap();
+
+        let outcome = apply_refinement(&db, "ref_keep_or_archive_1", "test-agent")
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.action_applied, "page_keep_or_archive");
+        let page = db
+            .get_page("stub_page")
+            .await
+            .unwrap()
+            .expect("page remains after archive");
+        assert_eq!(page.status, "archived");
+        let resolved = db
+            .get_refinement_proposal("ref_keep_or_archive_1")
             .await
             .unwrap()
             .expect("proposal remains after resolution");

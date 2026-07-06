@@ -586,9 +586,12 @@ async fn fire_maintenance_safe(
     {
         Ok(result) => {
             tracing::info!(
-                "[scheduler] {label} maintenance: {} merge card(s), {} discovery card(s), {} machine refresh(es), {} human card(s), {} orphan label(s), {} overview refresh(es)",
+                "[scheduler] {label} maintenance: {} merge card(s), {} discovery card(s), {} retro card(s) from {} expected (paused={}), {} machine refresh(es), {} human card(s), {} orphan label(s), {} overview refresh(es)",
                 result.merge_cards_emitted,
                 result.discovery_cards_emitted,
+                result.retro_cards_emitted,
+                result.retro_expected_card_volume,
+                result.retro_paused,
                 result.stale_machine_refreshed,
                 result.stale_human_cards,
                 result.orphan_labels_checked,

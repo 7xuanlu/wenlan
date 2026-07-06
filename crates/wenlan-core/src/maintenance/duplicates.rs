@@ -30,6 +30,21 @@ pub(super) async fn detect_near_duplicate_pages(
     page_match_threshold: f64,
     limit: usize,
 ) -> Result<Vec<NearDuplicatePair>, WenlanError> {
+    detect_near_duplicate_pages_inner(db, page_match_threshold, Some(limit)).await
+}
+
+pub(super) async fn detect_all_near_duplicate_pages(
+    db: &MemoryDB,
+    page_match_threshold: f64,
+) -> Result<Vec<NearDuplicatePair>, WenlanError> {
+    detect_near_duplicate_pages_inner(db, page_match_threshold, None).await
+}
+
+async fn detect_near_duplicate_pages_inner(
+    db: &MemoryDB,
+    page_match_threshold: f64,
+    limit: Option<usize>,
+) -> Result<Vec<NearDuplicatePair>, WenlanError> {
     let mut pairs: HashMap<(String, String), NearDuplicatePair> = HashMap::new();
     for pair in embedding_near_duplicate_pairs(db, page_match_threshold, limit).await? {
         pairs.insert((pair.left_id.clone(), pair.right_id.clone()), pair);
@@ -52,18 +67,20 @@ pub(super) async fn detect_near_duplicate_pages(
         let r = right.similarity.unwrap_or(right.source_overlap_ratio);
         r.partial_cmp(&l).unwrap_or(std::cmp::Ordering::Equal)
     });
-    out.truncate(limit);
+    if let Some(limit) = limit {
+        out.truncate(limit);
+    }
     Ok(out)
 }
 
 async fn embedding_near_duplicate_pairs(
     db: &MemoryDB,
     page_match_threshold: f64,
-    limit: usize,
+    limit: Option<usize>,
 ) -> Result<Vec<NearDuplicatePair>, WenlanError> {
     let conn = db.conn.lock().await;
-    let mut rows = conn
-        .query(
+    let sql = match limit {
+        Some(_) => {
             "SELECT a.id, b.id, vector_distance_cos(a.embedding, b.embedding) AS dist \
              FROM pages a \
              JOIN pages b ON a.id < b.id \
@@ -78,11 +95,34 @@ async fn embedding_near_duplicate_pairs(
                AND lower(b.title) != 'overview' \
                AND vector_distance_cos(a.embedding, b.embedding) <= ?1 \
              ORDER BY dist ASC \
-             LIMIT ?2",
-            libsql::params![(1.0 - page_match_threshold).max(0.0), limit as i64],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("page near-duplicate query: {e}")))?;
+             LIMIT ?2"
+        }
+        None => {
+            "SELECT a.id, b.id, vector_distance_cos(a.embedding, b.embedding) AS dist \
+             FROM pages a \
+             JOIN pages b ON a.id < b.id \
+             WHERE a.status = 'active' \
+               AND b.status = 'active' \
+               AND a.embedding IS NOT NULL \
+               AND b.embedding IS NOT NULL \
+               AND COALESCE(a.review_status, 'confirmed') = 'confirmed' \
+               AND COALESCE(b.review_status, 'confirmed') = 'confirmed' \
+               AND COALESCE(a.workspace, a.space, '') = COALESCE(b.workspace, b.space, '') \
+               AND lower(a.title) != 'overview' \
+               AND lower(b.title) != 'overview' \
+               AND vector_distance_cos(a.embedding, b.embedding) <= ?1 \
+             ORDER BY dist ASC"
+        }
+    };
+    let threshold = (1.0 - page_match_threshold).max(0.0);
+    let mut rows = match limit {
+        Some(limit) => {
+            conn.query(sql, libsql::params![threshold, limit as i64])
+                .await
+        }
+        None => conn.query(sql, libsql::params![threshold]).await,
+    }
+    .map_err(|e| WenlanError::VectorDb(format!("page near-duplicate query: {e}")))?;
 
     let mut out = Vec::new();
     while let Some(row) = rows
@@ -110,9 +150,9 @@ async fn embedding_near_duplicate_pairs(
 
 async fn source_overlap_pairs(
     db: &MemoryDB,
-    limit: usize,
+    limit: Option<usize>,
 ) -> Result<Vec<NearDuplicatePair>, WenlanError> {
-    let pages = list_page_source_sets(db).await?;
+    let pages = list_page_source_sets(db, limit.map(|n| n as i64)).await?;
     let mut pairs = Vec::new();
     for (index, left) in pages.iter().enumerate() {
         for right in pages.iter().skip(index + 1) {
@@ -134,7 +174,7 @@ async fn source_overlap_pairs(
                     source_overlap_ratio: ratio,
                 });
             }
-            if pairs.len() >= limit {
+            if limit.is_some_and(|limit| pairs.len() >= limit) {
                 return Ok(pairs);
             }
         }
@@ -142,8 +182,13 @@ async fn source_overlap_pairs(
     Ok(pairs)
 }
 
-async fn list_page_source_sets(db: &MemoryDB) -> Result<Vec<PageSourceSet>, WenlanError> {
-    let pages = db.list_pages("active", PAGE_SCAN_LIMIT, 0).await?;
+async fn list_page_source_sets(
+    db: &MemoryDB,
+    limit: Option<i64>,
+) -> Result<Vec<PageSourceSet>, WenlanError> {
+    let pages = db
+        .list_pages("active", limit.unwrap_or(i64::MAX).max(PAGE_SCAN_LIMIT), 0)
+        .await?;
     let mut out = Vec::new();
     for page in pages {
         if page.title.eq_ignore_ascii_case("overview") || page.review_status != "confirmed" {

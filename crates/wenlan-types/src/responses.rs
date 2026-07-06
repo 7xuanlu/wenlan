@@ -678,6 +678,7 @@ pub enum ProposalAction {
     DedupMerge,
     PageMerge,
     CrossSpaceDiscovery,
+    PageKeepOrArchive,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -728,6 +729,11 @@ pub enum RefinementPayload {
         spaces: Vec<String>,
         allowed_actions: Vec<RefinementCardAction>,
     },
+    PageKeepOrArchive {
+        page_id: String,
+        source_count: usize,
+        allowed_actions: Vec<RefinementCardAction>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -775,6 +781,10 @@ mod refinement_wire_tests {
             (
                 "\"cross_space_discovery\"",
                 ProposalAction::CrossSpaceDiscovery,
+            ),
+            (
+                "\"page_keep_or_archive\"",
+                ProposalAction::PageKeepOrArchive,
             ),
         ];
         for (json, expected) in cases {
@@ -839,6 +849,30 @@ mod refinement_wire_tests {
         let back = serde_json::to_value(&parsed).unwrap();
         assert_eq!(back["action"], "cross_space_discovery");
         assert_eq!(back["memory_count"], 3);
+    }
+
+    #[test]
+    fn refinement_payload_page_keep_or_archive_round_trip() {
+        let json = r#"{"action":"page_keep_or_archive","page_id":"page_stub","source_count":1,"allowed_actions":["dismiss","accept"]}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::PageKeepOrArchive {
+                ref page_id,
+                source_count,
+                ref allowed_actions,
+            } => {
+                assert_eq!(page_id, "page_stub");
+                assert_eq!(source_count, 1);
+                assert_eq!(
+                    allowed_actions,
+                    &vec![RefinementCardAction::Dismiss, RefinementCardAction::Accept]
+                );
+            }
+            _ => panic!("expected PageKeepOrArchive"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["action"], "page_keep_or_archive");
+        assert_eq!(back["source_count"], 1);
     }
 
     #[test]
