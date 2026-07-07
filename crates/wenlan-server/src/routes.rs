@@ -787,6 +787,11 @@ pub struct DistillRequest {
     /// Requires daemon LLM.
     #[serde(default)]
     pub force: bool,
+
+    /// Read-only pre-flight gate run before trusting the formation path and
+    /// again before the retro sweep; returns the fixed threshold stats grid.
+    #[serde(default)]
+    pub sweep: bool,
 }
 
 /// POST /api/distill
@@ -799,6 +804,24 @@ pub async fn handle_distill(
     } else {
         serde_json::from_slice(&body).map_err(|e| ServerError::ValidationError(e.to_string()))?
     };
+
+    if req.sweep {
+        if req.target.is_some() || req.force {
+            return Ok(Json(serde_json::json!({
+                "sweep": true,
+                "hint": "sweep=true cannot be combined with target or force; omit both to run the read-only formation-threshold grid",
+            })));
+        }
+        let (db, tuning) = {
+            let s = state.read().await;
+            (s.db.clone(), s.tuning.distillation.clone())
+        };
+        let db = db.ok_or(ServerError::Internal("DB not initialized".into()))?;
+        let report = wenlan_core::refinery::formation_sweep(&db, &tuning).await?;
+        let payload = serde_json::to_value(report)
+            .map_err(|e| ServerError::Internal(format!("formation sweep serialize: {e}")))?;
+        return Ok(Json(payload));
+    }
 
     // `/api/distill` always returns clusters as `pending` — the route is
     // user-triggered, so synthesis belongs to whoever called it (the agent
@@ -1589,9 +1612,175 @@ mod distill_request_tests {
     }
 
     #[test]
+    fn distill_request_deserializes_sweep() {
+        let r: DistillRequest = serde_json::from_str(r#"{"sweep":true}"#).unwrap();
+        assert!(r.sweep);
+        assert!(r.target.is_none());
+        assert!(!r.force);
+    }
+
+    #[test]
     fn distill_request_rejects_unknown_field() {
         let r = serde_json::from_str::<DistillRequest>(r#"{"bogus":true}"#);
         assert!(r.is_err(), "deny_unknown_fields should reject unknown keys");
+    }
+}
+
+#[cfg(test)]
+mod distill_sweep_route_tests {
+    use axum::body::Body;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+
+    async fn seeded_sweep_app() -> (
+        axum::Router,
+        Arc<wenlan_core::db::MemoryDB>,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+                .await
+                .expect("MemoryDB::new"),
+        );
+        let topic = "formation sweep route reports scoped cluster stats";
+        let mut rows = Vec::new();
+        for (prefix, space) in [
+            ("route_work", Some("work")),
+            ("route_personal", Some("personal")),
+            ("route_none", None),
+        ] {
+            for i in 0..3 {
+                rows.push(wenlan_core::sources::RawDocument {
+                    source: "memory".to_string(),
+                    source_id: format!("{prefix}_{i}"),
+                    title: format!("{prefix}_{i}"),
+                    content: topic.to_string(),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    memory_type: Some("fact".to_string()),
+                    space: space.map(str::to_string),
+                    source_agent: Some("test".to_string()),
+                    confirmed: Some(true),
+                    ..Default::default()
+                });
+            }
+        }
+        db.upsert_documents(rows).await.expect("seed sweep fixture");
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        (crate::router::build_router(state), db, tmp)
+    }
+
+    #[tokio::test]
+    async fn distill_sweep_returns_stats_grid_and_writes_no_rows() {
+        let (app, db, _tmp) = seeded_sweep_app().await;
+        let before = (
+            db.count_active_pages().await.unwrap(),
+            db.count().await.unwrap(),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/distill")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"sweep":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert!(payload.get("pending").is_none());
+        assert!(payload.get("stale_pages").is_none());
+        assert!(payload.get("created_ids").is_none());
+        assert!(payload.get("orphan_topics").is_none());
+
+        let thresholds = payload["thresholds"]
+            .as_array()
+            .expect("sweep response must contain threshold grid");
+        assert_eq!(thresholds.len(), 4);
+        let actual_thresholds: Vec<f64> = thresholds
+            .iter()
+            .map(|point| point["formation_threshold"].as_f64().unwrap())
+            .collect();
+        assert_eq!(actual_thresholds, vec![0.55, 0.60, 0.65, 0.70]);
+
+        for point in thresholds {
+            assert_eq!(point["global"]["cluster_count"], 3);
+            assert_eq!(
+                point["global"]["size_distribution"]["sizes"],
+                serde_json::json!([3, 3, 3])
+            );
+            assert_eq!(point["global"]["overlapping_member_fraction"], 0.0);
+            assert_eq!(point["capped"], false);
+
+            let per_space = point["per_space"]
+                .as_object()
+                .expect("per_space stats must be an object");
+            for space in ["(none)", "personal", "work"] {
+                let stats = per_space
+                    .get(space)
+                    .unwrap_or_else(|| panic!("missing per-space stats for {space}"));
+                assert_eq!(stats["cluster_count"], 1);
+                assert_eq!(stats["size_distribution"]["sizes"], serde_json::json!([3]));
+                assert_eq!(stats["overlapping_member_fraction"], 0.0);
+            }
+        }
+
+        let after = (
+            db.count_active_pages().await.unwrap(),
+            db.count().await.unwrap(),
+        );
+        assert_eq!(after, before, "sweep route must not write rows");
+    }
+
+    #[tokio::test]
+    async fn distill_sweep_with_target_or_force_returns_hint_payload() {
+        let (app, _db, _tmp) = seeded_sweep_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/distill")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"sweep":true,"target":"missing-space","force":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(payload["sweep"], true);
+        assert!(
+            payload["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("sweep=true")),
+            "hint payload should explain that sweep cannot be combined with target/force: {payload}"
+        );
+        assert!(payload.get("pending").is_none());
+        assert!(payload.get("unresolved").is_none());
     }
 }
 

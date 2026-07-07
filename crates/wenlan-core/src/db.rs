@@ -16587,6 +16587,24 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("count_memory_entity_links get: {e}")))
     }
 
+    #[cfg(test)]
+    pub(crate) async fn count_refinement_queue_rows(&self) -> Result<i64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM refinement_queue", ())
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("count_refinement_queue_rows query: {e}"))
+            })?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_refinement_queue_rows next: {e}")))?
+            .ok_or_else(|| WenlanError::Generic("count_refinement_queue_rows: no rows".into()))?;
+        row.get::<i64>(0)
+            .map_err(|e| WenlanError::VectorDb(format!("count_refinement_queue_rows get: {e}")))
+    }
+
     /// Count primary (chunk_index=0) source memories with a non-empty title.
     /// Used by the eval seed to report a REAL enriched-title count after Phase-2.
     pub async fn count_nonempty_titles(&self) -> Result<i64, WenlanError> {

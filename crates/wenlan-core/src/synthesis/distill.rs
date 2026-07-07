@@ -16,13 +16,15 @@ use crate::refinery::helpers::{
 };
 use crate::sources::StabilityTier;
 use crate::synthesis::refinement_queue::{resolve_proposal, ResolveStatus};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use wenlan_types::requests::{CreateConceptRequest, UpdatePageRequest};
 
+const FORMATION_SWEEP_THRESHOLDS: [f64; 4] = [0.55, 0.60, 0.65, 0.70];
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_NUMERATOR: usize = 1;
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_DENOMINATOR: usize = 2;
 const EXISTING_TITLES_HINT_LIMIT: usize = 100;
+const NO_SPACE_KEY: &str = "(none)";
 
 /// What a distillation pass is scoped to. Resolved from a free-form string
 /// supplied by the user (page id, entity name, or domain value).
@@ -818,6 +820,135 @@ pub struct DistillResult {
     /// metadata so the caller has everything it needs to write a page and
     /// POST back to `/api/pages`.
     pub pending: Vec<crate::db::DistillationCluster>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FormationSweepReport {
+    pub thresholds: Vec<FormationSweepPoint>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FormationSweepPoint {
+    pub formation_threshold: f64,
+    pub capped: bool,
+    pub global: FormationClusterStats,
+    pub per_space: BTreeMap<String, FormationClusterStats>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FormationClusterStats {
+    pub cluster_count: usize,
+    pub size_distribution: FormationSizeDistribution,
+    pub overlapping_member_fraction: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FormationSizeDistribution {
+    pub min: usize,
+    pub median: f64,
+    pub max: usize,
+    pub sizes: Vec<usize>,
+}
+
+/// Read-only pre-flight gate run before trusting the formation path and again
+/// before the retro sweep. It reports the fixed threshold grid with global and
+/// per-space cluster statistics; it does not tune or write anything.
+pub async fn formation_sweep(
+    db: &MemoryDB,
+    tuning: &crate::tuning::DistillationConfig,
+) -> Result<FormationSweepReport, WenlanError> {
+    let mut thresholds = Vec::with_capacity(FORMATION_SWEEP_THRESHOLDS.len());
+    for formation_threshold in FORMATION_SWEEP_THRESHOLDS {
+        let clusters = db
+            .find_distillation_clusters_scoped(
+                formation_threshold,
+                tuning.page_min_cluster_size,
+                tuning.max_clusters_per_steep,
+                16_000,
+                tuning.max_unlinked_cluster_size,
+                tuning.max_grouped_cluster_size,
+                None,
+                None,
+            )
+            .await?;
+        thresholds.push(FormationSweepPoint {
+            formation_threshold,
+            capped: clusters.len() == tuning.max_clusters_per_steep,
+            global: cluster_stats(&clusters),
+            per_space: per_space_cluster_stats(&clusters),
+        });
+    }
+    Ok(FormationSweepReport { thresholds })
+}
+
+fn per_space_cluster_stats(
+    clusters: &[crate::db::DistillationCluster],
+) -> BTreeMap<String, FormationClusterStats> {
+    let mut grouped: BTreeMap<String, Vec<&crate::db::DistillationCluster>> = BTreeMap::new();
+    for cluster in clusters {
+        grouped
+            .entry(
+                cluster
+                    .space
+                    .as_deref()
+                    .filter(|space| !space.is_empty())
+                    .unwrap_or(NO_SPACE_KEY)
+                    .to_string(),
+            )
+            .or_default()
+            .push(cluster);
+    }
+    grouped
+        .into_iter()
+        .map(|(space, clusters)| (space, cluster_stats(clusters)))
+        .collect()
+}
+
+fn cluster_stats<'a, I>(clusters: I) -> FormationClusterStats
+where
+    I: IntoIterator<Item = &'a crate::db::DistillationCluster>,
+{
+    let mut sizes = Vec::new();
+    let mut member_counts: HashMap<&str, usize> = HashMap::new();
+
+    for cluster in clusters {
+        sizes.push(cluster.source_ids.len());
+        for source_id in &cluster.source_ids {
+            *member_counts.entry(source_id.as_str()).or_insert(0) += 1;
+        }
+    }
+
+    sizes.sort_unstable();
+    let size_distribution = size_distribution(sizes);
+    let distinct_members = member_counts.len();
+    let overlapping_members = member_counts.values().filter(|&&count| count >= 2).count();
+    let overlapping_member_fraction = if distinct_members == 0 {
+        0.0
+    } else {
+        overlapping_members as f64 / distinct_members as f64
+    };
+
+    FormationClusterStats {
+        cluster_count: size_distribution.sizes.len(),
+        size_distribution,
+        overlapping_member_fraction,
+    }
+}
+
+fn size_distribution(sizes: Vec<usize>) -> FormationSizeDistribution {
+    let min = sizes.first().copied().unwrap_or(0);
+    let max = sizes.last().copied().unwrap_or(0);
+    let median = match sizes.len() {
+        0 => 0.0,
+        len if len % 2 == 1 => sizes[len / 2] as f64,
+        len => (sizes[len / 2 - 1] + sizes[len / 2]) as f64 / 2.0,
+    };
+    FormationSizeDistribution {
+        min,
+        median,
+        max,
+        sizes,
+    }
 }
 
 /// Distill memory clusters into structured concepts.
@@ -2309,6 +2440,93 @@ mod tests {
             "cluster should still form when enough non-document members remain: {:?}",
             cluster.source_ids
         );
+    }
+
+    #[tokio::test]
+    async fn formation_sweep_reports_global_and_per_space_grid_without_writes() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let topic = "formation sweep dry run reports scoped cluster stats";
+
+        upsert_test_sources(
+            &db,
+            &[
+                ("sweep_work_1", topic),
+                ("sweep_work_2", topic),
+                ("sweep_work_3", topic),
+            ],
+            Some("work"),
+        )
+        .await;
+        upsert_test_sources(
+            &db,
+            &[
+                ("sweep_personal_1", topic),
+                ("sweep_personal_2", topic),
+                ("sweep_personal_3", topic),
+            ],
+            Some("personal"),
+        )
+        .await;
+        upsert_test_sources(
+            &db,
+            &[
+                ("sweep_none_1", topic),
+                ("sweep_none_2", topic),
+                ("sweep_none_3", topic),
+            ],
+            None,
+        )
+        .await;
+
+        let before = (
+            db.count_active_pages().await.unwrap(),
+            db.count().await.unwrap(),
+            db.count_refinement_queue_rows().await.unwrap(),
+        );
+        let tuning = crate::tuning::DistillationConfig {
+            formation_threshold: 0.42,
+            page_min_cluster_size: 3,
+            max_clusters_per_steep: 20,
+            max_grouped_cluster_size: 20,
+            max_unlinked_cluster_size: 20,
+            ..Default::default()
+        };
+
+        let report = formation_sweep(&db, &tuning).await.unwrap();
+
+        let after = (
+            db.count_active_pages().await.unwrap(),
+            db.count().await.unwrap(),
+            db.count_refinement_queue_rows().await.unwrap(),
+        );
+        assert_eq!(after, before, "formation sweep must not write rows");
+
+        let thresholds: Vec<f64> = report
+            .thresholds
+            .iter()
+            .map(|point| point.formation_threshold)
+            .collect();
+        assert_eq!(thresholds, vec![0.55, 0.60, 0.65, 0.70]);
+
+        for point in &report.thresholds {
+            assert!(!point.capped, "fixture should not hit the cluster cap");
+            assert_eq!(point.global.cluster_count, 3);
+            assert_eq!(point.global.size_distribution.sizes, vec![3, 3, 3]);
+            assert_eq!(point.global.size_distribution.min, 3);
+            assert_eq!(point.global.size_distribution.median, 3.0);
+            assert_eq!(point.global.size_distribution.max, 3);
+            assert_eq!(point.global.overlapping_member_fraction, 0.0);
+
+            for space in ["(none)", "personal", "work"] {
+                let stats = point
+                    .per_space
+                    .get(space)
+                    .unwrap_or_else(|| panic!("missing per-space stats for {space}"));
+                assert_eq!(stats.cluster_count, 1);
+                assert_eq!(stats.size_distribution.sizes, vec![3]);
+                assert_eq!(stats.overlapping_member_fraction, 0.0);
+            }
+        }
     }
 
     #[tokio::test]

@@ -8,7 +8,7 @@ pub use phase::Phase;
 pub(crate) mod summary;
 
 pub use crate::synthesis::distill::{
-    deep_distill_single, distill_one_cluster, distill_pages, distill_pages_scoped,
+    deep_distill_single, distill_one_cluster, distill_pages, distill_pages_scoped, formation_sweep,
     resolve_distill_target, DistillTarget,
 };
 
