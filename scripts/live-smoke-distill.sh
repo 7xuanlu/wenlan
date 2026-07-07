@@ -141,7 +141,8 @@ REFRESH_RESP="$(curl -sf -X PUT "$HOST/api/pages/$PAGE_ID" \
     -H "X-Agent-Name: $AGENT" \
     -d "$(jq -n --argjson m "$MEMS_JSON" --arg c "$REFRESH_BODY" '{content:$c, source_memory_ids:$m}')" || true)"
 REFRESH_OK="$(echo "$REFRESH_RESP" | jq -r '.ok // empty')"
-REFRESH_GATED="$(echo "$REFRESH_RESP" | jq -r '.gated // empty')"
+# PageWriteResponse.gated is skip_serializing_if=is_false: absent on the wire means false.
+REFRESH_GATED="$(echo "$REFRESH_RESP" | jq -r '.gated // false')"
 [ "$REFRESH_OK" = "true" ] || fail "refresh response not ok: $REFRESH_RESP"
 [ "$REFRESH_GATED" = "false" ] || fail "machine refresh should not be gated: $REFRESH_RESP"
 curl -sf "$HOST/api/pages/$PAGE_ID" -o "$PAGE_FILE" || fail "get refreshed page failed"

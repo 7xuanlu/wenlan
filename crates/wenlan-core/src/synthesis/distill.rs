@@ -1129,8 +1129,8 @@ pub(crate) async fn distill_pages_scoped_gated(
 /// Why a page is being refreshed. Selects the `edited_by` provenance tag the
 /// changelog + ownership gate see. All refresh writes are machine writes (gated
 /// to a revision card on human-owned pages) and skip the embedding
-/// hallucination guard — `refresh_page` runs its own lexical fail-closed check
-/// (`synthesis_faithful_to_sources`) instead.
+/// hallucination guard — `refresh_page` runs its own fail-closed citation
+/// verification gate instead.
 ///
 /// Post-merge rebuilds flow through `SourceChanged`: a merge marks the page
 /// stale, and the stale-page sweep refreshes it on the same path.
@@ -1165,32 +1165,6 @@ pub struct RefreshOutcome {
     pub revision_card_id: Option<String>,
 }
 
-/// Fail-closed faithfulness gate (spec §7): the synthesized body must be
-/// lexically grounded in the numbered sources. Mirrors the page-faithfulness
-/// bench (`eval::page_faithfulness`): split the body into sentences, score each
-/// by content-token overlap against the union of source texts (≥ 0.5 =
-/// grounded), and require a majority of sentences to be grounded. A
-/// wholesale-hallucinated body (no overlap) fails; a faithful synthesis passes.
-fn synthesis_faithful_to_sources(
-    body: &str,
-    numbered: &[crate::citations::NumberedSource],
-) -> bool {
-    let union = numbered
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let sentences = crate::faithfulness::split_sentences(body);
-    if sentences.is_empty() {
-        return false;
-    }
-    let faithful = sentences
-        .iter()
-        .filter(|s| crate::faithfulness::score_sentence_faithful(s, &union))
-        .count();
-    faithful as f64 / sentences.len() as f64 >= 0.5
-}
-
 /// Rebuild a page's prose from its CURRENT sources via the DISTILL_PAGE prompt,
 /// verify per-claim `[N]` citations against the numbered sources, and write the
 /// result atomically through the canonical PageWrite path.
@@ -1198,7 +1172,7 @@ fn synthesis_faithful_to_sources(
 /// This is the ONE re-distill / repair op. `recompile_single_page`,
 /// `deep_distill_single`, and `re_distill_stale_pages` all delegate here so the
 /// synthesis, citation verification, atomic content+citations+changelog write,
-/// and fail-closed guard live in exactly one place.
+/// and fail-closed citation gate live in exactly one place.
 ///
 /// - **Sources.** Prefers the `page_sources` join table (kept accurate across
 ///   topic-key upserts), falling back to the page's `source_memory_ids` JSON
@@ -1207,9 +1181,9 @@ fn synthesis_faithful_to_sources(
 ///   `creation_kind = "authored"`) is gated by `update_page` into a pending
 ///   revision card — the prose is never overwritten in place. The card id is
 ///   returned on [`RefreshOutcome::revision_card_id`].
-/// - **Fail-closed.** If the synthesized body is not lexically grounded in the
-///   numbered sources, the synthesis is discarded and the page is left
-///   unchanged — nothing half-written.
+/// - **Fail-closed.** If per-claim citation verification verifies zero claims
+///   or leaves a majority unverified, the synthesis is discarded and the page
+///   is left unchanged — nothing half-written.
 ///
 /// Never holds a DB lock across the LLM call.
 pub async fn refresh_page(
@@ -1234,7 +1208,7 @@ pub async fn refresh_page(
 /// Same op as [`refresh_page`], parameterized on the system prompt. Lets a
 /// caller synthesize with a different prompt than the generic `distill_page`
 /// template while still going through the ONE re-distill path (citation
-/// verification, fail-closed faithfulness gate, atomic `update_page`,
+/// verification, fail-closed citation gate, atomic `update_page`,
 /// staleness CAS) rather than a bespoke write.
 ///
 /// Used by the reserved Overview page (spec §5.3), which needs its own
@@ -1322,11 +1296,14 @@ pub(crate) async fn refresh_page_with_prompt(
     // stripped from the body before it is saved.
     let (content, cites, stats) = crate::citations::process_citation_output(&body, &numbered);
 
-    // Fail-closed (spec §7): discard a synthesis not lexically grounded in the
-    // cited sources. Leaves the page unchanged — nothing half-written.
-    if !synthesis_faithful_to_sources(&content, &numbered) {
+    // Fail-closed (spec §7): discard when per-claim citation verification
+    // verifies zero claims or leaves a majority unverified. The previous
+    // whole-body sentence-majority scorer false-rejected thin-source pages:
+    // DISTILL_PAGE/OVERVIEW_SUMMARY require elaboration and Open Questions
+    // sentences that carry no markers by design.
+    if stats.verified == 0 || stats.unverified > stats.verified {
         log::warn!(
-            "[refresh] page '{}' synthesis failed the faithfulness gate ({}); discarding",
+            "[refresh] page '{}' synthesis failed the citation verification gate ({}); discarding",
             page.title,
             stats.summary()
         );
@@ -1810,8 +1787,7 @@ mod tests {
         let now_ts = chrono::Utc::now().timestamp();
 
         // Insert a seed memory row directly so get_memory_contents_by_ids
-        // returns it. Content shares tokens with the mock body ("recompiled
-        // body") so the fail-closed faithfulness gate passes.
+        // returns it. The mock body's [1] marker verifies against this content.
         {
             let conn = db.conn.lock().await;
             conn.execute(
@@ -1838,7 +1814,7 @@ mod tests {
         .unwrap();
         db.set_page_stale("page_a", "source_updated").await.unwrap();
 
-        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new("recompiled body"));
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new("recompiled body [1]"));
         let prompts = PromptRegistry::default();
         let page = db.get_page("page_a").await.unwrap().unwrap();
 
@@ -1960,8 +1936,8 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
 
-        // Seed the cited memory. The synthesized body echoes it so both the
-        // faithfulness gate and the [1] marker verify.
+        // Seed the cited memory. The synthesized body echoes it so the [1]
+        // marker verifies and the citation gate passes.
         {
             let conn = db.conn.lock().await;
             conn.execute(
@@ -2029,6 +2005,83 @@ mod tests {
         assert!(
             latest.get("citations_summary").is_some(),
             "citations committed atomically with the content bump"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_page_keeps_cited_synthesis_with_uncited_elaboration() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let runtime_fact = "Tokio is an async runtime for Rust programs.";
+        let storage_fact = "LibSQL persists Wenlan memory chunks with vector embeddings.";
+        let bridge_fact = "The MCP bridge talks to the local daemon over HTTP.";
+        upsert_test_sources(
+            &db,
+            &[
+                ("mem_1_runtime", runtime_fact),
+                ("mem_2_storage", storage_fact),
+                ("mem_3_bridge", bridge_fact),
+            ],
+            Some("test"),
+        )
+        .await;
+
+        db.insert_page(
+            "page_thin_sources",
+            "Wenlan architecture",
+            None,
+            "original body",
+            None,
+            Some("test"),
+            &["mem_1_runtime", "mem_2_storage", "mem_3_bridge"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_thin_sources", "source_updated")
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "Thin-source page summary frames the topic for later review.\n\n\
+             ## Runtime\n\
+             Tokio is an async runtime for Rust programs [1]. This interpretation extends the operational lens with durable framing beyond the captured note.\n\n\
+             ## Storage\n\
+             LibSQL persists Wenlan memory chunks with vector embeddings [2]. The wider implication is an architectural posture rather than a discrete observation.\n\n\
+             ## Bridge\n\
+             The MCP bridge talks to the local daemon over HTTP [3]. This leaves room for coordination patterns outside the original capture.\n\n\
+             ## Open Questions\n\
+             - Which review cadence should govern this page?\n\
+             - What migration signals would change the priority?",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let outcome = refresh_page(
+            &db,
+            &llm,
+            &prompts,
+            "page_thin_sources",
+            RefreshReason::SourceChanged,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            outcome.wrote,
+            "citation-faithful refresh should write despite uncited elaboration"
+        );
+
+        let page = db.get_page("page_thin_sources").await.unwrap().unwrap();
+        assert!(
+            page.content.contains("operational lens"),
+            "page content should reflect the refreshed synthesis, got: {}",
+            page.content
+        );
+        assert_eq!(
+            page.citations.len(),
+            3,
+            "all three cited claims should persist"
         );
     }
 
