@@ -827,31 +827,24 @@ async fn nurture_uncategorized_filter_matches_only_null_space() {
 async fn list_pages_uncategorized_filter_matches_only_null_space() {
     let (router, _tmp, db) = common::test_app().await;
     db.create_space("alpha", None, false).await.unwrap();
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "uncategorized_page",
+    let uncategorized_id = common::create_page_fixture(
+        &db,
         "Uncategorized Page",
-        None,
         "uncategorized page body",
         None,
-        None,
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("seed uncategorized page must store");
-    db.insert_page(
-        "alpha_page",
+    .await;
+    let alpha_id = common::create_page_fixture(
+        &db,
         "Alpha Page",
-        None,
         "alpha page body",
-        None,
         Some("alpha"),
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("seed alpha page must store");
+    .await;
 
     let req = Request::builder()
         .method("GET")
@@ -869,11 +862,11 @@ async fn list_pages_uncategorized_filter_matches_only_null_space() {
         .filter_map(|page| page["id"].as_str())
         .collect::<Vec<_>>();
     assert!(
-        ids.contains(&"uncategorized_page"),
+        ids.contains(&uncategorized_id.as_str()),
         "uncategorized must include NULL-space pages; got {ids:?}"
     );
     assert!(
-        !ids.contains(&"alpha_page"),
+        !ids.contains(&alpha_id.as_str()),
         "uncategorized must not become unscoped and include registered-space pages; got {ids:?}"
     );
 }

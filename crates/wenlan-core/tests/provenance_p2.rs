@@ -39,6 +39,79 @@ async fn seed_memory(db: &MemoryDB, id: &str, content: &str) {
     db.upsert_documents(vec![doc]).await.expect("seed memory");
 }
 
+struct PageFixture<'a> {
+    title: &'a str,
+    summary: Option<&'a str>,
+    content: &'a str,
+    space: Option<&'a str>,
+    source_ids: &'a [&'a str],
+    creation_kind: &'a str,
+    workspace: Option<&'a str>,
+}
+
+async fn create_page_fixture(db: &MemoryDB, fixture: PageFixture<'_>) -> String {
+    let PageFixture {
+        title,
+        summary,
+        content,
+        space,
+        source_ids,
+        creation_kind,
+        workspace,
+    } = fixture;
+    if !source_ids.is_empty() {
+        db.upsert_documents(
+            source_ids
+                .iter()
+                .map(|source_id| RawDocument {
+                    source: "memory".to_string(),
+                    source_id: (*source_id).to_string(),
+                    title: (*source_id).to_string(),
+                    content: content.to_string(),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    memory_type: Some("fact".to_string()),
+                    space: space.map(str::to_string),
+                    source_agent: Some("test-agent".to_string()),
+                    confirmed: Some(true),
+                    ..Default::default()
+                })
+                .collect(),
+        )
+        .await
+        .expect("seed page sources");
+    }
+    let req = CreateConceptRequest {
+        title: title.to_string(),
+        content: content.to_string(),
+        summary: summary.map(str::to_string),
+        entity_id: None,
+        space: space.map(str::to_string),
+        source_memory_ids: source_ids.iter().map(|id| (*id).to_string()).collect(),
+        creation_kind: Some(creation_kind.to_string()),
+        workspace: workspace.map(str::to_string),
+    };
+    let result = if creation_kind == "distilled" {
+        wenlan_core::post_write::create_page_with_tuning(
+            db,
+            req,
+            "test",
+            None,
+            source_ids.len().max(1),
+            1.1,
+        )
+        .await
+        .expect("create distilled page fixture")
+    } else {
+        wenlan_core::post_write::create_page(db, req, "test", None)
+            .await
+            .expect("create page fixture")
+    };
+    db.set_page_review_status(&result.id, "confirmed")
+        .await
+        .expect("confirm page fixture");
+    result.id
+}
+
 /// Seed a folder-document memory: `source="memory"`, `source_agent="folder"`,
 /// and the `{source_id}::{provenance}` id shape that
 /// `sources::directory::document_source_id` stamps (directory.rs:167,372). The
@@ -158,20 +231,20 @@ async fn page_evidence_backfill_matches_legacy_page_sources() {
     let (db, _d) = make_db().await;
     seed_memory(&db, "mem_a", "alpha content about rust").await;
     seed_memory(&db, "mem_b", "beta content about rust").await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_1",
-        "Rust",
-        Some("rust topic"),
-        "body",
-        None,
-        None,
-        &["mem_a", "mem_b"],
-        &now,
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "Rust",
+            summary: Some("rust topic"),
+            content: "body",
+            space: None,
+            source_ids: &["mem_a", "mem_b"],
+            creation_kind: "distilled",
+            workspace: None,
+        },
     )
-    .await
-    .unwrap();
-    let ev = db.get_page_evidence("page_1").await.unwrap();
+    .await;
+    let ev = db.get_page_evidence(&page_id).await.unwrap();
     let mut locs: Vec<String> = ev
         .iter()
         .filter(|e| e.source_kind == "memory")
@@ -211,30 +284,30 @@ async fn dual_write_keeps_page_evidence_consistent_with_page_sources() {
     seed_memory(&db, "mem_a", "alpha").await;
     seed_memory(&db, "mem_b", "beta").await;
     seed_memory(&db, "mem_c", "gamma").await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_1",
-        "T",
-        Some("s"),
-        "body",
-        None,
-        None,
-        &["mem_a", "mem_b"],
-        &now,
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "T",
+            summary: Some("s"),
+            content: "body",
+            space: None,
+            source_ids: &["mem_a", "mem_b"],
+            creation_kind: "distilled",
+            workspace: None,
+        },
     )
-    .await
-    .unwrap();
-    let (ev, ps) = evidence_vs_sources(&db, "page_1").await;
+    .await;
+    let (ev, ps) = evidence_vs_sources(&db, &page_id).await;
     assert_eq!(ev, ps, "insert_page diverged");
-    db.update_page_content("page_1", "body2", &["mem_a", "mem_c"], "manual_edit")
+    db.update_page_content(&page_id, "body2", &["mem_a", "mem_c"], "manual_edit")
         .await
         .unwrap();
-    let (ev, ps) = evidence_vs_sources(&db, "page_1").await;
+    let (ev, ps) = evidence_vs_sources(&db, &page_id).await;
     assert_eq!(ev, ps, "update_page_content diverged");
-    db.link_page_source("page_1", "mem_b", "page_growth")
+    db.link_page_source(&page_id, "mem_b", "page_growth")
         .await
         .unwrap();
-    let (ev, ps) = evidence_vs_sources(&db, "page_1").await;
+    let (ev, ps) = evidence_vs_sources(&db, &page_id).await;
     assert_eq!(ev, ps, "link_page_source diverged");
 }
 
@@ -243,22 +316,22 @@ async fn update_prunes_memory_evidence_but_preserves_external() {
     let (db, _d) = make_db().await;
     seed_memory(&db, "mem_a", "alpha").await;
     seed_memory(&db, "mem_b", "beta").await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_x",
-        "T",
-        Some("s"),
-        "body",
-        None,
-        None,
-        &["mem_a", "mem_b"],
-        &now,
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "T",
+            summary: Some("s"),
+            content: "body",
+            space: None,
+            source_ids: &["mem_a", "mem_b"],
+            creation_kind: "distilled",
+            workspace: None,
+        },
     )
-    .await
-    .unwrap();
+    .await;
     // Attach a non-memory evidence row directly (the row a memory-source edit must NOT touch).
     db.link_page_evidence(
-        "page_x",
+        &page_id,
         "external_url",
         Some("https://example.com"),
         Some("Example"),
@@ -268,10 +341,10 @@ async fn update_prunes_memory_evidence_but_preserves_external() {
     .unwrap();
 
     // Edit drops mem_b. Memory rows reconcile; the external row must survive.
-    db.update_page_content("page_x", "body2", &["mem_a"], "manual_edit")
+    db.update_page_content(&page_id, "body2", &["mem_a"], "manual_edit")
         .await
         .unwrap();
-    let ev = db.get_page_evidence("page_x").await.unwrap();
+    let ev = db.get_page_evidence(&page_id).await.unwrap();
     let mem: Vec<String> = ev
         .iter()
         .filter(|e| e.source_kind == "memory")
@@ -289,10 +362,10 @@ async fn update_prunes_memory_evidence_but_preserves_external() {
     );
 
     // Empty-source edit: prune ALL memory rows; external still preserved.
-    db.update_page_content("page_x", "body3", &[], "manual_edit")
+    db.update_page_content(&page_id, "body3", &[], "manual_edit")
         .await
         .unwrap();
-    let ev = db.get_page_evidence("page_x").await.unwrap();
+    let ev = db.get_page_evidence(&page_id).await.unwrap();
     assert!(
         !ev.iter().any(|e| e.source_kind == "memory"),
         "empty-source edit prunes all memory evidence"
@@ -307,20 +380,20 @@ async fn update_prunes_memory_evidence_but_preserves_external() {
 async fn distilled_page_defaults_creation_kind_distilled() {
     let (db, _d) = make_db().await;
     seed_memory(&db, "mem_a", "alpha").await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_1",
-        "T",
-        Some("s"),
-        "body",
-        None,
-        None,
-        &["mem_a"],
-        &now,
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "T",
+            summary: Some("s"),
+            content: "body",
+            space: None,
+            source_ids: &["mem_a"],
+            creation_kind: "distilled",
+            workspace: None,
+        },
     )
-    .await
-    .unwrap();
-    let p = db.get_page("page_1").await.unwrap().unwrap();
+    .await;
+    let p = db.get_page(&page_id).await.unwrap().unwrap();
     assert_eq!(p.creation_kind, "distilled");
 }
 
@@ -334,31 +407,32 @@ async fn distilled_page_defaults_creation_kind_distilled() {
 #[tokio::test]
 async fn find_matching_page_reads_real_distance_not_creation_kind() {
     let (db, _d) = make_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "p_rust",
-        "Rust",
-        Some("rust async tokio runtime"),
-        "Rust ownership and the borrow checker.",
-        None,
-        None,
-        &[],
-        &now,
+    let rust_page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "Rust",
+            summary: Some("rust async tokio runtime"),
+            content: "Rust ownership and the borrow checker.",
+            space: None,
+            source_ids: &[],
+            creation_kind: "research",
+            workspace: None,
+        },
     )
-    .await
-    .unwrap();
-    db.insert_page(
-        "p_py",
-        "Python",
-        Some("python decorators metaclasses"),
-        "Python data model and descriptors.",
-        None,
-        None,
-        &[],
-        &now,
+    .await;
+    create_page_fixture(
+        &db,
+        PageFixture {
+            title: "Python",
+            summary: Some("python decorators metaclasses"),
+            content: "Python data model and descriptors.",
+            space: None,
+            source_ids: &[],
+            creation_kind: "research",
+            workspace: None,
+        },
     )
-    .await
-    .unwrap();
+    .await;
 
     // Query embedding near the Rust page (title + summary is what insert_page embeds).
     let q = db
@@ -372,7 +446,7 @@ async fn find_matching_page_reads_real_distance_not_creation_kind() {
     let matched = db.find_matching_page(None, &q, 0.5).await.unwrap();
     let page = matched.expect("near page must clear the similarity threshold");
     assert_eq!(
-        page.id, "p_rust",
+        page.id, rust_page_id,
         "must match the embedding-nearest page, proving real distance was read"
     );
 }
@@ -381,20 +455,20 @@ async fn find_matching_page_reads_real_distance_not_creation_kind() {
 async fn distilled_page_defaults_review_status_confirmed() {
     let (db, _d) = make_db().await;
     seed_memory(&db, "mem_a", "alpha").await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_1",
-        "T",
-        Some("s"),
-        "body",
-        None,
-        None,
-        &["mem_a"],
-        &now,
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "T",
+            summary: Some("s"),
+            content: "body",
+            space: None,
+            source_ids: &["mem_a"],
+            creation_kind: "distilled",
+            workspace: None,
+        },
     )
-    .await
-    .unwrap();
-    let p = db.get_page("page_1").await.unwrap().unwrap();
+    .await;
+    let p = db.get_page(&page_id).await.unwrap().unwrap();
     assert_eq!(p.review_status, "confirmed");
 }
 
@@ -467,26 +541,26 @@ async fn garbage_creation_kind_rejected() {
 async fn scoped_matcher_excludes_user_edited_when_disallowed() {
     let (db, _d) = make_db().await;
     seed_memory(&db, "mem_a", "rust async runtime tokio").await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_ue",
-        "Rust",
-        Some("rust async tokio"),
-        "body",
-        None,
-        Some("work"),
-        &["mem_a"],
-        &now,
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "Rust",
+            summary: Some("rust async tokio"),
+            content: "body",
+            space: None,
+            source_ids: &["mem_a"],
+            creation_kind: "distilled",
+            workspace: Some("work"),
+        },
     )
-    .await
-    .unwrap();
+    .await;
     // Mark user_edited via the manual-edit path (sets user_edited=1, demotes review_status to 'unconfirmed').
-    db.update_page_content("page_ue", "edited body", &["mem_a"], "manual_edit")
+    db.update_page_content(&page_id, "edited body", &["mem_a"], "manual_edit")
         .await
         .unwrap();
     // Restore review_status to 'confirmed' so the control below tests user_edited filtering,
     // not review_status filtering (scoped_matcher only surfaces confirmed pages).
-    db.set_page_review_status("page_ue", "confirmed")
+    db.set_page_review_status(&page_id, "confirmed")
         .await
         .unwrap();
     let emb = db
@@ -499,7 +573,7 @@ async fn scoped_matcher_excludes_user_edited_when_disallowed() {
         .find_matching_page_scoped(None, &emb, 0.5, Some("work"), true)
         .await
         .unwrap();
-    assert_eq!(allowed.as_ref().map(|p| p.id.as_str()), Some("page_ue"),
+    assert_eq!(allowed.as_ref().map(|p| p.id.as_str()), Some(page_id.as_str()),
         "control: a confirmed in-workspace user_edited page must match when user_edited is allowed (else threshold/embedding is the problem, fix the test seed)");
 
     // TEST: with allow_user_edited=false, the SAME page is REFUSED.
@@ -508,7 +582,7 @@ async fn scoped_matcher_excludes_user_edited_when_disallowed() {
         .await
         .unwrap();
     assert!(
-        refused.map(|p| p.id != "page_ue").unwrap_or(true),
+        refused.map(|p| p.id != page_id).unwrap_or(true),
         "must not return a user_edited page when disallowed"
     );
 }
@@ -516,20 +590,25 @@ async fn scoped_matcher_excludes_user_edited_when_disallowed() {
 #[tokio::test]
 async fn source_less_page_embeds_title_plus_content() {
     let (db, _d) = make_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
     // Source-less confirmed authored page: OFF-TOPIC title ("Cooking Recipes"),
     // Rust-specific body, NO summary.
     // Pre-Task-11 (title-only embed): "Cooking Recipes" embeds far from the Rust
     // query — cosine < 0.5 → find_matching_page_scoped returns None.
     // Post-Task-11 (title+content embed): the Rust-dense body pulls the vector
     // close to the query — cosine > 0.5 → returns the page.
-    db.insert_page_with_kind(
-        "p_notes", "Cooking Recipes", None,
-        "Detailed notes about Rust ownership, borrowing, and the lifetime system used in async code.",
-        None, None, &[], &now, "authored", "confirmed",
-        None, // workspace
-        None, // citations
-    ).await.unwrap();
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "Cooking Recipes",
+            summary: None,
+            content: "Detailed notes about Rust ownership, borrowing, and the lifetime system used in async code.",
+            space: None,
+            source_ids: &[],
+            creation_kind: "authored",
+            workspace: None,
+        },
+    )
+    .await;
     let q = db
         .generate_embeddings(&["Rust ownership borrowing lifetimes".to_string()])
         .unwrap()
@@ -538,7 +617,7 @@ async fn source_less_page_embeds_title_plus_content() {
         .find_matching_page_scoped(None, &q, 0.5, None, true)
         .await
         .unwrap();
-    assert_eq!(m.as_ref().map(|p| p.id.as_str()), Some("p_notes"),
+    assert_eq!(m.as_ref().map(|p| p.id.as_str()), Some(page_id.as_str()),
         "source-less page must embed its content so a content-related query matches above 0.5 (title alone would not)");
 }
 
@@ -546,20 +625,20 @@ async fn source_less_page_embeds_title_plus_content() {
 async fn scoped_matcher_never_crosses_workspace() {
     let (db, _d) = make_db().await;
     seed_memory(&db, "mem_w", "kubernetes deployment rollout strategy").await;
-    let now = chrono::Utc::now().to_rfc3339();
     // A confirmed page in workspace "personal".
-    db.insert_page(
-        "page_personal",
-        "K8s",
-        Some("kubernetes deployment rollout strategy"),
-        "Kubernetes rollout strategies including blue-green and canary deployments.",
-        None,
-        Some("personal"),
-        &["mem_w"],
-        &now,
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "K8s",
+            summary: Some("kubernetes deployment rollout strategy"),
+            content: "Kubernetes rollout strategies including blue-green and canary deployments.",
+            space: None,
+            source_ids: &["mem_w"],
+            creation_kind: "distilled",
+            workspace: Some("personal"),
+        },
     )
-    .await
-    .unwrap();
+    .await;
     let q = db
         .generate_embeddings(&["kubernetes rollout strategy".to_string()])
         .unwrap()
@@ -583,7 +662,7 @@ async fn scoped_matcher_never_crosses_workspace() {
         .unwrap();
     assert_eq!(
         same.as_ref().map(|p| p.id.as_str()),
-        Some("page_personal"),
+        Some(page_id.as_str()),
         "control: the page must match within its own workspace"
     );
 }
@@ -591,32 +670,41 @@ async fn scoped_matcher_never_crosses_workspace() {
 #[tokio::test]
 async fn fs_edit_demotes_review_status_but_agent_refresh_does_not() {
     let (db, _d) = make_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page("page_fs", "T", Some("s"), "body", None, None, &[], &now)
-        .await
-        .unwrap();
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "T",
+            summary: Some("s"),
+            content: "body",
+            space: None,
+            source_ids: &[],
+            creation_kind: "authored",
+            workspace: None,
+        },
+    )
+    .await;
     assert_eq!(
-        db.get_page("page_fs").await.unwrap().unwrap().review_status,
+        db.get_page(&page_id).await.unwrap().unwrap().review_status,
         "confirmed"
     );
     // fs_edit (markdown curation) demotes — same trust rule as manual_edit.
-    db.update_page_content("page_fs", "edited on disk", &[], "fs_edit")
+    db.update_page_content(&page_id, "edited on disk", &[], "fs_edit")
         .await
         .unwrap();
     assert_eq!(
-        db.get_page("page_fs").await.unwrap().unwrap().review_status,
+        db.get_page(&page_id).await.unwrap().unwrap().review_status,
         "unconfirmed",
         "fs_edit must demote"
     );
     // agent_refresh is a faithful re-synth — must NOT demote.
-    db.set_page_review_status("page_fs", "confirmed")
+    db.set_page_review_status(&page_id, "confirmed")
         .await
         .unwrap();
-    db.update_page_content("page_fs", "refreshed body", &[], "agent_refresh")
+    db.update_page_content(&page_id, "refreshed body", &[], "agent_refresh")
         .await
         .unwrap();
     assert_eq!(
-        db.get_page("page_fs").await.unwrap().unwrap().review_status,
+        db.get_page(&page_id).await.unwrap().unwrap().review_status,
         "confirmed",
         "agent_refresh must NOT demote"
     );

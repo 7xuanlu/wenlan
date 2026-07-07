@@ -9,6 +9,7 @@ use wenlan_core::quality_gate::QualityGate;
 use wenlan_core::sources::RawDocument;
 use wenlan_server::router::build_router;
 use wenlan_server::state::ServerState;
+use wenlan_types::requests::CreateConceptRequest;
 
 /// Insert a page with a single wikilink reference whose target does not exist,
 /// producing an orphan `page_links` row (`target_page_id IS NULL`).
@@ -23,11 +24,50 @@ pub async fn insert_page_with_orphan_link(
     page_title: &str,
     orphan_label: &str,
 ) {
-    let now = chrono::Utc::now().to_rfc3339();
     let content = format!("References [[{orphan_label}]] in this page.");
-    db.insert_page(page_id, page_title, None, &content, None, None, &[], &now)
+    let created_id = create_page_fixture(db, page_title, &content, None, &[], "authored").await;
+    assert!(
+        !created_id.is_empty(),
+        "page fixture should return a generated id for requested fixture id {page_id}"
+    );
+}
+
+#[allow(dead_code)]
+pub async fn create_page_fixture(
+    db: &Arc<MemoryDB>,
+    title: &str,
+    content: &str,
+    space: Option<&str>,
+    source_ids: &[&str],
+    creation_kind: &str,
+) -> String {
+    let req = CreateConceptRequest {
+        title: title.to_string(),
+        content: content.to_string(),
+        summary: None,
+        entity_id: None,
+        space: space.map(str::to_string),
+        source_memory_ids: source_ids.iter().map(|id| (*id).to_string()).collect(),
+        creation_kind: Some(creation_kind.to_string()),
+        workspace: space.map(str::to_string),
+    };
+    let result = if creation_kind == "distilled" {
+        wenlan_core::post_write::create_page_with_floor(
+            db,
+            req,
+            "test",
+            None,
+            source_ids.len().max(1),
+        )
         .await
-        .expect("insert_page must succeed in test fixture");
+    } else {
+        wenlan_core::post_write::create_page(db, req, "test", None).await
+    }
+    .expect("page fixture must be created through PageWrite");
+    db.set_page_review_status(&result.id, "confirmed")
+        .await
+        .expect("page fixture review status must be confirmed");
+    result.id
 }
 
 /// Build a test app and return `(router, tmp, db_arc)`.

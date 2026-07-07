@@ -1602,14 +1602,14 @@ mod redistill_contract_tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_types::requests::CreateConceptRequest;
 
     use crate::state::ServerState;
 
-    async fn seeded_user_edited_page(
-        page_id: &str,
-    ) -> (
+    async fn seeded_user_edited_page() -> (
         axum::Router,
         Arc<wenlan_core::db::MemoryDB>,
+        String,
         tempfile::TempDir,
     ) {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -1620,24 +1620,29 @@ mod redistill_contract_tests {
                 .await
                 .expect("MemoryDB::new"),
         );
-        let now = chrono::Utc::now().to_rfc3339();
-        db.insert_page(
-            page_id,
-            "Manual page",
+        let result = wenlan_core::post_write::create_page(
+            &db,
+            CreateConceptRequest {
+                title: "Manual page".to_string(),
+                content: "original body".to_string(),
+                summary: None,
+                entity_id: None,
+                space: None,
+                source_memory_ids: Vec::new(),
+                creation_kind: Some("authored".to_string()),
+                workspace: None,
+            },
+            "test",
             None,
-            "original body",
-            None,
-            None,
-            &["mem_1"],
-            &now,
         )
         .await
-        .expect("insert page");
-        db.update_page_content(page_id, "user prose", &["mem_1"], "fs_edit")
+        .expect("create page");
+        let page_id = result.id;
+        db.update_page_content(&page_id, "user prose", &["mem_1"], "fs_edit")
             .await
             .expect("mark page user edited");
         let page = db
-            .get_page(page_id)
+            .get_page(&page_id)
             .await
             .expect("get page")
             .expect("page exists");
@@ -1647,18 +1652,18 @@ mod redistill_contract_tests {
             db: Some(db.clone()),
             ..Default::default()
         }));
-        (crate::router::build_router(state), db, tmp)
+        (crate::router::build_router(state), db, page_id, tmp)
     }
 
     #[tokio::test]
     async fn page_redistill_without_llm_does_not_clear_user_edited() {
-        let (app, db, _tmp) = seeded_user_edited_page("page_direct").await;
+        let (app, db, page_id, _tmp) = seeded_user_edited_page().await;
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/distill/page_direct")
+                    .uri(format!("/api/distill/{page_id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1672,7 +1677,7 @@ mod redistill_contract_tests {
         assert_eq!(payload["status"], "skipped");
 
         let page = db
-            .get_page("page_direct")
+            .get_page(&page_id)
             .await
             .expect("get page")
             .expect("page exists");
@@ -1689,7 +1694,7 @@ mod redistill_contract_tests {
 
     #[tokio::test]
     async fn force_target_redistill_without_llm_does_not_clear_user_edited() {
-        let (app, db, _tmp) = seeded_user_edited_page("page_force").await;
+        let (app, db, page_id, _tmp) = seeded_user_edited_page().await;
 
         let response = app
             .oneshot(
@@ -1697,7 +1702,9 @@ mod redistill_contract_tests {
                     .method("POST")
                     .uri("/api/distill")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"target":"page_force","force":true}"#))
+                    .body(Body::from(format!(
+                        r#"{{"target":"{page_id}","force":true}}"#
+                    )))
                     .unwrap(),
             )
             .await
@@ -1711,7 +1718,7 @@ mod redistill_contract_tests {
         assert_eq!(payload["force"], true);
 
         let page = db
-            .get_page("page_force")
+            .get_page(&page_id)
             .await
             .expect("get page")
             .expect("page exists");
@@ -1737,6 +1744,7 @@ mod context_page_selection_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
     use wenlan_core::pages::{filter_pages_by_source_overlap, select_pages_for_context, Page};
+    use wenlan_types::requests::CreateConceptRequest;
 
     fn make_page(id: &str, source_ids: &[&str], relevance_score: f32, review_status: &str) -> Page {
         Page {
@@ -1766,6 +1774,58 @@ mod context_page_selection_tests {
             workspace: None,
             citations: Vec::new(),
         }
+    }
+
+    async fn seed_confirmed_distilled_page(
+        db: &wenlan_core::db::MemoryDB,
+        title: &str,
+        content: &str,
+        source_id: &str,
+        source_type: &str,
+        space: &str,
+    ) {
+        let source = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: format!("memory-{source_id}"),
+            content: if space == "other" {
+                "unrelated source memory outside the query result set".to_string()
+            } else {
+                content.to_string()
+            },
+            memory_type: Some(source_type.to_string()),
+            space: Some(space.to_string()),
+            source_agent: Some("test-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![source]).await.unwrap();
+        if space == "other" {
+            return;
+        }
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: None,
+                entity_id: None,
+                source_memory_ids: vec![source_id.to_string()],
+                creation_kind: Some("distilled".to_string()),
+                space: Some(space.to_string()),
+                workspace: Some(space.to_string()),
+            },
+            "test",
+            None,
+            1,
+            1.1,
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
     }
 
     /// Unit-locks the `select_pages_for_context` SELECTOR (the ranking stage inside
@@ -1847,58 +1907,36 @@ mod context_page_selection_tests {
 
         // Three confirmed, active pages, all matching the query keyword "zorblax"
         // so search_pages returns each as a candidate.
-        let now = chrono::Utc::now().to_rfc3339();
         // Cross-space: workspace != caller space, source not in result set → DROP.
-        db.insert_page_with_kind(
-            "page_cross",
-            "Zorblax Crossmarker",
-            None,
-            "zorblax crossmarker body",
-            None,
-            None,
-            &["unrelated"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("other"),
-            None,
+        seed_confirmed_distilled_page(
+            &db,
+            "Crossmarker",
+            "crossmarker body outside query",
+            "unrelated",
+            "fact",
+            "other",
         )
-        .await
-        .unwrap();
+        .await;
         // Same space, only source is a tier-1 identity memory → DROP for review.
-        db.insert_page_with_kind(
-            "page_identity",
+        seed_confirmed_distilled_page(
+            &db,
             "Zorblax Identmarker",
-            None,
             "zorblax identmarker body",
-            None,
-            None,
-            &["m_identity"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
+            "m_identity",
+            "identity",
+            "work",
         )
-        .await
-        .unwrap();
+        .await;
         // Same space, tier-3 fact source → KEEP.
-        db.insert_page_with_kind(
-            "page_same",
+        seed_confirmed_distilled_page(
+            &db,
             "Zorblax Samemarker",
-            None,
             "zorblax samemarker body",
-            None,
-            None,
-            &["m_fact"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
+            "m_fact",
+            "fact",
+            "work",
         )
-        .await
-        .unwrap();
+        .await;
 
         let state = Arc::new(RwLock::new(ServerState {
             db: Some(Arc::new(db)),
@@ -1954,13 +1992,67 @@ mod search_supplemental_pages_tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_types::requests::CreateConceptRequest;
+
+    async fn seed_confirmed_distilled_page(
+        db: &wenlan_core::db::MemoryDB,
+        title: &str,
+        content: &str,
+        source_id: &str,
+        source_type: &str,
+        space: &str,
+    ) -> String {
+        let source = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: format!("memory-{source_id}"),
+            content: if space == "other" {
+                "unrelated source memory outside the query result set".to_string()
+            } else {
+                content.to_string()
+            },
+            memory_type: Some(source_type.to_string()),
+            space: Some(space.to_string()),
+            source_agent: Some("test-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![source]).await.unwrap();
+        if space == "other" {
+            return format!("page_absent_{source_id}");
+        }
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: None,
+                entity_id: None,
+                source_memory_ids: vec![source_id.to_string()],
+                creation_kind: Some("distilled".to_string()),
+                space: Some(space.to_string()),
+                workspace: Some(space.to_string()),
+            },
+            "test",
+            None,
+            1,
+            1.1,
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
+        result.id
+    }
 
     /// Seed a DB with a tier-2 (`review`) agent, one tier-2 (`decision`) source
     /// memory in space `work`, plus three confirmed active pages: a same-space
     /// page sourced from the tier-2 memory (visible to a tier-2 caller), and a
     /// cross-space page (workspace `other`, disjoint sources → always dropped).
     /// Returns the wired app router.
-    async fn seeded_app() -> (axum::Router, tempfile::TempDir) {
+    async fn seeded_app() -> (axum::Router, tempfile::TempDir, String, String) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
@@ -1990,54 +2082,44 @@ mod search_supplemental_pages_tests {
         };
         db.upsert_documents(vec![mem]).await.unwrap();
 
-        let now = chrono::Utc::now().to_rfc3339();
         // Cross-space: workspace != caller space, source not in result set → DROP.
-        db.insert_page_with_kind(
-            "page_cross",
-            "Zorblax Crossmarker",
-            None,
-            "zorblax crossmarker body",
-            None,
-            None,
-            &["unrelated"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("other"),
-            None,
+        let page_cross_id = seed_confirmed_distilled_page(
+            &db,
+            "Crossmarker",
+            "crossmarker body outside query",
+            "unrelated",
+            "fact",
+            "other",
         )
-        .await
-        .unwrap();
+        .await;
         // Same space, tier-2 (decision) source → KEEP for review, DROP for unknown.
-        db.insert_page_with_kind(
-            "page_same",
+        let page_same_id = seed_confirmed_distilled_page(
+            &db,
             "Zorblax Samemarker",
-            None,
             "zorblax samemarker body",
-            None,
-            None,
-            &["m_decision"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
+            "m_decision",
+            "decision",
+            "work",
         )
-        .await
-        .unwrap();
+        .await;
 
         let state = Arc::new(RwLock::new(ServerState {
             db: Some(Arc::new(db)),
             ..Default::default()
         }));
-        (crate::router::build_router(state), tmp)
+        (
+            crate::router::build_router(state),
+            tmp,
+            page_same_id,
+            page_cross_id,
+        )
     }
 
     /// A tier-2 (`review`) same-space caller gets the same-space, tier-2-sourced
     /// page in `supplemental_pages`; the cross-space page is dropped.
     #[tokio::test]
     async fn search_surfaces_same_space_tier2_page() {
-        let (app, _tmp) = seeded_app().await;
+        let (app, _tmp, page_same_id, page_cross_id) = seeded_app().await;
         let resp = app
             .oneshot(
                 Request::builder()
@@ -2060,12 +2142,12 @@ mod search_supplemental_pages_tests {
             .supplemental_pages
             .expect("tier-2 caller must get supplemental pages");
         assert!(
-            pages.iter().any(|p| p.source_id == "page_same"),
+            pages.iter().any(|p| p.source_id == page_same_id),
             "same-space tier-2 page must surface, got: {:?}",
             pages.iter().map(|p| &p.source_id).collect::<Vec<_>>()
         );
         assert!(
-            !pages.iter().any(|p| p.source_id == "page_cross"),
+            !pages.iter().any(|p| p.source_id == page_cross_id),
             "cross-space page must be dropped by the space-scope gate, got: {:?}",
             pages.iter().map(|p| &p.source_id).collect::<Vec<_>>()
         );
@@ -2076,7 +2158,7 @@ mod search_supplemental_pages_tests {
     /// drops everything and `supplemental_pages` is `None`.
     #[tokio::test]
     async fn search_supplemental_pages_none_for_unknown_caller() {
-        let (app, _tmp) = seeded_app().await;
+        let (app, _tmp, _page_same_id, _page_cross_id) = seeded_app().await;
         let resp = app
             .oneshot(
                 Request::builder()

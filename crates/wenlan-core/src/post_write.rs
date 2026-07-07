@@ -49,6 +49,7 @@ pub enum PageWrite<'a> {
         knowledge_path: Option<&'a Path>,
         page_min_cluster_size: usize,
         page_match_threshold: f64,
+        citations_json: Option<String>,
     },
     Update {
         page_id: &'a str,
@@ -74,6 +75,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             knowledge_path,
             page_min_cluster_size,
             page_match_threshold,
+            citations_json,
         } => {
             create_page_impl(
                 db,
@@ -82,6 +84,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 knowledge_path,
                 page_min_cluster_size,
                 page_match_threshold,
+                citations_json.as_deref(),
             )
             .await
         }
@@ -602,6 +605,7 @@ pub async fn create_page_with_tuning(
             knowledge_path,
             page_min_cluster_size,
             page_match_threshold,
+            citations_json: None,
         },
     )
     .await
@@ -614,6 +618,7 @@ async fn create_page_impl(
     knowledge_path: Option<&Path>,
     page_min_cluster_size: usize,
     page_match_threshold: f64,
+    citations_json: Option<&str>,
 ) -> Result<WriteResult, WenlanError> {
     // Pre-write validation
     if req.title.trim().is_empty() {
@@ -694,18 +699,14 @@ async fn create_page_impl(
                 .await?
             {
                 let matched_id = matched.id;
-                for sid in &req.source_memory_ids {
-                    db.link_page_source(&matched_id, sid, "page_write_attach")
-                        .await?;
-                }
-                return Ok(WriteResult {
-                    id: matched_id.clone(),
-                    attached_to: Some(matched_id),
-                    warnings: vec![],
-                    wrote: true,
-                    revision_card_id: None,
-                    gated: false,
-                });
+                return attach_page_sources_impl(
+                    db,
+                    &matched_id,
+                    &req.source_memory_ids,
+                    "page_write_attach",
+                    agent,
+                )
+                .await;
             }
         }
     }
@@ -738,7 +739,9 @@ async fn create_page_impl(
         creation_kind: creation_kind.to_string(),
         review_status: review_status.to_string(),
         workspace: req.workspace.clone(),
-        citations: Vec::new(),
+        citations: citations_json
+            .and_then(|raw| serde_json::from_str(raw).ok())
+            .unwrap_or_default(),
     };
 
     // md-first write (only if a knowledge_path was provided)
@@ -765,7 +768,7 @@ async fn create_page_impl(
             creation_kind,
             review_status,
             req.workspace.as_deref(),
-            None, // citations: create_page has no citation source; NULL = never citation-processed
+            citations_json,
         )
         .await
     {
@@ -820,13 +823,14 @@ async fn create_page_impl(
     })
 }
 
-/// Daemon-internal `edited_by` values that bypass the hallucination guard.
-/// Incremental updates can push aggregate cosine sim below 0.6; running the
-/// guard on these paths would silently drop legitimate refinery writes.
+/// PageWrite `edited_by` values that bypass the hallucination guard. Incremental
+/// updates can push aggregate cosine sim below 0.6; the HTTP/MCP
+/// `agent_refresh` route historically accepted agent-provided refreshes without
+/// this guard, so routing it through PageWrite preserves that behavior.
 fn skip_hallucination_guard(edited_by: &str) -> bool {
     matches!(
         edited_by,
-        "distill" | "re_distill" | "page_growth" | "refinery_merge"
+        "distill" | "re_distill" | "page_growth" | "refinery_merge" | "agent_refresh"
     )
 }
 

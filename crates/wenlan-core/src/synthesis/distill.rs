@@ -8,6 +8,7 @@
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
+use crate::post_write::{page_write, PageWrite};
 use crate::prompts::PromptRegistry;
 use crate::refinery::helpers::{
     is_all_generic_tokens, looks_like_code, looks_like_commit_message, looks_like_markup_styled,
@@ -17,7 +18,7 @@ use crate::sources::StabilityTier;
 use crate::synthesis::refinement_queue::{resolve_proposal, ResolveStatus};
 use std::collections::HashMap;
 use std::sync::Arc;
-use wenlan_types::requests::UpdatePageRequest;
+use wenlan_types::requests::{CreateConceptRequest, UpdatePageRequest};
 
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_NUMERATOR: usize = 1;
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_DENOMINATOR: usize = 2;
@@ -541,27 +542,27 @@ async fn distill_one_cluster_with_tuning(
             )
             .await?
         {
-            let mut attached: Vec<String> = Vec::with_capacity(cluster.source_ids.len());
-            for sid in &cluster.source_ids {
-                match db
-                    .link_page_source(&matched.id, sid, "distill_attach")
-                    .await
-                {
-                    Ok(()) => attached.push(sid.clone()),
-                    Err(e) => log::warn!(
-                        "[distill] attach source {sid} -> {} failed: {e}",
-                        matched.id
-                    ),
-                }
-            }
+            page_write(
+                db,
+                PageWrite::Attach {
+                    page_id: &matched.id,
+                    source_memory_ids: &cluster.source_ids,
+                    link_reason: "distill_attach",
+                    agent: "distill",
+                },
+            )
+            .await?;
+            let attached = cluster.source_ids.clone();
             // P3: the scoped-match attach consumes these memories into an existing
             // page, so demote them too. Stamp ONLY the ids that actually attached —
             // never-attached memories must keep ranking normally. (Resolves P2 TODO.)
-            if let Err(e) = db
-                .stamp_last_distilled_at(&attached, chrono::Utc::now().timestamp())
-                .await
-            {
-                log::warn!("[distill] stamp last_distilled_at (scoped attach) failed: {e}");
+            if !attached.is_empty() {
+                if let Err(e) = db
+                    .stamp_last_distilled_at(&attached, chrono::Utc::now().timestamp())
+                    .await
+                {
+                    log::warn!("[distill] stamp last_distilled_at (scoped attach) failed: {e}");
+                }
             }
             log::info!(
                 "[distill] cluster '{}' attached {} sources to existing page '{}' (scoped match), skipping new-page synth",
@@ -735,27 +736,32 @@ async fn distill_one_cluster_with_tuning(
                 crate::citations::process_citation_output(&content, &numbered);
             let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".into());
 
-            // Build source IDs as &str refs
-            let source_refs: Vec<&str> = cluster.source_ids.iter().map(|s| s.as_str()).collect();
-            let now = chrono::Utc::now().to_rfc3339();
-            let page_id = crate::pages::new_page_id();
-            log::info!("[distill] page {page_id} citations: {}", stats.summary());
-
-            db.insert_page_with_kind(
-                &page_id,
-                &title,
-                summary.as_deref(),
-                &content,
-                cluster.entity_id.as_deref(),
-                cluster.space.as_deref(),
-                &source_refs,
-                &now,
-                "distilled",
-                "confirmed",
-                None,
-                Some(&citations_json),
+            let write_result = page_write(
+                db,
+                PageWrite::Create {
+                    req: CreateConceptRequest {
+                        title: title.clone(),
+                        content: content.clone(),
+                        summary: summary.clone(),
+                        entity_id: cluster.entity_id.clone(),
+                        space: cluster.space.clone(),
+                        source_memory_ids: cluster.source_ids.clone(),
+                        creation_kind: Some("distilled".to_string()),
+                        workspace: cluster.space.clone(),
+                    },
+                    agent: "system",
+                    knowledge_path: None,
+                    page_min_cluster_size: tuning.page_min_cluster_size,
+                    page_match_threshold: tuning.page_match_threshold,
+                    citations_json: Some(citations_json),
+                },
             )
             .await?;
+            let page_id = write_result.id;
+            if write_result.attached_to.is_some() {
+                return Ok(None);
+            }
+            log::info!("[distill] page {page_id} citations: {}", stats.summary());
 
             // P3 consolidation-demotion: stamp the source memories so the ranking
             // demotion multiplier in search_memory_cross_rerank ranks them below
@@ -775,20 +781,6 @@ async fn distill_one_cluster_with_tuning(
                 title,
                 content.chars().take(40).collect::<String>()
             );
-
-            // Log activity — system-attributed, since distillation is background refinery work.
-            let source_memory_ids: Vec<String> = cluster.source_ids.to_vec();
-            let detail = format!(
-                "created \"{}\" from {} memories",
-                title,
-                cluster.source_ids.len()
-            );
-            if let Err(e) = db
-                .log_agent_activity("system", "page_create", &source_memory_ids, None, &detail)
-                .await
-            {
-                log::warn!("[distill] log page_create activity failed: {e}");
-            }
 
             if let Some(writer) = knowledge_writer {
                 if let Ok(Some(c)) = db.get_page(&page_id).await {
@@ -1351,6 +1343,29 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
+    async fn upsert_test_sources(
+        db: &crate::db::MemoryDB,
+        docs: &[(&str, &str)],
+        space: Option<&str>,
+    ) {
+        let rows = docs
+            .iter()
+            .map(|(source_id, content)| RawDocument {
+                source: "memory".to_string(),
+                source_id: (*source_id).to_string(),
+                title: (*source_id).to_string(),
+                content: (*content).to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                space: space.map(str::to_string),
+                source_agent: Some("test".to_string()),
+                confirmed: Some(true),
+                ..Default::default()
+            })
+            .collect();
+        db.upsert_documents(rows).await.unwrap();
+    }
+
     struct PromptRecordingProvider {
         prompts: Mutex<Vec<String>>,
     }
@@ -1538,18 +1553,34 @@ mod tests {
     #[tokio::test]
     async fn distill_one_cluster_persists_verified_and_unverified_citations() {
         let (db, _db_dir) = crate::db::tests::test_db().await;
+        let daemon_content =
+            "The Wenlan daemon binds to port 7878 by default on localhost, providing \
+             the HTTP API surface used by the CLI and the MCP bridge for all downstream \
+             tools that talk to the local memory store.";
+        let embed_content =
+            "FastEmbed uses the BGE-Base-EN embeddings model with 768 dimensions for \
+             vector search across every stored memory and page in the local database, \
+             combined with FTS5 for hybrid retrieval.";
+        let api_content =
+            "The Wenlan server exposes local HTTP endpoints for tools that need to store, \
+             search, and refresh memories through the daemon.";
+        upsert_test_sources(
+            &db,
+            &[
+                ("mem_daemon", daemon_content),
+                ("mem_embed", embed_content),
+                ("mem_api", api_content),
+            ],
+            None,
+        )
+        .await;
 
         let cluster = crate::db::DistillationCluster {
-            source_ids: vec!["mem_daemon".into(), "mem_embed".into()],
+            source_ids: vec!["mem_daemon".into(), "mem_embed".into(), "mem_api".into()],
             contents: vec![
-                "The Wenlan daemon binds to port 7878 by default on localhost, providing \
-                 the HTTP API surface used by the CLI and the MCP bridge for all downstream \
-                 tools that talk to the local memory store."
-                    .to_string(),
-                "FastEmbed uses the BGE-Base-EN embeddings model with 768 dimensions for \
-                 vector search across every stored memory and page in the local database, \
-                 combined with FTS5 for hybrid retrieval."
-                    .to_string(),
+                daemon_content.to_string(),
+                embed_content.to_string(),
+                api_content.to_string(),
             ],
             entity_id: None,
             entity_name: Some("Wenlan daemon".into()),
@@ -1574,6 +1605,70 @@ mod tests {
         assert_eq!(page.citations[0].status, "verified");
         assert_eq!(page.citations[0].locator, "mem_daemon");
         assert!(page.content.contains("[1]"));
+    }
+
+    #[tokio::test]
+    async fn distill_one_cluster_create_goes_through_page_write_birth_contract() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let source_ids = [
+            "daemon_pagewrite_a",
+            "daemon_pagewrite_b",
+            "daemon_pagewrite_c",
+        ];
+        for sid in source_ids {
+            db.upsert_documents(vec![RawDocument {
+                source: "memory".to_string(),
+                source_id: sid.to_string(),
+                title: sid.to_string(),
+                content: match sid {
+                    "daemon_pagewrite_a" => {
+                        "Wenlan daemon synthesis keeps page writes on one canonical path so daemon phases cannot bypass canonical validation when they turn source memories into distilled pages."
+                    }
+                    "daemon_pagewrite_b" => {
+                        "Canonical PageWrite births unconfirmed pages for review, matching the same review contract used by agent-created HTTP pages."
+                    }
+                    _ => "Daemon-created pages carry the same birth contract as HTTP pages and stay visible to reviewers before confirmation.",
+                }
+                .to_string(),
+                last_modified: chrono::Utc::now().timestamp(),
+                memory_type: Some("fact".to_string()),
+                source_agent: Some("test".to_string()),
+                confirmed: Some(true),
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        }
+        let cluster = crate::db::DistillationCluster {
+            source_ids: source_ids.iter().map(|sid| sid.to_string()).collect(),
+            contents: vec![
+                "Wenlan daemon synthesis keeps page writes on one canonical path so daemon phases cannot bypass canonical validation when they turn source memories into distilled pages.".to_string(),
+                "Canonical PageWrite births unconfirmed pages for review, matching the same review contract used by agent-created HTTP pages.".to_string(),
+                "Daemon-created pages carry the same birth contract as HTTP pages and stay visible to reviewers before confirmation.".to_string(),
+            ],
+            entity_id: None,
+            entity_name: Some("Daemon PageWrite".to_string()),
+            space: Some("work".to_string()),
+            estimated_tokens: 120,
+            centroid_embedding: None,
+        };
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(
+            "Wenlan daemon synthesis keeps page writes on one canonical path so daemon phases cannot bypass canonical validation when they turn source memories into distilled pages. [1]\n\
+             Canonical PageWrite births unconfirmed pages for review, matching the same review contract used by agent-created HTTP pages. [2]\n\
+             Daemon-created pages carry the same birth contract as HTTP pages and stay visible to reviewers before confirmation. [3]",
+        ));
+        let prompts = PromptRegistry::default();
+
+        let page_id = distill_one_cluster(&db, &llm, &prompts, &cluster, None)
+            .await
+            .unwrap()
+            .expect("cluster should synthesize a page");
+
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page.review_status, "unconfirmed",
+            "daemon create must inherit PageWrite page birth semantics"
+        );
     }
 
     #[tokio::test]
@@ -1903,6 +1998,7 @@ mod tests {
 
         let mem_plain = "mem_cluster_kind_plain";
         let mem_doc = "folder-notes::rust/cluster.md";
+        let mem_extra = "mem_cluster_kind_extra";
         {
             let conn = db.conn.lock().await;
             conn.execute(
@@ -1921,15 +2017,32 @@ mod tests {
             )
             .await
             .unwrap();
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Rust lifetimes document how borrowed references remain valid while ownership moves between functions', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params![mem_extra.to_string(), now_ts],
+            )
+            .await
+            .unwrap();
         }
 
         let plain_content =
             "Rust ownership rules prevent data races and dangling pointers at compile time without a garbage collector".to_string();
         let doc_content =
             "The borrow checker enforces these ownership rules statically at compile time by tracking lifetimes across function boundaries".to_string();
+        let extra_content =
+            "Rust lifetimes document how borrowed references remain valid while ownership moves between functions".to_string();
         let cluster = crate::db::DistillationCluster {
-            source_ids: vec![mem_plain.to_string(), mem_doc.to_string()],
-            contents: vec![plain_content.clone(), doc_content.clone()],
+            source_ids: vec![
+                mem_plain.to_string(),
+                mem_doc.to_string(),
+                mem_extra.to_string(),
+            ],
+            contents: vec![
+                plain_content.clone(),
+                doc_content.clone(),
+                extra_content.clone(),
+            ],
             entity_id: None,
             entity_name: Some("Rust ownership".into()),
             space: Some("test".into()),
@@ -2312,6 +2425,15 @@ mod tests {
             ev.contains(&"mem_x".to_string()),
             "cluster source attached to seed evidence"
         );
+        let activity = db
+            .list_agent_activity(20, Some("distill"), None)
+            .await
+            .unwrap();
+        assert!(
+            activity.iter().any(|entry| entry.action == "page_attach"
+                && entry.memory_ids.as_deref() == Some("seed_tokio")),
+            "daemon attach must route through PageWrite and log page_attach, got {activity:?}"
+        );
     }
 
     #[tokio::test]
@@ -2346,6 +2468,7 @@ mod tests {
             It provides a multi-threaded work-stealing scheduler, an async TCP and UDP socket API, \
             and a reactor backed by the operating system event queue for scalable network services."
             .to_string();
+        upsert_test_sources(&db, &[("mem_high_threshold", &long_content)], Some("work")).await;
         let cluster = crate::db::DistillationCluster {
             source_ids: vec!["mem_high_threshold".into()],
             contents: vec![long_content],
@@ -2358,6 +2481,7 @@ mod tests {
 
         let tuning = crate::tuning::DistillationConfig {
             page_match_threshold: 1.1,
+            page_min_cluster_size: 1,
             ..Default::default()
         };
         let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(

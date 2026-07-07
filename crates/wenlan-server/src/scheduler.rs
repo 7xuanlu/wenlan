@@ -1143,29 +1143,54 @@ mod tests {
 
     async fn insert_test_page(
         db: &wenlan_core::db::MemoryDB,
-        id: &str,
         title: &str,
         content: &str,
         source_ids: &[&str],
         creation_kind: &str,
-    ) {
-        let now = chrono::Utc::now().to_rfc3339();
-        db.insert_page_with_kind(
-            id,
-            title,
+    ) -> String {
+        let source_memory_ids: Vec<String> = if creation_kind == "distilled" {
+            source_ids.iter().map(|id| (*id).to_string()).collect()
+        } else {
+            Vec::new()
+        };
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            wenlan_types::requests::CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: None,
+                entity_id: None,
+                source_memory_ids,
+                creation_kind: Some(creation_kind.to_string()),
+                space: Some("work".to_string()),
+                workspace: Some("work".to_string()),
+            },
+            "test",
             None,
-            content,
-            None,
-            None,
-            source_ids,
-            &now,
-            creation_kind,
-            "confirmed",
-            Some("work"),
-            Some("[]"),
+            source_ids.len().max(1),
+            1.1,
         )
         .await
         .unwrap();
+        if creation_kind != "distilled" && !source_ids.is_empty() {
+            let source_memory_ids: Vec<String> =
+                source_ids.iter().map(|id| (*id).to_string()).collect();
+            wenlan_core::post_write::page_write(
+                db,
+                wenlan_core::post_write::PageWrite::Attach {
+                    page_id: &result.id,
+                    source_memory_ids: &source_memory_ids,
+                    link_reason: "test_fixture_attach",
+                    agent: "test",
+                },
+            )
+            .await
+            .unwrap();
+        }
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
+        result.id
     }
 
     #[tokio::test]
@@ -1182,55 +1207,50 @@ mod tests {
             store_test_memory(&db, id, source).await;
         }
 
-        insert_test_page(
+        let page_dup_a = insert_test_page(
             &db,
-            "page_dup_a",
             "Rust ownership",
             "Rust ownership prevents data races at compile time.",
             &["mem_dup_a", "mem_dup_b", "mem_dup_c"],
             "distilled",
         )
         .await;
-        insert_test_page(
+        let page_dup_b = insert_test_page(
             &db,
-            "page_dup_b",
             "Rust borrowing",
             "Rust ownership prevents data races at compile time.",
             &["mem_dup_a", "mem_dup_b", "mem_dup_c"],
             "distilled",
         )
         .await;
-        insert_test_page(
+        let page_machine_stale = insert_test_page(
             &db,
-            "page_machine_stale",
             "Machine stale page",
             "Old machine-owned prose.",
             &["mem_machine"],
             "research",
         )
         .await;
-        insert_test_page(
+        let page_human_stale = insert_test_page(
             &db,
-            "page_human_stale",
             "Human stale page",
             "Human-written prose must remain untouched.",
             &["mem_human"],
             "authored",
         )
         .await;
-        insert_test_page(
+        let _page_orphan_source = insert_test_page(
             &db,
-            "page_orphan_source",
             "Orphan source",
             "This page links to [[Missing Topic]].",
             &["mem_machine"],
             "research",
         )
         .await;
-        db.set_page_stale("page_machine_stale", "source_updated")
+        db.set_page_stale(&page_machine_stale, "source_updated")
             .await
             .unwrap();
-        db.set_page_stale("page_human_stale", "source_updated")
+        db.set_page_stale(&page_human_stale, "source_updated")
             .await
             .unwrap();
 
@@ -1273,11 +1293,11 @@ mod tests {
             .find(|p| p.action == "page_merge")
             .expect("near-duplicate pages must emit a page_merge card");
         assert_eq!(merge_card.source_ids.len(), 2);
-        assert!(merge_card.source_ids.contains(&"page_dup_a".to_string()));
-        assert!(merge_card.source_ids.contains(&"page_dup_b".to_string()));
+        assert!(merge_card.source_ids.contains(&page_dup_a));
+        assert!(merge_card.source_ids.contains(&page_dup_b));
 
         let machine = db
-            .get_page("page_machine_stale")
+            .get_page(&page_machine_stale)
             .await
             .unwrap()
             .expect("machine page remains");
@@ -1290,7 +1310,7 @@ mod tests {
         );
 
         let human = db
-            .get_page("page_human_stale")
+            .get_page(&page_human_stale)
             .await
             .unwrap()
             .expect("human page remains");
@@ -1301,7 +1321,7 @@ mod tests {
         assert!(
             revisions
                 .iter()
-                .any(|r| r.target_source_id == "page_human_stale"),
+                .any(|r| r.target_source_id == page_human_stale),
             "human-owned stale page should stage a revision card"
         );
 

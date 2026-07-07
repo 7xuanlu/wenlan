@@ -11,6 +11,7 @@ use wenlan_core::reranker::Reranker;
 use wenlan_core::sources::RawDocument;
 use wenlan_core::WenlanError;
 use wenlan_core::{EventEmitter, NoopEmitter};
+use wenlan_types::requests::CreateConceptRequest;
 
 // ---------------------------------------------------------------------------
 // Task 6 env guard: serializes tests that mutate WENLAN_ENABLE_PAGE_CHANNEL
@@ -83,6 +84,80 @@ async fn seed_memory(db: &MemoryDB, source_id: &str, content: &str) {
         ..Default::default()
     };
     db.upsert_documents(vec![doc]).await.expect("seed memory");
+}
+
+struct PageFixture<'a> {
+    title: &'a str,
+    summary: Option<&'a str>,
+    content: &'a str,
+    space: Option<&'a str>,
+    source_ids: &'a [&'a str],
+    creation_kind: &'a str,
+    workspace: Option<&'a str>,
+}
+
+async fn create_page_fixture(db: &MemoryDB, fixture: PageFixture<'_>) -> String {
+    let PageFixture {
+        title,
+        summary,
+        content,
+        space,
+        source_ids,
+        creation_kind,
+        workspace,
+    } = fixture;
+    if !source_ids.is_empty() {
+        db.upsert_documents(
+            source_ids
+                .iter()
+                .map(|source_id| RawDocument {
+                    source: "memory".to_string(),
+                    source_id: (*source_id).to_string(),
+                    title: (*source_id).to_string(),
+                    content: content.to_string(),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    memory_type: Some("fact".to_string()),
+                    space: space.map(str::to_string),
+                    source_agent: Some("test-agent".to_string()),
+                    confirmed: Some(true),
+                    ..Default::default()
+                })
+                .collect(),
+        )
+        .await
+        .expect("seed page sources");
+    }
+
+    let req = CreateConceptRequest {
+        title: title.to_string(),
+        content: content.to_string(),
+        summary: summary.map(str::to_string),
+        entity_id: None,
+        space: space.map(str::to_string),
+        source_memory_ids: source_ids.iter().map(|id| (*id).to_string()).collect(),
+        creation_kind: Some(creation_kind.to_string()),
+        workspace: workspace.map(str::to_string),
+    };
+    let result = if creation_kind == "distilled" {
+        wenlan_core::post_write::create_page_with_tuning(
+            db,
+            req,
+            "test",
+            None,
+            source_ids.len().max(1),
+            1.1,
+        )
+        .await
+        .expect("create distilled page fixture")
+    } else {
+        wenlan_core::post_write::create_page(db, req, "test", None)
+            .await
+            .expect("create page fixture")
+    };
+    db.set_page_review_status(&result.id, "confirmed")
+        .await
+        .expect("confirm page fixture");
+    result.id
 }
 
 /// Read `last_distilled_at` for a memory directly from SQL.
@@ -251,7 +326,6 @@ async fn normal_distill_stamps_last_distilled_at() {
 #[tokio::test]
 async fn scoped_match_attach_stamps_only_attached_ids() {
     let (db, _dir) = make_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
 
     // Seed two memories into the memories table so stamp_last_distilled_at has
     // rows to UPDATE.  Content length and topic are arbitrary — the cluster is
@@ -271,7 +345,6 @@ async fn scoped_match_attach_stamps_only_attached_ids() {
     )
     .await;
 
-    // The embed text used by insert_page_with_kind is: title + summary + capped_body.
     // We construct the centroid by embedding the SAME title+summary text so the
     // cosine between centroid and page embedding is effectively 1.0, guaranteeing
     // find_matching_page_scoped fires at the 0.85 threshold regardless of the
@@ -283,24 +356,19 @@ async fn scoped_match_attach_stamps_only_attached_ids() {
         as its I/O reactor. Blocking tasks run on a dedicated thread pool so they never \
         starve async I/O futures.";
 
-    // Insert a confirmed distilled page — this is the page the scoped matcher
-    // must find.  review_status = "confirmed" is required by find_matching_page_scoped.
-    db.insert_page_with_kind(
-        "page_scoped_seed",
-        page_title,
-        Some(page_summary),
-        page_body,
-        None, // no entity_id
-        None, // no space filter
-        &[],  // no source memories yet
-        &now,
-        "distilled",
-        "confirmed",
-        None, // workspace
-        None, // citations
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: page_title,
+            summary: Some(page_summary),
+            content: page_body,
+            space: None,
+            source_ids: &["mem_scoped_page_seed"],
+            creation_kind: "distilled",
+            workspace: None,
+        },
     )
-    .await
-    .expect("insert_page_with_kind must succeed");
+    .await;
 
     // Build the centroid embedding from title+summary (same as the page embed
     // prefix) so the cosine is near 1.0.
@@ -320,8 +388,8 @@ async fn scoped_match_attach_stamps_only_attached_ids() {
             .expect("find_matching_page_scoped must not error");
         assert_eq!(
             probe.as_ref().map(|p| p.id.as_str()),
-            Some("page_scoped_seed"),
-            "precondition: scoped matcher must find page_scoped_seed at threshold 0.85 \
+            Some(page_id.as_str()),
+            "precondition: scoped matcher must find seeded PageWrite page at threshold 0.85 \
              (tune centroid_text if this fails)"
         );
     }
@@ -399,13 +467,6 @@ async fn seed_memory_in_space(db: &MemoryDB, source_id: &str, content: &str, spa
         .expect("seed_memory_in_space");
 }
 
-/// Set pages.workspace via the public DB helper (delegates to db.set_page_workspace).
-async fn set_page_workspace(db: &Arc<MemoryDB>, page_id: &str, workspace: &str) {
-    db.set_page_workspace(page_id, Some(workspace))
-        .await
-        .expect("set_page_workspace must succeed");
-}
-
 // ---------------------------------------------------------------------------
 // Task 6 — Step 1: source-less page respects workspace gate
 // ---------------------------------------------------------------------------
@@ -415,12 +476,6 @@ async fn set_page_workspace(db: &Arc<MemoryDB>, page_id: &str, workspace: &str) 
 ///
 /// This verifies the "workspace axis" branch of the security gate:
 ///   page.workspace == space_filter => pass, regardless of sources.
-///
-/// The test uses `insert_page_with_kind` directly to bypass `create_page`'s
-/// source-existence check (source-less authored pages are valid per the spec).
-/// The workspace column is then set via `set_page_workspace` (the production
-/// write path that `create_page` will acquire in Step 4 is tested separately).
-///
 /// Passing `None` for `reranker` degrades gracefully (no CE model needed in CI).
 #[tokio::test]
 async fn source_less_page_passes_own_workspace_no_personal_leak() {
@@ -428,7 +483,6 @@ async fn source_less_page_passes_own_workspace_no_personal_leak() {
     let _env = PageChannelEnvGuard::set("1");
 
     let (db, _dir) = make_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
 
     // Seed anchor memories so both scoped pools are non-empty (prevents the
     // filter branch from short-circuiting due to empty memory_results).
@@ -449,28 +503,19 @@ async fn source_less_page_passes_own_workspace_no_personal_leak() {
 
     // Source-less authored page, confirmed (NOT unconfirmed — a passing test on
     // an unconfirmed page would bless a trust-model bypass). Zero source ids.
-    // workspace=None here so set_page_workspace simulates the pre-Step-4 state;
-    // the Step 4 write path is tested in create_page_persists_workspace below.
-    db.insert_page_with_kind(
-        "page_sl",
-        "Quarterly Planning Cadence",
-        Some("how we plan quarters"),
-        "Quarterly planning cadence prose. We review goals every quarter.",
-        None, // no entity_id
-        None, // space column intentionally NULL — workspace is the dedicated axis
-        &[],  // zero sources (source-less authored page)
-        &now,
-        "authored",
-        "confirmed",
-        None, // workspace set via SQL helper below (simulates pre-Step-4 state)
-        None, // citations
+    let page_id = create_page_fixture(
+        &db,
+        PageFixture {
+            title: "Quarterly Planning Cadence",
+            summary: Some("how we plan quarters"),
+            content: "Quarterly planning cadence prose. We review goals every quarter.",
+            space: None,
+            source_ids: &[],
+            creation_kind: "authored",
+            workspace: Some("work"),
+        },
     )
-    .await
-    .expect("insert_page_with_kind must succeed for source-less authored page");
-
-    // Bind the page to workspace="work" via the SQL helper (Step 4 will do this
-    // atomically via insert_page_with_kind; tested separately below).
-    set_page_workspace(&db, "page_sl", "work").await;
+    .await;
 
     // work-scoped recall: the page MUST surface (workspace match).
     let work = db
@@ -487,7 +532,7 @@ async fn source_less_page_passes_own_workspace_no_personal_leak() {
 
     assert!(
         work.iter()
-            .any(|r| r.id == "page_sl" || r.source_id == "page_sl"),
+            .any(|r| r.id == page_id || r.source_id == page_id),
         "source-less page in workspace=work must surface under work-scoped recall; \
          got results: {:?}",
         work.iter()
@@ -511,7 +556,7 @@ async fn source_less_page_passes_own_workspace_no_personal_leak() {
     assert!(
         !personal
             .iter()
-            .any(|r| r.id == "page_sl" || r.source_id == "page_sl"),
+            .any(|r| r.id == page_id || r.source_id == page_id),
         "work-workspace page LEAKED into personal-scoped recall (cross-workspace disclosure); \
          got results: {:?}",
         personal

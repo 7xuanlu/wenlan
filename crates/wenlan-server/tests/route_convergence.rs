@@ -21,6 +21,7 @@ use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
 use wenlan_server::router::build_router;
 use wenlan_server::state::ServerState;
+use wenlan_types::requests::CreateConceptRequest;
 use wenlan_types::RawDocument;
 
 fn data_dir_lock() -> &'static tokio::sync::Mutex<()> {
@@ -243,8 +244,6 @@ async fn add_observation_short_content_returns_422() {
 
 // ── Revision history endpoints ───────────────────────────────────────────────
 
-/// Helper: return (app, Arc<MemoryDB>, TempDir) for tests that need direct DB
-/// access alongside the HTTP router.
 async fn test_app_with_db() -> (axum::Router, Arc<MemoryDB>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(
@@ -258,6 +257,52 @@ async fn test_app_with_db() -> (axum::Router, Arc<MemoryDB>, tempfile::TempDir) 
     };
     let router = build_router(Arc::new(RwLock::new(state)));
     (router, db, dir)
+}
+
+async fn create_distilled_page_fixture(
+    db: &MemoryDB,
+    title: &str,
+    content: &str,
+    source_ids: &[&str],
+) -> String {
+    let req = CreateConceptRequest {
+        title: title.to_string(),
+        content: content.to_string(),
+        summary: None,
+        entity_id: None,
+        space: None,
+        source_memory_ids: source_ids.iter().map(|id| (*id).to_string()).collect(),
+        creation_kind: Some("distilled".to_string()),
+        workspace: None,
+    };
+    let result =
+        wenlan_core::post_write::create_page_with_floor(db, req, "test", None, source_ids.len())
+            .await
+            .expect("distilled page fixture must be created through PageWrite");
+    db.set_page_review_status(&result.id, "confirmed")
+        .await
+        .expect("distilled page fixture review status must be confirmed");
+    result.id
+}
+
+async fn create_authored_page_fixture(db: &MemoryDB, title: &str, content: &str) -> String {
+    let req = CreateConceptRequest {
+        title: title.to_string(),
+        content: content.to_string(),
+        summary: None,
+        entity_id: None,
+        space: None,
+        source_memory_ids: Vec::new(),
+        creation_kind: Some("authored".to_string()),
+        workspace: None,
+    };
+    let result = wenlan_core::post_write::create_page(db, req, "test", None)
+        .await
+        .expect("authored page fixture must be created through PageWrite");
+    db.set_page_review_status(&result.id, "confirmed")
+        .await
+        .expect("authored page fixture review status must be confirmed");
+    result.id
 }
 
 async fn json_get(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
@@ -324,27 +369,15 @@ async fn refresh_page_user_edited_page_stages_revision_card_without_overwrite() 
     .await
     .unwrap();
 
-    let page_id = "page_route_pagewrite_owned";
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        page_id,
-        "Rust Ownership",
-        None,
-        source_content,
-        None,
-        None,
-        &[mem_id],
-        &now,
-    )
-    .await
-    .unwrap();
+    let page_id =
+        create_distilled_page_fixture(&db, "Rust Ownership", source_content, &[mem_id]).await;
 
     let human_content =
         "Rust ownership keeps memory safety rules explicit in systems code, with human notes";
-    db.update_page_content(page_id, human_content, &[mem_id], "fs_edit")
+    db.update_page_content(&page_id, human_content, &[mem_id], "fs_edit")
         .await
         .unwrap();
-    let before = db.get_page(page_id).await.unwrap().unwrap();
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
     assert!(before.user_edited, "precondition: page is human-owned");
 
     let proposed_content =
@@ -365,7 +398,7 @@ async fn refresh_page_user_edited_page_stages_revision_card_without_overwrite() 
         .as_str()
         .expect("gated response must include revision_card_id");
 
-    let after = db.get_page(page_id).await.unwrap().unwrap();
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
     assert_eq!(
         after.content, before.content,
         "PageWrite refresh must not overwrite human-owned page prose"
@@ -382,6 +415,58 @@ async fn refresh_page_user_edited_page_stages_revision_card_without_overwrite() 
         .expect("revision card must be visible in pending revisions");
     assert_eq!(card.target_source_id, page_id);
     assert_eq!(card.revision_content, proposed_content);
+}
+
+#[tokio::test]
+async fn refresh_page_machine_owned_page_goes_through_page_write_changelog() {
+    let _guard = data_dir_lock().lock().await;
+    let _config = WritableKnowledgeConfig::new();
+    let (app, db, _dir) = test_app_with_db().await;
+    let mem_id = "mem_route_pagewrite_refresh";
+    let source_content = "Rust async refresh content stays grounded in its source memory";
+    db.upsert_documents(vec![RawDocument {
+        source: "memory".to_string(),
+        source_id: mem_id.to_string(),
+        title: "Rust async refresh source".to_string(),
+        content: source_content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        source_agent: Some("test".to_string()),
+        confirmed: Some(true),
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+
+    let page_id =
+        create_distilled_page_fixture(&db, "Rust Async Refresh", source_content, &[mem_id]).await;
+
+    let refreshed_content =
+        "Rust async refresh content stays grounded in its source memory and records the route write";
+    let (status, body) = json_put(
+        &app,
+        &format!("/api/pages/{page_id}"),
+        serde_json::json!({
+            "content": refreshed_content,
+            "source_memory_ids": [mem_id]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body["gated"], serde_json::json!(false), "body: {body}");
+    let page = db.get_page(&page_id).await.unwrap().unwrap();
+    let changelog = page.changelog.as_deref().unwrap_or("[]");
+    let entries: serde_json::Value = serde_json::from_str(changelog).unwrap();
+    let has_agent_refresh_entry = entries.as_array().is_some_and(|items| {
+        items.iter().any(|entry| {
+            entry.get("edited_by").and_then(|value| value.as_str()) == Some("agent_refresh")
+        })
+    });
+    assert!(
+        has_agent_refresh_entry,
+        "HTTP refresh must route through PageWrite changelog, got {changelog}"
+    );
 }
 
 /// Non-existent source_id returns 200 with an empty entries array.
@@ -424,25 +509,18 @@ async fn page_revisions_unknown_id_returns_404() {
 async fn page_revisions_known_page_returns_envelope() {
     let (app, db, _dir) = test_app_with_db().await;
 
-    let page_id = "page_rev_test_001";
-    db.insert_page(
-        page_id,
+    let page_id = create_authored_page_fixture(
+        &db,
         "Test Revision Page",
-        Some("A page for revision testing"),
         "Full content of the test page for revision surfacing.",
-        None,
-        None,
-        &[],
-        "2026-01-01T00:00:00Z",
     )
-    .await
-    .unwrap();
+    .await;
 
     let (status, body) = json_get(&app, &format!("/api/pages/{page_id}/revisions")).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
         body["page_id"].as_str(),
-        Some(page_id),
+        Some(page_id.as_str()),
         "envelope page_id mismatch: {body}"
     );
     assert_eq!(
@@ -535,33 +613,16 @@ async fn list_memories_confirmed_false_filters_unconfirmed() {
 #[tokio::test]
 async fn manual_page_edit_route_demotes_review_status_to_unconfirmed() {
     let (app, db, _dir) = test_app_with_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
-    // Seed a confirmed distilled page directly.
-    db.insert_page(
-        "page_demote",
-        "T",
-        Some("s"),
-        "original body",
-        None,
-        None,
-        &[],
-        &now,
-    )
-    .await
-    .unwrap();
+    let page_id = create_authored_page_fixture(&db, "T", "original body").await;
     assert_eq!(
-        db.get_page("page_demote")
-            .await
-            .unwrap()
-            .unwrap()
-            .review_status,
+        db.get_page(&page_id).await.unwrap().unwrap().review_status,
         "confirmed",
-        "freshly seeded distilled page starts confirmed"
+        "freshly seeded page starts confirmed"
     );
     // Manual edit via the HTTP route.
     let (status, _body) = json_post(
         &app,
-        "/api/memory/page_demote/update-page",
+        &format!("/api/memory/{page_id}/update-page"),
         Some("tester"),
         serde_json::json!({ "content": "manually edited body" }),
     )
@@ -573,11 +634,7 @@ async fn manual_page_edit_route_demotes_review_status_to_unconfirmed() {
     );
     // The trust boundary must cover this bypass route.
     assert_eq!(
-        db.get_page("page_demote")
-            .await
-            .unwrap()
-            .unwrap()
-            .review_status,
+        db.get_page(&page_id).await.unwrap().unwrap().review_status,
         "unconfirmed",
         "manual edit must demote the page to unconfirmed"
     );

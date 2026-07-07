@@ -21004,7 +21004,7 @@ impl MemoryDB {
     /// this dual-write at insert, brand-new pages left the join table empty
     /// until migration 44 backfilled them retroactively.
     #[allow(clippy::too_many_arguments)]
-    pub async fn insert_page(
+    pub(crate) async fn insert_page(
         &self,
         id: &str,
         title: &str,
@@ -21042,7 +21042,7 @@ impl MemoryDB {
     /// atomically with the new page; `None` leaves the column SQL NULL, marking
     /// the page as never citation-processed (the backfill sweep picks it up).
     #[allow(clippy::too_many_arguments)]
-    pub async fn insert_page_with_kind(
+    pub(crate) async fn insert_page_with_kind(
         &self,
         id: &str,
         title: &str,

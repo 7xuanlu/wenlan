@@ -3412,11 +3412,20 @@ pub async fn handle_refresh_page(
         .write_page(&refreshed_page)
         .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
 
-    // 2. DB index — content + sources + summary + clear staleness.
-    let source_refs: Vec<&str> = req.source_memory_ids.iter().map(String::as_str).collect();
     let db_result: Result<(), wenlan_core::error::WenlanError> = async {
-        db.update_page_content(&id, &req.content, &source_refs, "agent_refresh")
-            .await?;
+        wenlan_core::post_write::update_page(
+            &db,
+            &id,
+            wenlan_types::requests::UpdatePageRequest {
+                content: req.content.clone(),
+                source_memory_ids: req.source_memory_ids.clone(),
+            },
+            "agent_refresh",
+            false,
+            None,
+            None,
+        )
+        .await?;
         if let Some(opt) = &summary_update {
             db.update_page_summary(&id, opt.as_deref()).await?;
         }
@@ -3637,6 +3646,7 @@ mod create_page_endpoint_tests {
     use tower::ServiceExt;
 
     use crate::state::ServerState;
+    use wenlan_types::requests::CreateConceptRequest;
 
     struct DataDirGuard {
         previous: Option<std::ffi::OsString>,
@@ -3739,6 +3749,57 @@ mod create_page_endpoint_tests {
         (Arc::new(RwLock::new(server_state)), tmp)
     }
 
+    async fn seed_distilled_page(
+        db: &wenlan_core::db::MemoryDB,
+        title: &str,
+        summary: Option<&str>,
+        content: &str,
+        space: Option<&str>,
+        source_ids: &[&str],
+    ) -> String {
+        db.upsert_documents(
+            source_ids
+                .iter()
+                .map(|source_id| wenlan_core::sources::RawDocument {
+                    source: "memory".to_string(),
+                    source_id: (*source_id).to_string(),
+                    title: (*source_id).to_string(),
+                    content: content.to_string(),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    memory_type: Some("fact".to_string()),
+                    source_agent: Some("test".to_string()),
+                    confidence: Some(0.9),
+                    confirmed: Some(true),
+                    ..Default::default()
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+        let result = wenlan_core::post_write::create_page_with_floor(
+            db,
+            CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: summary.map(str::to_string),
+                entity_id: None,
+                space: space.map(str::to_string),
+                source_memory_ids: source_ids.iter().map(|id| (*id).to_string()).collect(),
+                creation_kind: Some("distilled".to_string()),
+                workspace: space.map(str::to_string),
+            },
+            "test",
+            None,
+            source_ids.len(),
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
+        result.id
+    }
+
     #[tokio::test]
     async fn create_distilled_page_with_two_sources_returns_422() {
         let _lock = crate::TEST_DATA_DIR_LOCK
@@ -3836,23 +3897,15 @@ mod create_page_endpoint_tests {
             s.db.as_ref().cloned().unwrap()
         };
         db.create_space("work", None, false).await.unwrap();
-        let now = chrono::Utc::now().to_rfc3339();
-        db.insert_page_with_kind(
-            "page_pagewrite_http_existing",
+        let existing_id = seed_distilled_page(
+            &db,
             "Rust Workspace Operations",
             Some("Rust workspace operations"),
             "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
-            None,
-            Some("recap"),
-            &["mem-page-floor-a", "mem-page-floor-b", "mem-page-floor-c"],
-            &now,
-            "distilled",
-            "confirmed",
             Some("work"),
-            None,
+            &["mem-page-floor-a", "mem-page-floor-b", "mem-page-floor-c"],
         )
-        .await
-        .unwrap();
+        .await;
         let app = crate::router::build_router(state);
         let body = json!({
             "title": "Rust Workspace Operations",
@@ -3884,9 +3937,10 @@ mod create_page_endpoint_tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["id"], "page_pagewrite_http_existing");
+        assert_eq!(body["id"].as_str(), Some(existing_id.as_str()));
         assert_eq!(
-            body["attached_to"], "page_pagewrite_http_existing",
+            body["attached_to"].as_str(),
+            Some(existing_id.as_str()),
             "create_page response must expose the attach target: {body}"
         );
         let pages = db.list_pages("active", 10, 0).await.unwrap();
@@ -3906,23 +3960,15 @@ mod create_page_endpoint_tests {
             s.db.as_ref().cloned().unwrap()
         };
         db.create_space("work", None, false).await.unwrap();
-        let now = chrono::Utc::now().to_rfc3339();
-        db.insert_page_with_kind(
-            "page_pagewrite_http_threshold_existing",
+        let existing_id = seed_distilled_page(
+            &db,
             "Rust Workspace Operations",
             Some("Rust workspace operations"),
             "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
-            None,
             Some("recap"),
             &["mem-page-floor-a", "mem-page-floor-b", "mem-page-floor-c"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
         )
-        .await
-        .unwrap();
+        .await;
         let app = crate::router::build_router(state);
         let body = json!({
             "title": "Rust Workspace Operations",
@@ -3955,7 +4001,8 @@ mod create_page_endpoint_tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_ne!(
-            body["id"], "page_pagewrite_http_threshold_existing",
+            body["id"].as_str(),
+            Some(existing_id.as_str()),
             "configured threshold above possible cosine must force a new page: {body}"
         );
         assert!(
@@ -4317,8 +4364,62 @@ mod search_quick_path_page_tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_types::requests::CreateConceptRequest;
 
     use crate::state::ServerState;
+
+    async fn seed_confirmed_distilled_page(
+        db: &wenlan_core::db::MemoryDB,
+        title: &str,
+        content: &str,
+        source_id: &str,
+        source_type: &str,
+        space: &str,
+    ) -> String {
+        let source = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: format!("memory-{source_id}"),
+            content: if space == "other" {
+                "unrelated source memory outside the query result set".to_string()
+            } else {
+                content.to_string()
+            },
+            memory_type: Some(source_type.to_string()),
+            space: Some(space.to_string()),
+            source_agent: Some("trusted-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![source]).await.unwrap();
+        if space == "other" {
+            return format!("page_absent_{source_id}");
+        }
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: None,
+                entity_id: None,
+                source_memory_ids: vec![source_id.to_string()],
+                creation_kind: Some("distilled".to_string()),
+                space: Some(space.to_string()),
+                workspace: Some(space.to_string()),
+            },
+            "test",
+            None,
+            1,
+            1.1,
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
+        result.id
+    }
 
     /// Seeds a DB with a tier-2 agent ("trusted-agent", trust "review"), a
     /// tier-2 `decision` source memory in space "work", a confirmed same-space
@@ -4326,7 +4427,8 @@ mod search_quick_path_page_tests {
     /// cross-space page whose only source is absent from any result set
     /// ("page_cross"). The tier-2 source makes "page_work" visible to "review"
     /// but invisible to "unknown".
-    async fn build_state_with_pages() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+    async fn build_state_with_pages(
+    ) -> (Arc<RwLock<ServerState>>, tempfile::TempDir, String, String) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
@@ -4357,47 +4459,32 @@ mod search_quick_path_page_tests {
         };
         db.upsert_documents(vec![mem]).await.unwrap();
 
-        let now = chrono::Utc::now().to_rfc3339();
         // Same-space page distilled from the tier-2 decision → visible to review.
-        db.insert_page_with_kind(
-            "page_work",
+        let page_work_id = seed_confirmed_distilled_page(
+            &db,
             "Zorblax Workmarker",
-            None,
             "zorblax workmarker body",
-            None,
-            None,
-            &["m_decision"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
+            "m_decision",
+            "decision",
+            "work",
         )
-        .await
-        .unwrap();
+        .await;
         // Cross-space page whose only source is NOT in the memory result set → dropped.
-        db.insert_page_with_kind(
-            "page_cross",
-            "Zorblax Crossmarker",
-            None,
-            "zorblax crossmarker body",
-            None,
-            None,
-            &["unrelated"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("other"),
-            None,
+        let page_cross_id = seed_confirmed_distilled_page(
+            &db,
+            "Crossmarker",
+            "crossmarker body outside query",
+            "unrelated",
+            "fact",
+            "other",
         )
-        .await
-        .unwrap();
+        .await;
 
         let state = Arc::new(RwLock::new(ServerState {
             db: Some(Arc::new(db)),
             ..Default::default()
         }));
-        (state, tmp)
+        (state, tmp, page_work_id, page_cross_id)
     }
 
     async fn search(
@@ -4430,7 +4517,7 @@ mod search_quick_path_page_tests {
 
     #[tokio::test]
     async fn quick_path_surfaces_gated_page_for_trusted_same_space_caller() {
-        let (state, _tmp) = build_state_with_pages().await;
+        let (state, _tmp, page_work_id, page_cross_id) = build_state_with_pages().await;
         let app = crate::router::build_router(state);
 
         let resp = search(app, Some("trusted-agent")).await;
@@ -4438,7 +4525,7 @@ mod search_quick_path_page_tests {
             .supplemental_pages
             .expect("trusted same-space caller should get supplemental pages");
         assert!(
-            pages.iter().any(|p| p.source_id == "page_work"),
+            pages.iter().any(|p| p.source_id == page_work_id),
             "same-space tier-2 page must surface, got: {:?}",
             pages
                 .iter()
@@ -4446,7 +4533,7 @@ mod search_quick_path_page_tests {
                 .collect::<Vec<_>>()
         );
         assert!(
-            !pages.iter().any(|p| p.source_id == "page_cross"),
+            !pages.iter().any(|p| p.source_id == page_cross_id),
             "cross-space page must be dropped, got: {:?}",
             pages
                 .iter()
@@ -4457,7 +4544,7 @@ mod search_quick_path_page_tests {
 
     #[tokio::test]
     async fn quick_path_hides_pages_from_unknown_caller() {
-        let (state, _tmp) = build_state_with_pages().await;
+        let (state, _tmp, _page_work_id, _page_cross_id) = build_state_with_pages().await;
         let app = crate::router::build_router(state);
 
         // No x-agent-name header → trust resolves to "unknown" → the tier-2 page is
