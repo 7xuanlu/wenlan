@@ -36,6 +36,51 @@ fn spawn_fake_healthy_daemon() -> u16 {
     port
 }
 
+/// Holds a port but never answers HTTP: connections queue in the accept
+/// backlog and get no response. The server must error out ("no healthy
+/// daemon"), not hang forever on its health probe.
+#[test]
+fn port_taken_by_mute_listener_errors_instead_of_hanging() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Keep the listener alive but never accept/respond.
+
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().join("data");
+
+    let mut child = Command::new(binary_path())
+        .env("WENLAN_PORT", port.to_string())
+        .env_remove("WENLAN_BIND_ADDR")
+        .env_remove("XPC_SERVICE_NAME")
+        .env("WENLAN_DATA_DIR", &data_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn wenlan-server");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("server hung on the health probe against a mute port-holder");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    assert!(
+        !status.success(),
+        "expected error exit (port in use, no healthy daemon), got {status:?}"
+    );
+    assert!(
+        !data_dir.join("memorydb").exists(),
+        "MemoryDB was initialized even though the port was already taken"
+    );
+    drop(listener);
+}
+
 #[test]
 fn port_taken_by_healthy_daemon_exits_before_db_init() {
     let port = spawn_fake_healthy_daemon();

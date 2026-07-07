@@ -116,7 +116,15 @@ async fn run_daemon() -> anyhow::Result<()> {
             // Check if existing daemon is healthy
             tracing::warn!("Failed to bind {}: {}", addr, e);
             let url = format!("http://127.0.0.1:{}/api/health", port);
-            match reqwest::get(&url).await {
+            // Bounded probe: a mute port-holder (accepts, never responds)
+            // must not hang this process forever — under launchd KeepAlive
+            // a hung loser also blocks the retry that would recover things.
+            let probe = reqwest::Client::new()
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+            match probe {
                 Ok(resp) if resp.status().is_success() => {
                     // Port already taken by a healthy daemon. If launchd is the
                     // parent (XPC_SERVICE_NAME set), exit non-zero so launchd
