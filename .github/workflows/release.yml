@@ -93,11 +93,16 @@ jobs:
           if [[ "$RELEASE_TAG" == *-* ]]; then
             PRERELEASE_FLAG="--prerelease"
           fi
+          # Create as a DRAFT so a failed build below never leaves a public,
+          # torn release. The finalize-release job publishes it only after every
+          # build + publish job succeeds. Draft releases are invisible to
+          # `releases/latest` and do not fire `release: published`.
           gh release create "$RELEASE_TAG" \
+            --draft \
             --title "$RELEASE_TAG" \
             --notes-file release-body.md \
             $PRERELEASE_FLAG \
-            || gh release edit "$RELEASE_TAG" --notes-file release-body.md
+            || gh release edit "$RELEASE_TAG" --draft --notes-file release-body.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -319,6 +324,9 @@ jobs:
         with:
           files: dist/*
           tag_name: ${{ env.RELEASE_TAG }}
+          # Keep the release a draft while assets upload; finalize-release
+          # flips it public only after every build + publish job succeeds.
+          draft: true
           # Don't touch the release body composed in prepare-release.
           append_body: false
           fail_on_unmatched_files: true
@@ -628,3 +636,18 @@ jobs:
         run: |
           ruby -c tap/Formula/wenlan-mcp.rb
           ruby -c tap/Formula/wenlan.rb
+
+  finalize-release:
+    name: Publish the draft release
+    # Runs only after EVERY build + publish job succeeds. A failure in any of
+    # them skips this job (GitHub requires all `needs` to succeed), so the
+    # release stays a draft — never a public, half-built `releases/latest`.
+    # Flipping draft -> published here is also what fires `release: published`
+    # (and notify-marketplace) at the right moment: after the artifacts exist.
+    needs: [release, docker-manifest, publish-crates, publish-npm, update-homebrew]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish
+        run: gh release edit "$RELEASE_TAG" --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
