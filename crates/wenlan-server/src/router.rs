@@ -4,18 +4,28 @@
 use crate::state::SharedState;
 use crate::{
     config_routes, import_routes, ingest_routes, knowledge_routes, memory_routes,
-    onboarding_routes, refinery_routes, routes, source_routes, websocket,
+    onboarding_routes, refinery_routes, routes, security, source_routes, websocket,
 };
 use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 /// Build the shared application router with all routes.
 pub fn build_router(state: SharedState) -> Router {
+    // Reflect CORS only for local origins so a legit localhost/Tauri browser
+    // can read responses; every other origin is refused. The real protection
+    // is `security::guard_local_only` below — this just stops browsers from
+    // exposing responses to non-local sites. Native clients (app/CLI/MCP over
+    // reqwest) send no Origin and are unaffected.
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(AllowOrigin::predicate(|origin, _parts| {
+            origin
+                .to_str()
+                .map(crate::security::origin_is_local)
+                .unwrap_or(false)
+        }))
         .allow_methods(Any)
         .allow_headers(Any);
 
@@ -483,5 +493,7 @@ pub fn build_router(state: SharedState) -> Router {
         // WebSocket
         .route("/ws/updates", get(websocket::handle_ws_upgrade))
         .layer(cors)
+        // Outermost: reject cross-origin browser traffic before CORS/handlers.
+        .layer(axum::middleware::from_fn(security::guard_local_only))
         .with_state(state)
 }
