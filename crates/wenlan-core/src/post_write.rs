@@ -642,18 +642,16 @@ async fn create_page_impl(
             "invalid creation_kind '{creation_kind}' (expected one of: distilled, authored, research, imported)"
         )));
     }
-    if creation_kind == "distilled" {
-        let distinct_source_count = req
-            .source_memory_ids
-            .iter()
-            .map(String::as_str)
-            .collect::<HashSet<_>>()
-            .len();
-        if distinct_source_count < page_min_cluster_size {
-            return Err(WenlanError::Validation(format!(
-                "distilled page requires at least {page_min_cluster_size} distinct source memories (got {distinct_source_count})"
-            )));
-        }
+    let distinct_source_count = req
+        .source_memory_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>()
+        .len();
+    if creation_kind == "distilled" && distinct_source_count < page_min_cluster_size {
+        return Err(WenlanError::Validation(format!(
+            "distilled page requires at least {page_min_cluster_size} distinct source memories (got {distinct_source_count})"
+        )));
     }
     let review_status = PAGE_BIRTH_REVIEW_STATUS;
     // Resolution check: every source id must exist
@@ -785,6 +783,15 @@ async fn create_page_impl(
 
     // Post-write enrichment
     let mut warnings: Vec<String> = Vec::new();
+
+    if creation_kind == "distilled" {
+        if let Err(e) =
+            crate::maintenance::emit_keep_or_archive_card(db, &id, distinct_source_count).await
+        {
+            log::warn!("[create_page] keep/archive card failed for {id}: {e}");
+            warnings.push(format!("keep/archive card failed: {e}"));
+        }
+    }
 
     // 1. Orphan-link resolution (best-effort)
     if let Err(e) = db.resolve_orphan_page_links().await {
@@ -2222,6 +2229,58 @@ mod tests {
         let page = db.get_page(&result.id).await.unwrap().unwrap();
 
         assert_eq!(page.review_status, "unconfirmed");
+        let keep_cards: Vec<_> = db
+            .get_pending_refinements()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|proposal| {
+                proposal.action == "page_keep_or_archive"
+                    && proposal.source_ids.iter().any(|id| id == &result.id)
+            })
+            .collect();
+        assert_eq!(
+            keep_cards.len(),
+            1,
+            "distilled page birth must mint exactly one keep/archive card"
+        );
+        let payload = keep_cards[0].payload.as_deref().unwrap_or_default();
+        assert!(
+            payload.contains("\"source_count\":3"),
+            "keep/archive card should preserve source count, got {payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_page_borns_authored_without_keep_card() {
+        let (db, _dir) = test_db().await;
+        let req = CreateConceptRequest {
+            title: "Authored Rust Notes".to_string(),
+            content: "Authored notes about Rust references and workspace conventions.".to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        let keep_cards: Vec<_> = db
+            .get_pending_refinements()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|proposal| {
+                proposal.action == "page_keep_or_archive"
+                    && proposal.source_ids.iter().any(|id| id == &result.id)
+            })
+            .collect();
+        assert!(
+            keep_cards.is_empty(),
+            "authored page birth must not mint a keep/archive card"
+        );
     }
 
     #[tokio::test]

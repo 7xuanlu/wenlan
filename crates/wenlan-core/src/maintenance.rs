@@ -205,7 +205,8 @@ async fn run_retro_sweep(
                 result.merge_cards_emitted += usize::from(emitted);
             }
             RetroCardCandidate::KeepOrArchive(stub) => {
-                let emitted = emit_keep_or_archive_card(db, stub).await?;
+                let emitted =
+                    emit_keep_or_archive_card(db, &stub.page_id, stub.source_count).await?;
                 result.cards_emitted += usize::from(emitted);
                 result.stub_cards_emitted += usize::from(emitted);
             }
@@ -280,25 +281,26 @@ async fn effective_page_source_count(db: &MemoryDB, page: &Page) -> Result<usize
     }
 }
 
-async fn emit_keep_or_archive_card(
+pub(crate) async fn emit_keep_or_archive_card(
     db: &MemoryDB,
-    stub: &StubPageCandidate,
+    page_id: &str,
+    source_count: usize,
 ) -> Result<bool, WenlanError> {
-    let id = keep_or_archive_card_id(&stub.page_id);
+    let id = keep_or_archive_card_id(page_id);
     if db.get_refinement_proposal(&id).await?.is_some() {
         return Ok(false);
     }
 
     let payload = serde_json::json!({
-        "page_id": &stub.page_id,
-        "source_count": stub.source_count,
+        "page_id": page_id,
+        "source_count": source_count,
         "allowed_actions": ["dismiss", "accept"],
     })
     .to_string();
     db.insert_refinement_proposal(
         &id,
         "page_keep_or_archive",
-        std::slice::from_ref(&stub.page_id),
+        &[page_id.to_string()],
         Some(&payload),
         1.0,
     )
