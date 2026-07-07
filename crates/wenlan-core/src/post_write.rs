@@ -1189,6 +1189,7 @@ async fn update_page_impl(
 struct PageRevisionCard {
     page_id: String,
     revision_id: String,
+    page_version: Option<i64>,
     content: String,
     source_memory_ids: Vec<String>,
 }
@@ -1259,10 +1260,12 @@ async fn resolve_page_revision_card(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let page_version = structured.get("page_version").and_then(|v| v.as_i64());
 
     Ok(Some(PageRevisionCard {
         page_id,
         revision_id,
+        page_version,
         content,
         source_memory_ids,
     }))
@@ -1271,6 +1274,7 @@ async fn resolve_page_revision_card(
 async fn accept_page_revision_card(
     db: &MemoryDB,
     card: PageRevisionCard,
+    knowledge_path: Option<&Path>,
 ) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
     let current = db
         .get_page(&card.page_id)
@@ -1315,16 +1319,50 @@ async fn accept_page_revision_card(
     let new_changelog =
         crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
 
-    db.try_update_page_content_with_changelog(
-        &card.page_id,
-        &card.content,
-        &source_refs,
-        "revision_accept",
-        false,
-        &new_changelog,
-        None,
-    )
-    .await?;
+    let wrote = match card.page_version {
+        Some(expected_version) => {
+            db.try_update_page_content_with_changelog_at_version(
+                &card.page_id,
+                &card.content,
+                &source_refs,
+                "revision_accept",
+                &new_changelog,
+                None,
+                expected_version,
+            )
+            .await?
+        }
+        None => {
+            db.try_update_page_content_with_changelog(
+                &card.page_id,
+                &card.content,
+                &source_refs,
+                "revision_accept",
+                false,
+                &new_changelog,
+                None,
+            )
+            .await?
+        }
+    };
+
+    if !wrote {
+        let current_version = db
+            .get_page(&card.page_id)
+            .await?
+            .ok_or_else(|| WenlanError::NotFound(format!("Page not found: {}", card.page_id)))?
+            .version;
+        let Some(staged_version) = card.page_version else {
+            return Err(WenlanError::Conflict(format!(
+                "page revision card {} for page {} did not write",
+                card.revision_id, card.page_id
+            )));
+        };
+        return Err(WenlanError::Conflict(format!(
+            "page revision card {} was staged for page {} at staged version {}, but current version {} no longer matches",
+            card.revision_id, card.page_id, staged_version, current_version
+        )));
+    }
 
     let conn = db.conn.lock().await;
     conn.execute(
@@ -1335,6 +1373,19 @@ async fn accept_page_revision_card(
     )
     .await
     .map_err(|e| WenlanError::VectorDb(format!("accept_page_revision_card consume: {e}")))?;
+    drop(conn);
+
+    if let Some(kp) = knowledge_path {
+        if let Ok(Some(updated_page)) = db.get_page(&card.page_id).await {
+            let writer = crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf());
+            if let Err(e) = writer.write_page(&updated_page) {
+                log::warn!(
+                    "[accept_page_revision_card] md re-write failed for {}: {e}",
+                    card.page_id
+                );
+            }
+        }
+    }
 
     Ok(wenlan_types::RevisionAcceptResponse {
         target_source_id: card.page_id,
@@ -1352,8 +1403,17 @@ pub async fn accept_pending_revision(
     id: &str,
     agent: &str,
 ) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
+    accept_pending_revision_with_knowledge_path(db, id, agent, None).await
+}
+
+pub async fn accept_pending_revision_with_knowledge_path(
+    db: &MemoryDB,
+    id: &str,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
     if let Some(card) = resolve_page_revision_card(db, id).await? {
-        let result = accept_page_revision_card(db, card).await?;
+        let result = accept_page_revision_card(db, card, knowledge_path).await?;
         log_activity_best_effort(db, agent, "revision_accept", &result.target_source_id).await;
         return Ok(result);
     }
@@ -3132,6 +3192,7 @@ mod tests {
     #[tokio::test]
     async fn accept_pending_revision_page_write_card_updates_page_content() {
         let (db, _dir) = test_db().await;
+        let knowledge_dir = tempfile::tempdir().unwrap();
         let mem_id = "mem_page_accept_original";
         let new_mem_id = "mem_page_accept_new";
         let original_content = "Rust ownership keeps memory safety rules explicit";
@@ -3174,9 +3235,14 @@ mod tests {
             .as_deref()
             .expect("staged page card must return an id");
 
-        let accepted = accept_pending_revision(&db, card_id, "test-agent")
-            .await
-            .unwrap();
+        let accepted = accept_pending_revision_with_knowledge_path(
+            &db,
+            card_id,
+            "test-agent",
+            Some(knowledge_dir.path()),
+        )
+        .await
+        .unwrap();
         assert_eq!(accepted.target_source_id, page_id);
         assert_eq!(accepted.revision_source_id, card_id);
         assert!(accepted.wrote);
@@ -3199,6 +3265,201 @@ mod tests {
         assert!(
             db.list_pending_revisions(10).await.unwrap().is_empty(),
             "accepted page-write card must leave the pending revision queue"
+        );
+
+        let writer =
+            crate::export::knowledge::KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+        let filename = writer
+            .page_filename(&page_id)
+            .expect("accepted page-write card must refresh the markdown projection");
+        let markdown = std::fs::read_to_string(knowledge_dir.path().join(filename)).unwrap();
+        assert!(
+            markdown.contains(proposed_content),
+            "markdown projection must contain the accepted page prose"
+        );
+        assert!(
+            markdown.contains(&format!("origin_version: {}", after.version)),
+            "markdown projection must carry the accepted page version"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_page_write_card_conflicts_when_page_version_changed() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_accept_conflict_original";
+        let new_mem_id = "mem_page_accept_conflict_new";
+        let original_content = "Rust ownership keeps memory safety rules explicit";
+        let human_content = "Rust ownership keeps memory safety rules explicit, with human notes";
+        let proposed_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+        let newer_human_content =
+            "Rust ownership keeps memory safety rules explicit, with newer human notes";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let staged_version = before.version;
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card
+            .revision_card_id
+            .as_deref()
+            .expect("staged page card must return an id");
+
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: newer_human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let err = accept_pending_revision(&db, card_id, "test-agent")
+            .await
+            .unwrap_err();
+        match err {
+            WenlanError::Conflict(msg) => {
+                assert!(
+                    msg.contains(&format!("staged version {staged_version}")),
+                    "conflict message must name the staged version, got: {msg}"
+                );
+                assert!(
+                    msg.contains(&format!("current version {}", staged_version + 1)),
+                    "conflict message must name the current version, got: {msg}"
+                );
+            }
+            other => panic!("expected version conflict, got {other:?}"),
+        }
+
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, newer_human_content,
+            "stale page-write card must not overwrite newer human prose"
+        );
+        assert!(
+            db.list_pending_revisions(10)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.revision_source_id == card_id),
+            "conflicted page-write card must remain pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_legacy_page_write_card_without_version_still_accepts() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_accept_legacy_original";
+        let new_mem_id = "mem_page_accept_legacy_new";
+        let original_content = "Rust ownership keeps memory safety rules explicit";
+        let human_content = "Rust ownership keeps memory safety rules explicit, with human notes";
+        let proposed_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card
+            .revision_card_id
+            .as_deref()
+            .expect("staged page card must return an id");
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT structured_fields FROM memories WHERE source_id = ?1",
+                    libsql::params![card_id.to_string()],
+                )
+                .await
+                .unwrap();
+            let row = rows
+                .next()
+                .await
+                .unwrap()
+                .expect("revision card row must exist");
+            let structured_fields = row.get::<String>(0).unwrap();
+            drop(rows);
+
+            let mut structured: serde_json::Value =
+                serde_json::from_str(&structured_fields).unwrap();
+            structured
+                .as_object_mut()
+                .expect("structured_fields must be an object")
+                .remove("page_version");
+            conn.execute(
+                "UPDATE memories SET structured_fields = ?1 WHERE source_id = ?2",
+                libsql::params![structured.to_string(), card_id.to_string()],
+            )
+            .await
+            .unwrap();
+        }
+
+        let accepted = accept_pending_revision(&db, card_id, "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(accepted.target_source_id, page_id);
+        assert_eq!(accepted.revision_source_id, card_id);
+        assert!(accepted.wrote);
+
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, proposed_content,
+            "legacy page-write cards without page_version must still accept"
         );
     }
 

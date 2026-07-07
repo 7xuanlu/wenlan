@@ -1543,7 +1543,14 @@ pub async fn handle_accept_revision(
         s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone()
     };
     let agent = extract_agent_name(&headers, None);
-    let result = wenlan_core::post_write::accept_pending_revision(&db, &id, &agent).await?;
+    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+    let result = wenlan_core::post_write::accept_pending_revision_with_knowledge_path(
+        &db,
+        &id,
+        &agent,
+        Some(knowledge_path.as_path()),
+    )
+    .await?;
     Ok(Json(result))
 }
 

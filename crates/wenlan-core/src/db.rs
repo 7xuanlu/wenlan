@@ -21384,6 +21384,7 @@ impl MemoryDB {
             false,
             None,
             None,
+            None,
         )
         .await
         .map(|_| ())
@@ -21409,6 +21410,7 @@ impl MemoryDB {
             source_memory_ids,
             link_reason,
             true,
+            None,
             None,
             None,
         )
@@ -21442,6 +21444,33 @@ impl MemoryDB {
             require_stale,
             Some(changelog),
             citations_json,
+            None,
+        )
+        .await
+    }
+
+    /// Version-CAS variant for accepting staged page-write cards. Returns `false`
+    /// when the current page version no longer matches `expected_version`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn try_update_page_content_with_changelog_at_version(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        changelog: &str,
+        citations_json: Option<&str>,
+        expected_version: i64,
+    ) -> Result<bool, WenlanError> {
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            false,
+            Some(changelog),
+            citations_json,
+            Some(expected_version),
         )
         .await
     }
@@ -21462,6 +21491,7 @@ impl MemoryDB {
         require_stale: bool,
         changelog: Option<&str>,
         citations_json: Option<&str>,
+        expected_version: Option<i64>,
     ) -> Result<bool, WenlanError> {
         let citations_bind: &str = citations_json.unwrap_or("[]");
         // Sanitize daemon-reserved Sources delimiters from client content so
@@ -21497,7 +21527,7 @@ impl MemoryDB {
         // per `post_write::update_page`).
         let affected = if let Some(cl) = changelog {
             // Changelog-aware variant: write changelog atomically with content.
-            let sql = if require_stale {
+            let mut sql = if require_stale {
                 "UPDATE pages SET \
                    content = ?1, \
                    source_memory_ids = ?2, \
@@ -21523,10 +21553,29 @@ impl MemoryDB {
                    changelog = ?6, \
                    citations = ?7 \
                  WHERE id = ?5"
-            };
-            match conn
-                .execute(
-                    sql,
+            }
+            .to_string();
+            if expected_version.is_some() {
+                sql.push_str(" AND version = ?8");
+            }
+            let update_result = if let Some(version) = expected_version {
+                conn.execute(
+                    &sql,
+                    libsql::params![
+                        content,
+                        source_ids_json,
+                        now,
+                        link_reason,
+                        id,
+                        cl,
+                        citations_bind,
+                        version
+                    ],
+                )
+                .await
+            } else {
+                conn.execute(
+                    &sql,
                     libsql::params![
                         content,
                         source_ids_json,
@@ -21538,7 +21587,8 @@ impl MemoryDB {
                     ],
                 )
                 .await
-            {
+            };
+            match update_result {
                 Ok(n) => n,
                 Err(e) => {
                     let _ = conn.execute("ROLLBACK", ()).await;
@@ -21546,7 +21596,7 @@ impl MemoryDB {
                 }
             }
         } else {
-            let sql = if require_stale {
+            let mut sql = if require_stale {
                 "UPDATE pages SET \
                    content = ?1, \
                    source_memory_ids = ?2, \
@@ -21570,10 +21620,28 @@ impl MemoryDB {
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
                    citations = ?6 \
                  WHERE id = ?5"
-            };
-            match conn
-                .execute(
-                    sql,
+            }
+            .to_string();
+            if expected_version.is_some() {
+                sql.push_str(" AND version = ?7");
+            }
+            let update_result = if let Some(version) = expected_version {
+                conn.execute(
+                    &sql,
+                    libsql::params![
+                        content,
+                        source_ids_json,
+                        now,
+                        link_reason,
+                        id,
+                        citations_bind,
+                        version
+                    ],
+                )
+                .await
+            } else {
+                conn.execute(
+                    &sql,
                     libsql::params![
                         content,
                         source_ids_json,
@@ -21584,7 +21652,8 @@ impl MemoryDB {
                     ],
                 )
                 .await
-            {
+            };
+            match update_result {
                 Ok(n) => n,
                 Err(e) => {
                     let _ = conn.execute("ROLLBACK", ()).await;
@@ -21592,7 +21661,7 @@ impl MemoryDB {
                 }
             }
         };
-        if require_stale && affected == 0 {
+        if (require_stale || expected_version.is_some()) && affected == 0 {
             // No rows matched the CAS condition (concurrent writer won or page
             // was already cleared). ROLLBACK closes the open transaction before
             // returning — an empty txn, but the connection must not be left in

@@ -252,6 +252,11 @@ pub struct RejectRefinementParams {
 pub struct AcceptRefinementParams {
     #[schemars(description = "The review proposal id (e.g. \"merge_abc123_def456\").")]
     pub id: String,
+    #[schemars(
+        description = "Selected destination space for cross_space_discovery cards. Omit for ordinary accept actions."
+    )]
+    #[serde(default)]
+    pub space: Option<String>,
 }
 
 // --- Knowledge graph CRUD params ---
@@ -1387,10 +1392,14 @@ impl WenlanMcpServer {
             "/api/refinery/queue/{}/accept",
             url_encode_simple(&params.id)
         );
-        let resp: AcceptRefinementResponse = try_call!(
-            self.client.post(&path, &serde_json::json!({})),
-            "accept_refinement"
-        );
+        let req = match params.space {
+            Some(space) => {
+                wenlan_types::requests::AcceptRefinementRequest::PickSpace { space, notes: None }
+            }
+            None => wenlan_types::requests::AcceptRefinementRequest::Accept { notes: None },
+        };
+        let resp: AcceptRefinementResponse =
+            try_call!(self.client.post(&path, &req), "accept_refinement");
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Review proposal {} accepted (action={}).",
@@ -2108,7 +2117,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Reject (dismiss) a review proposal by id. Use when reviewing the daemon queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
+        description = "Reject (dismiss) a review proposal by id. Use when reviewing the daemon queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Reject review proposal",
             read_only_hint = false,
@@ -2129,6 +2138,7 @@ impl WenlanMcpServer {
             entity_merge: existing entity wins as canonical. \
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
+            cross_space_discovery: pass `space` to choose the destination space. \
             Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
             Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
@@ -3487,6 +3497,7 @@ mod tests {
         let server = make_server(TransportMode::Http, "agent", None);
         let params = AcceptRefinementParams {
             id: "merge_abc_def".into(),
+            space: None,
         };
         let result = server.accept_refinement_impl(params).await.unwrap();
         let content = &result.content[0];
@@ -3503,6 +3514,7 @@ mod tests {
         let server = make_server(TransportMode::Stdio, "agent", None);
         let params = AcceptRefinementParams {
             id: "merge_abc_def".into(),
+            space: None,
         };
         let result = server.accept_refinement_impl(params).await.unwrap();
         assert!(

@@ -140,8 +140,13 @@ fn parse_accept_decision(body: &[u8]) -> Result<RefinementDecision, ServerError>
     if body.is_empty() {
         return Ok(RefinementDecision::Accept { notes: None });
     }
-    let request: AcceptRefinementRequest = serde_json::from_slice(body)
-        .map_err(|e| ServerError::ValidationError(format!("invalid accept body: {e}")))?;
+    let parsed: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| ServerError::BadRequest(format!("invalid accept body: {e}")))?;
+    if parsed.as_object().is_some_and(serde_json::Map::is_empty) {
+        return Ok(RefinementDecision::Accept { notes: None });
+    }
+    let request: AcceptRefinementRequest = serde_json::from_value(parsed)
+        .map_err(|e| ServerError::BadRequest(format!("invalid accept body: {e}")))?;
     Ok(match request {
         AcceptRefinementRequest::Accept { notes } => RefinementDecision::Accept { notes },
         AcceptRefinementRequest::PickSpace { space, notes } => {
