@@ -454,8 +454,10 @@ async fn refresh_page_machine_owned_page_goes_through_page_write_changelog() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert_eq!(body["gated"], serde_json::json!(false), "body: {body}");
+    assert_eq!(body["ok"], serde_json::json!(true), "body: {body}");
     let page = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(page.content, refreshed_content);
+    assert!(!page.user_edited);
     let changelog = page.changelog.as_deref().unwrap_or("[]");
     let entries: serde_json::Value = serde_json::from_str(changelog).unwrap();
     let has_agent_refresh_entry = entries.as_array().is_some_and(|items| {
