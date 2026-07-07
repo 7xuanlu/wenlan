@@ -21021,6 +21021,7 @@ impl MemoryDB {
     /// dual-writes on edit) only fires when a page is updated, so without
     /// this dual-write at insert, brand-new pages left the join table empty
     /// until migration 44 backfilled them retroactively.
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn insert_page(
         &self,
