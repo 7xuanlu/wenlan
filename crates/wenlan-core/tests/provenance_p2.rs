@@ -452,7 +452,10 @@ async fn find_matching_page_reads_real_distance_not_creation_kind() {
 }
 
 #[tokio::test]
-async fn distilled_page_defaults_review_status_confirmed() {
+async fn create_page_fixture_forces_review_status_confirmed() {
+    // Pages are born "unconfirmed" (see post_write::create_page_borns_distilled_unconfirmed);
+    // this guards the fixture's explicit set_page_review_status("confirmed") override,
+    // which the other provenance tests rely on.
     let (db, _d) = make_db().await;
     seed_memory(&db, "mem_a", "alpha").await;
     let page_id = create_page_fixture(

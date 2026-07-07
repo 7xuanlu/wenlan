@@ -14,9 +14,10 @@ use wenlan_types::requests::CreateConceptRequest;
 /// Insert a page with a single wikilink reference whose target does not exist,
 /// producing an orphan `page_links` row (`target_page_id IS NULL`).
 ///
-/// The `[[orphan_label]]` syntax in content causes `insert_page` to call
-/// `refresh_page_wikilinks`, which writes a `page_links` row with
-/// `target_page_id = NULL` (orphan) because no page with that title exists yet.
+/// The `[[orphan_label]]` syntax in content causes the PageWrite create path
+/// (`create_page_fixture` below) to run `refresh_page_wikilinks`, which writes
+/// a `page_links` row with `target_page_id = NULL` (orphan) because no page
+/// with that title exists yet.
 #[allow(dead_code)]
 pub async fn insert_page_with_orphan_link(
     db: &Arc<MemoryDB>,
