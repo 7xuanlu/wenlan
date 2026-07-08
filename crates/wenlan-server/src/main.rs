@@ -104,6 +104,55 @@ async fn run_daemon() -> anyhow::Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(7878);
 
+    // Bind BEFORE touching the data dir. Losing the port race must be free:
+    // under launchd KeepAlive, a retry loop that first runs full MemoryDB init
+    // (schema/FTS writes + embedder load) hammers the live daemon's SQLite
+    // file every ~10s — enough lock/CPU pressure to wedge the daemon that
+    // actually owns the port.
+    let addr = resolve_bind_addr(port);
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            // Check if existing daemon is healthy
+            tracing::warn!("Failed to bind {}: {}", addr, e);
+            let url = format!("http://127.0.0.1:{}/api/health", port);
+            // Bounded probe: a mute port-holder (accepts, never responds)
+            // must not hang this process forever — under launchd KeepAlive
+            // a hung loser also blocks the retry that would recover things.
+            let probe = reqwest::Client::new()
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+            match probe {
+                Ok(resp) if resp.status().is_success() => {
+                    // Port already taken by a healthy daemon. If launchd is the
+                    // parent (XPC_SERVICE_NAME set), exit non-zero so launchd
+                    // retries after ThrottleInterval — otherwise launchd marks
+                    // this attempt as a clean exit and refuses to respawn even
+                    // after the winning daemon dies (KeepAlive.SuccessfulExit
+                    // = false treats exit-0 as success). For sidecar invocation
+                    // by the app, exit 0 is the right answer.
+                    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
+                        tracing::info!(
+                            "Existing healthy daemon on port {} — exiting 75 (launchd retry)",
+                            port
+                        );
+                        std::process::exit(75);
+                    }
+                    tracing::info!("Existing healthy daemon on port {} — exiting cleanly", port);
+                    return Ok(());
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Port {} in use and no healthy daemon",
+                        port
+                    ));
+                }
+            }
+        }
+    };
+
     // One-time origin -> wenlan data migration (default locations only). Runs here,
     // before the DB opens, so the daemon is the sole writer. No-op once migrated.
     if wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR").is_none() {
@@ -748,43 +797,6 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Build router
     let app = router::build_router(shared);
-
-    // Bind
-    let addr = resolve_bind_addr(port);
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            // Check if existing daemon is healthy
-            tracing::warn!("Failed to bind {}: {}", addr, e);
-            let url = format!("http://127.0.0.1:{}/api/health", port);
-            match reqwest::get(&url).await {
-                Ok(resp) if resp.status().is_success() => {
-                    // Port already taken by a healthy daemon. If launchd is the
-                    // parent (XPC_SERVICE_NAME set), exit non-zero so launchd
-                    // retries after ThrottleInterval — otherwise launchd marks
-                    // this attempt as a clean exit and refuses to respawn even
-                    // after the winning daemon dies (KeepAlive.SuccessfulExit
-                    // = false treats exit-0 as success). For sidecar invocation
-                    // by the app, exit 0 is the right answer.
-                    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
-                        tracing::info!(
-                            "Existing healthy daemon on port {} — exiting 75 (launchd retry)",
-                            port
-                        );
-                        std::process::exit(75);
-                    }
-                    tracing::info!("Existing healthy daemon on port {} — exiting cleanly", port);
-                    return Ok(());
-                }
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Port {} in use and no healthy daemon",
-                        port
-                    ));
-                }
-            }
-        }
-    };
 
     // Advertise the bound port before accepting requests.
     // `addr` may be `127.0.0.1:0`; `local_addr()` gives the real ephemeral port.
