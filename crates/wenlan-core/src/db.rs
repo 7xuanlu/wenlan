@@ -1045,8 +1045,12 @@ struct ClusterMemRow {
     content: String,
     entity_id: Option<String>,
     entity_name: Option<String>,
-    community_id: Option<u32>,
     space: Option<String>,
+    /// True when this row is an agent capture eligible to SEED a new page.
+    /// Folder-ingested documents (`source_agent='folder'`/`'reconcile'` or
+    /// carrying a folder content-hash) are recruited as evidence but never
+    /// seed — a book must not mint pages from its own chapters (spec §4.2).
+    can_seed_page: bool,
     embedding: Vec<f32>,
 }
 
@@ -1162,9 +1166,16 @@ fn sub_cluster_by_tokens(
     memories: &[ClusterMemRow],
     cluster: DistillationCluster,
     token_limit: usize,
+    min_size: usize,
 ) -> Vec<DistillationCluster> {
     if cluster.estimated_tokens <= token_limit {
-        return vec![cluster];
+        // Floor re-check: a below-floor cluster that fit under the token
+        // limit still must not slip through as a candidate (spec §4.3).
+        return if cluster.source_ids.len() >= min_size {
+            vec![cluster]
+        } else {
+            Vec::new()
+        };
     }
 
     let k = (cluster.estimated_tokens as f64 / token_limit as f64).ceil() as usize;
@@ -1178,8 +1189,12 @@ fn sub_cluster_by_tokens(
         .collect();
 
     if indices.len() <= k {
+        // Each memory would land in its own singleton sub-cluster. Emit them
+        // only when the floor permits singletons (min_size <= 1); otherwise
+        // drop — a token split must never manufacture below-floor clusters.
         return indices
             .iter()
+            .filter(|_| min_size <= 1)
             .map(|&i| build_distillation_cluster(memories, &[i]))
             .collect();
     }
@@ -1224,9 +1239,153 @@ fn sub_cluster_by_tokens(
 
     assignments
         .into_iter()
-        .filter(|group| !group.is_empty())
+        .filter(|group| group.len() >= min_size)
         .map(|group| build_distillation_cluster(memories, &group))
         .collect()
+}
+
+/// Seeding floor (spec §4.2/§4.3, many-to-many): a candidate cluster may seed
+/// a new page only when at least `MIN_CAPTURE_SEED_MEMBERS` of its members are
+/// agent captures (`can_seed_page`). Folder documents are recruited as
+/// evidence but never count toward the seed floor.
+fn has_capture_seed_floor(memories: &[ClusterMemRow], cluster: &DistillationCluster) -> bool {
+    const MIN_CAPTURE_SEED_MEMBERS: usize = 3;
+    cluster
+        .source_ids
+        .iter()
+        .filter(|source_id| {
+            memories
+                .iter()
+                .any(|memory| memory.source_id == **source_id && memory.can_seed_page)
+        })
+        .count()
+        >= MIN_CAPTURE_SEED_MEMBERS
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DistillationClusterMode {
+    SpaceScoped,
+    Global,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cluster_distillation_rows(
+    memories: &[ClusterMemRow],
+    similarity_threshold: f64,
+    min_size: usize,
+    max_clusters: usize,
+    token_limit: usize,
+    max_unlinked_cluster_size: usize,
+    max_grouped_cluster_size: usize,
+    mode: DistillationClusterMode,
+) -> Vec<DistillationCluster> {
+    let mut clusters: Vec<DistillationCluster> = Vec::new();
+
+    let emit_split = |cluster: DistillationCluster, clusters: &mut Vec<DistillationCluster>| {
+        for split in sub_cluster_by_tokens(memories, cluster, token_limit, min_size) {
+            if has_capture_seed_floor(memories, &split) {
+                clusters.push(split);
+            }
+        }
+    };
+
+    let process_bucket = |bucket_label: &str,
+                          indices: &[usize],
+                          cap: usize,
+                          clusters: &mut Vec<DistillationCluster>| {
+        let sub = cluster_by_similarity(memories, indices, similarity_threshold);
+        for group in sub {
+            if group.len() < min_size {
+                continue;
+            }
+            if group.len() > cap {
+                let tighter = (similarity_threshold + 0.05).min(0.92);
+                log::info!(
+                    "[distill] re-splitting oversized {} cluster: \
+                         {} memories at threshold {:.2} (cap = {})",
+                    bucket_label,
+                    group.len(),
+                    tighter,
+                    cap,
+                );
+                let resplit = cluster_by_similarity(memories, &group, tighter);
+                for sub_group in resplit {
+                    if sub_group.len() < min_size {
+                        continue;
+                    }
+                    if sub_group.len() > cap {
+                        log::warn!(
+                            "[distill] dropping {} sub-cluster after re-split: \
+                                 {} memories still > cap {} -- raise \
+                                 max_{}_cluster_size if this is a genuine page",
+                            bucket_label,
+                            sub_group.len(),
+                            cap,
+                            bucket_label,
+                        );
+                        continue;
+                    }
+                    let cluster = build_distillation_cluster(memories, &sub_group);
+                    emit_split(cluster, clusters);
+                }
+                continue;
+            }
+            let cluster = build_distillation_cluster(memories, &group);
+            emit_split(cluster, clusters);
+        }
+    };
+
+    match mode {
+        DistillationClusterMode::SpaceScoped => {
+            let mut space_groups: std::collections::HashMap<String, Vec<usize>> =
+                std::collections::HashMap::new();
+            let mut unlinked: Vec<usize> = Vec::new();
+
+            for (i, mem) in memories.iter().enumerate() {
+                match mem.space.as_deref() {
+                    Some(space) if !space.is_empty() => {
+                        space_groups.entry(space.to_string()).or_default().push(i);
+                    }
+                    _ => unlinked.push(i),
+                }
+            }
+
+            for indices in space_groups.values() {
+                process_bucket("space", indices, max_grouped_cluster_size, &mut clusters);
+            }
+
+            if unlinked.len() >= min_size {
+                process_bucket(
+                    "unlinked",
+                    &unlinked,
+                    max_unlinked_cluster_size,
+                    &mut clusters,
+                );
+            }
+
+            log::info!(
+                "[distill] space_groups={}, unlinked={}, clusters_found={}",
+                space_groups.len(),
+                unlinked.len(),
+                clusters.len()
+            );
+        }
+        DistillationClusterMode::Global => {
+            let indices: Vec<usize> = (0..memories.len()).collect();
+            if indices.len() >= min_size {
+                process_bucket("global", &indices, max_grouped_cluster_size, &mut clusters);
+            }
+            log::info!(
+                "[distill] global_candidates={}, clusters_found={}",
+                indices.len(),
+                clusters.len()
+            );
+        }
+    }
+
+    clusters.sort_by_key(|c| std::cmp::Reverse(c.source_ids.len()));
+    clusters.truncate(max_clusters);
+    clusters
 }
 
 // ===== Public Types =====
@@ -1276,6 +1435,12 @@ pub struct PageSourceIndex {
     pub page_id: String,
     pub page_title: String,
     pub source_set: std::collections::HashSet<String>,
+}
+
+struct PageMergeRow {
+    title: String,
+    status: String,
+    source_ids: Vec<String>,
 }
 
 /// A T18 summary node loaded for the read-time global-context prelude.
@@ -16422,6 +16587,24 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("count_memory_entity_links get: {e}")))
     }
 
+    #[cfg(test)]
+    pub(crate) async fn count_refinement_queue_rows(&self) -> Result<i64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM refinement_queue", ())
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("count_refinement_queue_rows query: {e}"))
+            })?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_refinement_queue_rows next: {e}")))?
+            .ok_or_else(|| WenlanError::Generic("count_refinement_queue_rows: no rows".into()))?;
+        row.get::<i64>(0)
+            .map_err(|e| WenlanError::VectorDb(format!("count_refinement_queue_rows get: {e}")))
+    }
+
     /// Count primary (chunk_index=0) source memories with a non-empty title.
     /// Used by the eval seed to report a REAL enriched-title count after Phase-2.
     pub async fn count_nonempty_titles(&self) -> Result<i64, WenlanError> {
@@ -18509,6 +18692,92 @@ impl MemoryDB {
         .await
     }
 
+    /// Query the distillation staging pool. With `space_filter = Some(_)`,
+    /// this is the space-scoped pool formation reads before clustering.
+    async fn query_distillation_staging_pool(
+        &self,
+        entity_id_filter: Option<&str>,
+        space_filter: Option<&str>,
+    ) -> Result<Vec<ClusterMemRow>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut sql = String::from(
+            "SELECT m.source_id, m.content, m.entity_id, m.space, m.embedding, e.name, m.source_agent, m.content_hash \
+             FROM memories m \
+             LEFT JOIN entities e ON m.entity_id = e.id \
+             WHERE m.source = 'memory' AND m.chunk_index = 0 \
+               AND (m.pinned = 0 OR m.pinned IS NULL) \
+               AND m.supersede_mode NOT IN ('archive', 'evicted') \
+               AND m.source_id NOT LIKE 'merged_%' \
+               AND m.source_id NOT LIKE 'recap_%' \
+               AND m.is_recap = 0 \
+               AND m.embedding IS NOT NULL \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM page_evidence pe \
+                   WHERE pe.locator = m.source_id \
+               )",
+        );
+        let mut bind: Vec<libsql::Value> = Vec::new();
+        if let Some(eid) = entity_id_filter {
+            sql.push_str(" AND m.entity_id = ?");
+            bind.push(libsql::Value::Text(eid.to_string()));
+        }
+        if let Some(space) = space_filter {
+            sql.push_str(" AND m.space = ?");
+            bind.push(libsql::Value::Text(space.to_string()));
+        }
+        sql.push_str(" ORDER BY m.space, m.entity_id, m.last_modified DESC");
+
+        let mut rows = conn
+            .query(&sql, bind)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("distillation staging pool: {e}")))?;
+
+        let mut memories: Vec<ClusterMemRow> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            let source_id: String = row
+                .get(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let content: String = row
+                .get(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let entity_id: Option<String> = row.get(2).unwrap_or(None);
+            let space: Option<String> = row.get(3).unwrap_or(None);
+            let emb_bytes: Vec<u8> = row
+                .get(4)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let embedding: Vec<f32> = emb_bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let entity_name: Option<String> = row.get(5).unwrap_or(None);
+            let source_agent: Option<String> = row.get(6).unwrap_or(None);
+            let content_hash: Option<String> = row.get(7).unwrap_or(None);
+            // A row may seed a page only if it is an agent capture: no folder
+            // content-hash provenance (Migration 65) and not a folder/reconcile
+            // agent. Folder documents join clusters as recruited evidence but
+            // never seed (spec §4.2).
+            let can_seed_page = content_hash.is_none()
+                && !matches!(source_agent.as_deref(), Some("folder" | "reconcile"));
+            memories.push(ClusterMemRow {
+                source_id,
+                content,
+                entity_id,
+                entity_name,
+                can_seed_page,
+                space,
+                embedding,
+            });
+        }
+        drop(rows);
+        drop(conn);
+
+        Ok(memories)
+    }
+
     /// Like `find_distillation_clusters` but restricts the candidate memories
     /// to a single entity or domain when the caller supplies a filter.
     /// Both filters can be `None` (full scan, equivalent to the unscoped
@@ -18526,8 +18795,6 @@ impl MemoryDB {
         entity_id_filter: Option<&str>,
         domain_filter: Option<&str>,
     ) -> Result<Vec<DistillationCluster>, WenlanError> {
-        let conn = self.conn.lock().await;
-
         // No covered_ids exclusion — memories can participate in multiple pages.
         // Dedup happens in distill_concepts via Jaccard overlap check.
 
@@ -18538,71 +18805,9 @@ impl MemoryDB {
         // entity_id/memory_type since it reads memory contents directly to
         // cluster. Embedding similarity is enough as the floor; LLM-equipped
         // refinery still gets entity_id when present and skips when not.
-        let mut sql = String::from(
-            "SELECT m.source_id, m.content, m.entity_id, m.space, m.embedding, e.community_id, e.name \
-             FROM memories m \
-             LEFT JOIN entities e ON m.entity_id = e.id \
-             WHERE m.source = 'memory' AND m.chunk_index = 0 \
-               AND (m.confirmed = 0 OR m.confirmed IS NULL) \
-               AND (m.pinned = 0 OR m.pinned IS NULL) \
-               AND m.supersede_mode <> 'archive' \
-               AND m.source_id NOT LIKE 'merged_%' \
-               AND m.source_id NOT LIKE 'recap_%' \
-               AND m.is_recap = 0 \
-               AND m.embedding IS NOT NULL",
-        );
-        let mut bind: Vec<libsql::Value> = Vec::new();
-        if let Some(eid) = entity_id_filter {
-            sql.push_str(" AND m.entity_id = ?");
-            bind.push(libsql::Value::Text(eid.to_string()));
-        }
-        if let Some(d) = domain_filter {
-            sql.push_str(" AND m.space = ?");
-            bind.push(libsql::Value::Text(d.to_string()));
-        }
-        sql.push_str(" ORDER BY m.entity_id, m.space, m.last_modified DESC");
-
-        let mut rows = conn
-            .query(&sql, bind)
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("distillation fetch: {}", e)))?;
-
-        let mut memories: Vec<ClusterMemRow> = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        {
-            let source_id: String = row
-                .get(0)
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-            let content: String = row
-                .get(1)
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-            let entity_id: Option<String> = row.get(2).unwrap_or(None);
-            let space: Option<String> = row.get(3).unwrap_or(None);
-            // Parse embedding from F32_BLOB — stored as little-endian f32 bytes
-            let emb_bytes: Vec<u8> = row
-                .get(4)
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-            let embedding: Vec<f32> = emb_bytes
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                .collect();
-            let community_id: Option<u32> = row.get::<u32>(5).ok();
-            let entity_name: Option<String> = row.get(6).unwrap_or(None);
-            memories.push(ClusterMemRow {
-                source_id,
-                content,
-                entity_id,
-                entity_name,
-                community_id,
-                space,
-                embedding,
-            });
-        }
-        drop(rows);
-        drop(conn);
+        let memories = self
+            .query_distillation_staging_pool(entity_id_filter, domain_filter)
+            .await?;
 
         log::info!(
             "[distill] found {} eligible memories for clustering (raw excluded)",
@@ -18612,136 +18817,42 @@ impl MemoryDB {
             return Ok(vec![]);
         }
 
-        // Group by community_id (preferred) or entity_id (fallback)
-        let mut community_groups: std::collections::HashMap<u32, Vec<usize>> =
-            std::collections::HashMap::new();
-        let mut entity_groups: std::collections::HashMap<String, Vec<usize>> =
-            std::collections::HashMap::new();
-        let mut unlinked: Vec<usize> = Vec::new();
+        Ok(cluster_distillation_rows(
+            &memories,
+            similarity_threshold,
+            min_size,
+            max_clusters,
+            token_limit,
+            max_unlinked_cluster_size,
+            max_grouped_cluster_size,
+            DistillationClusterMode::SpaceScoped,
+        ))
+    }
 
-        for (i, mem) in memories.iter().enumerate() {
-            if let Some(cid) = mem.community_id {
-                // Group by community_id (preferred — graph-aware grouping)
-                community_groups.entry(cid).or_default().push(i);
-            } else if let Some(ref eid) = mem.entity_id {
-                // Fallback: group by entity_id. Treat empty string as unlinked:
-                // entity_backfill writes "" as a "tried, no entities found"
-                // marker so the memory isn't re-extracted forever, but
-                // bucketing under "" would group all such memories as if they
-                // shared an entity — exactly the runaway-cluster failure mode.
-                if eid.is_empty() {
-                    unlinked.push(i);
-                } else {
-                    entity_groups.entry(eid.clone()).or_default().push(i);
-                }
-            } else {
-                unlinked.push(i);
-            }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_cross_space_distillation_clusters(
+        &self,
+        similarity_threshold: f64,
+        min_size: usize,
+        max_clusters: usize,
+        token_limit: usize,
+        max_unlinked_cluster_size: usize,
+        max_grouped_cluster_size: usize,
+    ) -> Result<Vec<DistillationCluster>, WenlanError> {
+        let memories = self.query_distillation_staging_pool(None, None).await?;
+        if memories.is_empty() {
+            return Ok(vec![]);
         }
-
-        let mut clusters: Vec<DistillationCluster> = Vec::new();
-
-        // Process a single bucket's similarity-clustered groups with a hard
-        // size cap. Groups that exceed the cap re-cluster once at a tighter
-        // threshold; sub-groups still over the cap are dropped with a log
-        // line. Used by all three buckets (community, entity, unlinked) so
-        // the same grab-bag mitigation applies uniformly — community 16's
-        // 99-memory "Wenlan" pile was the original failure mode but the
-        // entity-only bucket has the same risk (e.g. one entity that swept
-        // in unrelated sub-topics over time).
-        //
-        // Cosine similarity is logarithmic in semantic distance — +0.1 from
-        // 0.85 lands at 0.95 (near-duplicate), which drops most legitimate
-        // sub-topics at min_size. +0.05 with a cap of 0.92 is the sweet spot.
-        let process_bucket =
-            |bucket_label: &str,
-             indices: &[usize],
-             cap: usize,
-             clusters: &mut Vec<DistillationCluster>| {
-                let sub = cluster_by_similarity(&memories, indices, similarity_threshold);
-                for group in sub {
-                    if group.len() < min_size {
-                        continue;
-                    }
-                    if group.len() > cap {
-                        let tighter = (similarity_threshold + 0.05).min(0.92);
-                        log::info!(
-                            "[distill] re-splitting oversized {} cluster: \
-                         {} memories at threshold {:.2} (cap = {})",
-                            bucket_label,
-                            group.len(),
-                            tighter,
-                            cap,
-                        );
-                        let resplit = cluster_by_similarity(&memories, &group, tighter);
-                        for sub_group in resplit {
-                            if sub_group.len() < min_size {
-                                continue;
-                            }
-                            if sub_group.len() > cap {
-                                // warn! not info! — log filter default is
-                                // warn (per CLAUDE.md), so a silently
-                                // dropped cluster of legitimately related
-                                // memories actually surfaces in operator
-                                // logs instead of vanishing.
-                                log::warn!(
-                                    "[distill] dropping {} sub-cluster after re-split: \
-                                 {} memories still > cap {} — raise \
-                                 max_{}_cluster_size if this is a genuine page",
-                                    bucket_label,
-                                    sub_group.len(),
-                                    cap,
-                                    bucket_label,
-                                );
-                                continue;
-                            }
-                            let cluster = build_distillation_cluster(&memories, &sub_group);
-                            let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                            clusters.extend(split);
-                        }
-                        continue;
-                    }
-                    let cluster = build_distillation_cluster(&memories, &group);
-                    let split = sub_cluster_by_tokens(&memories, cluster, token_limit);
-                    clusters.extend(split);
-                }
-            };
-
-        for indices in community_groups.values() {
-            process_bucket(
-                "community",
-                indices,
-                max_grouped_cluster_size,
-                &mut clusters,
-            );
-        }
-
-        for indices in entity_groups.values() {
-            process_bucket("entity", indices, max_grouped_cluster_size, &mut clusters);
-        }
-
-        if unlinked.len() >= min_size {
-            process_bucket(
-                "unlinked",
-                &unlinked,
-                max_unlinked_cluster_size,
-                &mut clusters,
-            );
-        }
-
-        log::info!(
-            "[distill] community_groups={}, entity_groups={}, unlinked={}, clusters_found={}",
-            community_groups.len(),
-            entity_groups.len(),
-            unlinked.len(),
-            clusters.len()
-        );
-
-        // Sort by size descending (larger clusters = more value)
-        clusters.sort_by_key(|c| std::cmp::Reverse(c.source_ids.len()));
-        clusters.truncate(max_clusters);
-
-        Ok(clusters)
+        Ok(cluster_distillation_rows(
+            &memories,
+            similarity_threshold,
+            min_size,
+            max_clusters,
+            token_limit,
+            max_unlinked_cluster_size,
+            max_grouped_cluster_size,
+            DistillationClusterMode::Global,
+        ))
     }
 
     // ==================== Recent Memories (for recap generation) ====================
@@ -20809,6 +20920,100 @@ impl MemoryDB {
     /// Insert a new page. Generates an embedding from `title + summary` if available.
     /// Embedding failures are logged but do not prevent insertion.
     ///
+    /// Look up one source id's `(source, source_agent)` shape on an
+    /// already-open connection and resolve its typed evidence kind via the
+    /// pure [`crate::citations::resolve_page_evidence_source_kind`] resolver.
+    /// A `source_id` with no `memories` row (pruned/orphaned) resolves using
+    /// the `source_id` shape alone (URL / folder-doc detection needs no row),
+    /// else falls back to `'memory'`. Shared by [`Self::insert_resolved_page_evidence`]
+    /// (transaction-bound) and [`Self::resolve_source_kinds`] (self-contained
+    /// lock) so every page-evidence / citation emitter resolves a source's
+    /// kind through this ONE query shape (spec §5.1).
+    async fn resolve_one_source_kind(
+        conn: &libsql::Connection,
+        source_id: &str,
+    ) -> Result<String, libsql::Error> {
+        let mut rows = conn
+            .query(
+                "SELECT source, source_agent FROM memories WHERE source_id = ?1 LIMIT 1",
+                libsql::params![source_id],
+            )
+            .await?;
+        let (source, source_agent) = match rows.next().await? {
+            Some(row) => (
+                row.get::<String>(0).unwrap_or_default(),
+                row.get::<Option<String>>(1).unwrap_or(None),
+            ),
+            None => (String::new(), None),
+        };
+        drop(rows);
+        Ok(crate::citations::resolve_page_evidence_source_kind(
+            &source,
+            source_agent.as_deref(),
+            source_id,
+        )
+        .to_string())
+    }
+
+    /// Resolve each source memory's typed evidence `source_kind`
+    /// (`memory` | `external_url` | `external_file` | `authored`) from its
+    /// `(source, source_agent, source_id)` shape via [`Self::resolve_one_source_kind`],
+    /// then `INSERT OR IGNORE` the `page_evidence` rows on the already-open
+    /// transaction `conn`. Running on the caller's open transaction keeps the
+    /// evidence rows atomic with the page-content write.
+    ///
+    /// This is the ONE site that writes `page_evidence` rows — it replaces the
+    /// hardcoded `source_kind='memory'` literals at the page-evidence emitters
+    /// (spec §5.1) so book/paper/report (folder-doc) and webpage sources
+    /// record `external_file` / `external_url`. A `source_id` with no
+    /// `memories` row (pruned/orphaned) falls back to `'memory'`, matching the
+    /// pre-resolver default.
+    async fn insert_resolved_page_evidence(
+        conn: &libsql::Connection,
+        page_id: &str,
+        source_ids: &[&str],
+        linked_at: i64,
+        link_reason: &str,
+    ) -> Result<(), libsql::Error> {
+        for sid in source_ids {
+            let source_kind = Self::resolve_one_source_kind(conn, sid).await?;
+            conn.execute(
+                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
+                libsql::params![page_id, source_kind, *sid, linked_at, link_reason],
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Batch-resolve typed `page_evidence.source_kind` values
+    /// (`memory` | `external_url` | `external_file` | `authored`) for a list
+    /// of source ids, keyed by id. The ONE wiring site for every citation
+    /// emitter outside a PageWrite transaction (the compile/grow/refresh
+    /// sites in `synthesis/distill.rs` and `post_ingest.rs` build their
+    /// `NumberedSource.source_kind` from this map instead of hardcoding
+    /// `'memory'`), mirroring the same resolution `insert_resolved_page_evidence`
+    /// applies to `page_evidence` rows (spec §5.1: "one fix site instead of
+    /// ten"). Missing ids resolve to `'memory'` via the shared per-id lookup.
+    pub async fn resolve_source_kinds(
+        &self,
+        source_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, WenlanError> {
+        if source_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let conn = self.conn.lock().await;
+        let mut map = std::collections::HashMap::with_capacity(source_ids.len());
+        for sid in source_ids {
+            let kind = Self::resolve_one_source_kind(&conn, sid)
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("resolve_source_kinds: {e}")))?;
+            map.insert(sid.clone(), kind);
+        }
+        Ok(map)
+    }
+
     /// Dual-writes the concept row and one `page_sources` row per
     /// `source_memory_id` inside a single BEGIN/COMMIT so the join table is
     /// always consistent with the legacy `source_memory_ids` JSON column at
@@ -20816,8 +21021,9 @@ impl MemoryDB {
     /// dual-writes on edit) only fires when a page is updated, so without
     /// this dual-write at insert, brand-new pages left the join table empty
     /// until migration 44 backfilled them retroactively.
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
-    pub async fn insert_page(
+    pub(crate) async fn insert_page(
         &self,
         id: &str,
         title: &str,
@@ -20855,7 +21061,7 @@ impl MemoryDB {
     /// atomically with the new page; `None` leaves the column SQL NULL, marking
     /// the page as never citation-processed (the backfill sweep picks it up).
     #[allow(clippy::too_many_arguments)]
-    pub async fn insert_page_with_kind(
+    pub(crate) async fn insert_page_with_kind(
         &self,
         id: &str,
         title: &str,
@@ -20880,15 +21086,8 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
 
         // Embed title + summary + capped content so source-less authored/research
-        // pages (often summary-less) still get a content-bearing vector. Cap the
-        // body so a long page doesn't blow the 512-token embedder window with prose
-        // the title+summary already cover.
-        const PAGE_EMBED_CONTENT_CAP: usize = 1500;
-        let capped_body: String = content.chars().take(PAGE_EMBED_CONTENT_CAP).collect();
-        let embed_text = match summary {
-            Some(s) => format!("{title} {s} {capped_body}"),
-            None => format!("{title} {capped_body}"),
-        };
+        // pages (often summary-less) still get a content-bearing vector.
+        let embed_text = crate::pages::page_embedding_text(title, summary, content);
         let embedding_sql = match self.generate_embeddings(&[embed_text]) {
             Ok(vecs) if !vecs.is_empty() => Some(Self::vec_to_sql(&vecs[0])),
             Ok(_) => {
@@ -20951,17 +21150,17 @@ impl MemoryDB {
             }
         }
 
-        // Dual-write to page_evidence (P2 typed provenance). INSERT OR IGNORE
-        // keeps this idempotent on re-distill.
-        for sid in source_memory_ids {
-            if let Err(e) = conn.execute(
-                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-                 VALUES (?1, 'memory', ?2, NULL, ?3, 'distill')",
-                libsql::params![id, *sid, linked_at],
-            ).await {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(WenlanError::VectorDb(format!("insert_page page_evidence: {e}")));
-            }
+        // Dual-write to page_evidence (P2 typed provenance) with each source's
+        // resolved source_kind (memory / external_url / external_file /
+        // authored). INSERT OR IGNORE keeps this idempotent on re-distill.
+        if let Err(e) =
+            Self::insert_resolved_page_evidence(&conn, id, source_memory_ids, linked_at, "distill")
+                .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "insert_page page_evidence: {e}"
+            )));
         }
 
         conn.execute("COMMIT", ())
@@ -21185,6 +21384,7 @@ impl MemoryDB {
             false,
             None,
             None,
+            None,
         )
         .await
         .map(|_| ())
@@ -21210,6 +21410,7 @@ impl MemoryDB {
             source_memory_ids,
             link_reason,
             true,
+            None,
             None,
             None,
         )
@@ -21243,6 +21444,33 @@ impl MemoryDB {
             require_stale,
             Some(changelog),
             citations_json,
+            None,
+        )
+        .await
+    }
+
+    /// Version-CAS variant for accepting staged page-write cards. Returns `false`
+    /// when the current page version no longer matches `expected_version`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn try_update_page_content_with_changelog_at_version(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        changelog: &str,
+        citations_json: Option<&str>,
+        expected_version: i64,
+    ) -> Result<bool, WenlanError> {
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            false,
+            Some(changelog),
+            citations_json,
+            Some(expected_version),
         )
         .await
     }
@@ -21263,6 +21491,7 @@ impl MemoryDB {
         require_stale: bool,
         changelog: Option<&str>,
         citations_json: Option<&str>,
+        expected_version: Option<i64>,
     ) -> Result<bool, WenlanError> {
         let citations_bind: &str = citations_json.unwrap_or("[]");
         // Sanitize daemon-reserved Sources delimiters from client content so
@@ -21293,11 +21522,12 @@ impl MemoryDB {
         // row but before this UPDATE) takes priority. Without the
         // user_edited check the refinery would clobber an in-flight
         // human write since stale_reason stays set: the watcher
-        // deliberately doesn't clear staleness on apply (refinery
-        // escalates to source_conflict on the next sweep instead).
+        // deliberately doesn't clear staleness on apply (the refinery's
+        // ownership gate stages a revision card on the next sweep instead,
+        // per `post_write::update_page`).
         let affected = if let Some(cl) = changelog {
             // Changelog-aware variant: write changelog atomically with content.
-            let sql = if require_stale {
+            let mut sql = if require_stale {
                 "UPDATE pages SET \
                    content = ?1, \
                    source_memory_ids = ?2, \
@@ -21323,10 +21553,29 @@ impl MemoryDB {
                    changelog = ?6, \
                    citations = ?7 \
                  WHERE id = ?5"
-            };
-            match conn
-                .execute(
-                    sql,
+            }
+            .to_string();
+            if expected_version.is_some() {
+                sql.push_str(" AND version = ?8");
+            }
+            let update_result = if let Some(version) = expected_version {
+                conn.execute(
+                    &sql,
+                    libsql::params![
+                        content,
+                        source_ids_json,
+                        now,
+                        link_reason,
+                        id,
+                        cl,
+                        citations_bind,
+                        version
+                    ],
+                )
+                .await
+            } else {
+                conn.execute(
+                    &sql,
                     libsql::params![
                         content,
                         source_ids_json,
@@ -21338,7 +21587,8 @@ impl MemoryDB {
                     ],
                 )
                 .await
-            {
+            };
+            match update_result {
                 Ok(n) => n,
                 Err(e) => {
                     let _ = conn.execute("ROLLBACK", ()).await;
@@ -21346,7 +21596,7 @@ impl MemoryDB {
                 }
             }
         } else {
-            let sql = if require_stale {
+            let mut sql = if require_stale {
                 "UPDATE pages SET \
                    content = ?1, \
                    source_memory_ids = ?2, \
@@ -21370,10 +21620,28 @@ impl MemoryDB {
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
                    citations = ?6 \
                  WHERE id = ?5"
-            };
-            match conn
-                .execute(
-                    sql,
+            }
+            .to_string();
+            if expected_version.is_some() {
+                sql.push_str(" AND version = ?7");
+            }
+            let update_result = if let Some(version) = expected_version {
+                conn.execute(
+                    &sql,
+                    libsql::params![
+                        content,
+                        source_ids_json,
+                        now,
+                        link_reason,
+                        id,
+                        citations_bind,
+                        version
+                    ],
+                )
+                .await
+            } else {
+                conn.execute(
+                    &sql,
                     libsql::params![
                         content,
                         source_ids_json,
@@ -21384,7 +21652,8 @@ impl MemoryDB {
                     ],
                 )
                 .await
-            {
+            };
+            match update_result {
                 Ok(n) => n,
                 Err(e) => {
                     let _ = conn.execute("ROLLBACK", ()).await;
@@ -21392,7 +21661,7 @@ impl MemoryDB {
                 }
             }
         };
-        if require_stale && affected == 0 {
+        if (require_stale || expected_version.is_some()) && affected == 0 {
             // No rows matched the CAS condition (concurrent writer won or page
             // was already cleared). ROLLBACK closes the open transaction before
             // returning — an empty txn, but the connection must not be left in
@@ -21492,20 +21761,14 @@ impl MemoryDB {
                 )));
             }
         }
-        for sid in source_memory_ids {
-            if let Err(e) = conn
-                .execute(
-                    "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-                     VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
-                    libsql::params![id, sid, now_ts, link_reason],
-                )
+        if let Err(e) =
+            Self::insert_resolved_page_evidence(&conn, id, source_memory_ids, now_ts, link_reason)
                 .await
-            {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(WenlanError::VectorDb(format!(
-                    "update_page evidence insert: {e}"
-                )));
-            }
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "update_page evidence insert: {e}"
+            )));
         }
 
         conn.execute("COMMIT", ())
@@ -21591,10 +21854,10 @@ impl MemoryDB {
     ///  - `workspace` (when Some): only pages whose `workspace` matches are eligible,
     ///    falling back to `space` for legacy pages that predate the workspace column.
     ///    `None` = no workspace constraint.
-    ///  - only `review_status='confirmed'` pages are dedup targets (an unconfirmed
-    ///    authored page is not a consolidation anchor).
-    ///  - when `allow_user_edited=false`, a `user_edited` match is REFUSED (returns
-    ///    None) so the caller never silently rewrites hand-edited prose.
+    ///  - only `review_status='confirmed'` pages are dedup targets.
+    ///  - when `allow_user_edited=false`, human-owned pages (`user_edited=1` or
+    ///    `creation_kind='authored'`) are REFUSED so the caller never silently
+    ///    rewrites hand-owned prose.
     pub async fn find_matching_page_scoped(
         &self,
         entity_id: Option<&str>,
@@ -21609,13 +21872,15 @@ impl MemoryDB {
                 let page_workspace = page.workspace.as_deref().or(page.space.as_deref());
                 let ws_ok = workspace.is_none_or(|w| page_workspace == Some(w));
                 let status_ok = page.review_status == "confirmed";
-                if ws_ok && status_ok && (allow_user_edited || !page.user_edited) {
+                let human_owned = page.user_edited || page.creation_kind == "authored";
+                if ws_ok && status_ok && (allow_user_edited || !human_owned) {
                     return Ok(Some(page));
                 }
             }
         }
-        // Embedding cosine, scoped in SQL on space + review_status.
+        // Embedding cosine, scoped in SQL on space + review_status + ownership.
         let emb_sql = Self::vec_to_sql(embedding);
+        let allow_human_owned = i64::from(allow_user_edited);
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -21629,8 +21894,9 @@ impl MemoryDB {
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
                    AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
                    AND (?2 IS NULL OR COALESCE(c.workspace, c.space) = ?2)
+                   AND (?3 != 0 OR (COALESCE(c.user_edited, 0) = 0 AND COALESCE(c.creation_kind, 'distilled') <> 'authored'))
                  ORDER BY dist ASC LIMIT 1",
-                libsql::params![emb_sql, workspace],
+                libsql::params![emb_sql, workspace, allow_human_owned],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("scoped page similarity: {e}")))?;
@@ -21642,7 +21908,7 @@ impl MemoryDB {
             let dist: f64 = row.get(20).unwrap_or(1.0);
             if 1.0 - dist >= threshold {
                 let page = Self::row_to_page(&row)?;
-                if !allow_user_edited && page.user_edited {
+                if !allow_user_edited && (page.user_edited || page.creation_kind == "authored") {
                     return Ok(None);
                 }
                 return Ok(Some(page));
@@ -21770,6 +22036,224 @@ impl MemoryDB {
         Ok(())
     }
 
+    pub async fn accept_page_merge(
+        &self,
+        proposal_id: &str,
+        survivor_id: &str,
+        absorbed_id: &str,
+    ) -> Result<(), WenlanError> {
+        if survivor_id == absorbed_id {
+            return Err(WenlanError::Validation(
+                "page_merge requires two distinct page ids".into(),
+            ));
+        }
+
+        let now = chrono::Utc::now();
+        let now_rfc3339 = now.to_rfc3339();
+        let now_ts = now.timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge begin: {e}")))?;
+
+        let result: Result<(), WenlanError> = async {
+            let survivor = Self::page_merge_row(&conn, survivor_id).await?;
+            let absorbed = Self::page_merge_row(&conn, absorbed_id).await?;
+            if survivor.status != "active" {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge survivor {survivor_id} is not active"
+                )));
+            }
+            if absorbed.status != "active" {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge absorbed page {absorbed_id} is not active"
+                )));
+            }
+
+            let survivor_original: HashSet<String> = survivor.source_ids.iter().cloned().collect();
+            let mut union = survivor.source_ids;
+            for sid in absorbed.source_ids {
+                if !union.iter().any(|existing| existing == &sid) {
+                    union.push(sid);
+                }
+            }
+
+            let mut rows = conn
+                .query(
+                    "SELECT memory_source_id FROM page_sources \
+                     WHERE page_id IN (?1, ?2) \
+                     ORDER BY CASE WHEN page_id = ?1 THEN 0 ELSE 1 END, linked_at ASC",
+                    libsql::params![survivor_id, absorbed_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge sources: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge source row: {e}")))?
+            {
+                let sid: String = row.get(0).map_err(|e| {
+                    WenlanError::VectorDb(format!("accept_page_merge source id: {e}"))
+                })?;
+                if !union.iter().any(|existing| existing == &sid) {
+                    union.push(sid);
+                }
+            }
+            drop(rows);
+
+            let added_count = union
+                .iter()
+                .filter(|sid| !survivor_original.contains(*sid))
+                .count()
+                .max(1) as i64;
+            let source_ids_json = serde_json::to_string(&union).map_err(|e| {
+                WenlanError::VectorDb(format!("accept_page_merge source json: {e}"))
+            })?;
+            let affected = conn
+                .execute(
+                    "UPDATE pages SET \
+                       source_memory_ids = ?1, \
+                       stale_reason = 'source_updated', \
+                       sources_updated_count = COALESCE(sources_updated_count, 0) + ?2, \
+                       last_modified = ?3 \
+                     WHERE id = ?4 AND status = 'active'",
+                    libsql::params![
+                        source_ids_json,
+                        added_count,
+                        now_rfc3339.as_str(),
+                        survivor_id
+                    ],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge survivor: {e}")))?;
+            if affected != 1 {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge survivor {survivor_id} could not be updated"
+                )));
+            }
+
+            for sid in &union {
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_sources \
+                       (page_id, memory_source_id, linked_at, link_reason) \
+                     VALUES (?1, ?2, ?3, 'page_merge')",
+                    libsql::params![survivor_id, sid.as_str(), now_ts],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("accept_page_merge page_sources: {e}"))
+                })?;
+            }
+
+            conn.execute(
+                "INSERT OR IGNORE INTO page_evidence \
+                   (page_id, source_kind, locator, title, linked_at, link_reason) \
+                 SELECT ?1, source_kind, locator, title, ?2, 'page_merge' \
+                 FROM page_evidence WHERE page_id = ?3",
+                libsql::params![survivor_id, now_ts, absorbed_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge evidence copy: {e}")))?;
+
+            let source_refs: Vec<&str> = union.iter().map(String::as_str).collect();
+            Self::insert_resolved_page_evidence(
+                &conn,
+                survivor_id,
+                &source_refs,
+                now_ts,
+                "page_merge",
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("accept_page_merge evidence insert: {e}"))
+            })?;
+
+            let archived = conn
+                .execute(
+                    "UPDATE pages SET status = 'archived', last_modified = ?1 \
+                     WHERE id = ?2 AND status = 'active'",
+                    libsql::params![now_rfc3339.as_str(), absorbed_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge archive: {e}")))?;
+            if archived != 1 {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge absorbed page {absorbed_id} could not be archived"
+                )));
+            }
+
+            let absorbed_title_key = absorbed.title.to_lowercase();
+            conn.execute(
+                "UPDATE page_links SET target_page_id = ?1 \
+                 WHERE target_page_id = ?2 OR label_key = ?3",
+                libsql::params![survivor_id, absorbed_id, absorbed_title_key],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge links: {e}")))?;
+
+            let resolved = conn
+                .execute(
+                    "UPDATE refinement_queue \
+                     SET status = 'resolved', resolved_at = ?1 \
+                     WHERE id = ?2 \
+                       AND action = 'page_merge' \
+                       AND status NOT IN ('dismissed', 'auto_applied', 'resolved')",
+                    libsql::params![now_ts, proposal_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge resolve: {e}")))?;
+            if resolved != 1 {
+                return Err(WenlanError::Validation(format!(
+                    "page_merge proposal {proposal_id} already resolved"
+                )));
+            }
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("accept_page_merge commit: {e}")))?;
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+        Ok(())
+    }
+
+    async fn page_merge_row(
+        conn: &libsql::Connection,
+        page_id: &str,
+    ) -> Result<PageMergeRow, WenlanError> {
+        let mut rows = conn
+            .query(
+                "SELECT title, status, source_memory_ids FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page_merge row query: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page_merge row next: {e}")))?
+            .ok_or_else(|| WenlanError::NotFound(format!("page {page_id} not found")))?;
+        let source_ids_json: String = row.get::<String>(2).unwrap_or_else(|_| "[]".to_string());
+        Ok(PageMergeRow {
+            title: row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(format!("page_merge row title: {e}")))?,
+            status: row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(format!("page_merge row status: {e}")))?,
+            source_ids: serde_json::from_str(&source_ids_json).unwrap_or_default(),
+        })
+    }
+
     /// Find the existing active page whose source memories overlap the most
     /// with the supplied cluster. Returns the page metadata plus Jaccard
     /// similarity and the raw intersection count, so callers can decide
@@ -21888,6 +22372,67 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_active_page_titles: {e}")))?;
+        let mut out = Vec::with_capacity(limit);
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            out.push(row.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
+    /// Return active page titles ranked by embedding similarity to `query`,
+    /// optionally constrained to the same workspace. Falls back to `space`
+    /// for legacy pages created before the dedicated workspace column.
+    pub async fn list_relevant_active_page_titles(
+        &self,
+        query: &str,
+        workspace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, WenlanError> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
+
+        let embedding = self.get_or_compute_embedding(query)?;
+        let vec_str = Self::vec_to_sql(&embedding);
+        let conn = self.conn.lock().await;
+
+        let (sql, params): (String, Vec<libsql::Value>) = match workspace {
+            Some(workspace) => (
+                "SELECT title FROM pages \
+                 WHERE status = 'active' \
+                   AND embedding IS NOT NULL \
+                   AND COALESCE(workspace, space) = ?2 \
+                 ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
+                 LIMIT ?3"
+                    .to_string(),
+                vec![
+                    libsql::Value::Text(vec_str),
+                    libsql::Value::Text(workspace.to_string()),
+                    libsql::Value::Integer(limit as i64),
+                ],
+            ),
+            None => (
+                "SELECT title FROM pages \
+                 WHERE status = 'active' \
+                   AND embedding IS NOT NULL \
+                 ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
+                 LIMIT ?2"
+                    .to_string(),
+                vec![
+                    libsql::Value::Text(vec_str),
+                    libsql::Value::Integer(limit as i64),
+                ],
+            ),
+        };
+
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list relevant page titles: {e}")))?;
         let mut out = Vec::with_capacity(limit);
         while let Some(row) = rows
             .next()
@@ -22402,6 +22947,7 @@ impl MemoryDB {
         let changelog_str = row.get::<String>(15).unwrap_or_else(|_| "[]".to_string());
         let (last_edited_by, last_edited_at, last_delta_summary) =
             Self::parse_changelog_tail(&changelog_str);
+        let stale_reason = row.get::<Option<String>>(13).unwrap_or(None);
         let citations: Vec<wenlan_types::pages::PageCitation> = row
             .get::<Option<String>>(19)
             .unwrap_or(None)
@@ -22435,7 +22981,10 @@ impl MemoryDB {
                 .get::<String>(11)
                 .map_err(|e| WenlanError::VectorDb(format!("page last_modified: {e}")))?,
             sources_updated_count: row.get::<i64>(12).unwrap_or(0),
-            stale_reason: row.get::<Option<String>>(13).unwrap_or(None),
+            pending_rebuild: wenlan_types::pages::pending_rebuild_for_stale_reason(
+                stale_reason.as_deref(),
+            ),
+            stale_reason,
             user_edited: row.get::<i64>(14).unwrap_or(0) != 0,
             relevance_score: 0.0, // populated by search_pages after RRF fusion
             last_edited_by,
@@ -22500,13 +23049,14 @@ impl MemoryDB {
             return Err(WenlanError::VectorDb(format!("link_page_source: {e}")));
         }
 
-        if let Err(e) = conn
-            .execute(
-                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-                 VALUES (?1, 'memory', ?2, NULL, ?3, ?4)",
-                libsql::params![page_id, memory_source_id, now, link_reason],
-            )
-            .await
+        if let Err(e) = Self::insert_resolved_page_evidence(
+            &conn,
+            page_id,
+            &[memory_source_id],
+            now,
+            link_reason,
+        )
+        .await
         {
             let _ = conn.execute("ROLLBACK", ()).await;
             return Err(WenlanError::VectorDb(format!(
@@ -22517,6 +23067,137 @@ impl MemoryDB {
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("link_page_source commit: {e}")))?;
+        Ok(())
+    }
+
+    /// Replace the full evidence set for a page with exactly
+    /// `memory_source_ids` -- REPLACE semantics, unlike `link_page_source`
+    /// (additive, INSERT OR IGNORE only, never prunes). Any currently-linked
+    /// source not in the new set is unlinked from both `page_sources` and
+    /// `page_evidence`; mirrors the same reconcile pattern `update_page_content`
+    /// already applies when a page's source list changes. Content/version are
+    /// untouched -- callers whose evidence set should track "the current N"
+    /// rather than accumulate forever (e.g. the reserved Overview page's
+    /// maintenance refresh, spec §5.3) call this before `refresh_page` so the
+    /// evidence `refresh_page` reads back is already bounded.
+    pub async fn replace_page_sources(
+        &self,
+        page_id: &str,
+        memory_source_ids: &[&str],
+        link_reason: &str,
+    ) -> Result<(), WenlanError> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources begin: {e}")))?;
+
+        if memory_source_ids.is_empty() {
+            if let Err(e) = conn
+                .execute(
+                    "DELETE FROM page_sources WHERE page_id = ?1",
+                    libsql::params![page_id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources prune: {e}"
+                )));
+            }
+        } else {
+            let placeholders: String = (0..memory_source_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_sql = format!(
+                "DELETE FROM page_sources WHERE page_id = ?1 AND memory_source_id NOT IN ({})",
+                placeholders
+            );
+            let mut bind: Vec<libsql::Value> = Vec::with_capacity(1 + memory_source_ids.len());
+            bind.push(libsql::Value::Text(page_id.to_string()));
+            for sid in memory_source_ids {
+                bind.push(libsql::Value::Text((*sid).to_string()));
+            }
+            if let Err(e) = conn
+                .execute(&delete_sql, libsql::params_from_iter(bind))
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources prune: {e}"
+                )));
+            }
+        }
+
+        for sid in memory_source_ids {
+            if let Err(e) = conn
+                .execute(
+                    "INSERT OR IGNORE INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
+                    libsql::params![page_id, *sid, now, link_reason],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources insert: {e}"
+                )));
+            }
+        }
+
+        // Mirror the same reconcile onto page_evidence (memory-kind rows only;
+        // external/authored evidence, if any, is preserved).
+        if memory_source_ids.is_empty() {
+            if let Err(e) = conn
+                .execute(
+                    "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory'",
+                    libsql::params![page_id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources evidence prune: {e}"
+                )));
+            }
+        } else {
+            let placeholders: String = (0..memory_source_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let delete_sql = format!(
+                "DELETE FROM page_evidence WHERE page_id = ?1 AND source_kind = 'memory' AND locator NOT IN ({})",
+                placeholders
+            );
+            let mut bind: Vec<libsql::Value> = Vec::with_capacity(1 + memory_source_ids.len());
+            bind.push(libsql::Value::Text(page_id.to_string()));
+            for sid in memory_source_ids {
+                bind.push(libsql::Value::Text((*sid).to_string()));
+            }
+            if let Err(e) = conn
+                .execute(&delete_sql, libsql::params_from_iter(bind))
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources evidence prune: {e}"
+                )));
+            }
+        }
+
+        if let Err(e) =
+            Self::insert_resolved_page_evidence(&conn, page_id, memory_source_ids, now, link_reason)
+                .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "replace_page_sources evidence insert: {e}"
+            )));
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources commit: {e}")))?;
         Ok(())
     }
 
@@ -25737,6 +26418,7 @@ pub(crate) mod tests {
             last_modified: String::new(),
             sources_updated_count: 0,
             stale_reason: None,
+            pending_rebuild: None,
             user_edited: false,
             relevance_score: 0.5,
             last_edited_by: None,
@@ -31188,18 +31870,220 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn find_distillation_clusters_reads_space_scoped_staging_pool() {
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp();
+        let mut docs = Vec::new();
+        for (sid, confirmed, source_agent, is_recap, space) in [
+            ("stage_confirmed", Some(true), "test-agent", false, "alpha"),
+            (
+                "stage_unconfirmed",
+                Some(false),
+                "test-agent",
+                false,
+                "alpha",
+            ),
+            // Third capture so the cluster clears the >= 3 capture seed floor;
+            // without it the two captures + one folder doc would not seed.
+            (
+                "stage_capture_third",
+                Some(false),
+                "test-agent",
+                false,
+                "alpha",
+            ),
+            (
+                "stage_page_linked",
+                Some(false),
+                "test-agent",
+                false,
+                "alpha",
+            ),
+            ("recap_stage", Some(false), "test-agent", true, "alpha"),
+            ("stage_folder_doc", None, "folder", false, "alpha"),
+            (
+                "stage_other_space",
+                Some(false),
+                "test-agent",
+                false,
+                "beta",
+            ),
+        ] {
+            let mut doc = make_memory_doc(
+                sid,
+                &format!("Shared staging pool memory content for {sid}"),
+                "fact",
+                space,
+                source_agent,
+            );
+            doc.confirmed = confirmed;
+            doc.is_recap = is_recap;
+            doc.entity_id = Some("stage_entity".to_string());
+            doc.last_modified = now;
+            docs.push(doc);
+        }
+        db.upsert_documents(docs).await.unwrap();
+
+        db.insert_page(
+            "stage_page",
+            "Stage Page",
+            Some("Already linked page"),
+            "Already linked page body",
+            None,
+            Some("alpha"),
+            &["stage_page_linked"],
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .await
+        .unwrap();
+
+        let clusters = db
+            .find_distillation_clusters_scoped(0.0, 1, 10, 3500, 50, 50, None, Some("alpha"))
+            .await
+            .unwrap();
+        let actual: std::collections::BTreeSet<String> = clusters
+            .iter()
+            .flat_map(|cluster| cluster.source_ids.iter().cloned())
+            .collect();
+
+        assert_eq!(
+            actual,
+            std::collections::BTreeSet::from([
+                "stage_capture_third".to_string(),
+                "stage_confirmed".to_string(),
+                "stage_folder_doc".to_string(),
+                "stage_unconfirmed".to_string(),
+            ]),
+            "staging pool must include the three captures + recruited folder-doc for the requested space, and exclude page-linked/recap/other-space rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_distillation_clusters_requires_three_non_document_captures_to_seed() {
+        // Seeding rule (spec §4.2/§4.3): a cluster needs >= 3 staging CAPTURE
+        // (non-doc) members to seed a page. Folder documents join clusters as
+        // recruited evidence but never seed one. A book must not mint pages
+        // from its own chapters. Here: 3 folder-doc chapters + 2 captures ->
+        // only 2 captures -> no page seeds.
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let topic = "Wenlan distillation seed floor";
+        let mut docs = Vec::new();
+        for i in 0..3 {
+            docs.push(RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("seed_doc_chapter_{i}"),
+                title: format!("Seed doc chapter {i}"),
+                content: format!("{topic} folder chapter evidence section {i}"),
+                last_modified: now + i,
+                memory_type: Some("fact".to_string()),
+                space: Some("alpha".to_string()),
+                source_agent: Some("folder".to_string()),
+                entity_id: Some("ent_seed_floor".to_string()),
+                content_hash: Some("seed-floor-doc-hash".to_string()),
+                ..Default::default()
+            });
+        }
+        for i in 0..2 {
+            docs.push(RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("seed_capture_{i}"),
+                title: format!("Seed capture {i}"),
+                content: format!("{topic} captured note {i}"),
+                last_modified: now + 10 + i,
+                memory_type: Some("fact".to_string()),
+                space: Some("alpha".to_string()),
+                entity_id: Some("ent_seed_floor".to_string()),
+                content_hash: None,
+                ..Default::default()
+            });
+        }
+        db.upsert_documents(docs).await.unwrap();
+
+        let clusters = db
+            .find_distillation_clusters_scoped(0.0, 3, 10, 3500, 50, 50, None, Some("alpha"))
+            .await
+            .unwrap();
+
+        assert!(
+            clusters.is_empty(),
+            "document evidence must not seed a page with fewer than three captures: {:?}",
+            clusters
+                .iter()
+                .map(|cluster| cluster.source_ids.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn find_distillation_clusters_compares_same_space_memories_across_entity_buckets() {
+        // Space is the only partition (spec §3.2/§8): two same-topic memories
+        // that today sit in different entity buckets must now be compared and
+        // cluster together. Setup: 3 captures in space "alpha" split across
+        // two entity_ids; the old entity/community bucketing would never
+        // compare ent_alpha vs ent_beta, so they could never co-cluster.
+        let (db, _dir) = test_db().await;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        for (sid, entity_id) in [
+            ("cross_bucket_alpha", "ent_alpha"),
+            ("cross_bucket_beta", "ent_beta"),
+            ("cross_bucket_anchor", "ent_alpha"),
+        ] {
+            db.upsert_documents(vec![RawDocument {
+                source: "memory".to_string(),
+                source_id: sid.to_string(),
+                title: format!("Cross bucket {sid}"),
+                content: format!("Shared cross bucket topic about Wenlan distillation {sid}"),
+                last_modified: now,
+                memory_type: Some("fact".to_string()),
+                space: Some("alpha".to_string()),
+                entity_id: Some(entity_id.to_string()),
+                content_hash: None,
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        }
+
+        let clusters = db
+            .find_distillation_clusters_scoped(0.0, 3, 10, 3500, 50, 50, None, Some("alpha"))
+            .await
+            .unwrap();
+
+        assert!(
+            clusters.iter().any(|cluster| {
+                cluster
+                    .source_ids
+                    .iter()
+                    .any(|id| id == "cross_bucket_alpha")
+                    && cluster
+                        .source_ids
+                        .iter()
+                        .any(|id| id == "cross_bucket_beta")
+                    && cluster.source_ids.len() == 3
+            }),
+            "same-space memories from different entity buckets must be compared together: {:?}",
+            clusters
+                .iter()
+                .map(|cluster| cluster.source_ids.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
     async fn find_distillation_clusters_treats_empty_entity_id_as_unlinked() {
-        // entity_backfill writes entity_id = "" as a "tried, no entities found"
-        // marker so the memory isn't re-extracted forever. Bucketing under ""
-        // would group all such memories as if they shared an entity — exactly
-        // the runaway-cluster failure mode (Mode B). They must fall into the
-        // unlinked bucket where the size cap protects against that.
+        // Space is the only partition now (entity/community buckets deleted).
+        // Memories with no declared space fall into the single unlinked
+        // catch-all, which carries the tighter `max_unlinked_cluster_size`
+        // cap. entity_id is irrelevant to partitioning here — these rows have
+        // space = None, so the unlinked cap must hold regardless of entity_id.
         //
-        // Setup: 8 highly-similar memories with empty-string entity_id, with
-        // max_unlinked_cluster_size = 5. If the bucketing bug is present, all
-        // 8 group under entity_groups[""] which has no size cap → returned as
-        // one 8-cluster, failing the <=5 assertion. With the fix, they fall
-        // into unlinked → cap kicks in → returned cluster sizes <= 5.
+        // Setup: 8 highly-similar memories with no space and empty-string
+        // entity_id, with max_unlinked_cluster_size = 5. They land in the
+        // unlinked catch-all → cap kicks in → returned cluster sizes <= 5.
         let (db, _dir) = test_db().await;
 
         let now = chrono::Utc::now().timestamp_millis();
@@ -31288,10 +32172,10 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn find_distillation_clusters_caps_oversized_entity_group() {
-        // A single entity (think "Wenlan" community cid=16 in prod) sweeps in
-        // a long tail of unrelated memories over time. Greedy clustering at
-        // 0.73 returns one big blob; the agent's coherence check rejects it
-        // as a grab-bag and the user sees nothing. The grouped-cluster cap
+        // A single space (think a "Wenlan" workspace in prod) accumulates a
+        // long tail of memories over time. Greedy clustering returns one big
+        // blob; the agent's coherence check rejects it as a grab-bag and the
+        // user sees nothing. The grouped-cluster cap (named-space partition)
         // forces a re-split so coherent sub-topics still surface.
         let (db, _dir) = test_db().await;
 
@@ -31325,8 +32209,8 @@ pub(crate) mod tests {
         for cluster in &clusters {
             assert!(
                 cluster.source_ids.len() <= 6,
-                "entity-bucket cluster of {} memories exceeded grouped cap 6 — \
-                 oversized re-split not applied to entity_groups/community_groups",
+                "space-partition cluster of {} memories exceeded grouped cap 6 — \
+                 oversized re-split not applied to the named-space partition",
                 cluster.source_ids.len(),
             );
         }
@@ -31596,9 +32480,27 @@ pub(crate) mod tests {
         row.get::<i64>(0).unwrap()
     }
 
+    // `WENLAN_ENABLE_EVICTION` is a process-global env var read synchronously
+    // by `eviction_enabled()` inside the refinery's Evict phase gate AND by
+    // every eviction test below via `evict_stale`. `temp_env::async_with_vars`
+    // mutates that global for the duration of a future but does not
+    // serialize against other tests doing the same (or against tests that
+    // merely read the ambient value across an `.await`) — two such tests
+    // running concurrently can corrupt each other's view of the flag mid-run.
+    // This is the ONE crate-shared lock (`pub(crate)` so
+    // `crate::refinery::tests` can import and share it too — see that
+    // module's Daily/Backstop trigger tests, which read this same ambient
+    // flag) that every reader AND mutator of `WENLAN_ENABLE_EVICTION` must
+    // take, mirroring the `PRF_ENV_LOCK` / `SALIENCE_ENV_LOCK` /
+    // `RERANK_BLEND_ENV_LOCK` / `MAGNITUDE_ENV_LOCK` precedent above (a
+    // `tokio::sync::Mutex` avoids the `await_holding_lock` lint a
+    // `std::sync::Mutex` would trip).
+    pub(crate) static EVICT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     // A1 — stale low-confidence aged rows get archived, never deleted.
     #[tokio::test]
     async fn test_evict_stale_archives_low_confidence_aged_rows() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         for i in 0..3 {
             seed_evict_row(
@@ -31638,6 +32540,7 @@ pub(crate) mod tests {
     // A2 — confirmed / pinned / Protected-tier rows are immune (load-bearing).
     #[tokio::test]
     async fn test_evict_stale_spares_confirmed_pinned_protected() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // confirmed=1 (note: setting confirmed without unconfirm trigger keeps pinned state)
         seed_evict_row(
@@ -31692,6 +32595,7 @@ pub(crate) mod tests {
     // A3 — age gate holds independently of confidence: fresh low-conf survives.
     #[tokio::test]
     async fn test_evict_stale_respects_age_gate() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         seed_evict_row(
             &db,
@@ -31719,6 +32623,7 @@ pub(crate) mod tests {
     // A4 — confidence floor holds independently of age: old valuable survives.
     #[tokio::test]
     async fn test_evict_stale_respects_confidence_floor() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         seed_evict_row(
             &db,
@@ -31746,6 +32651,7 @@ pub(crate) mod tests {
     // A5 — per_space_cap archives the lowest-confidence overflow first.
     #[tokio::test]
     async fn test_evict_stale_per_space_cap_evicts_lowest_first() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let confs = [0.9_f64, 0.8, 0.2, 0.15, 0.1];
         for (i, c) in confs.iter().enumerate() {
@@ -31797,6 +32703,7 @@ pub(crate) mod tests {
     // Without the age gate, fresh_lowconf (0.05) would be the first row archived.
     #[tokio::test]
     async fn test_evict_stale_per_space_cap_spares_fresh_rows() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // Three aged rows (cap-eligible) + one fresh row in the same space.
         for (i, c) in [0.8_f64, 0.6, 0.4].iter().enumerate() {
@@ -31875,6 +32782,7 @@ pub(crate) mod tests {
     // A6 — default OFF is a no-op; flag ON runs.
     #[tokio::test]
     async fn test_evict_stale_disabled_by_default_is_noop() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         seed_evict_row(
             &db,
@@ -31922,6 +32830,7 @@ pub(crate) mod tests {
     // A7 — empty DB is a clean no-op when enabled.
     #[tokio::test]
     async fn test_evict_stale_empty_db_is_clean_noop() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let report = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             db.evict_stale(&crate::tuning::EvictionConfig::default())
@@ -31941,6 +32850,7 @@ pub(crate) mod tests {
     // that the retrieval exclusion (not just the marker flip) is wired up.
     #[tokio::test]
     async fn test_evict_stale_is_reversible_and_excluded_from_search() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         // Two rows with DISTINCT (so they survive search's near-dup collapse)
         // but topically-related content, both matching a "kubernetes" query.
@@ -32053,6 +32963,75 @@ pub(crate) mod tests {
             rec_ids.contains(&"rev_row"),
             "un-evicted rev_row must REAPPEAR in search, got {:?}",
             rec_ids
+        );
+    }
+
+    // Regression test for a prior incomplete flaky-test fix: `EVICT_ENV_LOCK`
+    // must be the ONE process-wide lock that every reader AND mutator of
+    // `WENLAN_ENABLE_EVICTION` shares. A "reader" future (mirroring
+    // `refinery::tests::test_daily_trigger_runs_only_maintenance_phases`,
+    // which holds the lock and depends on the ambient flag staying unset
+    // across an `.await`) races a "mutator" future that mirrors one of the 9
+    // `db.rs` `evict_stale` tests, which (per the same fix applied to those
+    // tests just above) now ALSO takes `EVICT_ENV_LOCK` before mutating —
+    // closing the gap the earlier fix left open (it serialized
+    // `refinery::tests`'s 5 call sites against each other, but not against
+    // `db::tests`'s own 9 tests mutating the same process-global env var).
+    // Note this is NOT protected by `temp_env`'s own internal `SERIAL_TEST`
+    // mutex either: that mutex only excludes OTHER `temp_env` callers, but
+    // the reader here (like the real Daily/Backstop tests) reads the ambient
+    // flag via a plain `eviction_enabled()` call, never going through
+    // `temp_env` itself. Uses `tokio::join!` (not `tokio::spawn`, which would
+    // require the `temp_env` future to be `Send` — it isn't, it holds a
+    // `parking_lot::ReentrantMutexGuard`) so both futures are polled
+    // cooperatively on the current task; the sleep windows are sized with
+    // generous margin (a 5x ratio between the mutator's active-flip duration
+    // and the reader's single check point) so the interleaving the test
+    // exercises is not scheduler-luck. Deleting the mutator's
+    // `EVICT_ENV_LOCK.lock().await` line reproduces the original gap and
+    // fails this test (verified before this fix landed).
+    #[tokio::test]
+    async fn test_evict_env_lock_shared_excludes_unlocked_mutator() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let observed_flip = Arc::new(AtomicBool::new(false));
+        let observed_flip_reader = observed_flip.clone();
+
+        // Reader: acquires EVICT_ENV_LOCK, unsets the flag, and checks it
+        // ONCE after a 50ms window — mirroring a Daily/Backstop trigger test
+        // that reads the ambient flag after its own multi-phase `.await` run.
+        let reader = async {
+            let _serial = EVICT_ENV_LOCK.lock().await;
+            temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", None::<&str>)], async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if eviction_enabled() {
+                    observed_flip_reader.store(true, Ordering::SeqCst);
+                }
+            })
+            .await;
+        };
+
+        // Mutator: mirrors one of the (now-fixed) `db.rs` eviction tests —
+        // takes EVICT_ENV_LOCK too, so it must wait for the reader's window
+        // to close before it can flip the flag.
+        let mutator = async {
+            let _serial = EVICT_ENV_LOCK.lock().await;
+            temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+            })
+            .await;
+        };
+
+        tokio::join!(reader, mutator);
+
+        assert!(
+            !observed_flip.load(Ordering::SeqCst),
+            "reader observed WENLAN_ENABLE_EVICTION flip to '1' mid-window: an \
+             unlocked mutator raced a lock-holding reader — exactly the \
+             corruption class left open when only refinery::tests declared its \
+             own EVICT_ENV_LOCK instead of sharing db::tests's"
         );
     }
 
@@ -35896,7 +36875,7 @@ pub(crate) mod tests {
                     content: "x".repeat(3985),
                     entity_id: Some("entity_test".to_string()),
                     entity_name: Some("Test Entity".to_string()),
-                    community_id: None,
+                    can_seed_page: true,
                     space: Some("test".to_string()),
                     embedding: emb,
                 }
@@ -35907,7 +36886,7 @@ pub(crate) mod tests {
         let cluster = build_distillation_cluster(&memories, &indices);
         assert!(cluster.estimated_tokens > 3500);
 
-        let result = sub_cluster_by_tokens(&memories, cluster, 3500);
+        let result = sub_cluster_by_tokens(&memories, cluster, 3500, 2);
         assert!(result.len() >= 2);
         for sub in &result {
             assert!(
@@ -35922,6 +36901,51 @@ pub(crate) mod tests {
         let mut expected: Vec<String> = (0..6).map(|i| format!("mem_{}", i)).collect();
         expected.sort();
         assert_eq!(all_ids, expected);
+    }
+
+    #[test]
+    fn sub_cluster_by_tokens_drops_single_member_subclusters_after_split() {
+        // A token-split can strand a single memory in its own sub-cluster
+        // (the farthest-first orthogonal outlier). The floor re-check (spec
+        // §4.3) must drop such singletons. Setup: 3 near-identical memories +
+        // 1 orthogonal one, over a token limit that forces a k=2 split ->
+        // groups [0,1,2] and [3]; the singleton [3] must be dropped.
+        let memories: Vec<ClusterMemRow> = (0..4)
+            .map(|i| {
+                let mut emb = vec![0.0f32; 768];
+                if i < 3 {
+                    emb[0] = 1.0;
+                    emb[1] = 0.01 * i as f32;
+                } else {
+                    emb[0] = 0.0;
+                    emb[1] = 1.0;
+                }
+                ClusterMemRow {
+                    source_id: format!("mem_{}", i),
+                    content: "x".repeat(340),
+                    entity_id: Some("entity_test".to_string()),
+                    entity_name: Some("Test Entity".to_string()),
+                    can_seed_page: true,
+                    space: Some("test".to_string()),
+                    embedding: emb,
+                }
+            })
+            .collect();
+
+        let indices: Vec<usize> = (0..4).collect();
+        let cluster = build_distillation_cluster(&memories, &indices);
+        assert!(cluster.estimated_tokens > 450);
+
+        let result = sub_cluster_by_tokens(&memories, cluster, 450, 2);
+
+        assert!(
+            result.iter().all(|cluster| cluster.source_ids.len() > 1),
+            "token split must re-check the member floor and drop singleton subclusters: {:?}",
+            result
+                .iter()
+                .map(|cluster| cluster.source_ids.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
@@ -36174,7 +37198,7 @@ pub(crate) mod tests {
                 content: "short".to_string(),
                 entity_id: Some("entity_test".to_string()),
                 entity_name: Some("Test Entity".to_string()),
-                community_id: None,
+                can_seed_page: true,
                 space: Some("test".to_string()),
                 embedding: vec![0.0f32; 768],
             })
@@ -36184,7 +37208,7 @@ pub(crate) mod tests {
         let cluster = build_distillation_cluster(&memories, &indices);
         assert!(cluster.estimated_tokens <= 3500);
 
-        let result = sub_cluster_by_tokens(&memories, cluster, 3500);
+        let result = sub_cluster_by_tokens(&memories, cluster, 3500, 2);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].source_ids.len(), 3);
     }
@@ -41371,7 +42395,7 @@ pub(crate) mod tests {
             Some("recap"),
             &[],
             &now,
-            "authored",
+            "distilled",
             "confirmed",
             Some("work"),
             None,
@@ -41403,6 +42427,145 @@ pub(crate) mod tests {
         assert!(
             mismatched.is_none(),
             "workspace-scoped matching must not match pages from other workspaces"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_matching_page_scoped_excludes_human_owned_pages_from_auto_match() {
+        let (db, _td) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let embedding = [0.0f32; EMBEDDING_DIM];
+
+        db.insert_page_with_kind(
+            "page_user_edited_owned",
+            "User Edited Owned",
+            None,
+            "original distilled content",
+            Some("entity_user_edited_owned"),
+            Some("recap"),
+            &[],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        db.update_page_content(
+            "page_user_edited_owned",
+            "human edited content",
+            &[],
+            "manual_edit",
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status("page_user_edited_owned", "confirmed")
+            .await
+            .unwrap();
+
+        let user_edited_page = db
+            .get_page("page_user_edited_owned")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            user_edited_page.user_edited,
+            "precondition: manual_edit should set user_edited=1"
+        );
+        assert_eq!(
+            user_edited_page.review_status, "confirmed",
+            "precondition: this case must isolate user_edited, not review_status"
+        );
+
+        let skipped_user_edited = db
+            .find_matching_page_scoped(
+                Some("entity_user_edited_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(
+            skipped_user_edited.is_none(),
+            "allow_user_edited=false must exclude user_edited pages from auto-match"
+        );
+
+        let allowed_user_edited = db
+            .find_matching_page_scoped(
+                Some("entity_user_edited_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed_user_edited.as_ref().map(|page| page.id.as_str()),
+            Some("page_user_edited_owned"),
+            "allow_user_edited=true should keep the legacy manual override path available"
+        );
+
+        db.insert_page_with_kind(
+            "page_authored_owned",
+            "Authored Owned",
+            None,
+            "human authored content",
+            Some("entity_authored_owned"),
+            Some("recap"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let authored_page = db.get_page("page_authored_owned").await.unwrap().unwrap();
+        assert_eq!(
+            authored_page.creation_kind, "authored",
+            "precondition: authored pages are human-owned even without user_edited=1"
+        );
+        assert!(
+            !authored_page.user_edited,
+            "precondition: authored ownership must not depend on user_edited"
+        );
+        assert_eq!(authored_page.review_status, "confirmed");
+
+        let skipped_authored = db
+            .find_matching_page_scoped(
+                Some("entity_authored_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(
+            skipped_authored.is_none(),
+            "allow_user_edited=false must treat creation_kind='authored' as human-owned"
+        );
+
+        let allowed_authored = db
+            .find_matching_page_scoped(
+                Some("entity_authored_owned"),
+                &embedding,
+                2.0,
+                Some("work"),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed_authored.as_ref().map(|page| page.id.as_str()),
+            Some("page_authored_owned"),
+            "allow_user_edited=true should still permit explicit matching against authored pages"
         );
     }
 
@@ -42003,6 +43166,7 @@ pub(crate) mod tests {
             last_modified: "2026-05-20T12:34:56Z".into(),
             sources_updated_count: 0,
             stale_reason: None,
+            pending_rebuild: None,
             user_edited: false,
             relevance_score: 0.42,
             last_edited_by: None,
@@ -46474,7 +47638,7 @@ pub(crate) mod tests {
                 content: "x".into(),
                 entity_id: None,
                 entity_name: None,
-                community_id: None,
+                can_seed_page: true,
                 space: None,
                 embedding: vec![1.0, 0.0, 0.0],
             },
@@ -46483,7 +47647,7 @@ pub(crate) mod tests {
                 content: "y".into(),
                 entity_id: None,
                 entity_name: None,
-                community_id: None,
+                can_seed_page: true,
                 space: None,
                 embedding: vec![0.0, 1.0, 0.0],
             },

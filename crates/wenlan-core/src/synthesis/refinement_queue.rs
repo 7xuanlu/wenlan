@@ -5,10 +5,11 @@ use crate::contradiction::ContradictionResult;
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
-use crate::post_write::WriteResult;
+use crate::post_write::{page_write, PageWrite, WriteResult};
 use crate::prompts::PromptRegistry;
 use crate::synthesis::distill::apply_merge_by_tier;
 use std::sync::Arc;
+use wenlan_types::requests::CreateConceptRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveStatus {
@@ -75,8 +76,11 @@ pub async fn resolve_proposal(
 
     Ok(WriteResult {
         id: id.to_string(),
+        attached_to: None,
         warnings: Vec::new(),
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -85,6 +89,17 @@ pub async fn resolve_proposal(
 pub struct AcceptOutcome {
     pub id: String,
     pub action_applied: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefinementDecision {
+    Accept {
+        notes: Option<String>,
+    },
+    PickSpace {
+        space: String,
+        notes: Option<String>,
+    },
 }
 
 /// Apply a refinement queue proposal using sensible defaults per action variant.
@@ -102,6 +117,15 @@ pub async fn apply_refinement(
     id: &str,
     agent: &str,
 ) -> Result<AcceptOutcome, WenlanError> {
+    apply_refinement_with_decision(db, id, agent, RefinementDecision::Accept { notes: None }).await
+}
+
+pub async fn apply_refinement_with_decision(
+    db: &MemoryDB,
+    id: &str,
+    agent: &str,
+    decision: RefinementDecision,
+) -> Result<AcceptOutcome, WenlanError> {
     let prop = db
         .get_refinement_proposal(id)
         .await?
@@ -118,6 +142,7 @@ pub async fn apply_refinement(
         )));
     }
 
+    let mut resolved_inside_action = false;
     match prop.action.as_str() {
         "entity_merge" => {
             let new_id = prop.source_ids.first().ok_or_else(|| {
@@ -159,16 +184,61 @@ pub async fn apply_refinement(
                 "action 'dedup_merge' has no accept path (deprecated stale-v1 variant)".into(),
             ));
         }
+        "page_merge" => {
+            let survivor_id = prop.source_ids.first().cloned().ok_or_else(|| {
+                WenlanError::Validation("page_merge missing source_ids[0]".into())
+            })?;
+            let absorbed_id = prop.source_ids.get(1).cloned().ok_or_else(|| {
+                WenlanError::Validation("page_merge missing source_ids[1]".into())
+            })?;
+            db.accept_page_merge(id, &survivor_id, &absorbed_id).await?;
+            resolved_inside_action = true;
+        }
+        "cross_space_discovery" => match decision {
+            RefinementDecision::PickSpace { space, notes: _ } => {
+                apply_cross_space_discovery(db, &prop.source_ids, &space, agent).await?;
+            }
+            RefinementDecision::Accept { notes: _ } => {
+                return Err(WenlanError::Validation(
+                    "cross_space_discovery requires pick_space action".into(),
+                ));
+            }
+        },
+        "page_keep_or_archive" => match decision {
+            RefinementDecision::Accept { notes: _ } => {
+                let page_id = prop.source_ids.first().ok_or_else(|| {
+                    WenlanError::Validation("page_keep_or_archive missing source_ids[0]".into())
+                })?;
+                db.archive_page(page_id).await?;
+            }
+            RefinementDecision::PickSpace { space: _, notes: _ } => {
+                return Err(WenlanError::Validation(
+                    "page_keep_or_archive requires accept or dismiss".into(),
+                ));
+            }
+        },
         other => {
             return Err(WenlanError::Validation(format!("unknown action: {other}")));
         }
     }
 
-    resolve_proposal(db, id, ResolveStatus::Resolved, agent).await?;
+    if resolved_inside_action {
+        let resolve_payload = serde_json::json!({
+            "action": &prop.action,
+            "new_status": ResolveStatus::Resolved.as_str(),
+            "source_ids": &prop.source_ids,
+        })
+        .to_string();
+        let _ = db
+            .log_agent_activity(agent, "refinement_resolve", &[], None, &resolve_payload)
+            .await;
+    } else {
+        resolve_proposal(db, id, ResolveStatus::Resolved, agent).await?;
+    }
 
     let payload = serde_json::json!({
-        "action": prop.action,
-        "source_ids": prop.source_ids,
+        "action": &prop.action,
+        "source_ids": &prop.source_ids,
     })
     .to_string();
     let _ = db
@@ -179,6 +249,75 @@ pub async fn apply_refinement(
         id: id.to_string(),
         action_applied: prop.action,
     })
+}
+
+async fn apply_cross_space_discovery(
+    db: &MemoryDB,
+    source_ids: &[String],
+    space: &str,
+    agent: &str,
+) -> Result<(), WenlanError> {
+    let space = space.trim();
+    if space.is_empty() {
+        return Err(WenlanError::Validation(
+            "pick_space requires a space".into(),
+        ));
+    }
+    let source_contents = db.get_memory_contents_by_ids(source_ids).await?;
+    if source_contents.is_empty() {
+        return Err(WenlanError::Validation(
+            "cross_space_discovery has no readable source memories".into(),
+        ));
+    }
+    let title = discovery_page_title(&source_contents);
+    let content = discovery_page_content(&source_contents);
+    let req = CreateConceptRequest {
+        title,
+        content,
+        summary: None,
+        entity_id: None,
+        space: Some(space.to_string()),
+        source_memory_ids: source_ids.to_vec(),
+        creation_kind: Some("distilled".to_string()),
+        workspace: Some(space.to_string()),
+    };
+    page_write(
+        db,
+        PageWrite::Create {
+            req,
+            agent,
+            knowledge_path: None,
+            page_min_cluster_size: crate::tuning::DistillationConfig::default()
+                .page_min_cluster_size,
+            page_match_threshold: crate::tuning::DistillationConfig::default().page_match_threshold,
+            citations_json: None,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+fn discovery_page_title(source_contents: &[(String, String)]) -> String {
+    let title_words = source_contents
+        .first()
+        .map(|(_, content)| {
+            content
+                .split_whitespace()
+                .take(8)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_else(|| "Cross-space discovery".to_string());
+    format!("Discovered topic: {title_words}")
+}
+
+fn discovery_page_content(source_contents: &[(String, String)]) -> String {
+    source_contents
+        .iter()
+        .map(|(_, content)| content.trim())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Process pending refinement queue items via LLM.
@@ -654,6 +793,32 @@ mod tests {
         (db, tmp)
     }
 
+    async fn insert_page_source_memory(db: &MemoryDB, source_id: &str, content: &str, space: &str) {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (
+                id, content, source, source_id, title, chunk_index, last_modified,
+                chunk_type, memory_type, space, source_agent, confidence,
+                confirmed, word_count, enrichment_status, quality, is_recap,
+                supersede_mode, stability
+             )
+             VALUES (
+                ?1, ?2, 'memory', ?1, ?3, 0, ?4, 'document', 'fact',
+                ?5, 'codex-test', 0.9, 1, 8, 'enriched', 'high', 0,
+                'hide', 'learned'
+             )",
+            libsql::params![
+                source_id,
+                content,
+                content.chars().take(40).collect::<String>(),
+                chrono::Utc::now().timestamp(),
+                space,
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn resolve_proposal_dismissed_updates_status() {
         let (db, _tmp) = test_db().await;
@@ -1026,6 +1191,257 @@ mod tests {
             .unwrap();
         let f: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(f, 0, "new memory should NOT be flagged either");
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_page_merge_unions_evidence_archives_absorbed_and_repoints_links() {
+        let (db, _tmp) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_survivor",
+            "Survivor Topic",
+            None,
+            "Survivor prose.",
+            None,
+            None,
+            &["mem_keep"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_absorbed",
+            "Absorbed Topic",
+            None,
+            "Absorbed prose.",
+            None,
+            None,
+            &["mem_absorbed", "mem_extra"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_referrer",
+            "Referrer",
+            None,
+            "See [[Absorbed Topic]] for the current notes.",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_refinement_proposal(
+            "ref_page_merge_1",
+            "page_merge",
+            &["page_survivor".to_string(), "page_absorbed".to_string()],
+            Some(
+                r#"{"action":"page_merge","left_page_id":"page_survivor","right_page_id":"page_absorbed","source_overlap":1,"source_overlap_ratio":0.5}"#,
+            ),
+            0.95,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params!["ref_page_merge_1"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let outcome = apply_refinement(&db, "ref_page_merge_1", "test-agent")
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.action_applied, "page_merge");
+        let survivor = db
+            .get_page("page_survivor")
+            .await
+            .unwrap()
+            .expect("survivor page remains active");
+        assert_eq!(survivor.status, "active");
+        assert_eq!(survivor.stale_reason.as_deref(), Some("source_updated"));
+        assert!(
+            ["mem_keep", "mem_absorbed", "mem_extra"]
+                .iter()
+                .all(|sid| survivor.source_memory_ids.iter().any(|s| s == sid)),
+            "survivor must carry the unioned source evidence, got {:?}",
+            survivor.source_memory_ids
+        );
+
+        let absorbed = db
+            .get_page("page_absorbed")
+            .await
+            .unwrap()
+            .expect("absorbed page is archived, not deleted");
+        assert_eq!(absorbed.status, "archived");
+
+        let survivor_sources = db.get_page_sources("page_survivor").await.unwrap();
+        assert!(
+            ["mem_keep", "mem_absorbed", "mem_extra"].iter().all(|sid| {
+                survivor_sources
+                    .iter()
+                    .any(|source| source.memory_source_id == *sid)
+            }),
+            "page_sources must carry the unioned evidence, got {:?}",
+            survivor_sources
+        );
+
+        let survivor_links = db.get_page_inbound_links("page_survivor").await.unwrap();
+        assert!(
+            survivor_links
+                .iter()
+                .any(|(source_page_id, label)| source_page_id == "page_referrer"
+                    && label == "Absorbed Topic"),
+            "wikilinks to the absorbed title must point at the survivor now, got {:?}",
+            survivor_links
+        );
+        let absorbed_links = db.get_page_inbound_links("page_absorbed").await.unwrap();
+        assert!(
+            !absorbed_links
+                .iter()
+                .any(|(source_page_id, _)| source_page_id == "page_referrer"),
+            "absorbed page must not retain backlinks after merge, got {:?}",
+            absorbed_links
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_cross_space_discovery_pick_space_creates_page_in_selected_space() {
+        let (db, _tmp) = test_db().await;
+        for (source_id, space) in [
+            ("disc_pick_work_a", "work"),
+            ("disc_pick_personal_a", "personal"),
+            ("disc_pick_work_b", "work"),
+        ] {
+            insert_page_source_memory(
+                &db,
+                source_id,
+                "Incremental Rust compilation cache tuning for shared developer machines.",
+                space,
+            )
+            .await;
+        }
+        let source_ids = vec![
+            "disc_pick_work_a".to_string(),
+            "disc_pick_personal_a".to_string(),
+            "disc_pick_work_b".to_string(),
+        ];
+        db.insert_refinement_proposal(
+            "ref_cross_space_discovery_1",
+            "cross_space_discovery",
+            &source_ids,
+            Some(
+                r#"{"action":"cross_space_discovery","memory_count":3,"spaces":["personal","work"],"allowed_actions":["dismiss","pick_space"]}"#,
+            ),
+            1.0,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE refinement_queue SET status = 'awaiting_review' WHERE id = ?1",
+                libsql::params!["ref_cross_space_discovery_1"],
+            )
+            .await
+            .unwrap();
+        }
+
+        let outcome = apply_refinement_with_decision(
+            &db,
+            "ref_cross_space_discovery_1",
+            "test-agent",
+            RefinementDecision::PickSpace {
+                space: "work".to_string(),
+                notes: Some("Prefer the engineering workspace.".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.action_applied, "cross_space_discovery");
+        let pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(pages.len(), 1, "pick_space should create exactly one page");
+        let page = &pages[0];
+        assert_eq!(page.workspace.as_deref(), Some("work"));
+        assert_eq!(page.space.as_deref(), Some("work"));
+        assert_eq!(page.creation_kind, "distilled");
+        assert_eq!(page.review_status, "unconfirmed");
+        assert!(
+            source_ids
+                .iter()
+                .all(|sid| page.source_memory_ids.iter().any(|source| source == sid)),
+            "PageWrite should persist every discovery source, got {:?}",
+            page.source_memory_ids
+        );
+        let resolved = db
+            .get_refinement_proposal("ref_cross_space_discovery_1")
+            .await
+            .unwrap()
+            .expect("proposal remains after resolution");
+        assert_eq!(resolved.status, "resolved");
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_page_keep_or_archive_accept_archives_page() {
+        let (db, _tmp) = test_db().await;
+        insert_page_source_memory(&db, "stub_source", "Small source.", "work").await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "stub_page",
+            "Stub Page",
+            None,
+            "Thin machine-owned page.",
+            None,
+            None,
+            &["stub_source"],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            Some("[]"),
+        )
+        .await
+        .unwrap();
+        db.insert_refinement_proposal(
+            "ref_keep_or_archive_1",
+            "page_keep_or_archive",
+            &["stub_page".to_string()],
+            Some(
+                r#"{"action":"page_keep_or_archive","page_id":"stub_page","source_count":1,"allowed_actions":["dismiss","accept"]}"#,
+            ),
+            1.0,
+        )
+        .await
+        .unwrap();
+        db.resolve_refinement_if_open("ref_keep_or_archive_1", "awaiting_review")
+            .await
+            .unwrap();
+
+        let outcome = apply_refinement(&db, "ref_keep_or_archive_1", "test-agent")
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.action_applied, "page_keep_or_archive");
+        let page = db
+            .get_page("stub_page")
+            .await
+            .unwrap()
+            .expect("page remains after archive");
+        assert_eq!(page.status, "archived");
+        let resolved = db
+            .get_refinement_proposal("ref_keep_or_archive_1")
+            .await
+            .unwrap()
+            .expect("proposal remains after resolution");
+        assert_eq!(resolved.status, "resolved");
     }
 
     #[tokio::test]

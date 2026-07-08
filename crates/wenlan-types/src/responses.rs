@@ -152,6 +152,13 @@ pub struct StatusResponse {
     /// defaults to `Idle` so older daemons (which omit it) deserialize cleanly.
     #[serde(default)]
     pub queue: QueueStatus,
+    /// Compile-routing queue depth (spec §3.1/§7): clusters the last routed
+    /// compile left pending because no lane (cloud or healthy on-device) was
+    /// available. `Active { pending }` when nonzero, `Idle` otherwise; never
+    /// `Paused` (no retry/backoff concept for this gauge). Additive: defaults
+    /// to `Idle` so older daemons (which omit it) deserialize cleanly.
+    #[serde(default)]
+    pub compile_queue: QueueStatus,
     /// Reranker on the DEEP path (`/api/memory/search` with `rerank=true`). Legacy
     /// field — for `WENLAN_RERANKER_ENABLED=1` it is the configured model, exactly as before.
     #[serde(default)]
@@ -298,6 +305,8 @@ pub struct AddObservationResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreatePageResponse {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached_to: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -453,6 +462,19 @@ pub struct DeleteCountResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SuccessResponse {
     pub ok: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageWriteResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_card_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gated: bool,
 }
 
 // ===== Memory detail =====
@@ -654,6 +676,17 @@ pub enum ProposalAction {
     DetectContradiction,
     SuggestEntity,
     DedupMerge,
+    PageMerge,
+    CrossSpaceDiscovery,
+    PageKeepOrArchive,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefinementCardAction {
+    Accept,
+    Dismiss,
+    PickSpace,
 }
 
 /// Tagged-union payload emitted by the background refinery.
@@ -683,6 +716,24 @@ pub enum RefinementPayload {
         name_hint: Option<String>,
     },
     DedupMerge,
+    PageMerge {
+        left_page_id: String,
+        right_page_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        similarity: Option<f64>,
+        source_overlap: usize,
+        source_overlap_ratio: f64,
+    },
+    CrossSpaceDiscovery {
+        memory_count: usize,
+        spaces: Vec<String>,
+        allowed_actions: Vec<RefinementCardAction>,
+    },
+    PageKeepOrArchive {
+        page_id: String,
+        source_count: usize,
+        allowed_actions: Vec<RefinementCardAction>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -727,6 +778,14 @@ mod refinement_wire_tests {
             ),
             ("\"suggest_entity\"", ProposalAction::SuggestEntity),
             ("\"dedup_merge\"", ProposalAction::DedupMerge),
+            (
+                "\"cross_space_discovery\"",
+                ProposalAction::CrossSpaceDiscovery,
+            ),
+            (
+                "\"page_keep_or_archive\"",
+                ProposalAction::PageKeepOrArchive,
+            ),
         ];
         for (json, expected) in cases {
             let parsed: ProposalAction = serde_json::from_str(json).unwrap();
@@ -763,6 +822,57 @@ mod refinement_wire_tests {
         let json = r#"{"action":"dedup_merge"}"#;
         let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
         assert!(matches!(parsed, RefinementPayload::DedupMerge));
+    }
+
+    #[test]
+    fn refinement_payload_cross_space_discovery_round_trip() {
+        let json = r#"{"action":"cross_space_discovery","memory_count":3,"spaces":["personal","work"],"allowed_actions":["dismiss","pick_space"]}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::CrossSpaceDiscovery {
+                memory_count,
+                ref spaces,
+                ref allowed_actions,
+            } => {
+                assert_eq!(memory_count, 3);
+                assert_eq!(spaces, &vec!["personal".to_string(), "work".to_string()]);
+                assert_eq!(
+                    allowed_actions,
+                    &vec![
+                        RefinementCardAction::Dismiss,
+                        RefinementCardAction::PickSpace
+                    ]
+                );
+            }
+            _ => panic!("expected CrossSpaceDiscovery"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["action"], "cross_space_discovery");
+        assert_eq!(back["memory_count"], 3);
+    }
+
+    #[test]
+    fn refinement_payload_page_keep_or_archive_round_trip() {
+        let json = r#"{"action":"page_keep_or_archive","page_id":"page_stub","source_count":1,"allowed_actions":["dismiss","accept"]}"#;
+        let parsed: RefinementPayload = serde_json::from_str(json).unwrap();
+        match parsed {
+            RefinementPayload::PageKeepOrArchive {
+                ref page_id,
+                source_count,
+                ref allowed_actions,
+            } => {
+                assert_eq!(page_id, "page_stub");
+                assert_eq!(source_count, 1);
+                assert_eq!(
+                    allowed_actions,
+                    &vec![RefinementCardAction::Dismiss, RefinementCardAction::Accept]
+                );
+            }
+            _ => panic!("expected PageKeepOrArchive"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["action"], "page_keep_or_archive");
+        assert_eq!(back["source_count"], 1);
     }
 
     #[test]
@@ -1279,6 +1389,7 @@ mod reranker_status_tests {
             files_total: 0,
             sources_connected: vec![],
             queue: QueueStatus::Idle,
+            compile_queue: QueueStatus::Idle,
             reranker: RerankerStatus::Active {
                 model_id: "BGERerankerBase".into(),
             },

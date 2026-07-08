@@ -159,6 +159,9 @@ fn d_070_f64() -> f64 {
 fn d_075() -> f64 {
     0.75
 }
+fn d_060() -> f64 {
+    0.60
+}
 fn d_13_f32() -> f32 {
     1.3
 }
@@ -245,8 +248,6 @@ pub struct RefineryConfig {
     pub max_reweave_per_steep: usize,
     #[serde(default = "d_120")]
     pub steep_deadline_secs: u64,
-    #[serde(default = "d_085")]
-    pub dedup_similarity_threshold: f64,
     #[serde(default = "d_015_f64")]
     pub entity_link_distance: f64,
     #[serde(default = "d_03")]
@@ -273,8 +274,8 @@ pub struct RefineryConfig {
 pub struct DistillationConfig {
     #[serde(default = "d_073")]
     pub similarity_threshold: f64,
-    #[serde(default = "d_2_usize")]
-    pub min_cluster_size: usize,
+    #[serde(default = "d_060")]
+    pub formation_threshold: f64,
     /// Max tokens per distillation cluster for on-device models (Qwen3-4B: 8K,
     /// Qwen3.5-9B: 16K effective synthesis window per research). Default 8000.
     #[serde(default = "d_8000_usize")]
@@ -292,6 +293,12 @@ pub struct DistillationConfig {
     pub page_min_cluster_size: usize,
     #[serde(default = "d_075", alias = "concept_growth_threshold")]
     pub page_growth_threshold: f64,
+    #[serde(default = "d_085")]
+    pub page_match_threshold: f64,
+    /// Max DETECT candidates attempted per sweep tick. DETECT is intentionally
+    /// bounded separately from synthesis because it scans the staging pool.
+    #[serde(default = "d_5_usize")]
+    pub detect_max_candidates_per_tick: usize,
     /// Reserved for future integration into search_memory scoring pipeline.
     /// Currently pages are searched via separate search_pages endpoint.
     #[serde(default = "d_13_f32", alias = "concept_boost")]
@@ -543,7 +550,6 @@ impl Default for RefineryConfig {
             recap_lookback_secs: d_86400(),
             max_reweave_per_steep: d_20_usize(),
             steep_deadline_secs: d_120(),
-            dedup_similarity_threshold: d_085(),
             entity_link_distance: d_015_f64(),
             consolidation_confidence_threshold: d_03(),
             consolidation_batch_size: d_10_usize(),
@@ -638,13 +644,15 @@ impl Default for DistillationConfig {
     fn default() -> Self {
         Self {
             similarity_threshold: d_073(),
-            min_cluster_size: d_2_usize(),
+            formation_threshold: d_060(),
             ondevice_token_limit: d_8000_usize(),
             api_token_limit: d_50000_usize(),
             max_retries: d_3_usize(),
             max_clusters_per_steep: d_20_usize(),
             page_min_cluster_size: d_3_usize(),
             page_growth_threshold: d_075(),
+            page_match_threshold: d_085(),
+            detect_max_candidates_per_tick: d_5_usize(),
             page_boost: d_13_f32(),
             max_unlinked_cluster_size: d_50_usize(),
             max_grouped_cluster_size: d_12_usize(),
@@ -712,7 +720,6 @@ mod tests {
         assert_eq!(cfg.refinery.recap_lookback_secs, 86400);
         assert_eq!(cfg.refinery.max_reweave_per_steep, 20);
         assert_eq!(cfg.refinery.steep_deadline_secs, 120);
-        assert_eq!(cfg.refinery.dedup_similarity_threshold, 0.85);
         assert_eq!(cfg.refinery.entity_link_distance, 0.15);
         assert_eq!(cfg.refinery.consolidation_confidence_threshold, 0.3);
         assert_eq!(cfg.refinery.consolidation_batch_size, 10);
@@ -818,9 +825,33 @@ score_threshold = 0.25
     #[test]
     fn test_concept_config_defaults() {
         let cfg = DistillationConfig::default();
+        assert!((cfg.formation_threshold - 0.60).abs() < f64::EPSILON);
+        assert!((cfg.page_match_threshold - 0.85).abs() < f64::EPSILON);
         assert_eq!(cfg.page_min_cluster_size, 3);
         assert!((cfg.page_growth_threshold - 0.75).abs() < 0.01);
         assert!((cfg.page_boost - 1.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn distillation_thresholds_load_from_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("intelligence.toml");
+        std::fs::write(
+            &path,
+            r#"
+[distillation]
+formation_threshold = 0.42
+page_match_threshold = 0.91
+"#,
+        )
+        .unwrap();
+
+        let cfg = TuningConfig::load(&path);
+
+        assert!((cfg.distillation.formation_threshold - 0.42).abs() < f64::EPSILON);
+        assert!((cfg.distillation.page_match_threshold - 0.91).abs() < f64::EPSILON);
+        assert_eq!(cfg.distillation.page_min_cluster_size, 3);
+        assert!((cfg.distillation.page_growth_threshold - 0.75).abs() < f64::EPSILON);
     }
 
     #[test]

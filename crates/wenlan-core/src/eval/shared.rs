@@ -2262,8 +2262,8 @@ pub async fn run_title_enrichment_batch_api(
 /// Batch concept distillation via Anthropic Batch API.
 ///
 /// Replaces production `distill_pages` (which uses sequential on-device LLM)
-/// with a batch API approach. Same DB queries and concept storage, different
-/// LLM execution model.
+/// with a batch API approach. Same DB queries and PageWrite-backed concept
+/// storage, different LLM execution model.
 ///
 /// Two batch submissions: refinement (merge/split clusters), then synthesis.
 pub async fn run_concept_distillation_batch_api(
@@ -2283,7 +2283,7 @@ pub async fn run_concept_distillation_batch_api(
     let token_limit = 16_000;
     let clusters = db
         .find_distillation_clusters(
-            tuning.similarity_threshold,
+            tuning.formation_threshold,
             tuning.page_min_cluster_size,
             tuning.max_clusters_per_steep,
             token_limit,
@@ -2484,19 +2484,17 @@ pub async fn run_concept_distillation_batch_api(
             .find(|l| l.starts_with("- "))
             .map(|l| l.trim_start_matches("- ").to_string());
 
-        let source_refs: Vec<&str> = meta.source_ids.iter().map(|s| s.as_str()).collect();
-        let now = chrono::Utc::now().to_rfc3339();
-        let concept_id = crate::pages::new_page_id();
-
-        db.insert_page(
-            &concept_id,
-            &title,
-            summary.as_deref(),
-            content,
-            meta.entity_id.as_deref(),
-            meta.space.as_deref(),
-            &source_refs,
-            &now,
+        store_batch_distilled_page(
+            db,
+            BatchDistilledPage {
+                title,
+                summary,
+                content: content.clone(),
+                entity_id: meta.entity_id.clone(),
+                space: meta.space.clone(),
+                source_memory_ids: meta.source_ids.clone(),
+            },
+            &tuning,
         )
         .await?;
 
@@ -2505,6 +2503,42 @@ pub async fn run_concept_distillation_batch_api(
 
     eprintln!("[batch_distill] Distilled {} concepts", distilled);
     Ok(distilled)
+}
+
+struct BatchDistilledPage {
+    title: String,
+    summary: Option<String>,
+    content: String,
+    entity_id: Option<String>,
+    space: Option<String>,
+    source_memory_ids: Vec<String>,
+}
+
+async fn store_batch_distilled_page(
+    db: &MemoryDB,
+    page: BatchDistilledPage,
+    tuning: &crate::tuning::DistillationConfig,
+) -> Result<String, WenlanError> {
+    let write = crate::post_write::create_page_with_tuning(
+        db,
+        wenlan_types::requests::CreateConceptRequest {
+            title: page.title,
+            content: page.content,
+            summary: page.summary,
+            entity_id: page.entity_id,
+            space: page.space.clone(),
+            source_memory_ids: page.source_memory_ids,
+            creation_kind: Some("distilled".to_string()),
+            workspace: page.space,
+        },
+        "system",
+        None,
+        tuning.page_min_cluster_size,
+        tuning.page_match_threshold,
+    )
+    .await?;
+
+    Ok(write.id)
 }
 
 /// Static (DB-free) part of the CE-path G3 touch probe. Separated from the
@@ -2561,6 +2595,56 @@ mod tests {
     use fs2::FileExt;
 
     #[test]
+    fn eval_distillation_cluster_callers_use_formation_threshold() {
+        // Production callers must group distillation clusters at
+        // `formation_threshold` (0.60), matching what `distill_pages_scoped`
+        // ships — else eval-seed pages form at a different threshold than
+        // production and reintroduce seed<->production skew (Rule #32 / ONE
+        // route, ONE contract). Scan only the PRODUCTION region of each file
+        // (truncated at the `#[cfg(test)]` boundary) so this guard never
+        // matches its own test literals.
+        let sources = [
+            ("eval/shared.rs", include_str!("shared.rs")),
+            ("eval/lifecycle.rs", include_str!("lifecycle.rs")),
+            ("eval/pipeline.rs", include_str!("pipeline.rs")),
+        ];
+
+        let mut failures = Vec::new();
+        for (path, full_source) in sources {
+            let source = full_source
+                .split_once("\n#[cfg(test)]")
+                .map(|(prod, _)| prod)
+                .unwrap_or(full_source);
+            let lines: Vec<_> = source.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                if !line.contains(".find_distillation_clusters(") {
+                    continue;
+                }
+
+                let call_window = lines
+                    .iter()
+                    .enumerate()
+                    .skip(idx)
+                    .take(8)
+                    .map(|(line_idx, line)| (line_idx + 1, *line));
+
+                for (line_no, call_line) in call_window {
+                    if call_line.contains(".similarity_threshold") {
+                        failures.push(format!("{path}:{line_no}: {call_line}"));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "eval distillation cluster discovery must use formation_threshold, \
+             matching production distill_pages cluster formation:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
     fn scenario_lock_blocks_concurrent_acquire() {
         let tmp = tempfile::tempdir().unwrap();
         let lock_path = tmp.path().join("scenario.lock");
@@ -2593,6 +2677,96 @@ mod tests {
         write_cache_env_stamp(&path, &want);
         let got: ScenarioCacheEnv = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(got, want);
+    }
+
+    #[tokio::test]
+    async fn batch_distilled_page_storage_uses_page_write_provenance() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = MemoryDB::new(
+            dir.path().join("test.db").as_path(),
+            Arc::new(crate::events::NoopEmitter),
+        )
+        .await
+        .unwrap();
+
+        let sources = [
+            (
+                "mem-eval-pagewrite-a",
+                "Rust references track ownership so borrowed values remain memory safe.",
+            ),
+            (
+                "mem-eval-pagewrite-b",
+                "Rust lifetimes describe how references stay valid across function calls.",
+            ),
+            (
+                "mem-eval-pagewrite-c",
+                "Rust borrowing rules prevent mutable aliasing while references are live.",
+            ),
+        ];
+        let docs = sources
+            .iter()
+            .map(|(source_id, content)| RawDocument {
+                source: "memory".to_string(),
+                source_id: (*source_id).to_string(),
+                title: content.chars().take(40).collect(),
+                summary: None,
+                content: (*content).to_string(),
+                url: None,
+                last_modified: chrono::Utc::now().timestamp(),
+                metadata: std::collections::HashMap::new(),
+                memory_type: Some("fact".to_string()),
+                space: Some("engineering".to_string()),
+                source_agent: Some("test".to_string()),
+                confidence: Some(0.9),
+                confirmed: Some(true),
+                stability: Some("stable".to_string()),
+                supersedes: None,
+                pending_revision: false,
+                entity_id: None,
+                quality: None,
+                importance: None,
+                is_recap: false,
+                enrichment_status: "raw".to_string(),
+                supersede_mode: "hide".to_string(),
+                structured_fields: None,
+                retrieval_cue: None,
+                source_text: None,
+                content_hash: None,
+            })
+            .collect();
+        db.upsert_documents(docs).await.unwrap();
+
+        let tuning = crate::tuning::DistillationConfig::default();
+        let page_id = store_batch_distilled_page(
+            &db,
+            BatchDistilledPage {
+                title: "Rust Reference Safety".to_string(),
+                summary: Some("Rust reference safety".to_string()),
+                content: "Rust references track ownership, borrowing, and lifetimes so borrowed values remain memory safe without mutable aliasing.".to_string(),
+                entity_id: None,
+                space: Some("engineering".to_string()),
+                source_memory_ids: sources
+                    .iter()
+                    .map(|(source_id, _)| (*source_id).to_string())
+                    .collect(),
+            },
+            &tuning,
+        )
+        .await
+        .unwrap();
+
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.review_status, "unconfirmed");
+
+        let activity = db.list_agent_activity(20, None, None).await.unwrap();
+        assert!(
+            activity.iter().any(|a| {
+                a.action == "page_create"
+                    && a.memory_ids.as_deref()
+                        == Some("mem-eval-pagewrite-a,mem-eval-pagewrite-b,mem-eval-pagewrite-c")
+            }),
+            "expected PageWrite page_create provenance row, got: {activity:?}"
+        );
     }
 
     /// The eval classification pass must close the gap the legacy shortcut left:

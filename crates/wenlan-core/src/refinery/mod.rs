@@ -7,13 +7,9 @@ pub use phase::Phase;
 
 pub(crate) mod summary;
 
-// Re-export distillation functions from `synthesis::distill` to preserve the
-// public API path `wenlan_core::refinery::{distill_pages, deep_distill_pages,
-// deep_distill_single}`. These callers live in wenlan-server, eval modules, and
-// tests outside this crate.
 pub use crate::synthesis::distill::{
-    deep_distill_pages, deep_distill_single, distill_one_cluster, distill_pages,
-    distill_pages_scoped, resolve_distill_target, DistillTarget,
+    deep_distill_single, distill_one_cluster, distill_pages, distill_pages_scoped, formation_sweep,
+    resolve_distill_target, DistillTarget,
 };
 
 // Re-export KG phase functions from `kg::*` to preserve the public API path
@@ -25,17 +21,56 @@ pub use crate::kg::reweave::reweave_entity_links;
 // Internal re-imports for refinery code that still calls into the moved
 // distillation helpers (distill_one_cluster + refine_clusters_with_llm +
 // recompile_single_page from other refinery phases).
-use crate::synthesis::distill::recompile_single_page;
+use crate::synthesis::detect::detect_page_candidates;
+use crate::synthesis::distill::{
+    distill_pages_scoped_gated, recompile_single_page, refresh_page, RefreshReason,
+};
 use crate::synthesis::refinement_queue::process_refinement_queue;
-use wenlan_types::requests::UpdatePageRequest;
 
 use crate::activity::ACTIVITY_GAP_SECS;
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use crate::llm_provider::{LlmProvider, LlmRequest};
+use crate::llm_provider::{LlmBackend, LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
 use serde::Serialize;
 use std::sync::Arc;
+
+/// app_metadata key backing the compile queue depth gauge (spec §3.1/§7): the
+/// count of clusters the last routed compile left pending because no lane
+/// (cloud or healthy on-device) was available to write them. Surfaced on
+/// `/api/status`. A gauge, not a counter — each compile tick overwrites it
+/// with the pending count discovered THIS tick (the staging pool is
+/// re-queried fresh every time, not a persisted queue).
+const COMPILE_QUEUE_DEPTH_KEY: &str = "compile_queue_depth_v1";
+
+/// Persist the compile queue depth so `/api/status` can report it without
+/// re-running cluster discovery. Called after every routed compile.
+pub async fn persist_compile_queue_depth(db: &MemoryDB, depth: usize) -> Result<(), WenlanError> {
+    db.set_app_metadata(COMPILE_QUEUE_DEPTH_KEY, &depth.to_string())
+        .await
+}
+
+/// Read the last-persisted compile queue depth. Defaults to 0 (idle) when
+/// never set or unparseable.
+pub async fn compile_queue_depth(db: &MemoryDB) -> Result<usize, WenlanError> {
+    Ok(db
+        .get_app_metadata(COMPILE_QUEUE_DEPTH_KEY)
+        .await?
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0))
+}
+
+fn on_device_compile_preferred() -> bool {
+    std::env::var("WENLAN_PREFER_ON_DEVICE_COMPILE")
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
 
 /// What triggered a refinery cycle. Different triggers run different subsets
 /// of phases — the goal is to do the right work at the right time.
@@ -44,7 +79,7 @@ use std::sync::Arc;
 ///   the safe default for any code path that doesn't know better.
 /// - `BurstEnd`: only `recaps` + `refinement_queue`.
 /// - `Idle`: only synthesis phases (`community_detection`, `emergence`,
-///   `re-distill`, `decision_logs`).
+///   `re-distill`, `overview`, `decision_logs`).
 /// - `Daily`: only maintenance phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerKind {
@@ -65,9 +100,11 @@ impl TriggerKind {
             Self::Idle => matches!(
                 phase,
                 Phase::CommunityDetection
+                    | Phase::Detect
                     | Phase::Emergence
                     | Phase::SummaryRollup
                     | Phase::ReDistill
+                    | Phase::Overview
                     | Phase::DecisionLogs
             ),
             Self::Daily => matches!(
@@ -77,6 +114,7 @@ impl TriggerKind {
                     | Phase::Reweave
                     | Phase::Reembed
                     | Phase::EntityExtraction
+                    | Phase::Overview
                     | Phase::PruneRejections
                     | Phase::Evict
                     | Phase::KgRethink
@@ -88,7 +126,7 @@ impl TriggerKind {
     /// of phases, so they need different time budgets:
     /// - BurstEnd: tight (recaps + refinement only, should be fast)
     /// - Idle/Daily: moderate (focused subsets, no competition)
-    /// - Backstop: generous (runs all 13 phases, safety net every 6h)
+    /// - Backstop: generous (runs all phases, safety net every 6h)
     pub fn deadline_secs(&self, base: u64) -> u64 {
         match self {
             Self::BurstEnd => base,      // 120s — recaps should be fast
@@ -250,6 +288,7 @@ pub async fn run_periodic_steep(
         llm,
         None,
         None,
+        None,
         prompts,
         tuning,
         _confidence_cfg,
@@ -261,13 +300,15 @@ pub async fn run_periodic_steep(
 
 /// Periodic steep with optional API and synthesis LLM providers.
 /// `api_llm` is used for routine tasks (entity extraction, classification).
-/// `synthesis_llm` is used for distillation/page synthesis (falls back to api_llm → on-device).
+/// `synthesis_llm` is used for distillation/page synthesis
+/// (falls back to api_llm, then external_llm, then on-device).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_periodic_steep_with_api(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
     api_llm: Option<&Arc<dyn LlmProvider>>,
     synthesis_llm: Option<&Arc<dyn LlmProvider>>,
+    external_llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
     tuning: &crate::tuning::RefineryConfig,
     _confidence_cfg: &crate::tuning::ConfidenceConfig,
@@ -462,9 +503,37 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
+    // Phase 5c: DETECT — embedding/cosine-only page candidate pass. It runs
+    // before compile/emergence so cheap attach-to-existing-page opportunities
+    // are consumed through PageWrite before any LLM synthesis lane is touched.
+    if trigger.runs_phase(Phase::Detect) {
+        let phase = run_phase(Phase::Detect, || async {
+            let report = detect_page_candidates(db_ref, distillation).await?;
+            if report.candidates_processed > 0
+                || report.attached > 0
+                || report.skipped_unchanged > 0
+            {
+                log::info!(
+                    "[detect] processed={}, attached={}, skipped_unchanged={}",
+                    report.candidates_processed,
+                    report.attached,
+                    report.skipped_unchanged
+                );
+            }
+            let (nudge, headline) = classify_backfill(report.attached);
+            Ok(PhaseOutput {
+                items_processed: report.candidates_processed,
+                nudge,
+                headline,
+            })
+        })
+        .await;
+        phases.push(phase);
+    }
+
     // Phase 6: Normal distill — create new concepts from clusters
-    // Prefer synthesis LLM (Sonnet+) → API LLM (Haiku) → on-device
-    let compile_llm = synthesis_llm.or(api_llm).or(llm);
+    // Prefer synthesis LLM, API LLM, external/BYOK API, then on-device.
+    let compile_llm = synthesis_llm.or(api_llm).or(external_llm).or(llm);
     let knowledge_path = {
         let config = crate::config::load_config();
         Some(config.knowledge_path_or_default())
@@ -472,7 +541,35 @@ pub async fn run_periodic_steep_with_api(
     let kp_ref = knowledge_path.as_deref();
     if trigger.runs_phase(Phase::Emergence) {
         let phase = run_phase(Phase::Emergence, || async {
-            let count = distill_pages(db_ref, compile_llm, prompts, distillation, kp_ref).await?;
+            let cloud_compile_llm = [synthesis_llm, api_llm, external_llm, llm]
+                .into_iter()
+                .flatten()
+                .find(|l| matches!(l.backend(), LlmBackend::Api));
+            let on_device_llm = [synthesis_llm, api_llm, external_llm, llm]
+                .into_iter()
+                .flatten()
+                .find(|l| matches!(l.backend(), LlmBackend::OnDevice));
+            let run_coherence_gate = cloud_compile_llm.is_some();
+            let routed_llm = if cloud_compile_llm.is_some() {
+                cloud_compile_llm
+            } else if on_device_compile_preferred() {
+                on_device_llm.filter(|provider| provider.is_available())
+            } else {
+                None
+            };
+            let result = distill_pages_scoped_gated(
+                db_ref,
+                routed_llm,
+                prompts,
+                distillation,
+                kp_ref,
+                None,
+                run_coherence_gate,
+            )
+            .await?;
+            if let Err(e) = persist_compile_queue_depth(db_ref, result.pending.len()).await {
+                log::warn!("[emergence] failed to persist compile queue depth: {e}");
+            }
             // Re-resolve orphan wikilinks now that distill may have created
             // new pages. Cheap: one SELECT DISTINCT + per-label UPDATE for
             // hits; no LLM. Captures the case where page A linked to
@@ -485,6 +582,7 @@ pub async fn run_periodic_steep_with_api(
                 Ok(_) => {}
                 Err(e) => log::warn!("[emergence] orphan link resolve failed: {e}"),
             }
+            let count = result.created.len();
             let (nudge, headline) = classify_emergence(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -536,6 +634,33 @@ pub async fn run_periodic_steep_with_api(
             // Also re-distill concepts explicitly marked stale by topic-key upserts.
             let stale = re_distill_stale_pages(db_ref, compile_llm, prompts, kp_ref).await?;
             let count = changed + stale;
+            let (nudge, headline) = classify_redistill(count);
+            Ok(PhaseOutput {
+                items_processed: count,
+                nudge,
+                headline,
+            })
+        })
+        .await;
+        phases.push(phase);
+    }
+
+    if trigger.runs_phase(Phase::Overview)
+        && {
+            let elapsed = steep_start.elapsed().as_secs();
+            if elapsed >= deadline {
+                if !deadline_hit {
+                    log::warn!("[refinery] deadline exceeded ({}s >= {}s) — skipping remaining deadline-gated phases", elapsed, deadline);
+                    deadline_hit = true;
+                }
+                false
+            } else {
+                true
+            }
+        }
+    {
+        let phase = run_phase(Phase::Overview, || async {
+            let count = maybe_refresh_overview_page(db_ref, compile_llm, prompts, kp_ref).await?;
             let (nudge, headline) = classify_redistill(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -820,8 +945,12 @@ pub(crate) async fn redistill_changed_pages(
 /// upsert path in handle_store_memory.
 ///
 /// - `source_updated`: LLM re-distills using the join table's current source list.
-/// - `source_conflict`: user-edited page — escalates to `source_conflict` only,
-///   does not overwrite user content.
+///   Every stale page (human-owned or not) routes through `refresh_page`, which
+///   owns the ownership gate itself: a human-owned page (`user_edited` or
+///   `creation_kind = "authored"`) never gets its prose overwritten — the
+///   sweep stages a revision card instead (spec §5.1/§5.2) and clears
+///   staleness so the card isn't re-proposed every cycle. No-op refreshes
+///   stay stale so a later sweep can retry.
 pub(crate) async fn re_distill_stale_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
@@ -846,131 +975,41 @@ pub(crate) async fn re_distill_stale_pages(
 
     let mut recompiled = 0usize;
     for page in &stale {
-        if page.user_edited {
-            // Never auto-overwrite user edits — escalate to conflict so a human sees it.
-            db.set_page_stale(&page.id, "source_conflict").await?;
-            log::info!(
-                "[re-distill-stale] user-edited page '{}' escalated to source_conflict",
-                page.title
-            );
-            continue;
-        }
-
-        // Fetch current sources via join table (more accurate than JSON column after upserts).
-        let sources = db.get_page_sources(&page.id).await?;
-        let source_id_strings: Vec<String> =
-            sources.iter().map(|s| s.memory_source_id.clone()).collect();
-        if source_id_strings.is_empty() {
-            log::warn!(
-                "[re-distill-stale] page '{}' has no sources in join table, clearing staleness",
-                page.title
-            );
-            db.clear_page_staleness(&page.id).await?;
-            continue;
-        }
-
-        // Fetch memory contents.
-        let memories = db.get_memories_by_source_ids(&source_id_strings).await?;
-        if memories.is_empty() {
-            log::warn!(
-                "[re-distill-stale] page '{}' sources are all orphaned, clearing staleness",
-                page.title
-            );
-            db.clear_page_staleness(&page.id).await?;
-            continue;
-        }
-
-        const MEM_SNIPPET_CAP: usize = 800;
-        let numbered: Vec<crate::citations::NumberedSource> = memories
-            .iter()
-            .enumerate()
-            .map(|(i, m)| crate::citations::NumberedSource {
-                index: (i + 1) as u32,
-                source_kind: "memory".to_string(),
-                locator: m.source_id.clone(),
-                text: m.content.chars().take(MEM_SNIPPET_CAP).collect(),
-            })
-            .collect();
-        let memories_block = crate::citations::build_numbered_block(&numbered);
-
-        let user_prompt = format!("Topic: {}\n\n{}", page.title, memories_block);
-        let response = llm_ref
-            .generate(crate::llm_provider::LlmRequest {
-                system_prompt: Some(prompts.distill_page.clone()),
-                user_prompt,
-                max_tokens: llm_ref.recommended_max_output(),
-                temperature: 0.1,
-                label: Some("re-distill-stale".into()),
-                timeout_secs: None,
-            })
-            .await;
-
-        match response {
-            Ok(raw) if !raw.trim().is_empty() => {
-                let content = crate::llm_provider::strip_think_tags(&raw)
-                    .trim()
-                    .to_string();
-                if !content.is_empty() {
-                    // Verify [N] markers against the numbered sources; out-of-
-                    // range markers are stripped from the body before saving.
-                    let (content, cites, stats) =
-                        crate::citations::process_citation_output(&content, &numbered);
+        // Synthesis, citation verification, the fail-closed guard, and the
+        // atomic content+citations+changelog write all live in the ONE
+        // re-distill op (`refresh_page`); this loop just owns the staleness
+        // lifecycle. `refresh_page` reads the page's current sources (join
+        // table first) itself, so no per-site source assembly here.
+        match refresh_page(
+            db,
+            llm_ref,
+            prompts,
+            &page.id,
+            RefreshReason::SourceChanged,
+            knowledge_path,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                if outcome.wrote || outcome.gated {
+                    db.clear_page_staleness(&page.id).await?;
+                }
+                if outcome.wrote {
+                    recompiled += 1;
+                    log::info!("[re-distill-stale] refreshed page '{}'", page.title);
+                } else if outcome.gated {
                     log::info!(
-                        "[re-distill-stale] page '{}' citations: {}",
-                        page.title,
-                        stats.summary()
+                        "[re-distill-stale] '{}' human-owned; staged revision card, cleared staleness",
+                        page.title
                     );
-                    // Real CAS: require_stale=true means the write only lands
-                    // when stale_reason IS NOT NULL, so a concurrent agent-side
-                    // PUT that cleared staleness wins the race without TOCTOU.
-                    let result = crate::post_write::update_page(
-                        db,
-                        &page.id,
-                        UpdatePageRequest {
-                            content,
-                            source_memory_ids: source_id_strings.clone(),
-                        },
-                        "re_distill",
-                        true,
-                        knowledge_path,
-                        None,
-                    )
-                    .await?;
-                    if result.wrote {
-                        // `update_page` has no `citations` param until Task 6
-                        // wires the growth path, so the content write resets
-                        // the column to '[]'; persist the real citation map
-                        // computed from this same body as a follow-up write
-                        // (else the backfill sweep, IS NULL only, would never
-                        // re-visit this page).
-                        let citations_json =
-                            serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-                        if let Err(e) = db.set_page_citations(&page.id, Some(&citations_json)).await
-                        {
-                            log::warn!(
-                                "[re-distill-stale] persist citations failed for '{}': {e}; resetting to NULL so the backfill sweep re-picks it",
-                                page.title
-                            );
-                            if let Err(e2) = db.set_page_citations(&page.id, None).await {
-                                log::error!(
-                                    "[re-distill-stale] citations NULL fallback also failed for '{}': {e2}",
-                                    page.title
-                                );
-                            }
-                        }
-                        db.clear_page_staleness(&page.id).await?;
-                        recompiled += 1;
-                        log::info!("[re-distill-stale] refreshed page '{}'", page.title);
-                    } else {
-                        log::info!(
-                            "[re-distill-stale] '{}' staleness already cleared, yielding",
-                            page.title
-                        );
-                    }
+                } else {
+                    log::info!(
+                        "[re-distill-stale] '{}' yielded no write; keeping stale for retry",
+                        page.title
+                    );
                 }
             }
-            Ok(_) => log::warn!("[re-distill-stale] empty LLM output for '{}'", page.title),
-            Err(e) => log::warn!("[re-distill-stale] LLM error for '{}': {}", page.id, e),
+            Err(e) => log::warn!("[re-distill-stale] refresh error for '{}': {}", page.id, e),
         }
     }
 
@@ -978,6 +1017,32 @@ pub(crate) async fn re_distill_stale_pages(
         log::info!("[re-distill-stale] refreshed {} stale concepts", recompiled);
     }
     Ok(recompiled)
+}
+
+/// Spec §5.3: refresh the reserved, machine-owned Overview page as part of
+/// the maintenance re-distill phase — the "wiki is alive" signal. No-op
+/// (returns 0, creates nothing) when no LLM lane is available, mirroring the
+/// `redistill_changed_pages` guard above: a steep cycle with no LLM must not
+/// create the placeholder row just to leave it unrefreshed.
+async fn maybe_refresh_overview_page(
+    db: &MemoryDB,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    knowledge_path: Option<&std::path::Path>,
+) -> Result<usize, WenlanError> {
+    let llm = match llm {
+        Some(l) if l.is_available() => l,
+        _ => return Ok(0),
+    };
+    let outcome = crate::synthesis::overview::refresh_overview_page(
+        db,
+        llm,
+        prompts,
+        "refinery",
+        knowledge_path,
+    )
+    .await?;
+    Ok(if outcome.wrote { 1 } else { 0 })
 }
 
 /// Group memories by activity bursts (30-min gap → new burst).
@@ -1215,7 +1280,133 @@ pub struct SteepResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::tests::test_db;
+    use crate::db::tests::{test_db, EVICT_ENV_LOCK};
+
+    struct RecordingDistillProvider {
+        prompts: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingDistillProvider {
+        fn new() -> Self {
+            Self {
+                prompts: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn prompts(&self) -> Vec<String> {
+            self.prompts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RecordingDistillProvider {
+        async fn generate(
+            &self,
+            request: crate::llm_provider::LlmRequest,
+        ) -> Result<String, crate::llm_provider::LlmError> {
+            let prompt = request.user_prompt;
+            self.prompts.lock().unwrap().push(prompt.clone());
+            if prompt.contains("[[Related Page]]") {
+                Ok(
+                    "Refreshed page prose keeps the valid [[Related Page]] wikilink. [1]"
+                        .to_string(),
+                )
+            } else {
+                Ok("Refreshed page prose drops the valid wikilink. [1]".to_string())
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "recording-distill"
+        }
+
+        fn backend(&self) -> crate::llm_provider::LlmBackend {
+            crate::llm_provider::LlmBackend::OnDevice
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    /// Records the `(system_prompt, label)` of every `generate` call, so a
+    /// test driving the FULL `run_periodic_steep_with_api` Emergence phase
+    /// (not the `distill_pages_scoped_gated` primitive directly) can assert
+    /// whether the coherence-gate system prompt (`prompts.refine_clusters`)
+    /// was ever sent — proving the backend-based routing decision at the
+    /// Emergence call site, not just the gate parameter it forwards.
+    /// Responds compile-plausibly enough to synthesize a real page: echoes
+    /// the `distill_body`-labeled user prompt back with a trailing citation
+    /// marker (passes the hallucination/faithfulness check trivially) and
+    /// returns a short fixed title for any other (title-gen) call.
+    struct EmergenceRoutingProvider {
+        calls: std::sync::Mutex<Vec<(Option<String>, Option<String>)>>,
+        backend: crate::llm_provider::LlmBackend,
+    }
+
+    impl EmergenceRoutingProvider {
+        fn new(backend: crate::llm_provider::LlmBackend) -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                backend,
+            }
+        }
+
+        fn saw_system_prompt(&self, needle: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(sys, _)| sys.as_deref() == Some(needle))
+        }
+
+        fn saw_label(&self, needle: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, label)| label.as_deref() == Some(needle))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for EmergenceRoutingProvider {
+        async fn generate(
+            &self,
+            request: crate::llm_provider::LlmRequest,
+        ) -> Result<String, crate::llm_provider::LlmError> {
+            let label = request.label.clone();
+            self.calls
+                .lock()
+                .unwrap()
+                .push((request.system_prompt.clone(), label.clone()));
+            if label.as_deref() == Some("distill_body") {
+                Ok(format!("{} [1]", request.user_prompt))
+            } else {
+                Ok("Test Topic".to_string())
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "emergence-routing"
+        }
+
+        fn backend(&self) -> crate::llm_provider::LlmBackend {
+            self.backend
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
     use crate::sources::{RawDocument, StabilityTier};
     use crate::synthesis::distill::apply_merge_by_tier;
 
@@ -1254,6 +1445,7 @@ mod tests {
         assert!(!t.runs_phase(Phase::Promote));
         assert!(!t.runs_phase(Phase::Emergence));
         assert!(!t.runs_phase(Phase::CommunityDetection));
+        assert!(!t.runs_phase(Phase::Detect));
         assert!(!t.runs_phase(Phase::DecisionLogs));
         assert!(!t.runs_phase(Phase::PruneRejections));
         assert!(!t.runs_phase(Phase::Evict));
@@ -1263,8 +1455,10 @@ mod tests {
     fn test_trigger_kind_idle_subset() {
         let t = TriggerKind::Idle;
         assert!(t.runs_phase(Phase::CommunityDetection));
+        assert!(t.runs_phase(Phase::Detect));
         assert!(t.runs_phase(Phase::Emergence));
         assert!(t.runs_phase(Phase::ReDistill));
+        assert!(t.runs_phase(Phase::Overview));
         assert!(t.runs_phase(Phase::DecisionLogs));
         // Should NOT run burst/maintenance/backfill phases
         assert!(!t.runs_phase(Phase::Recaps));
@@ -1286,11 +1480,13 @@ mod tests {
         assert!(t.runs_phase(Phase::Reweave));
         assert!(t.runs_phase(Phase::Reembed));
         assert!(t.runs_phase(Phase::EntityExtraction));
+        assert!(t.runs_phase(Phase::Overview));
         assert!(t.runs_phase(Phase::PruneRejections));
         assert!(t.runs_phase(Phase::Evict));
         // Should NOT run synthesis or burst phases
         assert!(!t.runs_phase(Phase::Recaps));
         assert!(!t.runs_phase(Phase::Emergence));
+        assert!(!t.runs_phase(Phase::Detect));
         assert!(!t.runs_phase(Phase::ReDistill));
         assert!(!t.runs_phase(Phase::DecisionLogs));
         assert!(!t.runs_phase(Phase::CommunityDetection));
@@ -1332,6 +1528,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &PromptRegistry::default(),
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
@@ -1359,6 +1556,7 @@ mod tests {
 
         let result = run_periodic_steep_with_api(
             &db,
+            None,
             None,
             None,
             None,
@@ -1410,6 +1608,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &PromptRegistry::default(),
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
@@ -1431,6 +1630,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &PromptRegistry::default(),
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
@@ -1449,13 +1649,28 @@ mod tests {
 
     // ── T21 Eviction phase wiring (B1-B3) ────────────────────────────────────
 
+    // `WENLAN_ENABLE_EVICTION` is a process-global env var read synchronously
+    // by `crate::db::eviction_enabled()` inside the Evict phase gate.
+    // `temp_env::async_with_vars` mutates that global for the duration of a
+    // future, but does not serialize against other tests doing the same (or
+    // against tests that merely read the ambient value across an `.await`) —
+    // two such tests running concurrently can corrupt each other's view of
+    // the flag mid-run. `EVICT_ENV_LOCK` (imported above from
+    // `crate::db::tests`, where `db.rs`'s own eviction tests also take it) is
+    // the ONE process-wide lock every reader AND mutator of this flag shares
+    // — not a second, module-local lock that would not exclude the db.rs
+    // call sites. Mirrors the `PRF_ENV_LOCK` / `SALIENCE_ENV_LOCK` /
+    // `RERANK_BLEND_ENV_LOCK` / `MAGNITUDE_ENV_LOCK` precedent in `db.rs`.
+
     // B1 — with WENLAN_ENABLE_EVICTION=1, Backstop runs 'evict' as a phase.
     #[tokio::test]
     async fn test_evict_runs_as_phase_when_enabled() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             run_periodic_steep_with_api(
                 &db,
+                None,
                 None,
                 None,
                 None,
@@ -1481,10 +1696,12 @@ mod tests {
     // double-gated by trigger membership AND env flag).
     #[tokio::test]
     async fn test_evict_absent_when_flag_unset() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", None::<&str>)], async {
             run_periodic_steep_with_api(
                 &db,
+                None,
                 None,
                 None,
                 None,
@@ -1510,10 +1727,12 @@ mod tests {
     // belongs on Backstop/Daily only, like PruneRejections).
     #[tokio::test]
     async fn test_evict_not_run_on_burstend() {
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let result = temp_env::async_with_vars([("WENLAN_ENABLE_EVICTION", Some("1"))], async {
             run_periodic_steep_with_api(
                 &db,
+                None,
                 None,
                 None,
                 None,
@@ -1553,6 +1772,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &PromptRegistry::default(),
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
@@ -1567,8 +1787,10 @@ mod tests {
         // Idle subset
         let expected: &[&str] = &[
             "community_detection",
+            "detect",
             "emergence",
             "re-distill",
+            "overview",
             "decision_logs",
         ];
         for &exp in expected {
@@ -1579,6 +1801,19 @@ mod tests {
                 phase_names
             );
         }
+        let detect_pos = phase_names
+            .iter()
+            .position(|name| *name == "detect")
+            .expect("detect phase should run on Idle");
+        let emergence_pos = phase_names
+            .iter()
+            .position(|name| *name == "emergence")
+            .expect("emergence phase should run on Idle");
+        assert!(
+            detect_pos < emergence_pos,
+            "DETECT must run before compile/emergence, got {:?}",
+            phase_names
+        );
 
         // Must NOT run anything else
         for name in &phase_names {
@@ -1592,6 +1827,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_daily_trigger_runs_only_maintenance_phases() {
+        // Daily runs the Evict phase gate (`TriggerKind::Daily.runs_phase`
+        // includes `Phase::Evict`) and asserts an exact maintenance-phase
+        // set that excludes 'evict' — it depends on the ambient
+        // `WENLAN_ENABLE_EVICTION` staying unset for the test's duration, so
+        // it must hold the same lock as the B1-B3 tests that mutate it.
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
         db.upsert_documents(vec![make_memory(
@@ -1605,6 +1846,7 @@ mod tests {
 
         let result = run_periodic_steep_with_api(
             &db,
+            None,
             None,
             None,
             None,
@@ -1627,6 +1869,7 @@ mod tests {
             "reweave",
             "reembed",
             "entity_extraction",
+            "overview",
             "prune_rejections",
             "kg_rethink",
         ];
@@ -1656,6 +1899,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_backstop_trigger_runs_all_phases() {
+        // Backstop always runs the Evict phase gate and this test asserts
+        // an EXACT phase count — same ambient-`WENLAN_ENABLE_EVICTION`
+        // dependency as the Daily test above, same lock required.
+        let _serial = EVICT_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
 
         db.upsert_documents(vec![make_memory(
@@ -1672,6 +1919,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &PromptRegistry::default(),
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
@@ -1683,7 +1931,7 @@ mod tests {
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
-        // All 13 phases must run with Backstop. `kg_rethink` is
+        // All phases must run with Backstop. `kg_rethink` is
         // rate-limited, so on a fresh DB (last_kg_rethink_ts=0) it runs
         // on the first steep.
         let expected: &[&str] = &[
@@ -1694,8 +1942,10 @@ mod tests {
             "reembed",
             "entity_extraction",
             "community_detection",
+            "detect",
             "emergence",
             "re-distill",
+            "overview",
             "refinement_queue",
             "decision_logs",
             "prune_rejections",
@@ -2012,6 +2262,462 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_lane_compile_leaves_pending_and_persists_queue_depth() {
+        let (db, _dir) = test_db().await;
+
+        // A well-formed, eligible cluster (3+ memories, shared space).
+        for (i, content) in [
+            "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store.",
+            "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code.",
+            "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("nolane_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        // No cloud, no agent-lane consumer yet, and the on-device engine is
+        // configured but unhealthy (is_available() == false) — the "no lane"
+        // case per spec §3.1/§7: clusters must WAIT as pending, nothing
+        // half-written.
+        let unhealthy: Arc<dyn LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::unavailable());
+        let result = distill_pages_scoped(
+            &db,
+            Some(&unhealthy),
+            &PromptRegistry::default(),
+            &crate::tuning::DistillationConfig::default(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.created.is_empty(),
+            "no-lane compile must not write a partial page"
+        );
+        assert!(
+            !result.pending.is_empty(),
+            "fixture cluster should be queued as pending, not silently dropped"
+        );
+
+        persist_compile_queue_depth(&db, result.pending.len())
+            .await
+            .unwrap();
+        let depth = compile_queue_depth(&db).await.unwrap();
+        assert_eq!(
+            depth,
+            result.pending.len(),
+            "/api/status must be able to read back the persisted compile queue depth"
+        );
+    }
+
+    static COMPILE_ROUTING_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn emergence_tick_without_cloud_defers_healthy_ondevice_engine_to_agent_lane_by_default()
+    {
+        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+
+        let db_topic: Vec<(&str, &str)> = vec![
+            ("topic_db", "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store."),
+            ("topic_db", "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code."),
+            ("topic_db", "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query."),
+            ("topic_bread", "A sourdough levain needs to be fed with equal parts flour and water twice a day to stay active enough to leaven a loaf, and it should roughly double in volume within four to six hours after each feeding."),
+            ("topic_bread", "Increasing the hydration of a bread dough to around eighty percent produces a much more open, irregular crumb structure once it is baked, though it also makes the dough considerably harder to shape by hand."),
+            ("topic_bread", "Kneading a wheat dough develops long gluten strands that trap the carbon dioxide bubbles produced by yeast fermentation, which is what allows the loaf to rise instead of collapsing in the oven."),
+        ];
+        for (i, (space, content)) in db_topic.iter().enumerate() {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("emergence_gate_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some(space.to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let provider = Arc::new(EmergenceRoutingProvider::new(LlmBackend::OnDevice));
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let result = run_periodic_steep_with_api(
+            &db,
+            None,
+            None,
+            Some(&llm),
+            None,
+            &prompts,
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::ConfidenceConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            TriggerKind::Idle,
+        )
+        .await
+        .unwrap();
+
+        let emergence = result
+            .phases
+            .iter()
+            .find(|p| p.name == "emergence")
+            .expect("Idle trigger must run the emergence phase");
+        assert!(
+            emergence.error.is_none(),
+            "emergence phase must not error: {:?}",
+            emergence.error
+        );
+        assert!(
+            !provider.saw_label("distill_body"),
+            "without cloud, default routing must leave eligible clusters pending for the agent lane instead of invoking the healthy on-device provider"
+        );
+        // The eligible cluster must NOT have grown a page: check the cluster
+        // page by title, not total active-page count. The ReDistill phase's
+        // reserved "Overview" page (`ensure_overview_page`) is always minted
+        // when an LLM is available, so a raw count is never 0 and would test
+        // the wrong thing. Mirrors the sibling default-routing test, which
+        // asserts the same "Test Topic" cluster page IS present.
+        let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
+        assert!(
+            cluster_page.is_none(),
+            "default routing must not synthesize the cluster page via the healthy on-device engine"
+        );
+        let queue_depth_after = compile_queue_depth(&db).await.unwrap();
+        assert!(
+            queue_depth_after > 0,
+            "default routing must persist queued clusters for /distill, got queue depth {queue_depth_after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn emergence_tick_with_on_device_preference_uses_healthy_ondevice_engine() {
+        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+
+        for (i, content) in [
+            "The wenlan daemon persists document chunks in a libSQL table using an F32_BLOB column for the 768-dimension embedding vector, with DiskANN indexing enabling fast approximate nearest-neighbor search across the whole memory store.",
+            "libSQL's FTS5 virtual table stays synchronized with the chunks table through SQL triggers, so every insert or update to a chunk automatically refreshes its full-text search index without extra application code.",
+            "Hybrid retrieval combines the vector similarity score and the FTS5 rank using reciprocal rank fusion, blending semantic and lexical signals into one ranked result list for each search query.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("ondevice_default_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        let provider = Arc::new(EmergenceRoutingProvider::new(LlmBackend::OnDevice));
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let result = temp_env::async_with_vars(
+            [("WENLAN_PREFER_ON_DEVICE_COMPILE", Some("1"))],
+            run_periodic_steep_with_api(
+                &db,
+                None,
+                None,
+                Some(&llm),
+                None,
+                &prompts,
+                &crate::tuning::RefineryConfig::default(),
+                &crate::tuning::ConfidenceConfig::default(),
+                &crate::tuning::DistillationConfig::default(),
+                TriggerKind::Idle,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let emergence = result
+            .phases
+            .iter()
+            .find(|p| p.name == "emergence")
+            .expect("Idle trigger must run the emergence phase");
+        assert!(
+            emergence.error.is_none(),
+            "emergence phase must not error: {:?}",
+            emergence.error
+        );
+        assert!(
+            !provider.saw_system_prompt(&prompts.refine_clusters),
+            "an opted-in healthy on-device compile must skip the LLM coherence gate"
+        );
+        assert!(
+            provider.saw_label("distill_body"),
+            "without a cloud provider, opted-in on-device routing must invoke the healthy on-device provider \
+             to compile eligible clusters"
+        );
+        let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
+        assert!(
+            cluster_page.is_some(),
+            "opted-in on-device routing must synthesize a page from the eligible cluster \
+             via the healthy on-device engine"
+        );
+        let queue_depth_after = compile_queue_depth(&db).await.unwrap();
+        assert_eq!(
+            queue_depth_after, 0,
+            "opted-in on-device routing must resolve eligible clusters through the healthy on-device engine, \
+             got queue depth {queue_depth_after}"
+        );
+    }
+
+    /// Companion to the OnDevice case above: drives the SAME Emergence call
+    /// site with no available lane (configured on-device engine that is
+    /// unhealthy) and asserts the queue-depth persist call at the end of the
+    /// Emergence phase actually ran. Dropping `persist_compile_queue_depth`
+    /// from the Emergence phase would leave `compile_queue_depth` at its
+    /// default-0 read and make this test fail.
+    #[tokio::test]
+    async fn emergence_tick_with_unhealthy_engine_persists_pending_queue_depth() {
+        let (db, _dir) = test_db().await;
+
+        // A well-formed, eligible cluster (3+ memories, shared space).
+        for (i, content) in [
+            "libSQL stores vectors using F32_BLOB columns",
+            "libSQL uses DiskANN for vector indexing",
+            "libSQL supports FTS5 full-text search via triggers",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let doc = crate::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("emergence_nolane_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            };
+            db.upsert_documents(vec![doc]).await.unwrap();
+        }
+
+        assert_eq!(
+            compile_queue_depth(&db).await.unwrap(),
+            0,
+            "queue depth should read back 0 before any compile tick has run"
+        );
+
+        let unhealthy: Arc<dyn LlmProvider> =
+            Arc::new(crate::llm_provider::MockProvider::unavailable());
+        let prompts = PromptRegistry::default();
+
+        let result = run_periodic_steep_with_api(
+            &db,
+            None,
+            None,
+            Some(&unhealthy),
+            None,
+            &prompts,
+            &crate::tuning::RefineryConfig::default(),
+            &crate::tuning::ConfidenceConfig::default(),
+            &crate::tuning::DistillationConfig::default(),
+            TriggerKind::Idle,
+        )
+        .await
+        .unwrap();
+
+        let emergence = result
+            .phases
+            .iter()
+            .find(|p| p.name == "emergence")
+            .expect("Idle trigger must run the emergence phase");
+        assert!(
+            emergence.error.is_none(),
+            "emergence phase must not error: {:?}",
+            emergence.error
+        );
+
+        let depth = compile_queue_depth(&db).await.unwrap();
+        assert!(
+            depth > 0,
+            "a full Emergence tick with no available lane must persist a non-zero compile queue depth, got {depth}"
+        );
+    }
+
+    /// Spec §5.3: the reserved Overview page is a "wiki is alive" signal that
+    /// must actually fire in production, not just in `synthesis::overview`'s
+    /// own unit tests. Drives the real maintenance entrypoint
+    /// (`run_periodic_steep_with_api`, the function the daemon scheduler
+    /// calls) with a trigger that runs `Phase::Overview` and an available
+    /// LLM, and asserts the reserved "Overview" page exists afterward.
+    #[tokio::test]
+    async fn test_overview_phase_refreshes_reserved_overview_page() {
+        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
+        let knowledge_path = knowledge_dir.path().to_path_buf();
+
+        // A pre-existing page for the Overview to summarize — mirrors
+        // `synthesis::overview`'s own fixture helper.
+        let mem_content = "Rust is a systems programming language with memory safety guarantees";
+        db.upsert_documents(vec![make_memory(
+            "overview_wiring_rust",
+            mem_content,
+            "fact",
+            "engineering",
+        )])
+        .await
+        .unwrap();
+        let req = wenlan_types::requests::CreateConceptRequest {
+            title: "Rust".to_string(),
+            content: mem_content.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec!["overview_wiring_rust".to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        crate::post_write::create_page(&db, req, "test", None)
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(crate::llm_provider::MockProvider::new(&format!(
+            "{mem_content}.[1]"
+        )));
+
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    knowledge_path: Some(knowledge_path),
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    Some(&llm),
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    TriggerKind::Idle,
+                )
+                .await
+            })
+            .await
+            .unwrap();
+
+        let overview = result
+            .phases
+            .iter()
+            .find(|p| p.name == "overview")
+            .expect("Idle trigger must run the overview phase");
+        assert!(
+            overview.error.is_none(),
+            "overview phase must not error: {:?}",
+            overview.error
+        );
+
+        let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
+        assert!(
+            overview_id.is_some(),
+            "the overview phase must create/refresh the reserved Overview page \
+             (spec §5.3) — this is the 'wiki is alive' signal and must fire from the real \
+             steep cycle, not just from synthesis::overview's own unit tests"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daily_maintenance_refreshes_reserved_overview_page() {
+        let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
+        let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let knowledge_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
+        let knowledge_path = knowledge_dir.path().to_path_buf();
+
+        let mem_content = "Rust ownership lets the compiler enforce aliasing and mutation rules";
+        db.upsert_documents(vec![make_memory(
+            "overview_daily_rust",
+            mem_content,
+            "fact",
+            "engineering",
+        )])
+        .await
+        .unwrap();
+        let req = wenlan_types::requests::CreateConceptRequest {
+            title: "Rust Ownership".to_string(),
+            content: mem_content.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec!["overview_daily_rust".to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        crate::post_write::create_page(&db, req, "test", None)
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(crate::llm_provider::MockProvider::new(&format!(
+            "{mem_content}.[1]"
+        )));
+
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    knowledge_path: Some(knowledge_path),
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    Some(&llm),
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    TriggerKind::Daily,
+                )
+                .await
+            })
+            .await
+            .unwrap();
+
+        let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            phase_names.contains(&"overview"),
+            "Daily maintenance must run the reserved Overview refresh phase, got {:?}",
+            phase_names
+        );
+
+        let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
+        assert!(
+            overview_id.is_some(),
+            "the Daily maintenance pass must create/refresh the reserved Overview page \
+             (spec §5.3) through the real steep cycle"
+        );
+    }
+
+    #[tokio::test]
     async fn test_distill_concepts_creates_concept() {
         let (db, _dir) = test_db().await;
 
@@ -2317,6 +3023,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &PromptRegistry::default(),
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
@@ -2536,12 +3243,14 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
 
-        // Seed memory row so get_memories_by_source_ids returns it.
+        // Seed memory row so the re-distill can read a source. Content shares
+        // tokens with the mock body ("refreshed body") so the fail-closed
+        // faithfulness gate passes.
         {
             let conn = db.conn.lock().await;
             conn.execute(
                 "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
-                 VALUES (?1, ?1, ?1, 'seed content', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                 VALUES (?1, ?1, ?1, 'refreshed body reference material', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
                 libsql::params!["mem_seed".to_string(), now_ts],
             )
             .await
@@ -2564,7 +3273,10 @@ mod tests {
             .await
             .unwrap();
 
-        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new("refreshed body"));
+        // The single `refresh_page` op now owns the citation fail-closed gate;
+        // a write-path fixture must include a verifiable source marker.
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("refreshed body reference material [1]"));
         let prompts = PromptRegistry::default();
 
         let recompiled =
@@ -2585,6 +3297,316 @@ mod tests {
             content.contains("refreshed body"),
             "md body should reflect LLM output, got: {}",
             content
+        );
+    }
+
+    /// Spec §5.1/§5.2/§6.3: a human-owned page must always get a revision
+    /// card, never an in-place write, for EVERY machine write path -- the
+    /// daemon staleness sweep included. Pins the gate at the sweep's own
+    /// boundary so a future edit to the sweep can't silently reintroduce a
+    /// bypass around `refresh_page`'s ownership check.
+    #[tokio::test]
+    async fn re_distill_stale_pages_user_edited_stages_revision_card_not_source_conflict() {
+        use crate::llm_provider::MockProvider;
+
+        let (db, _db_dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed source memory so refresh_page has content to synthesize from.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'refreshed body reference material', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_owned".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_owned",
+            "Owned Topic",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_owned"],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Human edits the page (sets user_edited=1); the source changes again
+        // afterward, marking it stale -- exactly the scenario the sweep exists
+        // to handle.
+        db.update_page_content("page_owned", "human-edited body", &["mem_owned"], "fs_edit")
+            .await
+            .unwrap();
+        db.set_page_stale("page_owned", "source_updated")
+            .await
+            .unwrap();
+
+        let before = db.get_page("page_owned").await.unwrap().unwrap();
+        assert!(before.user_edited, "precondition: page is human-owned");
+
+        // The ownership gate lives after `refresh_page`'s citation verifier, so
+        // the fixture must first pass citation verification to reach the gate.
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("refreshed body reference material [1]"));
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(recompiled, 0, "a gated write must not count as a recompile");
+
+        let after = db.get_page("page_owned").await.unwrap().unwrap();
+        assert_eq!(
+            after.content, before.content,
+            "the staleness sweep must never overwrite human-owned page prose"
+        );
+        assert_eq!(
+            after.stale_reason, None,
+            "the sweep must clear staleness via the ownership gate outcome, not escalate \
+             to a dead-end 'source_conflict' state that no human-facing surface reads"
+        );
+
+        let revisions = db.list_pending_revisions(10).await.unwrap();
+        assert_eq!(
+            revisions.len(),
+            1,
+            "the staleness sweep must stage a revision card for a human-owned page \
+             instead of silently escalating to source_conflict"
+        );
+        assert_eq!(revisions[0].target_source_id, "page_owned");
+    }
+
+    #[tokio::test]
+    async fn re_distill_stale_pages_preserves_staleness_when_refresh_noops() {
+        use crate::llm_provider::MockProvider;
+
+        let (db, _db_dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'retryable source material', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_retry".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_retry",
+            "Retry Topic",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_retry"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_retry", "source_updated")
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(""));
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            recompiled, 0,
+            "empty refresh output must not count as a write"
+        );
+
+        let after = db.get_page("page_retry").await.unwrap().unwrap();
+        assert_eq!(
+            after.stale_reason.as_deref(),
+            Some("source_updated"),
+            "a no-op refresh should stay stale so the next sweep can retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn re_distill_stale_pages_prompt_includes_same_space_existing_titles_hint() {
+        let (db, _db_dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'The target topic should retain the valid wikilink to Related Page when refreshed.', 0, 'text', 'fact', 'work', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_target".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_related",
+            "Related Page",
+            None,
+            "A work-space page that should be offered as a real wikilink target.",
+            None,
+            Some("work"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_private",
+            "Private Page",
+            None,
+            "A personal-space page that must not be offered in a work refresh prompt.",
+            None,
+            Some("personal"),
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_target",
+            "Target Page",
+            None,
+            "Original body links to [[Related Page]].",
+            None,
+            Some("work"),
+            &["mem_target"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_target", "source_updated")
+            .await
+            .unwrap();
+
+        let provider = Arc::new(RecordingDistillProvider::new());
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(recompiled, 1, "stale page should be re-distilled");
+
+        let seen = provider.prompts();
+        let user_prompt = seen
+            .first()
+            .expect("stale re-distill must send one compile prompt");
+        assert!(
+            user_prompt.starts_with("Existing pages you may reference with exact-match wikilinks:"),
+            "PageWrite refresh prompt must start with existing-title hint, got:\n{user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("[[Related Page]]"),
+            "same-space existing title must be offered as a valid wikilink target, got:\n{user_prompt}"
+        );
+        assert!(
+            !user_prompt.contains("[[Private Page]]"),
+            "cross-space existing title must not be offered in a work refresh prompt, got:\n{user_prompt}"
+        );
+
+        let page = db.get_page("page_target").await.unwrap().unwrap();
+        assert!(
+            page.content.contains("[[Related Page]]"),
+            "refresh should retain already-valid wikilinks when the prompt exposes the real title, got:\n{}",
+            page.content
+        );
+    }
+
+    /// Atomicity (spec §5.1): re-distill must write the page body and its
+    /// per-claim citation map in ONE transaction. The pre-fix site did a
+    /// non-atomic two-step — `update_page(.., citations=None)` (content bump,
+    /// citations reset to '[]') followed by a SEPARATE `set_page_citations`
+    /// call — so a crash between the two commits leaves the page with updated
+    /// content but un-updated ('[]') citations.
+    ///
+    /// The observable proof of atomicity: only
+    /// `try_update_page_content_with_changelog` stamps `citations_summary` into
+    /// the changelog entry, and it does so in the SAME transaction that writes
+    /// the content + citations. The two-step leaves the content-bump changelog
+    /// entry WITHOUT a `citations_summary` (set_page_citations touches only the
+    /// citations column, no changelog). Asserting the summary is present proves
+    /// citations rode the atomic content write, not a second commit.
+    #[tokio::test]
+    async fn re_distill_persists_citations_atomically_with_content() {
+        use crate::llm_provider::MockProvider;
+
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Seed the cited memory. The re-distilled body echoes its content so the
+        // [1] marker verifies and yields a non-empty citation map.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'Tokio is an async runtime for Rust', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_seed".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_stale",
+            "Tokio",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_stale", "source_updated")
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("Tokio is an async runtime for Rust [1]"));
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(recompiled, 1, "stale page should be re-distilled");
+
+        let page = db.get_page("page_stale").await.unwrap().unwrap();
+        assert!(
+            page.content.contains("Tokio is an async runtime"),
+            "content should reflect the re-distilled body, got: {}",
+            page.content
+        );
+        assert!(
+            !page.citations.is_empty(),
+            "re-distill must persist the per-claim citation map, not leave it empty"
+        );
+
+        let changelog_raw = db.get_page_changelog("page_stale").await.unwrap();
+        let changelog: Vec<serde_json::Value> = serde_json::from_str(&changelog_raw).unwrap();
+        let latest = changelog
+            .last()
+            .expect("re-distill content write must append a changelog entry");
+        assert!(
+            latest.get("citations_summary").is_some(),
+            "content+citations must commit atomically: the re-distill changelog entry must carry citations_summary (the two-step leaves it absent); changelog={changelog_raw}"
         );
     }
 }

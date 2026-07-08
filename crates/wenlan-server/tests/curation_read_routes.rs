@@ -229,3 +229,37 @@ async fn orphan_links_returns_typed_envelope() {
         "count must be the number of distinct source pages"
     );
 }
+
+#[tokio::test]
+async fn get_page_exposes_pending_rebuild_for_stale_survivor_without_lane() {
+    let (app, _tmp, db) = test_app().await;
+    let page_id = common::create_page_fixture(
+        &db,
+        "Pending rebuild",
+        "Evidence has already moved, prose has not.",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    db.set_page_stale(&page_id, "source_updated").await.unwrap();
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/pages/{page_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = body_as_json(resp).await;
+    let page = &body["page"];
+    assert_eq!(page["stale_reason"], "source_updated");
+    assert_eq!(
+        page["pending_rebuild"], "evidence updated, prose rebuild pending",
+        "GET page must expose the merged-but-unrebuilt state even before a compile lane runs"
+    );
+}

@@ -48,6 +48,9 @@ pub enum WenlanError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Not found: {0}")]
     NotFound(String),
 

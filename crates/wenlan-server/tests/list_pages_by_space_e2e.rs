@@ -1,10 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//! E2E: GET /api/pages?space=alpha filters pages by space.
-//!
-//! Inserts one page tagged `space=alpha` and one tagged `space=beta` directly
-//! via `MemoryDB::insert_page`, then queries the list endpoint with
-//! `?space=alpha` and asserts only the alpha page is returned.
-
 mod common;
 
 use axum::body::Body;
@@ -46,7 +40,6 @@ async fn list_pages(router: &axum::Router, space: Option<&str>) -> ListPagesResp
 async fn list_pages_filters_by_space() {
     let (router, _tmp, db) = common::test_app().await;
 
-    let now = chrono::Utc::now().to_rfc3339();
     db.create_space("alpha", None, false)
         .await
         .expect("alpha space must be registered");
@@ -54,32 +47,25 @@ async fn list_pages_filters_by_space() {
         .await
         .expect("beta space must be registered");
 
-    // Insert two pages — one per space.
-    db.insert_page(
-        "page_alpha_001",
+    common::create_page_fixture(
+        &db,
         "Alpha Page Title",
-        None,
         "Content about alpha space topics.",
-        None,
         Some("alpha"),
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("insert alpha page must succeed");
+    .await;
 
-    db.insert_page(
-        "page_beta_001",
+    common::create_page_fixture(
+        &db,
         "Beta Page Title",
-        None,
         "Content about beta space topics.",
-        None,
         Some("beta"),
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("insert beta page must succeed");
+    .await;
 
     // Query with space=alpha — only the alpha page must come back.
     let response = list_pages(&router, Some("alpha")).await;
@@ -114,19 +100,15 @@ async fn list_pages_filters_by_space() {
 async fn list_pages_unregistered_query_space_falls_back_to_unscoped() {
     let (router, _tmp, db) = common::test_app().await;
 
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_unscoped_fallback",
+    common::create_page_fixture(
+        &db,
         "Unscoped Fallback Page",
-        None,
         "Content that should remain visible when an unregistered page space is ignored.",
         None,
-        None,
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("insert unscoped page must succeed");
+    .await;
 
     let response = list_pages(&router, Some("ghost-pages-space")).await;
     let titles: Vec<&str> = response.pages.iter().map(|p| p.title.as_str()).collect();
@@ -145,19 +127,15 @@ async fn list_pages_unregistered_query_space_falls_back_to_unscoped() {
 async fn list_pages_empty_query_space_falls_back_to_unscoped() {
     let (router, _tmp, db) = common::test_app().await;
 
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "page_empty_space_fallback",
+    common::create_page_fixture(
+        &db,
         "Empty Space Fallback Page",
-        None,
         "Content that should remain visible when the page space query is empty.",
         None,
-        None,
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("insert unscoped page must succeed");
+    .await;
 
     let response = list_pages(&router, Some("")).await;
     let titles: Vec<&str> = response.pages.iter().map(|p| p.title.as_str()).collect();

@@ -38,6 +38,7 @@ pub mod kg;
 pub mod kg_quality;
 pub mod llm_classifier;
 pub mod llm_provider;
+pub mod maintenance;
 pub mod memory_schema;
 pub mod migrate_rename;
 pub mod migrations;

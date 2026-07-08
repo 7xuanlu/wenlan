@@ -91,18 +91,36 @@ fn queue_status_wire(
 pub async fn handle_status(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<wenlan_types::responses::StatusResponse>, ServerError> {
-    let s = state.read().await;
+    let (db, reranker_status, reranker_light_status, reranker_mode) = {
+        let s = state.read().await;
+        (
+            s.db.clone(),
+            s.reranker_status.clone(),
+            s.reranker_light_status.clone(),
+            s.reranker_mode.clone(),
+        )
+    };
 
-    let (files_indexed, queue) = if let Some(db) = &s.db {
+    let (files_indexed, queue, compile_queue) = if let Some(db) = &db {
         let files_indexed = db.count().await.unwrap_or(0);
         let queue = db
             .document_enrichment_queue_status()
             .await
             .map(queue_status_wire)
             .unwrap_or_default();
-        (files_indexed, queue)
+        let compile_queue = match wenlan_core::refinery::compile_queue_depth(db).await {
+            Ok(0) | Err(_) => wenlan_types::responses::QueueStatus::Idle,
+            Ok(pending) => wenlan_types::responses::QueueStatus::Active {
+                pending: pending as u64,
+            },
+        };
+        (files_indexed, queue, compile_queue)
     } else {
-        (0, wenlan_types::responses::QueueStatus::Idle)
+        (
+            0,
+            wenlan_types::responses::QueueStatus::Idle,
+            wenlan_types::responses::QueueStatus::Idle,
+        )
     };
 
     Ok(Json(wenlan_types::responses::StatusResponse {
@@ -111,9 +129,10 @@ pub async fn handle_status(
         files_total: 0,
         sources_connected: vec![],
         queue,
-        reranker: s.reranker_status.clone(),
-        reranker_light: s.reranker_light_status.clone(),
-        reranker_mode: s.reranker_mode.clone(),
+        compile_queue,
+        reranker: reranker_status,
+        reranker_light: reranker_light_status,
+        reranker_mode,
     }))
 }
 
@@ -688,26 +707,41 @@ pub async fn handle_pipeline_status(
 pub async fn handle_steep(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> Result<Json<SteepResponse>, ServerError> {
-    let s = state.read().await;
-    let db =
-        s.db.as_ref()
-            .ok_or(ServerError::Internal("DB not initialized".into()))?;
-    let llm = s.llm.as_ref();
-    let api_llm = s.api_llm.as_ref();
-    let synthesis_llm = s.synthesis_llm.as_ref();
-    let prompts = &s.prompts;
-    let tuning = &s.tuning.refinery;
-    let confidence_cfg = &s.tuning.confidence;
-    let distillation_cfg = &s.tuning.distillation;
-    let result = wenlan_core::refinery::run_periodic_steep_with_api(
+    let (
         db,
         llm,
         api_llm,
         synthesis_llm,
+        external_llm,
         prompts,
         tuning,
         confidence_cfg,
         distillation_cfg,
+    ) = {
+        let s = state.read().await;
+        (
+            s.db.clone()
+                .ok_or(ServerError::Internal("DB not initialized".into()))?,
+            s.llm.clone(),
+            s.api_llm.clone(),
+            s.synthesis_llm.clone(),
+            s.external_llm.clone(),
+            s.prompts.clone(),
+            s.tuning.refinery.clone(),
+            s.tuning.confidence.clone(),
+            s.tuning.distillation.clone(),
+        )
+    };
+    let result = wenlan_core::refinery::run_periodic_steep_with_api(
+        &db,
+        llm.as_ref(),
+        api_llm.as_ref(),
+        synthesis_llm.as_ref(),
+        external_llm.as_ref(),
+        &prompts,
+        &tuning,
+        &confidence_cfg,
+        &distillation_cfg,
         wenlan_core::refinery::TriggerKind::Backstop,
     )
     .await
@@ -753,6 +787,11 @@ pub struct DistillRequest {
     /// Requires daemon LLM.
     #[serde(default)]
     pub force: bool,
+
+    /// Read-only pre-flight gate run before trusting the formation path and
+    /// again before the retro sweep; returns the fixed threshold stats grid.
+    #[serde(default)]
+    pub sweep: bool,
 }
 
 /// POST /api/distill
@@ -765,6 +804,24 @@ pub async fn handle_distill(
     } else {
         serde_json::from_slice(&body).map_err(|e| ServerError::ValidationError(e.to_string()))?
     };
+
+    if req.sweep {
+        if req.target.is_some() || req.force {
+            return Ok(Json(serde_json::json!({
+                "sweep": true,
+                "hint": "sweep=true cannot be combined with target or force; omit both to run the read-only formation-threshold grid",
+            })));
+        }
+        let (db, tuning) = {
+            let s = state.read().await;
+            (s.db.clone(), s.tuning.distillation.clone())
+        };
+        let db = db.ok_or(ServerError::Internal("DB not initialized".into()))?;
+        let report = wenlan_core::refinery::formation_sweep(&db, &tuning).await?;
+        let payload = serde_json::to_value(report)
+            .map_err(|e| ServerError::Internal(format!("formation sweep serialize: {e}")))?;
+        return Ok(Json(payload));
+    }
 
     // `/api/distill` always returns clusters as `pending` — the route is
     // user-triggered, so synthesis belongs to whoever called it (the agent
@@ -1163,11 +1220,56 @@ pub async fn handle_shutdown() -> &'static str {
 mod recent_endpoints_tests {
     use axum::body::Body;
     use axum::http::Request;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 
     use crate::state::ServerState;
+
+    struct ExternalCompileProvider {
+        state: Arc<RwLock<ServerState>>,
+        distill_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ExternalCompileProvider {
+        async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+            if request.label.as_deref() == Some("distill_body") {
+                self.distill_calls.fetch_add(1, Ordering::SeqCst);
+                let guard =
+                    tokio::time::timeout(std::time::Duration::from_millis(200), self.state.write())
+                        .await
+                        .map_err(|_| {
+                            LlmError::InferenceFailed(
+                                "/api/steep held ServerState read lock across compile await"
+                                    .to_string(),
+                            )
+                        })?;
+                drop(guard);
+                Ok(format!("{} [1]", request.user_prompt))
+            } else {
+                Ok("External Compile Topic".to_string())
+            }
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "external-compile-test"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
 
     #[tokio::test]
     async fn get_recent_retrievals_without_db_returns_503() {
@@ -1250,6 +1352,70 @@ mod recent_endpoints_tests {
     }
 
     #[tokio::test]
+    async fn steep_routes_external_provider_without_holding_state_lock_across_compile() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+                .await
+                .expect("MemoryDB::new"),
+        );
+
+        for (i, content) in [
+            "libSQL stores vector embeddings in F32_BLOB columns for each memory chunk, giving the Wenlan daemon a local semantic index over durable agent notes.",
+            "DiskANN indexes the libSQL embedding column so Wenlan can perform approximate nearest-neighbor lookup without shipping private memory data to a hosted service.",
+            "FTS5 triggers keep a lexical index synchronized with the chunks table, letting Wenlan combine full-text matches with vector similarity through reciprocal rank fusion.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            db.upsert_documents(vec![wenlan_core::sources::RawDocument {
+                source: "memory".to_string(),
+                source_id: format!("external_route_{}", i),
+                title: content.to_string(),
+                content: content.to_string(),
+                space: Some("architecture".to_string()),
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        }
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        let provider = Arc::new(ExternalCompileProvider {
+            state: state.clone(),
+            distill_calls: AtomicUsize::new(0),
+        });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(provider.clone());
+        }
+
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/steep")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+
+        assert!(
+            provider.distill_calls.load(Ordering::SeqCst) > 0,
+            "/api/steep must route configured external/API-compatible LLMs into the compile lane"
+        );
+        let pages_after = db.count_active_pages().await.unwrap();
+        assert!(
+            pages_after > 0,
+            "external compile lane must synthesize a page, got {pages_after}"
+        );
+    }
+
+    #[tokio::test]
     async fn status_reports_reranker_disabled_by_default() {
         let state = Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
@@ -1301,6 +1467,86 @@ mod recent_endpoints_tests {
         let parsed: wenlan_types::responses::StatusResponse =
             serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.queue, wenlan_types::responses::QueueStatus::Idle);
+    }
+
+    #[test]
+    fn status_handler_snapshots_state_before_awaiting_db() {
+        let source = include_str!("routes.rs");
+        let start = source
+            .find("pub async fn handle_status")
+            .expect("handle_status should exist");
+        let end = source[start..]
+            .find("/// POST /api/search")
+            .map(|offset| start + offset)
+            .expect("handle_search marker should follow handle_status");
+        let body = &source[start..end];
+
+        assert!(
+            body.contains("let (db, reranker_status, reranker_light_status, reranker_mode) = {"),
+            "handle_status must snapshot cloned state out of ServerState before awaiting DB work"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_reports_compile_queue_idle_by_default() {
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let raw = std::str::from_utf8(&bytes).unwrap();
+        assert!(
+            raw.contains("\"compile_queue\""),
+            "status JSON must include a compile_queue field, got: {raw}"
+        );
+        let parsed: wenlan_types::responses::StatusResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            parsed.compile_queue,
+            wenlan_types::responses::QueueStatus::Idle
+        );
+    }
+
+    #[tokio::test]
+    async fn status_reports_compile_queue_depth_when_clusters_are_pending() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+            .await
+            .expect("MemoryDB::new");
+        wenlan_core::refinery::persist_compile_queue_depth(&db, 3)
+            .await
+            .unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(Arc::new(db)),
+            ..Default::default()
+        }));
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: wenlan_types::responses::StatusResponse =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            parsed.compile_queue,
+            wenlan_types::responses::QueueStatus::Active { pending: 3 }
+        );
     }
 }
 
@@ -1366,6 +1612,14 @@ mod distill_request_tests {
     }
 
     #[test]
+    fn distill_request_deserializes_sweep() {
+        let r: DistillRequest = serde_json::from_str(r#"{"sweep":true}"#).unwrap();
+        assert!(r.sweep);
+        assert!(r.target.is_none());
+        assert!(!r.force);
+    }
+
+    #[test]
     fn distill_request_rejects_unknown_field() {
         let r = serde_json::from_str::<DistillRequest>(r#"{"bogus":true}"#);
         assert!(r.is_err(), "deny_unknown_fields should reject unknown keys");
@@ -1373,7 +1627,7 @@ mod distill_request_tests {
 }
 
 #[cfg(test)]
-mod redistill_contract_tests {
+mod distill_sweep_route_tests {
     use axum::body::Body;
     use axum::http::Request;
     use std::sync::Arc;
@@ -1382,9 +1636,7 @@ mod redistill_contract_tests {
 
     use crate::state::ServerState;
 
-    async fn seeded_user_edited_page(
-        page_id: &str,
-    ) -> (
+    async fn seeded_sweep_app() -> (
         axum::Router,
         Arc<wenlan_core::db::MemoryDB>,
         tempfile::TempDir,
@@ -1397,28 +1649,29 @@ mod redistill_contract_tests {
                 .await
                 .expect("MemoryDB::new"),
         );
-        let now = chrono::Utc::now().to_rfc3339();
-        db.insert_page(
-            page_id,
-            "Manual page",
-            None,
-            "original body",
-            None,
-            None,
-            &["mem_1"],
-            &now,
-        )
-        .await
-        .expect("insert page");
-        db.update_page_content(page_id, "user prose", &["mem_1"], "fs_edit")
-            .await
-            .expect("mark page user edited");
-        let page = db
-            .get_page(page_id)
-            .await
-            .expect("get page")
-            .expect("page exists");
-        assert!(page.user_edited, "precondition: page is user edited");
+        let topic = "formation sweep route reports scoped cluster stats";
+        let mut rows = Vec::new();
+        for (prefix, space) in [
+            ("route_work", Some("work")),
+            ("route_personal", Some("personal")),
+            ("route_none", None),
+        ] {
+            for i in 0..3 {
+                rows.push(wenlan_core::sources::RawDocument {
+                    source: "memory".to_string(),
+                    source_id: format!("{prefix}_{i}"),
+                    title: format!("{prefix}_{i}"),
+                    content: topic.to_string(),
+                    last_modified: chrono::Utc::now().timestamp(),
+                    memory_type: Some("fact".to_string()),
+                    space: space.map(str::to_string),
+                    source_agent: Some("test".to_string()),
+                    confirmed: Some(true),
+                    ..Default::default()
+                });
+            }
+        }
+        db.upsert_documents(rows).await.expect("seed sweep fixture");
 
         let state = Arc::new(RwLock::new(ServerState {
             db: Some(db.clone()),
@@ -1428,14 +1681,178 @@ mod redistill_contract_tests {
     }
 
     #[tokio::test]
-    async fn page_redistill_without_llm_does_not_clear_user_edited() {
-        let (app, db, _tmp) = seeded_user_edited_page("page_direct").await;
+    async fn distill_sweep_returns_stats_grid_and_writes_no_rows() {
+        let (app, db, _tmp) = seeded_sweep_app().await;
+        let before = (
+            db.count_active_pages().await.unwrap(),
+            db.count().await.unwrap(),
+        );
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/distill/page_direct")
+                    .uri("/api/distill")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"sweep":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert!(payload.get("pending").is_none());
+        assert!(payload.get("stale_pages").is_none());
+        assert!(payload.get("created_ids").is_none());
+        assert!(payload.get("orphan_topics").is_none());
+
+        let thresholds = payload["thresholds"]
+            .as_array()
+            .expect("sweep response must contain threshold grid");
+        assert_eq!(thresholds.len(), 4);
+        let actual_thresholds: Vec<f64> = thresholds
+            .iter()
+            .map(|point| point["formation_threshold"].as_f64().unwrap())
+            .collect();
+        assert_eq!(actual_thresholds, vec![0.55, 0.60, 0.65, 0.70]);
+
+        for point in thresholds {
+            assert_eq!(point["global"]["cluster_count"], 3);
+            assert_eq!(
+                point["global"]["size_distribution"]["sizes"],
+                serde_json::json!([3, 3, 3])
+            );
+            assert_eq!(point["global"]["overlapping_member_fraction"], 0.0);
+            assert_eq!(point["capped"], false);
+
+            let per_space = point["per_space"]
+                .as_object()
+                .expect("per_space stats must be an object");
+            for space in ["(none)", "personal", "work"] {
+                let stats = per_space
+                    .get(space)
+                    .unwrap_or_else(|| panic!("missing per-space stats for {space}"));
+                assert_eq!(stats["cluster_count"], 1);
+                assert_eq!(stats["size_distribution"]["sizes"], serde_json::json!([3]));
+                assert_eq!(stats["overlapping_member_fraction"], 0.0);
+            }
+        }
+
+        let after = (
+            db.count_active_pages().await.unwrap(),
+            db.count().await.unwrap(),
+        );
+        assert_eq!(after, before, "sweep route must not write rows");
+    }
+
+    #[tokio::test]
+    async fn distill_sweep_with_target_or_force_returns_hint_payload() {
+        let (app, _db, _tmp) = seeded_sweep_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/distill")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"sweep":true,"target":"missing-space","force":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(payload["sweep"], true);
+        assert!(
+            payload["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("sweep=true")),
+            "hint payload should explain that sweep cannot be combined with target/force: {payload}"
+        );
+        assert!(payload.get("pending").is_none());
+        assert!(payload.get("unresolved").is_none());
+    }
+}
+
+#[cfg(test)]
+mod redistill_contract_tests {
+    use axum::body::Body;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+    use wenlan_types::requests::CreateConceptRequest;
+
+    use crate::state::ServerState;
+
+    async fn seeded_user_edited_page() -> (
+        axum::Router,
+        Arc<wenlan_core::db::MemoryDB>,
+        String,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+                .await
+                .expect("MemoryDB::new"),
+        );
+        let result = wenlan_core::post_write::create_page(
+            &db,
+            CreateConceptRequest {
+                title: "Manual page".to_string(),
+                content: "original body".to_string(),
+                summary: None,
+                entity_id: None,
+                space: None,
+                source_memory_ids: Vec::new(),
+                creation_kind: Some("authored".to_string()),
+                workspace: None,
+            },
+            "test",
+            None,
+        )
+        .await
+        .expect("create page");
+        let page_id = result.id;
+        db.update_page_content(&page_id, "user prose", &["mem_1"], "fs_edit")
+            .await
+            .expect("mark page user edited");
+        let page = db
+            .get_page(&page_id)
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert!(page.user_edited, "precondition: page is user edited");
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        (crate::router::build_router(state), db, page_id, tmp)
+    }
+
+    #[tokio::test]
+    async fn page_redistill_without_llm_does_not_clear_user_edited() {
+        let (app, db, page_id, _tmp) = seeded_user_edited_page().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/distill/{page_id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1449,7 +1866,7 @@ mod redistill_contract_tests {
         assert_eq!(payload["status"], "skipped");
 
         let page = db
-            .get_page("page_direct")
+            .get_page(&page_id)
             .await
             .expect("get page")
             .expect("page exists");
@@ -1466,7 +1883,7 @@ mod redistill_contract_tests {
 
     #[tokio::test]
     async fn force_target_redistill_without_llm_does_not_clear_user_edited() {
-        let (app, db, _tmp) = seeded_user_edited_page("page_force").await;
+        let (app, db, page_id, _tmp) = seeded_user_edited_page().await;
 
         let response = app
             .oneshot(
@@ -1474,7 +1891,9 @@ mod redistill_contract_tests {
                     .method("POST")
                     .uri("/api/distill")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"target":"page_force","force":true}"#))
+                    .body(Body::from(format!(
+                        r#"{{"target":"{page_id}","force":true}}"#
+                    )))
                     .unwrap(),
             )
             .await
@@ -1488,7 +1907,7 @@ mod redistill_contract_tests {
         assert_eq!(payload["force"], true);
 
         let page = db
-            .get_page("page_force")
+            .get_page(&page_id)
             .await
             .expect("get page")
             .expect("page exists");
@@ -1514,6 +1933,7 @@ mod context_page_selection_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
     use wenlan_core::pages::{filter_pages_by_source_overlap, select_pages_for_context, Page};
+    use wenlan_types::requests::CreateConceptRequest;
 
     fn make_page(id: &str, source_ids: &[&str], relevance_score: f32, review_status: &str) -> Page {
         Page {
@@ -1531,6 +1951,7 @@ mod context_page_selection_tests {
             last_modified: String::new(),
             sources_updated_count: 0,
             stale_reason: None,
+            pending_rebuild: None,
             user_edited: false,
             relevance_score,
             last_edited_by: None,
@@ -1542,6 +1963,58 @@ mod context_page_selection_tests {
             workspace: None,
             citations: Vec::new(),
         }
+    }
+
+    async fn seed_confirmed_distilled_page(
+        db: &wenlan_core::db::MemoryDB,
+        title: &str,
+        content: &str,
+        source_id: &str,
+        source_type: &str,
+        space: &str,
+    ) {
+        let source = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: format!("memory-{source_id}"),
+            content: if space == "other" {
+                "unrelated source memory outside the query result set".to_string()
+            } else {
+                content.to_string()
+            },
+            memory_type: Some(source_type.to_string()),
+            space: Some(space.to_string()),
+            source_agent: Some("test-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![source]).await.unwrap();
+        if space == "other" {
+            return;
+        }
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: None,
+                entity_id: None,
+                source_memory_ids: vec![source_id.to_string()],
+                creation_kind: Some("distilled".to_string()),
+                space: Some(space.to_string()),
+                workspace: Some(space.to_string()),
+            },
+            "test",
+            None,
+            1,
+            1.1,
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
     }
 
     /// Unit-locks the `select_pages_for_context` SELECTOR (the ranking stage inside
@@ -1623,58 +2096,36 @@ mod context_page_selection_tests {
 
         // Three confirmed, active pages, all matching the query keyword "zorblax"
         // so search_pages returns each as a candidate.
-        let now = chrono::Utc::now().to_rfc3339();
         // Cross-space: workspace != caller space, source not in result set → DROP.
-        db.insert_page_with_kind(
-            "page_cross",
-            "Zorblax Crossmarker",
-            None,
-            "zorblax crossmarker body",
-            None,
-            None,
-            &["unrelated"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("other"),
-            None,
+        seed_confirmed_distilled_page(
+            &db,
+            "Crossmarker",
+            "crossmarker body outside query",
+            "unrelated",
+            "fact",
+            "other",
         )
-        .await
-        .unwrap();
+        .await;
         // Same space, only source is a tier-1 identity memory → DROP for review.
-        db.insert_page_with_kind(
-            "page_identity",
+        seed_confirmed_distilled_page(
+            &db,
             "Zorblax Identmarker",
-            None,
             "zorblax identmarker body",
-            None,
-            None,
-            &["m_identity"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
+            "m_identity",
+            "identity",
+            "work",
         )
-        .await
-        .unwrap();
+        .await;
         // Same space, tier-3 fact source → KEEP.
-        db.insert_page_with_kind(
-            "page_same",
+        seed_confirmed_distilled_page(
+            &db,
             "Zorblax Samemarker",
-            None,
             "zorblax samemarker body",
-            None,
-            None,
-            &["m_fact"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
+            "m_fact",
+            "fact",
+            "work",
         )
-        .await
-        .unwrap();
+        .await;
 
         let state = Arc::new(RwLock::new(ServerState {
             db: Some(Arc::new(db)),
@@ -1730,13 +2181,67 @@ mod search_supplemental_pages_tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_types::requests::CreateConceptRequest;
+
+    async fn seed_confirmed_distilled_page(
+        db: &wenlan_core::db::MemoryDB,
+        title: &str,
+        content: &str,
+        source_id: &str,
+        source_type: &str,
+        space: &str,
+    ) -> String {
+        let source = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: format!("memory-{source_id}"),
+            content: if space == "other" {
+                "unrelated source memory outside the query result set".to_string()
+            } else {
+                content.to_string()
+            },
+            memory_type: Some(source_type.to_string()),
+            space: Some(space.to_string()),
+            source_agent: Some("test-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![source]).await.unwrap();
+        if space == "other" {
+            return format!("page_absent_{source_id}");
+        }
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: None,
+                entity_id: None,
+                source_memory_ids: vec![source_id.to_string()],
+                creation_kind: Some("distilled".to_string()),
+                space: Some(space.to_string()),
+                workspace: Some(space.to_string()),
+            },
+            "test",
+            None,
+            1,
+            1.1,
+        )
+        .await
+        .unwrap();
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
+        result.id
+    }
 
     /// Seed a DB with a tier-2 (`review`) agent, one tier-2 (`decision`) source
     /// memory in space `work`, plus three confirmed active pages: a same-space
     /// page sourced from the tier-2 memory (visible to a tier-2 caller), and a
     /// cross-space page (workspace `other`, disjoint sources → always dropped).
     /// Returns the wired app router.
-    async fn seeded_app() -> (axum::Router, tempfile::TempDir) {
+    async fn seeded_app() -> (axum::Router, tempfile::TempDir, String, String) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
@@ -1766,54 +2271,44 @@ mod search_supplemental_pages_tests {
         };
         db.upsert_documents(vec![mem]).await.unwrap();
 
-        let now = chrono::Utc::now().to_rfc3339();
         // Cross-space: workspace != caller space, source not in result set → DROP.
-        db.insert_page_with_kind(
-            "page_cross",
-            "Zorblax Crossmarker",
-            None,
-            "zorblax crossmarker body",
-            None,
-            None,
-            &["unrelated"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("other"),
-            None,
+        let page_cross_id = seed_confirmed_distilled_page(
+            &db,
+            "Crossmarker",
+            "crossmarker body outside query",
+            "unrelated",
+            "fact",
+            "other",
         )
-        .await
-        .unwrap();
+        .await;
         // Same space, tier-2 (decision) source → KEEP for review, DROP for unknown.
-        db.insert_page_with_kind(
-            "page_same",
+        let page_same_id = seed_confirmed_distilled_page(
+            &db,
             "Zorblax Samemarker",
-            None,
             "zorblax samemarker body",
-            None,
-            None,
-            &["m_decision"],
-            &now,
-            "distilled",
-            "confirmed",
-            Some("work"),
-            None,
+            "m_decision",
+            "decision",
+            "work",
         )
-        .await
-        .unwrap();
+        .await;
 
         let state = Arc::new(RwLock::new(ServerState {
             db: Some(Arc::new(db)),
             ..Default::default()
         }));
-        (crate::router::build_router(state), tmp)
+        (
+            crate::router::build_router(state),
+            tmp,
+            page_same_id,
+            page_cross_id,
+        )
     }
 
     /// A tier-2 (`review`) same-space caller gets the same-space, tier-2-sourced
     /// page in `supplemental_pages`; the cross-space page is dropped.
     #[tokio::test]
     async fn search_surfaces_same_space_tier2_page() {
-        let (app, _tmp) = seeded_app().await;
+        let (app, _tmp, page_same_id, page_cross_id) = seeded_app().await;
         let resp = app
             .oneshot(
                 Request::builder()
@@ -1836,12 +2331,12 @@ mod search_supplemental_pages_tests {
             .supplemental_pages
             .expect("tier-2 caller must get supplemental pages");
         assert!(
-            pages.iter().any(|p| p.source_id == "page_same"),
+            pages.iter().any(|p| p.source_id == page_same_id),
             "same-space tier-2 page must surface, got: {:?}",
             pages.iter().map(|p| &p.source_id).collect::<Vec<_>>()
         );
         assert!(
-            !pages.iter().any(|p| p.source_id == "page_cross"),
+            !pages.iter().any(|p| p.source_id == page_cross_id),
             "cross-space page must be dropped by the space-scope gate, got: {:?}",
             pages.iter().map(|p| &p.source_id).collect::<Vec<_>>()
         );
@@ -1852,7 +2347,7 @@ mod search_supplemental_pages_tests {
     /// drops everything and `supplemental_pages` is `None`.
     #[tokio::test]
     async fn search_supplemental_pages_none_for_unknown_caller() {
-        let (app, _tmp) = seeded_app().await;
+        let (app, _tmp, _page_same_id, _page_cross_id) = seeded_app().await;
         let resp = app
             .oneshot(
                 Request::builder()

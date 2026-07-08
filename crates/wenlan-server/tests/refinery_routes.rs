@@ -12,6 +12,7 @@ use tokio::sync::RwLock;
 use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
+use wenlan_core::sources::RawDocument;
 use wenlan_server::router::build_router;
 use wenlan_server::state::ServerState;
 
@@ -57,6 +58,22 @@ async fn read_body_json(resp: axum::response::Response) -> serde_json::Value {
         .await
         .unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn seed_memory(db: &Arc<MemoryDB>, source_id: &str, content: &str, space: &str) {
+    let doc = RawDocument {
+        source: "memory".to_string(),
+        source_id: source_id.to_string(),
+        title: source_id.to_string(),
+        content: content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        space: Some(space.to_string()),
+        source_agent: Some("test".to_string()),
+        confidence: Some(0.9),
+        ..Default::default()
+    };
+    db.upsert_documents(vec![doc]).await.unwrap();
 }
 
 #[tokio::test]
@@ -307,6 +324,137 @@ async fn accept_entity_merge_flow() {
         db.get_entity_detail(&new_id).await.is_err(),
         "merged-away entity should be deleted"
     );
+}
+
+#[tokio::test]
+async fn accept_stale_empty_json_body_applies_default_accept() {
+    let (app, _tmp, db) = test_app().await;
+    db.insert_refinement_proposal(
+        "ref_accept_empty_json",
+        "detect_contradiction",
+        &["src_a".to_string(), "src_b".to_string()],
+        None,
+        0.8,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_accept_empty_json", "awaiting_review")
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_accept_empty_json/accept")
+        .header("x-agent-name", "test-agent")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = read_body_json(resp).await;
+    assert_eq!(body["id"], "ref_accept_empty_json");
+    assert_eq!(body["action_applied"], "detect_contradiction");
+}
+
+#[tokio::test]
+async fn accept_tagged_accept_body_applies_default_accept() {
+    let (app, _tmp, db) = test_app().await;
+    db.insert_refinement_proposal(
+        "ref_accept_tagged",
+        "detect_contradiction",
+        &["src_a".to_string(), "src_b".to_string()],
+        None,
+        0.8,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_accept_tagged", "awaiting_review")
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_accept_tagged/accept")
+        .header("x-agent-name", "test-agent")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"action":"accept"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = read_body_json(resp).await;
+    assert_eq!(body["id"], "ref_accept_tagged");
+    assert_eq!(body["action_applied"], "detect_contradiction");
+}
+
+#[tokio::test]
+async fn accept_pick_space_body_applies_cross_space_discovery() {
+    let (app, _tmp, db) = test_app().await;
+    for (source_id, space) in [
+        ("route_pick_work_a", "work"),
+        ("route_pick_personal_a", "personal"),
+        ("route_pick_work_b", "work"),
+    ] {
+        seed_memory(
+            &db,
+            source_id,
+            "Incremental Rust compilation cache tuning for shared developer machines.",
+            space,
+        )
+        .await;
+    }
+    let source_ids = vec![
+        "route_pick_work_a".to_string(),
+        "route_pick_personal_a".to_string(),
+        "route_pick_work_b".to_string(),
+    ];
+    db.insert_refinement_proposal(
+        "ref_accept_pick_space",
+        "cross_space_discovery",
+        &source_ids,
+        Some(
+            r#"{"action":"cross_space_discovery","memory_count":3,"spaces":["personal","work"],"allowed_actions":["dismiss","pick_space"]}"#,
+        ),
+        1.0,
+    )
+    .await
+    .unwrap();
+    db.resolve_refinement_if_open("ref_accept_pick_space", "awaiting_review")
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_accept_pick_space/accept")
+        .header("x-agent-name", "test-agent")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"action":"pick_space","space":"work"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = read_body_json(resp).await;
+    assert_eq!(body["id"], "ref_accept_pick_space");
+    assert_eq!(body["action_applied"], "cross_space_discovery");
+    let pages = db.list_pages("active", 10, 0).await.unwrap();
+    assert_eq!(pages.len(), 1, "pick_space should create exactly one page");
+    assert_eq!(pages[0].workspace.as_deref(), Some("work"));
+    assert_eq!(pages[0].space.as_deref(), Some("work"));
+}
+
+#[tokio::test]
+async fn accept_garbage_body_returns_400() {
+    let (app, _tmp, _db) = test_app().await;
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/refinery/queue/ref_parse_first/accept")
+        .header("x-agent-name", "test-agent")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("not json"))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

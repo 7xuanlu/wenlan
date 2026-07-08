@@ -252,6 +252,11 @@ pub struct RejectRefinementParams {
 pub struct AcceptRefinementParams {
     #[schemars(description = "The review proposal id (e.g. \"merge_abc123_def456\").")]
     pub id: String,
+    #[schemars(
+        description = "Selected destination space for cross_space_discovery cards. Omit for ordinary accept actions."
+    )]
+    #[serde(default)]
+    pub space: Option<String>,
 }
 
 // --- Knowledge graph CRUD params ---
@@ -1158,12 +1163,13 @@ impl WenlanMcpServer {
         // Typed end-to-end: a wire-shape drift on the daemon side fails at
         // deserialize instead of silently returning the no-op "Refreshed"
         // line. Same discipline as PR #77's search_pages / list_pages_recent.
-        let _: wenlan_types::responses::SuccessResponse =
+        let resp: wenlan_types::responses::PageWriteResponse =
             try_call!(self.client.put(&path, &req), "update_page");
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Refreshed page {}",
-            params.page_id
-        ))]))
+        // Ownership gate (spec §5.2): a human-owned page is never overwritten in
+        // place; the daemon stages a revision card. Surface that so the caller
+        // does not believe the prose was rewritten.
+        let msg = format_update_page_response(&params.page_id, resp);
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     pub async fn delete_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
@@ -1386,10 +1392,14 @@ impl WenlanMcpServer {
             "/api/refinery/queue/{}/accept",
             url_encode_simple(&params.id)
         );
-        let resp: AcceptRefinementResponse = try_call!(
-            self.client.post(&path, &serde_json::json!({})),
-            "accept_refinement"
-        );
+        let req = match params.space {
+            Some(space) => {
+                wenlan_types::requests::AcceptRefinementRequest::PickSpace { space, notes: None }
+            }
+            None => wenlan_types::requests::AcceptRefinementRequest::Accept { notes: None },
+        };
+        let resp: AcceptRefinementResponse =
+            try_call!(self.client.post(&path, &req), "accept_refinement");
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Review proposal {} accepted (action={}).",
@@ -1626,6 +1636,24 @@ fn format_page_list(pages: &[wenlan_types::Page]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn format_update_page_response(
+    page_id: &str,
+    resp: wenlan_types::responses::PageWriteResponse,
+) -> String {
+    if resp.gated {
+        match resp.revision_card_id {
+            Some(card) => format!(
+                "Page {page_id} is human-owned; staged revision card for review — prose left unchanged.\ngated: true\nrevision_card_id: {card}"
+            ),
+            None => format!(
+                "Page {page_id} is human-owned; staged a revision card for review — prose left unchanged.\ngated: true"
+            ),
+        }
+    } else {
+        format!("Refreshed page {page_id}")
+    }
 }
 
 /// Percent-encode a string for use in URL query parameter values.
@@ -2089,7 +2117,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Reject (dismiss) a review proposal by id. Use when reviewing the daemon queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Note: there is no accept verb yet; keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
+        description = "Reject (dismiss) a review proposal by id. Use when reviewing the daemon queue and the user decides a proposal is wrong or noise. Marks the queue row dismissed and logs the agent activity. Idempotent: already-dismissed proposals return 422. Keeping a proposal is a no-op (it stays queued). Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Reject review proposal",
             read_only_hint = false,
@@ -2110,6 +2138,7 @@ impl WenlanMcpServer {
             entity_merge: existing entity wins as canonical. \
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
+            cross_space_discovery: pass `space` to choose the destination space. \
             Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
             Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
@@ -3412,6 +3441,26 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_update_page_surfaces_gated_revision_card_fields() {
+        let text = format_update_page_response(
+            "page_x",
+            wenlan_types::responses::PageWriteResponse {
+                ok: true,
+                gated: true,
+                revision_card_id: Some("mem_page_card_1".to_string()),
+            },
+        );
+        assert!(
+            text.contains("gated: true"),
+            "gated field missing from update_page response: {text}"
+        );
+        assert!(
+            text.contains("revision_card_id: mem_page_card_1"),
+            "revision_card_id missing from update_page response: {text}"
+        );
+    }
+
     // ===== Refinement queue guards =====
 
     #[tokio::test]
@@ -3448,6 +3497,7 @@ mod tests {
         let server = make_server(TransportMode::Http, "agent", None);
         let params = AcceptRefinementParams {
             id: "merge_abc_def".into(),
+            space: None,
         };
         let result = server.accept_refinement_impl(params).await.unwrap();
         let content = &result.content[0];
@@ -3464,6 +3514,7 @@ mod tests {
         let server = make_server(TransportMode::Stdio, "agent", None);
         let params = AcceptRefinementParams {
             id: "merge_abc_def".into(),
+            space: None,
         };
         let result = server.accept_refinement_impl(params).await.unwrap();
         assert!(

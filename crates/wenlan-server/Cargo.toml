@@ -42,5 +42,6 @@ sha2 = "0.10"
 openssl-sys = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true }

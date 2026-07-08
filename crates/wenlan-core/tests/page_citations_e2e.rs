@@ -7,8 +7,10 @@ use std::sync::Arc;
 use wenlan_core::db::{DistillationCluster, MemoryDB};
 use wenlan_core::events::NoopEmitter;
 use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
+use wenlan_core::post_write::create_page;
 use wenlan_core::prompts::PromptRegistry;
 use wenlan_core::synthesis::distill::distill_one_cluster;
+use wenlan_types::requests::CreateConceptRequest;
 use wenlan_types::RawDocument;
 
 async fn temp_db() -> (tempfile::TempDir, MemoryDB) {
@@ -67,11 +69,9 @@ impl LlmProvider for AnnotateStub {
     }
 }
 
-/// Two numbered sources shared by the distill-path tests: [1] daemon port,
-/// [2] FastEmbed embeddings.
 fn distill_cluster() -> DistillationCluster {
     DistillationCluster {
-        source_ids: vec!["mem_daemon".into(), "mem_embed".into()],
+        source_ids: vec!["mem_daemon".into(), "mem_embed".into(), "mem_local".into()],
         contents: vec![
             "The Wenlan daemon binds to port 7878 by default on localhost, providing \
              the HTTP API surface used by the CLI and the MCP bridge for all downstream \
@@ -80,6 +80,10 @@ fn distill_cluster() -> DistillationCluster {
             "FastEmbed uses the BGE-Base-EN embeddings model with 768 dimensions for \
              vector search across every stored memory and page in the local database, \
              combined with FTS5 for hybrid retrieval."
+                .to_string(),
+            "Wenlan keeps personal agent memory local-first in a libSQL database so \
+             tools can recall durable facts without sending every source artifact to \
+             an external service."
                 .to_string(),
         ],
         entity_id: None,
@@ -90,6 +94,27 @@ fn distill_cluster() -> DistillationCluster {
     }
 }
 
+async fn seed_distill_sources(db: &MemoryDB, cluster: &DistillationCluster) {
+    db.upsert_documents(
+        cluster
+            .source_ids
+            .iter()
+            .zip(cluster.contents.iter())
+            .map(|(source_id, content)| RawDocument {
+                source: "memory".to_string(),
+                source_id: source_id.clone(),
+                title: source_id.clone(),
+                content: content.clone(),
+                last_modified: chrono::Utc::now().timestamp(),
+                confirmed: Some(true),
+                ..Default::default()
+            })
+            .collect(),
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn distill_emits_verified_citations() {
     let (_dir, db) = temp_db().await;
@@ -98,8 +123,10 @@ async fn distill_emits_verified_citations() {
                FastEmbed uses BGE-Base embeddings with 768 dimensions.[2]",
     });
     let prompts = PromptRegistry::default();
+    let cluster = distill_cluster();
+    seed_distill_sources(&db, &cluster).await;
 
-    let page_id = distill_one_cluster(&db, &llm, &prompts, &distill_cluster(), None)
+    let page_id = distill_one_cluster(&db, &llm, &prompts, &cluster, None)
         .await
         .unwrap()
         .expect("cluster should synthesize a page");
@@ -118,15 +145,15 @@ async fn distill_emits_verified_citations() {
 #[tokio::test]
 async fn out_of_range_marker_stripped_and_counted() {
     let (_dir, db) = temp_db().await;
-    // Only 2 sources exist; [9] is out of range and must be stripped, not
-    // recorded as a citation.
     let llm: Arc<dyn LlmProvider> = Arc::new(DistillStub {
         body: "The Wenlan daemon binds to port 7878 by default.[1]\n\n\
                A hallucinated claim citing a source that does not exist.[9]",
     });
     let prompts = PromptRegistry::default();
+    let cluster = distill_cluster();
+    seed_distill_sources(&db, &cluster).await;
 
-    let page_id = distill_one_cluster(&db, &llm, &prompts, &distill_cluster(), None)
+    let page_id = distill_one_cluster(&db, &llm, &prompts, &cluster, None)
         .await
         .unwrap()
         .expect("cluster should synthesize a page");
@@ -157,8 +184,10 @@ async fn unmatched_claim_unverified() {
                The daemon supports encrypted peer-to-peer video conferencing.[1]",
     });
     let prompts = PromptRegistry::default();
+    let cluster = distill_cluster();
+    seed_distill_sources(&db, &cluster).await;
 
-    let page_id = distill_one_cluster(&db, &llm, &prompts, &distill_cluster(), None)
+    let page_id = distill_one_cluster(&db, &llm, &prompts, &cluster, None)
         .await
         .unwrap()
         .expect("cluster should synthesize a page");
@@ -185,13 +214,7 @@ async fn unmatched_claim_unverified() {
 
 /// Seed a legacy page (citations NULL) with one memory-kind evidence link,
 /// mirroring the annotate-only backfill's target shape.
-async fn seed_backfill_page(
-    db: &MemoryDB,
-    page_id: &str,
-    body: &str,
-    mem_id: &str,
-    mem_content: &str,
-) {
+async fn seed_backfill_page(db: &MemoryDB, body: &str, mem_id: &str, mem_content: &str) -> String {
     db.upsert_documents(vec![RawDocument {
         source: "memory".to_string(),
         source_id: mem_id.to_string(),
@@ -204,13 +227,27 @@ async fn seed_backfill_page(
     .await
     .unwrap();
 
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(page_id, "T", None, body, None, None, &[], &now)
+    let result = create_page(
+        db,
+        CreateConceptRequest {
+            title: "T".to_string(),
+            content: body.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        },
+        "test",
+        None,
+    )
+    .await
+    .unwrap();
+    db.link_page_evidence(&result.id, "memory", Some(mem_id), None, "test")
         .await
         .unwrap();
-    db.link_page_evidence(page_id, "memory", Some(mem_id), None, "test")
-        .await
-        .unwrap();
+    result.id
 }
 
 const BACKFILL_BODY: &str = "The daemon binds to port 7878 by default.";
@@ -219,19 +256,12 @@ const BACKFILL_MEM_CONTENT: &str = "The daemon binds to port 7878 by default";
 #[tokio::test]
 async fn backfill_annotates_legacy_page() {
     let (_dir, db) = temp_db().await;
-    seed_backfill_page(
-        &db,
-        "p_legacy",
-        BACKFILL_BODY,
-        "mem_a",
-        BACKFILL_MEM_CONTENT,
-    )
-    .await;
+    let page_id = seed_backfill_page(&db, BACKFILL_BODY, "mem_a", BACKFILL_MEM_CONTENT).await;
     assert!(db
         .get_pages_missing_citations(10)
         .await
         .unwrap()
-        .contains(&"p_legacy".to_string()));
+        .contains(&page_id));
 
     let annotated = format!("{BACKFILL_BODY}[1]");
     let llm: Arc<dyn LlmProvider> = Arc::new(AnnotateStub {
@@ -243,7 +273,7 @@ async fn backfill_annotates_legacy_page() {
         .await
         .unwrap();
 
-    let page = db.get_page("p_legacy").await.unwrap().unwrap();
+    let page = db.get_page(&page_id).await.unwrap().unwrap();
     assert_eq!(
         page.content, annotated,
         "prose stays byte-identical modulo the inserted marker"
@@ -254,10 +284,10 @@ async fn backfill_annotates_legacy_page() {
         !db.get_pages_missing_citations(10)
             .await
             .unwrap()
-            .contains(&"p_legacy".to_string()),
+            .contains(&page_id),
         "page should no longer be citations-missing"
     );
-    let changelog = db.get_page_changelog("p_legacy").await.unwrap();
+    let changelog = db.get_page_changelog(&page_id).await.unwrap();
     assert!(
         changelog.contains("citation_backfill"),
         "changelog: {changelog}"
@@ -267,14 +297,7 @@ async fn backfill_annotates_legacy_page() {
 #[tokio::test]
 async fn backfill_guard_rejects_rewrite_then_poison_pills() {
     let (_dir, db) = temp_db().await;
-    seed_backfill_page(
-        &db,
-        "p_rewrite",
-        BACKFILL_BODY,
-        "mem_a",
-        BACKFILL_MEM_CONTENT,
-    )
-    .await;
+    let page_id = seed_backfill_page(&db, BACKFILL_BODY, "mem_a", BACKFILL_MEM_CONTENT).await;
 
     let rewritten = "A completely different sentence about something else entirely.[1]";
     let llm: Arc<dyn LlmProvider> = Arc::new(AnnotateStub {
@@ -289,17 +312,17 @@ async fn backfill_guard_rejects_rewrite_then_poison_pills() {
             .unwrap();
     }
 
-    let page = db.get_page("p_rewrite").await.unwrap().unwrap();
+    let page = db.get_page(&page_id).await.unwrap().unwrap();
     assert_eq!(page.content, BACKFILL_BODY, "prose must never be rewritten");
     assert!(page.citations.is_empty());
     assert!(
         !db.get_pages_missing_citations(10)
             .await
             .unwrap()
-            .contains(&"p_rewrite".to_string()),
+            .contains(&page_id),
         "citations should be '[]' (gave up), not NULL"
     );
-    let changelog = db.get_page_changelog("p_rewrite").await.unwrap();
+    let changelog = db.get_page_changelog(&page_id).await.unwrap();
     assert!(
         changelog.contains("citation backfill gave up"),
         "changelog: {changelog}"
@@ -309,21 +332,25 @@ async fn backfill_guard_rejects_rewrite_then_poison_pills() {
 #[tokio::test]
 async fn old_page_wire_compat() {
     let (_dir, db) = temp_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "p_old",
-        "Old Page",
+    let result = create_page(
+        &db,
+        CreateConceptRequest {
+            title: "Old Page".to_string(),
+            content: "Some old body.".to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        },
+        "test",
         None,
-        "Some old body.",
-        None,
-        None,
-        &[],
-        &now,
     )
     .await
     .unwrap();
 
-    let page = db.get_page("p_old").await.unwrap().unwrap();
+    let page = db.get_page(&result.id).await.unwrap().unwrap();
     assert!(
         page.citations.is_empty(),
         "a never citation-processed page deserializes with an empty citations vec"

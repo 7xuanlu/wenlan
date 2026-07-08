@@ -8,12 +8,51 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use std::sync::OnceLock;
 use tower::ServiceExt;
 use wenlan_types::responses::{
     ChatContextResponse, CreateEntityResponse, CreatePageResponse, DecisionsResponse,
     ListMemoriesResponse, NurtureCardsResponse, SearchMemoryResponse, SearchResponse,
     StoreMemoryResponse,
 };
+
+fn data_dir_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+struct WritableKnowledgeConfig {
+    previous: Option<std::ffi::OsString>,
+    _tmp: tempfile::TempDir,
+}
+
+impl WritableKnowledgeConfig {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let pages = tmp.path().join("pages");
+        std::fs::create_dir_all(&pages).unwrap();
+        std::fs::write(
+            tmp.path().join("config.json"),
+            serde_json::json!({ "knowledge_path": pages.to_string_lossy() }).to_string(),
+        )
+        .unwrap();
+        let previous = std::env::var_os("WENLAN_DATA_DIR");
+        std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+        Self {
+            previous,
+            _tmp: tmp,
+        }
+    }
+}
+
+impl Drop for WritableKnowledgeConfig {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+            None => std::env::remove_var("WENLAN_DATA_DIR"),
+        }
+    }
+}
 
 async fn seed_confirmed_memory(
     db: &std::sync::Arc<wenlan_core::db::MemoryDB>,
@@ -788,31 +827,24 @@ async fn nurture_uncategorized_filter_matches_only_null_space() {
 async fn list_pages_uncategorized_filter_matches_only_null_space() {
     let (router, _tmp, db) = common::test_app().await;
     db.create_space("alpha", None, false).await.unwrap();
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page(
-        "uncategorized_page",
+    let uncategorized_id = common::create_page_fixture(
+        &db,
         "Uncategorized Page",
-        None,
         "uncategorized page body",
         None,
-        None,
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("seed uncategorized page must store");
-    db.insert_page(
-        "alpha_page",
+    .await;
+    let alpha_id = common::create_page_fixture(
+        &db,
         "Alpha Page",
-        None,
         "alpha page body",
-        None,
         Some("alpha"),
         &[],
-        &now,
+        "authored",
     )
-    .await
-    .expect("seed alpha page must store");
+    .await;
 
     let req = Request::builder()
         .method("GET")
@@ -830,11 +862,11 @@ async fn list_pages_uncategorized_filter_matches_only_null_space() {
         .filter_map(|page| page["id"].as_str())
         .collect::<Vec<_>>();
     assert!(
-        ids.contains(&"uncategorized_page"),
+        ids.contains(&uncategorized_id.as_str()),
         "uncategorized must include NULL-space pages; got {ids:?}"
     );
     assert!(
-        !ids.contains(&"alpha_page"),
+        !ids.contains(&alpha_id.as_str()),
         "uncategorized must not become unscoped and include registered-space pages; got {ids:?}"
     );
 }
@@ -1087,6 +1119,8 @@ async fn create_entity_unregistered_header_space_is_not_stored_or_auto_created()
 
 #[tokio::test]
 async fn create_page_uses_header_when_body_omits_space() {
+    let _env_lock = data_dir_lock().lock().await;
+    let _config = WritableKnowledgeConfig::new();
     let (router, _tmp, db) = common::test_app_no_gate().await;
     db.create_space("career", None, false).await.unwrap();
 
@@ -1131,7 +1165,8 @@ async fn create_page_uses_header_when_body_omits_space() {
                     serde_json::json!({
                         "title": "Rust Systems Language",
                         "content": page_content,
-                        "source_memory_ids": [source_id]
+                        "source_memory_ids": [source_id],
+                        "creation_kind": "authored"
                     })
                     .to_string(),
                 ))
@@ -1167,6 +1202,8 @@ async fn create_page_uses_header_when_body_omits_space() {
 
 #[tokio::test]
 async fn create_page_unregistered_header_space_is_not_stored_or_auto_created() {
+    let _env_lock = data_dir_lock().lock().await;
+    let _config = WritableKnowledgeConfig::new();
     let (router, _tmp, db) = common::test_app_no_gate().await;
 
     let content = "Rust is a systems programming language with memory safety guarantees";
@@ -1208,7 +1245,8 @@ async fn create_page_unregistered_header_space_is_not_stored_or_auto_created() {
                     serde_json::json!({
                         "title": "Rust Systems Language Unscoped",
                         "content": page_content,
-                        "source_memory_ids": [source_id]
+                        "source_memory_ids": [source_id],
+                        "creation_kind": "authored"
                     })
                     .to_string(),
                 ))

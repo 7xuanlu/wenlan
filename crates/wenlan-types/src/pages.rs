@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const PAGE_PENDING_REBUILD_MESSAGE: &str = "evidence updated, prose rebuild pending";
+
 /// A compiled knowledge page — structured, cross-referenced, backed by source memories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
@@ -24,6 +26,10 @@ pub struct Page {
     pub sources_updated_count: i64,
     /// Why this page is stale: "source_updated" | "source_conflict" | None.
     pub stale_reason: Option<String>,
+    /// Human-facing compile state for stale pages whose evidence has already
+    /// changed but whose prose is waiting for the next compile lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_rebuild: Option<String>,
     /// True if a human has edited this page's content directly.
     pub user_edited: bool,
     /// Relevance score from search (0.0-1.0). Only populated by `search_pages`;
@@ -52,7 +58,10 @@ pub struct Page {
     pub creation_kind: String,
     /// Trust boundary: whether this page has been confirmed as accurate.
     /// One of: "unconfirmed" | "confirmed".
-    /// Distilled pages start confirmed; authored/research pages start unconfirmed.
+    /// Every newly-created page is born "unconfirmed" regardless of
+    /// `creation_kind` (spec 3.1/5.2). `default_review_status()` below is a
+    /// wire/deserialization fallback for rows predating this column (backfilled
+    /// "confirmed" by migration 62), not the birth value for new pages.
     #[serde(default = "default_review_status")]
     pub review_status: String,
     /// Per-occurrence [N] citation records for this page's body (spec §3).
@@ -71,6 +80,13 @@ fn default_review_status() -> String {
 
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
+}
+
+pub fn pending_rebuild_for_stale_reason(stale_reason: Option<&str>) -> Option<String> {
+    match stale_reason {
+        Some("source_updated") => Some(PAGE_PENDING_REBUILD_MESSAGE.to_string()),
+        _ => None,
+    }
 }
 
 /// Typed provenance link for a page (P2 successor to `PageSource`).

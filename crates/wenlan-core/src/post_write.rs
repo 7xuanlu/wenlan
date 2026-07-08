@@ -7,17 +7,128 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use std::path::Path;
-use wenlan_types::requests::{
-    AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
-    UpdatePageRequest,
+use std::{collections::HashSet, path::Path};
+use wenlan_types::{
+    requests::{
+        AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
+        UpdatePageRequest,
+    },
+    RawDocument,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WriteResult {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached_to: Option<String>,
     pub warnings: Vec<String>,
     pub wrote: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_card_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gated: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+const VALID_PAGE_CREATION_KINDS: [&str; 4] = ["distilled", "authored", "research", "imported"];
+const PAGE_BIRTH_REVIEW_STATUS: &str = "unconfirmed";
+
+pub enum PageWrite<'a> {
+    Attach {
+        page_id: &'a str,
+        source_memory_ids: &'a [String],
+        link_reason: &'a str,
+        agent: &'a str,
+    },
+    Create {
+        req: CreateConceptRequest,
+        agent: &'a str,
+        knowledge_path: Option<&'a Path>,
+        page_min_cluster_size: usize,
+        page_match_threshold: f64,
+        citations_json: Option<String>,
+    },
+    Update {
+        page_id: &'a str,
+        req: UpdatePageRequest,
+        edited_by: &'a str,
+        require_stale: bool,
+        knowledge_path: Option<&'a Path>,
+        citations: Option<(String, String)>,
+    },
+}
+
+pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResult, WenlanError> {
+    match write {
+        PageWrite::Attach {
+            page_id,
+            source_memory_ids,
+            link_reason,
+            agent,
+        } => attach_page_sources_impl(db, page_id, source_memory_ids, link_reason, agent).await,
+        PageWrite::Create {
+            req,
+            agent,
+            knowledge_path,
+            page_min_cluster_size,
+            page_match_threshold,
+            citations_json,
+        } => {
+            create_page_impl(
+                db,
+                req,
+                agent,
+                knowledge_path,
+                page_min_cluster_size,
+                page_match_threshold,
+                citations_json.as_deref(),
+            )
+            .await
+        }
+        PageWrite::Update {
+            page_id,
+            req,
+            edited_by,
+            require_stale,
+            knowledge_path,
+            citations,
+        } => {
+            update_page_impl(
+                db,
+                page_id,
+                req,
+                edited_by,
+                require_stale,
+                knowledge_path,
+                citations,
+            )
+            .await
+        }
+    }
+}
+
+async fn attach_page_sources_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    source_memory_ids: &[String],
+    link_reason: &str,
+    agent: &str,
+) -> Result<WriteResult, WenlanError> {
+    for sid in source_memory_ids {
+        db.link_page_source(page_id, sid, link_reason).await?;
+    }
+    log_activity_best_effort(db, agent, "page_attach", page_id).await;
+    Ok(WriteResult {
+        id: page_id.to_string(),
+        attached_to: Some(page_id.to_string()),
+        warnings: vec![],
+        wrote: true,
+        revision_card_id: None,
+        gated: false,
+    })
 }
 
 /// Best-effort activity logger used by curation-mutate capability fns.
@@ -82,8 +193,11 @@ pub async fn create_entity(
     if let Some(id) = db.resolve_entity_by_alias(&name_lower).await? {
         return Ok(WriteResult {
             id,
+            attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -93,8 +207,11 @@ pub async fn create_entity(
         let _ = db.add_entity_alias(&name_lower, &existing.id, "auto").await;
         return Ok(WriteResult {
             id: existing.id.clone(),
+            attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -109,8 +226,11 @@ pub async fn create_entity(
             let _ = db.add_entity_alias(&name_lower, &cand_id, "minhash").await;
             return Ok(WriteResult {
                 id: cand_id,
+                attached_to: None,
                 warnings: vec![],
                 wrote: false,
+                revision_card_id: None,
+                gated: false,
             });
         }
     }
@@ -124,8 +244,11 @@ pub async fn create_entity(
                 .await;
             return Ok(WriteResult {
                 id: result.entity.id.clone(),
+                attached_to: None,
                 warnings: vec![],
                 wrote: false,
+                revision_card_id: None,
+                gated: false,
             });
         }
     }
@@ -211,8 +334,11 @@ pub async fn create_entity(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings,
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -253,8 +379,11 @@ pub async fn create_relation(
         if let Some((existing_id, _)) = existing.into_iter().find(|(_, t)| t == rt) {
             return Ok(WriteResult {
                 id: existing_id,
+                attached_to: None,
                 warnings: vec![],
                 wrote: false,
+                revision_card_id: None,
+                gated: false,
             });
         }
     }
@@ -352,8 +481,11 @@ pub async fn create_relation(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings,
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -411,8 +543,11 @@ pub async fn add_observation(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings: vec![],
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
@@ -423,6 +558,67 @@ pub async fn create_page(
     req: CreateConceptRequest,
     agent: &str,
     knowledge_path: Option<&Path>,
+) -> Result<WriteResult, WenlanError> {
+    let distillation = crate::tuning::DistillationConfig::default();
+    create_page_with_tuning(
+        db,
+        req,
+        agent,
+        knowledge_path,
+        distillation.page_min_cluster_size,
+        distillation.page_match_threshold,
+    )
+    .await
+}
+
+pub async fn create_page_with_floor(
+    db: &MemoryDB,
+    req: CreateConceptRequest,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+    page_min_cluster_size: usize,
+) -> Result<WriteResult, WenlanError> {
+    create_page_with_tuning(
+        db,
+        req,
+        agent,
+        knowledge_path,
+        page_min_cluster_size,
+        crate::tuning::DistillationConfig::default().page_match_threshold,
+    )
+    .await
+}
+
+pub async fn create_page_with_tuning(
+    db: &MemoryDB,
+    req: CreateConceptRequest,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+    page_min_cluster_size: usize,
+    page_match_threshold: f64,
+) -> Result<WriteResult, WenlanError> {
+    page_write(
+        db,
+        PageWrite::Create {
+            req,
+            agent,
+            knowledge_path,
+            page_min_cluster_size,
+            page_match_threshold,
+            citations_json: None,
+        },
+    )
+    .await
+}
+
+async fn create_page_impl(
+    db: &MemoryDB,
+    req: CreateConceptRequest,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+    page_min_cluster_size: usize,
+    page_match_threshold: f64,
+    citations_json: Option<&str>,
 ) -> Result<WriteResult, WenlanError> {
     // Pre-write validation
     if req.title.trim().is_empty() {
@@ -441,17 +637,23 @@ pub async fn create_page(
             "distilled page must cite at least one source memory".into(),
         ));
     }
-    const VALID_KINDS: [&str; 4] = ["distilled", "authored", "research", "imported"];
-    if !VALID_KINDS.contains(&creation_kind) {
+    if !VALID_PAGE_CREATION_KINDS.contains(&creation_kind) {
         return Err(WenlanError::Validation(format!(
             "invalid creation_kind '{creation_kind}' (expected one of: distilled, authored, research, imported)"
         )));
     }
-    let review_status = if creation_kind == "distilled" {
-        "confirmed"
-    } else {
-        "unconfirmed"
-    };
+    let distinct_source_count = req
+        .source_memory_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>()
+        .len();
+    if creation_kind == "distilled" && distinct_source_count < page_min_cluster_size {
+        return Err(WenlanError::Validation(format!(
+            "distilled page requires at least {page_min_cluster_size} distinct source memories (got {distinct_source_count})"
+        )));
+    }
+    let review_status = PAGE_BIRTH_REVIEW_STATUS;
     // Resolution check: every source id must exist
     for sid in &req.source_memory_ids {
         if db.get_memory_detail(sid).await?.is_none() {
@@ -469,6 +671,41 @@ pub async fn create_page(
             return Err(WenlanError::Validation(
                 "page body diverges from cited sources (cos sim < 0.6)".into(),
             ));
+        }
+    }
+
+    if creation_kind == "distilled" {
+        let embed_text =
+            crate::pages::page_embedding_text(&req.title, req.summary.as_deref(), &req.content);
+        let embedding = match db.generate_embeddings(&[embed_text]) {
+            Ok(mut embeddings) => embeddings.pop(),
+            Err(e) => {
+                log::warn!("[create_page] dedup embedding failed: {e}");
+                None
+            }
+        };
+        let workspace = req.workspace.as_deref().or(req.space.as_deref());
+        if let (Some(embedding), Some(workspace)) = (embedding, workspace) {
+            if let Some(matched) = db
+                .find_matching_page_scoped(
+                    req.entity_id.as_deref(),
+                    &embedding,
+                    page_match_threshold,
+                    Some(workspace),
+                    false,
+                )
+                .await?
+            {
+                let matched_id = matched.id;
+                return attach_page_sources_impl(
+                    db,
+                    &matched_id,
+                    &req.source_memory_ids,
+                    "page_write_attach",
+                    agent,
+                )
+                .await;
+            }
         }
     }
 
@@ -490,6 +727,7 @@ pub async fn create_page(
         last_modified: now.clone(),
         sources_updated_count: 0,
         stale_reason: None,
+        pending_rebuild: None,
         user_edited: false,
         relevance_score: 0.0,
         last_edited_by: None,
@@ -499,7 +737,9 @@ pub async fn create_page(
         creation_kind: creation_kind.to_string(),
         review_status: review_status.to_string(),
         workspace: req.workspace.clone(),
-        citations: Vec::new(),
+        citations: citations_json
+            .and_then(|raw| serde_json::from_str(raw).ok())
+            .unwrap_or_default(),
     };
 
     // md-first write (only if a knowledge_path was provided)
@@ -526,7 +766,7 @@ pub async fn create_page(
             creation_kind,
             review_status,
             req.workspace.as_deref(),
-            None, // citations: create_page has no citation source; NULL = never citation-processed
+            citations_json,
         )
         .await
     {
@@ -543,6 +783,15 @@ pub async fn create_page(
 
     // Post-write enrichment
     let mut warnings: Vec<String> = Vec::new();
+
+    if creation_kind == "distilled" {
+        if let Err(e) =
+            crate::maintenance::emit_keep_or_archive_card(db, &id, distinct_source_count).await
+        {
+            log::warn!("[create_page] keep/archive card failed for {id}: {e}");
+            warnings.push(format!("keep/archive card failed: {e}"));
+        }
+    }
 
     // 1. Orphan-link resolution (best-effort)
     if let Err(e) = db.resolve_orphan_page_links().await {
@@ -573,18 +822,22 @@ pub async fn create_page(
 
     Ok(WriteResult {
         id,
+        attached_to: None,
         warnings,
         wrote: true,
+        revision_card_id: None,
+        gated: false,
     })
 }
 
-/// Daemon-internal `edited_by` values that bypass the hallucination guard.
-/// Incremental updates can push aggregate cosine sim below 0.6; running the
-/// guard on these paths would silently drop legitimate refinery writes.
+/// PageWrite `edited_by` values that bypass the hallucination guard. Incremental
+/// updates can push aggregate cosine sim below 0.6; the HTTP/MCP
+/// `agent_refresh` route historically accepted agent-provided refreshes without
+/// this guard, so routing it through PageWrite preserves that behavior.
 fn skip_hallucination_guard(edited_by: &str) -> bool {
     matches!(
         edited_by,
-        "distill" | "re_distill" | "page_growth" | "refinery_merge"
+        "distill" | "re_distill" | "page_growth" | "refinery_merge" | "agent_refresh"
     )
 }
 
@@ -596,6 +849,94 @@ fn is_llm_rewrite(edited_by: &str) -> bool {
         edited_by,
         "distill" | "re_distill" | "page_growth" | "refinery_merge"
     )
+}
+
+pub fn page_is_human_owned(page: &crate::pages::Page) -> bool {
+    page.user_edited || page.creation_kind == "authored"
+}
+
+fn is_machine_page_write(edited_by: &str) -> bool {
+    !matches!(edited_by, "manual_edit" | "fs_edit")
+}
+
+/// Stage a machine write to a human-owned page as a pending revision card
+/// instead of overwriting the page's prose. Uses the same grammar as L3
+/// doc-grounded revisions (`crate::reconcile::write_revision`): a
+/// `source='memory'`, `pending_revision=1`, `supersedes=<page id>` row that
+/// `list_pending_revisions` surfaces on the `/curate revisions` queue. The page
+/// itself is never mutated here — the human accepts or dismisses the card.
+/// Returns a gated `WriteResult` carrying the new card id.
+pub async fn stage_page_revision_card(
+    db: &MemoryDB,
+    page: &crate::pages::Page,
+    content: &str,
+    source_memory_ids: &[String],
+    edited_by: &str,
+) -> Result<WriteResult, WenlanError> {
+    let revision_card_id = format!(
+        "mem_{}",
+        uuid::Uuid::new_v4()
+            .to_string()
+            .replace('-', "")
+            .chars()
+            .take(12)
+            .collect::<String>()
+    );
+    let structured = serde_json::json!({
+        "revision_kind": "page_write",
+        "target_kind": "page",
+        "revises_page": page.id,
+        "page_version": page.version,
+        "edited_by": edited_by,
+        "source_memory_ids": source_memory_ids,
+    })
+    .to_string();
+    let title: String = format!("Revision: {}", page.title)
+        .chars()
+        .take(80)
+        .collect();
+    let row = RawDocument {
+        source: "memory".to_string(),
+        source_id: revision_card_id.clone(),
+        title,
+        content: content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        space: page.space.clone().or_else(|| page.workspace.clone()),
+        source_agent: Some("page_write".to_string()),
+        confidence: Some(0.9),
+        confirmed: Some(false),
+        stability: Some("new".to_string()),
+        supersedes: Some(page.id.clone()),
+        pending_revision: true,
+        structured_fields: Some(structured.clone()),
+        source_text: Some(content.to_string()),
+        ..Default::default()
+    };
+    db.upsert_documents(vec![row]).await?;
+    if let Err(e) = db
+        .log_agent_activity(
+            edited_by,
+            "page_revision_card",
+            &[page.id.clone(), revision_card_id.clone()],
+            None,
+            &structured,
+        )
+        .await
+    {
+        log::warn!("[page_revision_card] activity log failed: {e}");
+    }
+
+    Ok(WriteResult {
+        id: page.id.clone(),
+        attached_to: None,
+        warnings: vec![
+            "human-owned page; staged revision card instead of overwriting content".to_string(),
+        ],
+        wrote: false,
+        revision_card_id: Some(revision_card_id),
+        gated: true,
+    })
 }
 
 /// Parse WENLAN_MERGE_SHRINK_GUARD env var as f64 threshold.
@@ -638,6 +979,30 @@ pub async fn update_page(
     knowledge_path: Option<&Path>,
     citations: Option<(String, String)>,
 ) -> Result<WriteResult, WenlanError> {
+    page_write(
+        db,
+        PageWrite::Update {
+            page_id,
+            req,
+            edited_by,
+            require_stale,
+            knowledge_path,
+            citations,
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn update_page_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    req: UpdatePageRequest,
+    edited_by: &str,
+    require_stale: bool,
+    knowledge_path: Option<&Path>,
+    citations: Option<(String, String)>,
+) -> Result<WriteResult, WenlanError> {
     // ── Pre-write validation ────────────────────────────────────────────────
     if req.content.trim().is_empty() {
         return Err(WenlanError::Validation(
@@ -672,6 +1037,16 @@ pub async fn update_page(
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
+    if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
+        return stage_page_revision_card(
+            db,
+            &current,
+            &req.content,
+            &req.source_memory_ids,
+            edited_by,
+        )
+        .await;
+    }
     let current_version = current.version;
     let new_version = current_version + 1;
 
@@ -724,8 +1099,11 @@ pub async fn update_page(
     if delta_summary.is_none() && old_set == new_set {
         return Ok(WriteResult {
             id: page_id.to_string(),
+            attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -774,8 +1152,11 @@ pub async fn update_page(
         // CAS skipped — page was not stale; return empty warnings (no-op)
         return Ok(WriteResult {
             id: page_id.to_string(),
+            attached_to: None,
             warnings: vec![],
             wrote: false,
+            revision_card_id: None,
+            gated: false,
         });
     }
 
@@ -797,7 +1178,218 @@ pub async fn update_page(
 
     Ok(WriteResult {
         id: page_id.to_string(),
+        attached_to: None,
         warnings,
+        wrote: true,
+        revision_card_id: None,
+        gated: false,
+    })
+}
+
+struct PageRevisionCard {
+    page_id: String,
+    revision_id: String,
+    page_version: Option<i64>,
+    content: String,
+    source_memory_ids: Vec<String>,
+}
+
+async fn resolve_page_revision_card(
+    db: &MemoryDB,
+    id: &str,
+) -> Result<Option<PageRevisionCard>, WenlanError> {
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT source_id, supersedes, content, structured_fields \
+             FROM memories \
+             WHERE pending_revision = 1 \
+               AND source = 'memory' \
+               AND (source_id = ?1 OR supersedes = ?1) \
+             ORDER BY CASE WHEN source_id = ?1 THEN 0 ELSE 1 END, last_modified DESC \
+             LIMIT 1",
+            libsql::params![id.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("resolve_page_revision_card: {e}")))?;
+
+    let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("resolve_page_revision_card row: {e}")))?
+    else {
+        return Ok(None);
+    };
+    let revision_id = row
+        .get::<String>(0)
+        .map_err(|e| WenlanError::VectorDb(format!("revision source_id: {e}")))?;
+    let supersedes = row
+        .get::<String>(1)
+        .map_err(|e| WenlanError::VectorDb(format!("revision supersedes: {e}")))?;
+    let content = row
+        .get::<String>(2)
+        .map_err(|e| WenlanError::VectorDb(format!("revision content: {e}")))?;
+    let structured = row
+        .get::<Option<String>>(3)
+        .unwrap_or(None)
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    drop(rows);
+    drop(conn);
+
+    let Some(structured) = structured else {
+        return Ok(None);
+    };
+    if structured.get("revision_kind").and_then(|v| v.as_str()) != Some("page_write")
+        || structured.get("target_kind").and_then(|v| v.as_str()) != Some("page")
+    {
+        return Ok(None);
+    }
+
+    let page_id = structured
+        .get("revises_page")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&supersedes)
+        .to_string();
+    let source_memory_ids = structured
+        .get("source_memory_ids")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let page_version = structured.get("page_version").and_then(|v| v.as_i64());
+
+    Ok(Some(PageRevisionCard {
+        page_id,
+        revision_id,
+        page_version,
+        content,
+        source_memory_ids,
+    }))
+}
+
+async fn accept_page_revision_card(
+    db: &MemoryDB,
+    card: PageRevisionCard,
+    knowledge_path: Option<&Path>,
+) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
+    let current = db
+        .get_page(&card.page_id)
+        .await?
+        .ok_or_else(|| WenlanError::NotFound(format!("Page not found: {}", card.page_id)))?;
+    let source_memory_ids = if card.source_memory_ids.is_empty() {
+        current.source_memory_ids.clone()
+    } else {
+        card.source_memory_ids.clone()
+    };
+    let source_refs: Vec<&str> = source_memory_ids.iter().map(String::as_str).collect();
+    let old_set: std::collections::HashSet<&str> = current
+        .source_memory_ids
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    let new_set: std::collections::HashSet<&str> = source_refs.iter().copied().collect();
+    let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
+    added_sources.sort_unstable();
+    let added_sources_json = serde_json::Value::Array(
+        added_sources
+            .iter()
+            .map(|s| serde_json::Value::String((*s).to_string()))
+            .collect(),
+    );
+    let new_version = current.version + 1;
+    let entry = serde_json::json!({
+        "version": new_version,
+        "at": chrono::Utc::now().timestamp(),
+        "edited_by": "revision_accept",
+        "delta_summary": crate::db::compute_page_delta_summary(
+            &current.content,
+            &current.source_memory_ids,
+            &card.content,
+            &source_refs,
+            "revision_accept",
+        ),
+        "incoming_source_ids": added_sources_json,
+    });
+    let existing_cl = db.get_page_changelog(&card.page_id).await?;
+    const DEFAULT_CHANGELOG_CAP: usize = 20;
+    let new_changelog =
+        crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
+
+    let wrote = match card.page_version {
+        Some(expected_version) => {
+            db.try_update_page_content_with_changelog_at_version(
+                &card.page_id,
+                &card.content,
+                &source_refs,
+                "revision_accept",
+                &new_changelog,
+                None,
+                expected_version,
+            )
+            .await?
+        }
+        None => {
+            db.try_update_page_content_with_changelog(
+                &card.page_id,
+                &card.content,
+                &source_refs,
+                "revision_accept",
+                false,
+                &new_changelog,
+                None,
+            )
+            .await?
+        }
+    };
+
+    if !wrote {
+        let current_version = db
+            .get_page(&card.page_id)
+            .await?
+            .ok_or_else(|| WenlanError::NotFound(format!("Page not found: {}", card.page_id)))?
+            .version;
+        let Some(staged_version) = card.page_version else {
+            return Err(WenlanError::Conflict(format!(
+                "page revision card {} for page {} did not write",
+                card.revision_id, card.page_id
+            )));
+        };
+        return Err(WenlanError::Conflict(format!(
+            "page revision card {} was staged for page {} at staged version {}, but current version {} no longer matches",
+            card.revision_id, card.page_id, staged_version, current_version
+        )));
+    }
+
+    let conn = db.conn.lock().await;
+    conn.execute(
+        "UPDATE memories \
+         SET pending_revision = 0, confirmed = 0, stability = 'new' \
+         WHERE source_id = ?1 AND pending_revision = 1",
+        libsql::params![card.revision_id.clone()],
+    )
+    .await
+    .map_err(|e| WenlanError::VectorDb(format!("accept_page_revision_card consume: {e}")))?;
+    drop(conn);
+
+    if let Some(kp) = knowledge_path {
+        if let Ok(Some(updated_page)) = db.get_page(&card.page_id).await {
+            let writer = crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf());
+            if let Err(e) = writer.write_page(&updated_page) {
+                log::warn!(
+                    "[accept_page_revision_card] md re-write failed for {}: {e}",
+                    card.page_id
+                );
+            }
+        }
+    }
+
+    Ok(wenlan_types::RevisionAcceptResponse {
+        target_source_id: card.page_id,
+        revision_source_id: card.revision_id,
         wrote: true,
     })
 }
@@ -811,6 +1403,21 @@ pub async fn accept_pending_revision(
     id: &str,
     agent: &str,
 ) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
+    accept_pending_revision_with_knowledge_path(db, id, agent, None).await
+}
+
+pub async fn accept_pending_revision_with_knowledge_path(
+    db: &MemoryDB,
+    id: &str,
+    agent: &str,
+    knowledge_path: Option<&Path>,
+) -> Result<wenlan_types::RevisionAcceptResponse, WenlanError> {
+    if let Some(card) = resolve_page_revision_card(db, id).await? {
+        let result = accept_page_revision_card(db, card, knowledge_path).await?;
+        log_activity_best_effort(db, agent, "revision_accept", &result.target_source_id).await;
+        return Ok(result);
+    }
+
     // `id` may be the revision's own source_id (exact) or its target's (legacy);
     // the DB resolves it and returns the actual (target, revision) pair acted on.
     let (target_source_id, revision_source_id) = db.accept_pending_revision(id).await?;
@@ -1396,7 +2003,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec!["mem_does_not_exist".to_string()],
-            creation_kind: None,
+            creation_kind: Some("authored".to_string()),
             workspace: None,
         };
         assert!(matches!(
@@ -1408,26 +2015,20 @@ mod tests {
     #[tokio::test]
     async fn create_page_rejects_hallucinated_body() {
         let (db, _dir) = test_db().await;
-        // Seed a memory about Rust
-        let doc = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: "mem-rust".to_string(),
-            title: "mem-rust".to_string(),
-            content: "Rust is a systems programming language".to_string(),
-            last_modified: chrono::Utc::now().timestamp(),
-            memory_type: Some("fact".to_string()),
-            source_agent: Some("test".to_string()),
-            confidence: Some(0.9),
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc]).await.unwrap();
+        seed_memory(&db, "mem-rust-a", "Rust is a systems programming language").await;
+        seed_memory(&db, "mem-rust-b", "Rust has ownership and borrowing").await;
+        seed_memory(&db, "mem-rust-c", "Rust supports memory-safe concurrency").await;
         let req = CreateConceptRequest {
             title: "Cooking".to_string(),
             content: "Pasta carbonara needs eggs and pancetta".to_string(),
             summary: None,
             entity_id: None,
             space: None,
-            source_memory_ids: vec!["mem-rust".to_string()],
+            source_memory_ids: vec![
+                "mem-rust-a".to_string(),
+                "mem-rust-b".to_string(),
+                "mem-rust-c".to_string(),
+            ],
             creation_kind: None,
             workspace: None,
         };
@@ -1441,20 +2042,24 @@ mod tests {
     #[tokio::test]
     async fn create_page_happy_path() {
         let (db, _dir) = test_db().await;
-        // Seed a memory about Rust
-        let doc = crate::sources::RawDocument {
-            source: "memory".to_string(),
-            source_id: "mem-rust-happy".to_string(),
-            title: "mem-rust-happy".to_string(),
-            content: "Rust is a systems programming language with memory safety guarantees"
-                .to_string(),
-            last_modified: chrono::Utc::now().timestamp(),
-            memory_type: Some("fact".to_string()),
-            source_agent: Some("test".to_string()),
-            confidence: Some(0.9),
-            ..Default::default()
-        };
-        db.upsert_documents(vec![doc]).await.unwrap();
+        seed_memory(
+            &db,
+            "mem-rust-happy-a",
+            "Rust is a systems programming language with memory safety guarantees",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-happy-b",
+            "Rust provides ownership and borrowing for memory safety",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-happy-c",
+            "Rust supports systems programming with safe concurrency",
+        )
+        .await;
         let req = CreateConceptRequest {
             title: "Rust".to_string(),
             content: "Rust is a systems programming language providing memory safety guarantees"
@@ -1462,12 +2067,576 @@ mod tests {
             summary: Some("memory-safe systems language".to_string()),
             entity_id: None,
             space: None,
-            source_memory_ids: vec!["mem-rust-happy".to_string()],
+            source_memory_ids: vec![
+                "mem-rust-happy-a".to_string(),
+                "mem-rust-happy-b".to_string(),
+                "mem-rust-happy-c".to_string(),
+            ],
             creation_kind: None,
             workspace: None,
         };
         let result = create_page(&db, req, "test", None).await.unwrap();
         assert!(result.id.starts_with("page_"));
+    }
+
+    #[tokio::test]
+    async fn create_page_with_floor_rejects_distilled_below_configured_floor() {
+        let (db, _dir) = test_db().await;
+        seed_memory(
+            &db,
+            "mem-rust-floor-a",
+            "Rust has ownership and borrowing for memory safety",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-floor-b",
+            "Rust uses lifetimes to validate borrowed references",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-floor-c",
+            "Rust tracks reference validity through lifetimes",
+        )
+        .await;
+        let req = CreateConceptRequest {
+            title: "Rust Memory Safety".to_string(),
+            content:
+                "Rust has ownership, borrowing, lifetimes, reference validity, and memory safety"
+                    .to_string(),
+            summary: Some("Rust memory safety".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-rust-floor-a".to_string(),
+                "mem-rust-floor-b".to_string(),
+                "mem-rust-floor-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page_with_floor(&db, req, "test", None, 4).await;
+
+        match result {
+            Err(WenlanError::Validation(message)) => assert_eq!(
+                message,
+                "distilled page requires at least 4 distinct source memories (got 3)"
+            ),
+            other => panic!("expected distinct-source floor validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_page_counts_distinct_sources_for_distilled_floor() {
+        let (db, _dir) = test_db().await;
+        seed_memory(
+            &db,
+            "mem-rust-distinct-a",
+            "Rust ownership prevents memory safety bugs",
+        )
+        .await;
+        seed_memory(
+            &db,
+            "mem-rust-distinct-b",
+            "Rust borrowing validates references at compile time",
+        )
+        .await;
+        let req = CreateConceptRequest {
+            title: "Rust Safety".to_string(),
+            content: "Rust ownership and borrowing validate memory-safe references".to_string(),
+            summary: Some("Rust source floor".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-rust-distinct-a".to_string(),
+                "mem-rust-distinct-a".to_string(),
+                "mem-rust-distinct-b".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await;
+
+        match result {
+            Err(WenlanError::Validation(message)) => assert_eq!(
+                message,
+                "distilled page requires at least 3 distinct source memories (got 2)"
+            ),
+            other => panic!("expected distinct-source floor validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_page_allows_authored_below_distilled_floor() {
+        let (db, _dir) = test_db().await;
+        seed_memory(
+            &db,
+            "mem-rust-authored-a",
+            "Rust ownership prevents memory safety bugs",
+        )
+        .await;
+        let req = CreateConceptRequest {
+            title: "Rust Authored Note".to_string(),
+            content: "Rust ownership prevents memory safety bugs".to_string(),
+            summary: Some("Rust authored page".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec!["mem-rust-authored-a".to_string()],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert!(result.id.starts_with("page_"));
+    }
+
+    #[tokio::test]
+    async fn create_page_rejects_zero_source_distilled_with_preexisting_message() {
+        let (db, _dir) = test_db().await;
+        let req = CreateConceptRequest {
+            title: "Rust".to_string(),
+            content: "Rust is a systems programming language".to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await;
+
+        match result {
+            Err(WenlanError::Validation(message)) => assert_eq!(
+                message, "distilled page must cite at least one source memory",
+                "zero-source distilled must keep the pre-existing message, not the distinct-source floor message"
+            ),
+            other => panic!("expected zero-source validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_page_allows_authored_with_zero_sources() {
+        let (db, _dir) = test_db().await;
+        let req = CreateConceptRequest {
+            title: "Rust Authored Note".to_string(),
+            content: "Rust ownership prevents memory safety bugs".to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert!(result.id.starts_with("page_"));
+    }
+
+    #[tokio::test]
+    async fn create_page_borns_distilled_unconfirmed() {
+        let (db, _dir) = test_db().await;
+        let docs = [
+            (
+                "mem-rust-birth-a",
+                "Rust ownership helps prevent memory safety bugs",
+            ),
+            (
+                "mem-rust-birth-b",
+                "Rust borrowing validates references at compile time",
+            ),
+            (
+                "mem-rust-birth-c",
+                "Rust lifetimes describe how long references remain valid",
+            ),
+        ]
+        .into_iter()
+        .map(|(source_id, content)| crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: source_id.to_string(),
+            content: content.to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confidence: Some(0.9),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+        db.upsert_documents(docs).await.unwrap();
+        let req = CreateConceptRequest {
+            title: "Rust References".to_string(),
+            content: "Rust ownership, borrowing, and lifetimes keep references memory safe"
+                .to_string(),
+            summary: Some("Rust reference safety".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-rust-birth-a".to_string(),
+                "mem-rust-birth-b".to_string(),
+                "mem-rust-birth-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+        let page = db.get_page(&result.id).await.unwrap().unwrap();
+
+        assert_eq!(page.review_status, "unconfirmed");
+        let keep_cards: Vec<_> = db
+            .get_pending_refinements()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|proposal| {
+                proposal.action == "page_keep_or_archive"
+                    && proposal.source_ids.iter().any(|id| id == &result.id)
+            })
+            .collect();
+        assert_eq!(
+            keep_cards.len(),
+            1,
+            "distilled page birth must mint exactly one keep/archive card"
+        );
+        let payload = keep_cards[0].payload.as_deref().unwrap_or_default();
+        assert!(
+            payload.contains("\"source_count\":3"),
+            "keep/archive card should preserve source count, got {payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_page_borns_authored_without_keep_card() {
+        let (db, _dir) = test_db().await;
+        let req = CreateConceptRequest {
+            title: "Authored Rust Notes".to_string(),
+            content: "Authored notes about Rust references and workspace conventions.".to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![],
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        let keep_cards: Vec<_> = db
+            .get_pending_refinements()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|proposal| {
+                proposal.action == "page_keep_or_archive"
+                    && proposal.source_ids.iter().any(|id| id == &result.id)
+            })
+            .collect();
+        assert!(
+            keep_cards.is_empty(),
+            "authored page birth must not mint a keep/archive card"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_page_attaches_same_workspace_near_duplicate_without_new_page() {
+        let (db, _dir) = test_db().await;
+        let existing_sources = [
+            (
+                "mem-pagewrite-existing-a",
+                "Rust workspaces can share a single Cargo lockfile across related crates",
+            ),
+            (
+                "mem-pagewrite-existing-b",
+                "Rust workspace members inherit shared package metadata from the root",
+            ),
+            (
+                "mem-pagewrite-existing-c",
+                "Rust workspace builds can check all member crates together",
+            ),
+        ];
+        for (source_id, content) in existing_sources {
+            seed_memory(&db, source_id, content).await;
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &[
+                "mem-pagewrite-existing-a",
+                "mem-pagewrite-existing-b",
+                "mem-pagewrite-existing-c",
+            ],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        for (source_id, content) in [
+            (
+                "mem-pagewrite-candidate-a",
+                "Rust workspaces share one Cargo lockfile for related crates",
+            ),
+            (
+                "mem-pagewrite-candidate-b",
+                "Rust workspace members can inherit shared package metadata",
+            ),
+            (
+                "mem-pagewrite-candidate-c",
+                "Rust workspace checks can validate every member crate together",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let before_pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(before_pages.len(), 1, "precondition: one active page");
+        let req = CreateConceptRequest {
+            title: "Rust Workspace Operations".to_string(),
+            content:
+                "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks"
+                    .to_string(),
+            summary: Some("Rust workspace operations".to_string()),
+            entity_id: None,
+            space: Some("recap".to_string()),
+            source_memory_ids: vec![
+                "mem-pagewrite-candidate-a".to_string(),
+                "mem-pagewrite-candidate-b".to_string(),
+                "mem-pagewrite-candidate-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: Some("work".to_string()),
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert_eq!(
+            result.id, "page_pagewrite_existing",
+            "near-duplicate create must resolve to the existing page id"
+        );
+        let result_json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            result_json.get("attached_to").and_then(|v| v.as_str()),
+            Some("page_pagewrite_existing"),
+            "response must expose the attach target"
+        );
+        let after_pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(
+            after_pages.len(),
+            1,
+            "same-workspace near-duplicate must not mint a second page"
+        );
+        let evidence = db
+            .get_page_evidence("page_pagewrite_existing")
+            .await
+            .unwrap();
+        let locators = evidence
+            .iter()
+            .filter(|ev| ev.source_kind == "memory")
+            .filter_map(|ev| ev.locator.as_deref())
+            .collect::<HashSet<_>>();
+        for expected in [
+            "mem-pagewrite-existing-a",
+            "mem-pagewrite-existing-b",
+            "mem-pagewrite-existing-c",
+            "mem-pagewrite-candidate-a",
+            "mem-pagewrite-candidate-b",
+            "mem-pagewrite-candidate-c",
+        ] {
+            assert!(
+                locators.contains(expected),
+                "page_evidence must include {expected}; got {locators:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_page_does_not_attach_no_space_candidate_to_workspace_page() {
+        let (db, _dir) = test_db().await;
+        for (source_id, content) in [
+            (
+                "mem-pagewrite-cross-existing-a",
+                "Rust workspaces can share a single Cargo lockfile across related crates",
+            ),
+            (
+                "mem-pagewrite-cross-existing-b",
+                "Rust workspace members inherit shared package metadata from the root",
+            ),
+            (
+                "mem-pagewrite-cross-existing-c",
+                "Rust workspace builds can check all member crates together",
+            ),
+            (
+                "mem-pagewrite-cross-candidate-a",
+                "Rust workspaces share one Cargo lockfile for related crates",
+            ),
+            (
+                "mem-pagewrite-cross-candidate-b",
+                "Rust workspace members can inherit shared package metadata",
+            ),
+            (
+                "mem-pagewrite-cross-candidate-c",
+                "Rust workspace checks can validate every member crate together",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_cross_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &[
+                "mem-pagewrite-cross-existing-a",
+                "mem-pagewrite-cross-existing-b",
+                "mem-pagewrite-cross-existing-c",
+            ],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let req = CreateConceptRequest {
+            title: "Rust Workspace Operations".to_string(),
+            content:
+                "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks"
+                    .to_string(),
+            summary: Some("Rust workspace operations".to_string()),
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![
+                "mem-pagewrite-cross-candidate-a".to_string(),
+                "mem-pagewrite-cross-candidate-b".to_string(),
+                "mem-pagewrite-cross-candidate-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: None,
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert_ne!(
+            result.id, "page_pagewrite_cross_existing",
+            "space-scoped dedup must not attach a no-space candidate to a workspace page"
+        );
+        assert_eq!(
+            result.attached_to, None,
+            "cross-space create must report a new page, not an attachment"
+        );
+        let pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(
+            pages.len(),
+            2,
+            "cross-space near-duplicate must mint a second page"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_page_does_not_attach_different_space_candidate() {
+        let (db, _dir) = test_db().await;
+        for (source_id, content) in [
+            (
+                "mem-pagewrite-diffspace-existing-a",
+                "Rust workspaces can share a single Cargo lockfile across related crates",
+            ),
+            (
+                "mem-pagewrite-diffspace-existing-b",
+                "Rust workspace members inherit shared package metadata from the root",
+            ),
+            (
+                "mem-pagewrite-diffspace-existing-c",
+                "Rust workspace builds can check all member crates together",
+            ),
+            (
+                "mem-pagewrite-diffspace-candidate-a",
+                "Rust workspaces share one Cargo lockfile for related crates",
+            ),
+            (
+                "mem-pagewrite-diffspace-candidate-b",
+                "Rust workspace members can inherit shared package metadata",
+            ),
+            (
+                "mem-pagewrite-diffspace-candidate-c",
+                "Rust workspace checks can validate every member crate together",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_pagewrite_diffspace_existing",
+            "Rust Workspace Operations",
+            Some("Rust workspace operations"),
+            "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks",
+            None,
+            Some("recap"),
+            &[
+                "mem-pagewrite-diffspace-existing-a",
+                "mem-pagewrite-diffspace-existing-b",
+                "mem-pagewrite-diffspace-existing-c",
+            ],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        // Same content, but scoped to a DIFFERENT workspace ("personal") — the
+        // scoped matcher's `COALESCE(workspace, space) = ?` filter must exclude
+        // the "work" page, so this mints a new page rather than attaching.
+        let req = CreateConceptRequest {
+            title: "Rust Workspace Operations".to_string(),
+            content:
+                "Rust workspaces share Cargo lockfiles, inherited metadata, and all-crate checks"
+                    .to_string(),
+            summary: Some("Rust workspace operations".to_string()),
+            entity_id: None,
+            space: Some("recap".to_string()),
+            source_memory_ids: vec![
+                "mem-pagewrite-diffspace-candidate-a".to_string(),
+                "mem-pagewrite-diffspace-candidate-b".to_string(),
+                "mem-pagewrite-diffspace-candidate-c".to_string(),
+            ],
+            creation_kind: Some("distilled".to_string()),
+            workspace: Some("personal".to_string()),
+        };
+
+        let result = create_page(&db, req, "test", None).await.unwrap();
+
+        assert_ne!(
+            result.id, "page_pagewrite_diffspace_existing",
+            "space-scoped dedup must not attach a different-space candidate to a work page"
+        );
+        assert_eq!(
+            result.attached_to, None,
+            "different-space create must report a new page, not an attachment"
+        );
+        let pages = db.list_pages("active", 10, 0).await.unwrap();
+        assert_eq!(
+            pages.len(),
+            2,
+            "different-space near-duplicate must mint a second page"
+        );
     }
 
     // ── update_page ──────────────────────────────────────────────────────────
@@ -1497,7 +2666,7 @@ mod tests {
             entity_id: None,
             space: None,
             source_memory_ids: vec![source_id.to_string()],
-            creation_kind: None,
+            creation_kind: Some("research".to_string()),
             workspace: None,
         };
         create_page(db, req, "test", None).await.unwrap().id
@@ -1830,6 +2999,165 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn page_write_update_user_edited_machine_write_creates_revision_card_without_overwrite() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-pagewrite-owned";
+        let source_content = "Rust ownership keeps memory safety rules explicit in systems code";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_pagewrite_owned";
+        db.insert_page(
+            page_id,
+            "Rust Ownership",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let human_content =
+            "Rust ownership keeps memory safety rules explicit in systems code, with human notes";
+        page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: human_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                },
+                edited_by: "fs_edit",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            before.user_edited,
+            "precondition: fs_edit marks human ownership"
+        );
+
+        let machine_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+        let result = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: machine_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(result.id, page_id);
+        assert!(!result.wrote, "gated PageWrite must report wrote=false");
+        assert!(result.gated, "gated PageWrite must expose gated=true");
+        assert_eq!(result.attached_to, None);
+        assert_eq!(
+            result.warnings,
+            vec!["human-owned page; staged revision card instead of overwriting content"],
+            "gated PageWrite must explain that the page prose was not overwritten"
+        );
+        assert_eq!(
+            after.content, before.content,
+            "machine PageWrite must not overwrite human-owned page prose"
+        );
+        assert_eq!(
+            after.content, human_content,
+            "machine PageWrite must leave the human-authored bytes unchanged"
+        );
+        assert_eq!(
+            after.source_memory_ids, before.source_memory_ids,
+            "gated PageWrite must not mutate the protected page source set"
+        );
+        assert_eq!(
+            after.version, before.version,
+            "gated PageWrite must not bump the protected page version"
+        );
+        assert!(
+            after.user_edited,
+            "gated PageWrite must preserve the human ownership marker"
+        );
+
+        let result_json = serde_json::to_value(&result).unwrap();
+        assert_eq!(result_json.get("gated"), Some(&serde_json::json!(true)));
+        let revision_card_id = result_json
+            .get("revision_card_id")
+            .and_then(|v| v.as_str())
+            .expect("gated response must include revision_card_id");
+
+        let revisions = db.list_pending_revisions(10).await.unwrap();
+        assert_eq!(
+            revisions.len(),
+            1,
+            "gated PageWrite must stage exactly one pending revision card"
+        );
+        let card = revisions
+            .iter()
+            .find(|r| r.revision_source_id == revision_card_id)
+            .expect("revision card must be visible in pending revisions");
+        assert_eq!(card.target_source_id, page_id);
+        assert_eq!(card.revision_content, machine_content);
+        assert_eq!(card.source_agent.as_deref(), Some("page_write"));
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT source, supersedes, pending_revision, confirmed, stability, \
+                        structured_fields, source_text, memory_type \
+                 FROM memories WHERE source_id = ?1",
+                libsql::params![revision_card_id.to_string()],
+            )
+            .await
+            .unwrap();
+        let row = rows
+            .next()
+            .await
+            .unwrap()
+            .expect("revision card row must be persisted");
+        assert_eq!(row.get::<String>(0).unwrap(), "memory");
+        assert_eq!(row.get::<String>(1).unwrap(), page_id);
+        assert_eq!(row.get::<i64>(2).unwrap(), 1);
+        assert_eq!(row.get::<i64>(3).unwrap(), 0);
+        assert_eq!(row.get::<String>(4).unwrap(), "new");
+        let structured_fields = row.get::<String>(5).unwrap();
+        assert_eq!(
+            row.get::<Option<String>>(6).unwrap().as_deref(),
+            Some(machine_content)
+        );
+        assert_eq!(row.get::<String>(7).unwrap(), "fact");
+        assert!(
+            rows.next().await.unwrap().is_none(),
+            "revision_card_id must identify one persisted card row"
+        );
+        drop(rows);
+        drop(conn);
+
+        let structured: serde_json::Value = serde_json::from_str(&structured_fields).unwrap();
+        assert_eq!(structured["revision_kind"], "page_write");
+        assert_eq!(structured["target_kind"], "page");
+        assert_eq!(structured["revises_page"], page_id);
+        assert_eq!(structured["page_version"], before.version);
+        assert_eq!(structured["edited_by"], "re_distill");
+        assert_eq!(structured["source_memory_ids"], serde_json::json!([mem_id]));
+    }
+
     // ── accept_pending_revision ──────────────────────────────────────────────
 
     async fn seed_pending_revision(db: &MemoryDB, target: &str, revision: &str) {
@@ -1859,6 +3187,280 @@ mod tests {
         assert_eq!(result.target_source_id, "mem_apr_target");
         assert_eq!(result.revision_source_id, "mem_apr_rev");
         assert!(result.wrote);
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_page_write_card_updates_page_content() {
+        let (db, _dir) = test_db().await;
+        let knowledge_dir = tempfile::tempdir().unwrap();
+        let mem_id = "mem_page_accept_original";
+        let new_mem_id = "mem_page_accept_new";
+        let original_content = "Rust ownership keeps memory safety rules explicit";
+        let human_content = "Rust ownership keeps memory safety rules explicit, with human notes";
+        let proposed_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        assert!(before.user_edited, "precondition: page is human-owned");
+
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card
+            .revision_card_id
+            .as_deref()
+            .expect("staged page card must return an id");
+
+        let accepted = accept_pending_revision_with_knowledge_path(
+            &db,
+            card_id,
+            "test-agent",
+            Some(knowledge_dir.path()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(accepted.target_source_id, page_id);
+        assert_eq!(accepted.revision_source_id, card_id);
+        assert!(accepted.wrote);
+
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, proposed_content,
+            "accepting a page-write card must apply the proposed prose to the page"
+        );
+        assert_eq!(
+            after.source_memory_ids,
+            vec![mem_id.to_string(), new_mem_id.to_string()],
+            "accepting a page-write card must apply its proposed source set"
+        );
+        assert_eq!(
+            after.version,
+            before.version + 1,
+            "accepting a page-write card must bump the page version"
+        );
+        assert!(
+            db.list_pending_revisions(10).await.unwrap().is_empty(),
+            "accepted page-write card must leave the pending revision queue"
+        );
+
+        let writer =
+            crate::export::knowledge::KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+        let filename = writer
+            .page_filename(&page_id)
+            .expect("accepted page-write card must refresh the markdown projection");
+        let markdown = std::fs::read_to_string(knowledge_dir.path().join(filename)).unwrap();
+        assert!(
+            markdown.contains(proposed_content),
+            "markdown projection must contain the accepted page prose"
+        );
+        assert!(
+            markdown.contains(&format!("origin_version: {}", after.version)),
+            "markdown projection must carry the accepted page version"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_page_write_card_conflicts_when_page_version_changed() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_accept_conflict_original";
+        let new_mem_id = "mem_page_accept_conflict_new";
+        let original_content = "Rust ownership keeps memory safety rules explicit";
+        let human_content = "Rust ownership keeps memory safety rules explicit, with human notes";
+        let proposed_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+        let newer_human_content =
+            "Rust ownership keeps memory safety rules explicit, with newer human notes";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let staged_version = before.version;
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card
+            .revision_card_id
+            .as_deref()
+            .expect("staged page card must return an id");
+
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: newer_human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let err = accept_pending_revision(&db, card_id, "test-agent")
+            .await
+            .unwrap_err();
+        match err {
+            WenlanError::Conflict(msg) => {
+                assert!(
+                    msg.contains(&format!("staged version {staged_version}")),
+                    "conflict message must name the staged version, got: {msg}"
+                );
+                assert!(
+                    msg.contains(&format!("current version {}", staged_version + 1)),
+                    "conflict message must name the current version, got: {msg}"
+                );
+            }
+            other => panic!("expected version conflict, got {other:?}"),
+        }
+
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, newer_human_content,
+            "stale page-write card must not overwrite newer human prose"
+        );
+        assert!(
+            db.list_pending_revisions(10)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.revision_source_id == card_id),
+            "conflicted page-write card must remain pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_pending_revision_legacy_page_write_card_without_version_still_accepts() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_accept_legacy_original";
+        let new_mem_id = "mem_page_accept_legacy_new";
+        let original_content = "Rust ownership keeps memory safety rules explicit";
+        let human_content = "Rust ownership keeps memory safety rules explicit, with human notes";
+        let proposed_content =
+            "Rust ownership lets the compiler enforce memory safety during page refresh";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: human_content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card
+            .revision_card_id
+            .as_deref()
+            .expect("staged page card must return an id");
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT structured_fields FROM memories WHERE source_id = ?1",
+                    libsql::params![card_id.to_string()],
+                )
+                .await
+                .unwrap();
+            let row = rows
+                .next()
+                .await
+                .unwrap()
+                .expect("revision card row must exist");
+            let structured_fields = row.get::<String>(0).unwrap();
+            drop(rows);
+
+            let mut structured: serde_json::Value =
+                serde_json::from_str(&structured_fields).unwrap();
+            structured
+                .as_object_mut()
+                .expect("structured_fields must be an object")
+                .remove("page_version");
+            conn.execute(
+                "UPDATE memories SET structured_fields = ?1 WHERE source_id = ?2",
+                libsql::params![structured.to_string(), card_id.to_string()],
+            )
+            .await
+            .unwrap();
+        }
+
+        let accepted = accept_pending_revision(&db, card_id, "test-agent")
+            .await
+            .unwrap();
+        assert_eq!(accepted.target_source_id, page_id);
+        assert_eq!(accepted.revision_source_id, card_id);
+        assert!(accepted.wrote);
+
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, proposed_content,
+            "legacy page-write cards without page_version must still accept"
+        );
     }
 
     #[tokio::test]

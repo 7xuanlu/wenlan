@@ -191,6 +191,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                         s.llm.clone(),
                         s.api_llm.clone(),
                         s.synthesis_llm.clone(),
+                        s.external_llm.clone(),
                         s.prompts.clone(),
                         s.tuning.refinery.clone(),
                         s.tuning.confidence.clone(),
@@ -204,6 +205,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 llm,
                 api_llm,
                 synthesis_llm,
+                external_llm,
                 prompts,
                 refinery_cfg,
                 confidence_cfg,
@@ -278,6 +280,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                             llm.as_ref(),
                             api_llm.as_ref(),
                             synthesis_llm.as_ref(),
+                            external_llm.as_ref(),
                             &prompts,
                             &refinery_cfg,
                             &confidence_cfg,
@@ -309,11 +312,26 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                     llm.as_ref(),
                     api_llm.as_ref(),
                     synthesis_llm.as_ref(),
+                    external_llm.as_ref(),
                     &prompts,
                     &refinery_cfg,
                     &confidence_cfg,
                     &distillation_cfg,
                     wenlan_core::refinery::TriggerKind::Idle,
+                    "Idle",
+                )
+                .await;
+                let maintenance_llm = synthesis_llm
+                    .as_ref()
+                    .or(api_llm.as_ref())
+                    .or(external_llm.as_ref())
+                    .or(llm.as_ref());
+                fire_maintenance_safe(
+                    db.as_ref(),
+                    maintenance_llm,
+                    &prompts,
+                    &distillation_cfg,
+                    Some(knowledge_path.as_path()),
                     "Idle",
                 )
                 .await;
@@ -328,6 +346,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                     llm.as_ref(),
                     api_llm.as_ref(),
                     synthesis_llm.as_ref(),
+                    external_llm.as_ref(),
                     &prompts,
                     &refinery_cfg,
                     &confidence_cfg,
@@ -351,11 +370,26 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                     llm.as_ref(),
                     api_llm.as_ref(),
                     synthesis_llm.as_ref(),
+                    external_llm.as_ref(),
                     &prompts,
                     &refinery_cfg,
                     &confidence_cfg,
                     &distillation_cfg,
                     wenlan_core::refinery::TriggerKind::Backstop,
+                    "Backstop",
+                )
+                .await;
+                let maintenance_llm = synthesis_llm
+                    .as_ref()
+                    .or(api_llm.as_ref())
+                    .or(external_llm.as_ref())
+                    .or(llm.as_ref());
+                fire_maintenance_safe(
+                    db.as_ref(),
+                    maintenance_llm,
+                    &prompts,
+                    &distillation_cfg,
+                    Some(knowledge_path.as_path()),
                     "Backstop",
                 )
                 .await;
@@ -530,6 +564,44 @@ async fn run_directory_sync_tick(
     processed
 }
 
+async fn fire_maintenance_safe(
+    db: &wenlan_core::db::MemoryDB,
+    llm: Option<&Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+    prompts: &wenlan_core::prompts::PromptRegistry,
+    distillation_cfg: &wenlan_core::tuning::DistillationConfig,
+    knowledge_path: Option<&std::path::Path>,
+    label: &str,
+) {
+    let config = wenlan_core::maintenance::MaintenanceTickConfig {
+        page_match_threshold: distillation_cfg.page_match_threshold,
+        formation_threshold: distillation_cfg.formation_threshold,
+        page_min_cluster_size: distillation_cfg.page_min_cluster_size,
+        token_limit: distillation_cfg.ondevice_token_limit,
+        max_unlinked_cluster_size: distillation_cfg.max_unlinked_cluster_size,
+        max_grouped_cluster_size: distillation_cfg.max_grouped_cluster_size,
+        max_per_tick: 5,
+    };
+    match wenlan_core::maintenance::run_maintenance_tick(db, llm, prompts, &config, knowledge_path)
+        .await
+    {
+        Ok(result) => {
+            tracing::info!(
+                "[scheduler] {label} maintenance: {} merge card(s), {} discovery card(s), {} retro card(s) from {} expected (paused={}), {} machine refresh(es), {} human card(s), {} orphan label(s), {} overview refresh(es)",
+                result.merge_cards_emitted,
+                result.discovery_cards_emitted,
+                result.retro_cards_emitted,
+                result.retro_expected_card_volume,
+                result.retro_paused,
+                result.stale_machine_refreshed,
+                result.stale_human_cards,
+                result.orphan_labels_checked,
+                result.overview_refreshed
+            );
+        }
+        Err(e) => tracing::warn!("[scheduler] {label} maintenance error: {e}"),
+    }
+}
+
 /// Load the persisted last_daily_steep_ts from DB. Returns epoch seconds or 0.
 async fn load_last_daily(shared: &SharedState) -> i64 {
     let s = shared.read().await;
@@ -551,6 +623,7 @@ async fn fire_steep_safe(
     llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
     api_llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
     synthesis_llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+    external_llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
     prompts: &wenlan_core::prompts::PromptRegistry,
     refinery_cfg: &wenlan_core::tuning::RefineryConfig,
     confidence_cfg: &wenlan_core::tuning::ConfidenceConfig,
@@ -563,6 +636,7 @@ async fn fire_steep_safe(
         llm,
         api_llm,
         synthesis_llm,
+        external_llm,
         prompts,
         refinery_cfg,
         confidence_cfg,
@@ -593,6 +667,7 @@ async fn fire_steep(
     llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
     api_llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
     synthesis_llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+    external_llm: Option<&std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
     prompts: &wenlan_core::prompts::PromptRegistry,
     refinery_cfg: &wenlan_core::tuning::RefineryConfig,
     confidence_cfg: &wenlan_core::tuning::ConfidenceConfig,
@@ -606,6 +681,7 @@ async fn fire_steep(
         llm,
         api_llm,
         synthesis_llm,
+        external_llm,
         prompts,
         refinery_cfg,
         confidence_cfg,
@@ -1016,6 +1092,245 @@ mod tests {
         assert!(
             chunks.is_empty(),
             "a skipped paused document must not be processed into chunks"
+        );
+    }
+
+    struct MaintenanceTestProvider {
+        body: String,
+    }
+
+    #[async_trait::async_trait]
+    impl wenlan_core::llm_provider::LlmProvider for MaintenanceTestProvider {
+        async fn generate(
+            &self,
+            _request: wenlan_core::llm_provider::LlmRequest,
+        ) -> Result<String, wenlan_core::llm_provider::LlmError> {
+            Ok(self.body.clone())
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "maintenance-test"
+        }
+
+        fn backend(&self) -> wenlan_core::llm_provider::LlmBackend {
+            wenlan_core::llm_provider::LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    async fn store_test_memory(db: &wenlan_core::db::MemoryDB, id: &str, content: &str) {
+        db.upsert_documents(vec![wenlan_types::RawDocument {
+            source: "memory".to_string(),
+            source_id: id.to_string(),
+            title: id.to_string(),
+            content: content.to_string(),
+            last_modified: chrono::Utc::now().timestamp(),
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confirmed: Some(true),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+    }
+
+    async fn insert_test_page(
+        db: &wenlan_core::db::MemoryDB,
+        title: &str,
+        content: &str,
+        source_ids: &[&str],
+        creation_kind: &str,
+    ) -> String {
+        let source_memory_ids: Vec<String> = if creation_kind == "distilled" {
+            source_ids.iter().map(|id| (*id).to_string()).collect()
+        } else {
+            Vec::new()
+        };
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            wenlan_types::requests::CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
+                summary: None,
+                entity_id: None,
+                source_memory_ids,
+                creation_kind: Some(creation_kind.to_string()),
+                space: Some("work".to_string()),
+                workspace: Some("work".to_string()),
+            },
+            "test",
+            None,
+            source_ids.len().max(1),
+            1.1,
+        )
+        .await
+        .unwrap();
+        if creation_kind != "distilled" && !source_ids.is_empty() {
+            let source_memory_ids: Vec<String> =
+                source_ids.iter().map(|id| (*id).to_string()).collect();
+            wenlan_core::post_write::page_write(
+                db,
+                wenlan_core::post_write::PageWrite::Attach {
+                    page_id: &result.id,
+                    source_memory_ids: &source_memory_ids,
+                    link_reason: "test_fixture_attach",
+                    agent: "test",
+                },
+            )
+            .await
+            .unwrap();
+        }
+        db.set_page_review_status(&result.id, "confirmed")
+            .await
+            .unwrap();
+        result.id
+    }
+
+    #[tokio::test]
+    async fn maintenance_tick_detects_page_merge_cards_and_routes_stale_pages() {
+        let (db, _db_dir) = new_test_db().await;
+        let source = "Rust ownership prevents data races at compile time.";
+        for id in [
+            "mem_dup_a",
+            "mem_dup_b",
+            "mem_dup_c",
+            "mem_machine",
+            "mem_human",
+        ] {
+            store_test_memory(&db, id, source).await;
+        }
+
+        let page_dup_a = insert_test_page(
+            &db,
+            "Rust ownership",
+            "Rust ownership prevents data races at compile time.",
+            &["mem_dup_a", "mem_dup_b", "mem_dup_c"],
+            "distilled",
+        )
+        .await;
+        let page_dup_b = insert_test_page(
+            &db,
+            "Rust borrowing",
+            "Rust ownership prevents data races at compile time.",
+            &["mem_dup_a", "mem_dup_b", "mem_dup_c"],
+            "distilled",
+        )
+        .await;
+        let page_machine_stale = insert_test_page(
+            &db,
+            "Machine stale page",
+            "Old machine-owned prose.",
+            &["mem_machine"],
+            "research",
+        )
+        .await;
+        let page_human_stale = insert_test_page(
+            &db,
+            "Human stale page",
+            "Human-written prose must remain untouched.",
+            &["mem_human"],
+            "authored",
+        )
+        .await;
+        let _page_orphan_source = insert_test_page(
+            &db,
+            "Orphan source",
+            "This page links to [[Missing Topic]].",
+            &["mem_machine"],
+            "research",
+        )
+        .await;
+        db.set_page_stale(&page_machine_stale, "source_updated")
+            .await
+            .unwrap();
+        db.set_page_stale(&page_human_stale, "source_updated")
+            .await
+            .unwrap();
+
+        let llm: std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider> =
+            std::sync::Arc::new(MaintenanceTestProvider {
+                body: format!("{source} [1]"),
+            });
+        let prompts = wenlan_core::prompts::PromptRegistry::default();
+
+        let result = wenlan_core::maintenance::run_maintenance_tick(
+            &db,
+            Some(&llm),
+            &prompts,
+            &wenlan_core::maintenance::MaintenanceTickConfig {
+                page_match_threshold: 0.85,
+                formation_threshold: 0.60,
+                page_min_cluster_size: 3,
+                token_limit: 3500,
+                max_unlinked_cluster_size: 20,
+                max_grouped_cluster_size: 20,
+                max_per_tick: 5,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.merge_cards_emitted, 1);
+        assert_eq!(result.stale_machine_refreshed, 1);
+        assert_eq!(result.stale_human_cards, 1);
+        assert!(
+            result.orphan_labels_checked >= 1,
+            "the maintenance tick must run the orphan wikilink check"
+        );
+        assert_eq!(result.overview_refreshed, 1);
+
+        let proposals = db.get_pending_refinements().await.unwrap();
+        let merge_card = proposals
+            .iter()
+            .find(|p| p.action == "page_merge")
+            .expect("near-duplicate pages must emit a page_merge card");
+        assert_eq!(merge_card.source_ids.len(), 2);
+        assert!(merge_card.source_ids.contains(&page_dup_a));
+        assert!(merge_card.source_ids.contains(&page_dup_b));
+
+        let machine = db
+            .get_page(&page_machine_stale)
+            .await
+            .unwrap()
+            .expect("machine page remains");
+        assert_eq!(machine.stale_reason, None);
+        assert!(
+            machine
+                .content
+                .contains("Rust ownership prevents data races"),
+            "machine-owned stale page should be refreshed in place"
+        );
+
+        let human = db
+            .get_page(&page_human_stale)
+            .await
+            .unwrap()
+            .expect("human page remains");
+        assert_eq!(human.stale_reason, None);
+        assert_eq!(human.content, "Human-written prose must remain untouched.");
+
+        let revisions = db.list_pending_revisions(10).await.unwrap();
+        assert!(
+            revisions
+                .iter()
+                .any(|r| r.target_source_id == page_human_stale),
+            "human-owned stale page should stage a revision card"
+        );
+
+        assert!(
+            db.find_active_page_id_by_title("Overview")
+                .await
+                .unwrap()
+                .is_some(),
+            "overview refresh must create or update the reserved Overview page"
         );
     }
 }

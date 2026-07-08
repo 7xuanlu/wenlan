@@ -10,9 +10,11 @@ use serde_json::json;
 #[derive(Debug)]
 pub enum ServerError {
     DbNotInitialized,
+    BadRequest(String),
     SearchFailed(String),
     IngestFailed(String),
     Internal(String),
+    Conflict(String),
     AgentDisabled(String),
     NotFound(String),
     ValidationError(String),
@@ -28,9 +30,11 @@ impl std::fmt::Display for ServerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServerError::DbNotInitialized => write!(f, "Database not initialized"),
+            ServerError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
             ServerError::SearchFailed(msg) => write!(f, "Search failed: {}", msg),
             ServerError::IngestFailed(msg) => write!(f, "Ingest failed: {}", msg),
             ServerError::Internal(msg) => write!(f, "Internal error: {}", msg),
+            ServerError::Conflict(msg) => write!(f, "Conflict: {}", msg),
             ServerError::AgentDisabled(msg) => write!(f, "Agent disabled: {}", msg),
             ServerError::NotFound(msg) => write!(f, "Not found: {}", msg),
             ServerError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
@@ -66,9 +70,11 @@ impl IntoResponse for ServerError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Database not initialized".to_string(),
             ),
+            ServerError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ServerError::SearchFailed(msg) => (StatusCode::BAD_REQUEST, msg),
             ServerError::IngestFailed(msg) => (StatusCode::BAD_REQUEST, msg),
             ServerError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ServerError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             ServerError::AgentDisabled(msg) => (StatusCode::FORBIDDEN, msg),
             ServerError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ServerError::ValidationError(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
@@ -88,6 +94,7 @@ impl From<wenlan_core::WenlanError> for ServerError {
     fn from(err: wenlan_core::WenlanError) -> Self {
         match err {
             wenlan_core::WenlanError::AgentDisabled(msg) => ServerError::AgentDisabled(msg),
+            wenlan_core::WenlanError::Conflict(msg) => ServerError::Conflict(msg),
             wenlan_core::WenlanError::Validation(msg) => ServerError::ValidationError(msg),
             wenlan_core::WenlanError::NotFound(msg) => ServerError::NotFound(msg),
             other => ServerError::Internal(other.to_string()),

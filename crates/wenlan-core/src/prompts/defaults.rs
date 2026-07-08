@@ -196,6 +196,24 @@ Rules:\n\
 - Cite each factual claim by appending [N] immediately after it, where N is the number of the supporting source in the numbered source list. Attach the marker to the exact sentence that states the fact — never at the end of a paragraph, and never on a sentence that only explains or elaborates. A claim drawing on several sources may carry several markers, like [1][3]. Use only numbers that appear in the list. Do NOT add a sources or citations section — the system renders citations from the markers.\n\
 - Do not write HTML comments (the <!-- ... --> form) anywhere in the page.";
 
+pub(crate) const OVERVIEW_SUMMARY: &str = "\
+You are refreshing the wiki's reserved Overview page -- a short index of what \
+the wiki currently covers, not a deep-dive page.\n\
+\n\
+Format:\n\
+Do NOT start with a title heading (# Title) -- the title is displayed separately by the UI.\n\
+Start directly with a one-sentence TLDR describing the wiki's current focus.\n\
+\n\
+Then, for the sources given, write ONE short entry per DISTINCT topic they represent -- \
+naming the topic and summarizing what it covers in a sentence or two. Group sources that \
+belong to the same topic into a single entry; do not enumerate every source separately.\n\
+\n\
+Rules:\n\
+- Read like a table of contents with one-line annotations, not an encyclopedia entry.\n\
+- If the sources span multiple topics, the Overview must name and summarize EACH one.\n\
+- Cite each topic's summary by appending [N] immediately after it, where N is the number of a supporting source in the numbered source list. Use only numbers that appear in the list. Do NOT add a sources or citations section -- the system renders citations from the markers.\n\
+- Do not write HTML comments (the <!-- ... --> form) anywhere in the page.";
+
 pub(crate) const UPDATE_PAGE: &str = "\
 You maintain a wiki-style knowledge page. Update it with new information.\n\
 Integrate new facts into the existing prose naturally — don't just append bullets.\n\
@@ -213,29 +231,6 @@ claim that a source supports, where N is that source's number in the list. \
 Change NOTHING else: do not rewrite, reorder, add, or remove any text. \
 If you are unsure a source supports a claim, leave the claim unmarked. \
 Output the complete page body with the markers inserted.";
-
-pub(crate) const ASSIGN_ORPHANS: &str = r#"You are a knowledge organization assistant. Given a list of unassigned memories and existing concepts, for each memory:
-1. If it clearly belongs to an existing page, assign it (return the page_id)
-2. If 3+ unassigned memories share a theme not covered by existing pages, propose a new page (return a title and the memory indices)
-3. Skip memories that are too isolated to group
-
-Return a JSON object with two arrays:
-- "assignments": [{"memory_index": 0, "page_id": "existing_page_id"}]
-- "proposals": [{"title": "Proposed Page Title", "memory_indices": [1, 3, 5]}]
-
-Only return valid JSON. No explanation text."#;
-
-pub(crate) const GLOBAL_PAGE_REVIEW: &str = r#"You are reviewing a knowledge base for organization quality. Given all page titles and summaries, identify:
-1. Pages that should merge (overlapping topics) — return pairs of page_ids
-2. Cross-cutting themes missing — return proposed titles with related page_ids
-3. Pages that should split (too broad) — return page_id with proposed sub-titles
-
-Return a JSON object:
-- "merges": [{"keep": "page_id_1", "remove": "page_id_2", "reason": "..."}]
-- "missing": [{"title": "...", "related_pages": ["id1", "id2"]}]
-- "splits": [{"page_id": "...", "sub_titles": ["...", "..."]}]
-
-Be conservative. Only suggest changes with high confidence. Return empty arrays if nothing needs changing."#;
 
 pub(crate) const REFINE_CLUSTERS: &str = r#"You are organizing memory clusters for wiki compilation. Each cluster will become a separate concept page.
 
