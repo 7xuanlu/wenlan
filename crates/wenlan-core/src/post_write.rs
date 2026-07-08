@@ -33,7 +33,8 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-const VALID_PAGE_CREATION_KINDS: [&str; 4] = ["distilled", "authored", "research", "imported"];
+const VALID_PAGE_CREATION_KINDS: [&str; 5] =
+    ["distilled", "authored", "research", "imported", "source"];
 const PAGE_BIRTH_REVIEW_STATUS: &str = "unconfirmed";
 
 pub enum PageWrite<'a> {
@@ -44,6 +45,7 @@ pub enum PageWrite<'a> {
         agent: &'a str,
     },
     Create {
+        page_id: Option<&'a str>,
         req: CreateConceptRequest,
         agent: &'a str,
         knowledge_path: Option<&'a Path>,
@@ -70,6 +72,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             agent,
         } => attach_page_sources_impl(db, page_id, source_memory_ids, link_reason, agent).await,
         PageWrite::Create {
+            page_id,
             req,
             agent,
             knowledge_path,
@@ -79,12 +82,15 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
         } => {
             create_page_impl(
                 db,
-                req,
-                agent,
-                knowledge_path,
-                page_min_cluster_size,
-                page_match_threshold,
-                citations_json.as_deref(),
+                CreatePageInput {
+                    page_id,
+                    req,
+                    agent,
+                    knowledge_path,
+                    page_min_cluster_size,
+                    page_match_threshold,
+                    citations_json: citations_json.as_deref(),
+                },
             )
             .await
         }
@@ -600,6 +606,7 @@ pub async fn create_page_with_tuning(
     page_write(
         db,
         PageWrite::Create {
+            page_id: None,
             req,
             agent,
             knowledge_path,
@@ -611,15 +618,55 @@ pub async fn create_page_with_tuning(
     .await
 }
 
-async fn create_page_impl(
+async fn page_source_reference_exists(
     db: &MemoryDB,
+    creation_kind: &str,
+    source_id: &str,
+) -> Result<bool, WenlanError> {
+    if db.get_memory_detail(source_id).await?.is_some() {
+        return Ok(true);
+    }
+    if creation_kind != "source" {
+        return Ok(false);
+    }
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM memories WHERE id = ?1 AND pending_revision = 0 AND source != 'episode' LIMIT 1",
+            libsql::params![source_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("source page chunk lookup: {e}")))?;
+    rows.next()
+        .await
+        .map(|row| row.is_some())
+        .map_err(|e| WenlanError::VectorDb(format!("source page chunk lookup row: {e}")))
+}
+
+struct CreatePageInput<'a> {
+    page_id: Option<&'a str>,
     req: CreateConceptRequest,
-    agent: &str,
-    knowledge_path: Option<&Path>,
+    agent: &'a str,
+    knowledge_path: Option<&'a Path>,
     page_min_cluster_size: usize,
     page_match_threshold: f64,
-    citations_json: Option<&str>,
+    citations_json: Option<&'a str>,
+}
+
+async fn create_page_impl(
+    db: &MemoryDB,
+    input: CreatePageInput<'_>,
 ) -> Result<WriteResult, WenlanError> {
+    let CreatePageInput {
+        page_id,
+        req,
+        agent,
+        knowledge_path,
+        page_min_cluster_size,
+        page_match_threshold,
+        citations_json,
+    } = input;
+
     // Pre-write validation
     if req.title.trim().is_empty() {
         return Err(WenlanError::Validation(
@@ -639,8 +686,18 @@ async fn create_page_impl(
     }
     if !VALID_PAGE_CREATION_KINDS.contains(&creation_kind) {
         return Err(WenlanError::Validation(format!(
-            "invalid creation_kind '{creation_kind}' (expected one of: distilled, authored, research, imported)"
+            "invalid creation_kind '{creation_kind}' (expected one of: distilled, authored, research, imported, source)"
         )));
+    }
+    if creation_kind == "source" && page_id.is_none() {
+        return Err(WenlanError::Validation(
+            "source page requires a deterministic page id".into(),
+        ));
+    }
+    if creation_kind == "source" && req.source_memory_ids.is_empty() {
+        return Err(WenlanError::Validation(
+            "source page must cite at least one source memory".into(),
+        ));
     }
     let distinct_source_count = req
         .source_memory_ids
@@ -656,7 +713,7 @@ async fn create_page_impl(
     let review_status = PAGE_BIRTH_REVIEW_STATUS;
     // Resolution check: every source id must exist
     for sid in &req.source_memory_ids {
-        if db.get_memory_detail(sid).await?.is_none() {
+        if !page_source_reference_exists(db, creation_kind, sid).await? {
             return Err(WenlanError::Validation(format!(
                 "source memory '{sid}' does not exist"
             )));
@@ -710,7 +767,9 @@ async fn create_page_impl(
     }
 
     // Build page
-    let id = crate::pages::new_page_id();
+    let id = page_id
+        .map(str::to_string)
+        .unwrap_or_else(crate::pages::new_page_id);
     let now = chrono::Utc::now().to_rfc3339();
     let page = crate::pages::Page {
         id: id.clone(),
