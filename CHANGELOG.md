@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/7xuanlu/wenlan/compare/v0.11.0...v0.12.0) (2026-07-08)
+
+
+### Features
+
+* distill redesign - one refresh op, canonical PageWrite births, citation-gated synthesis ([#336](https://github.com/7xuanlu/wenlan/issues/336)) ([33a721c](https://github.com/7xuanlu/wenlan/commit/33a721c4544fdac7956087f8bfe647e484507c1f))
+* per-claim verified citations for wiki pages ([#332](https://github.com/7xuanlu/wenlan/issues/332)) ([2f6ee4b](https://github.com/7xuanlu/wenlan/commit/2f6ee4bdc3db4c833f00de6991fc71907cd5fc92))
+
+
+### Bug Fixes
+
+* guard loopback daemon against cross-origin browser access; gate release publish on build success ([#335](https://github.com/7xuanlu/wenlan/issues/335)) ([4ee3ee5](https://github.com/7xuanlu/wenlan/commit/4ee3ee5299de123d6734c6fa2780cda8e42591e9))
+* **server:** bind port before any data-dir work ([#334](https://github.com/7xuanlu/wenlan/issues/334)) ([046a1c9](https://github.com/7xuanlu/wenlan/commit/046a1c919dd84b040dc16163d39f55226a618dc6))
+
 ## [0.11.0](https://github.com/7xuanlu/wenlan/compare/v0.10.1...v0.11.0) (2026-07-03)
 
 
