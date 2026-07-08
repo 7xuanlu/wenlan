@@ -387,7 +387,7 @@ async fn record_annotate_failure(
 }
 
 /// Annotate-only backfill sweep: pick up to `BACKFILL_BATCH_SIZE` active pages
-/// with `citations IS NULL`, insert `[N]` markers against their memory-kind
+/// with `citations IS NULL`, insert `[N]` markers against their source
 /// evidence, and save. A deterministic prose guard (marker-stripped output
 /// must whitespace-normalize-equal the input body) rejects any output that
 /// rewrites text; 3 consecutive rejections poison-pill the page to
@@ -404,17 +404,24 @@ pub async fn run_citation_backfill_tick(
         };
 
         let evidence = db.get_page_evidence(&page_id).await.unwrap_or_default();
-        let locators: Vec<String> = evidence
+        let evidence_sources: Vec<(String, String)> = evidence
             .iter()
-            .filter(|e| e.source_kind == "memory")
-            .filter_map(|e| e.locator.clone())
+            .filter_map(|e| {
+                e.locator
+                    .clone()
+                    .map(|locator| (locator, e.source_kind.clone()))
+            })
+            .collect();
+        let locators: Vec<String> = evidence_sources
+            .iter()
+            .map(|(locator, _)| locator.clone())
             .collect();
         if locators.is_empty() {
             let changelog = build_backfill_changelog(
                 db,
                 &page_id,
                 page.version,
-                "citation backfill gave up: no memory evidence",
+                "citation backfill gave up: no source evidence",
             )
             .await;
             let _ = db
@@ -424,12 +431,20 @@ pub async fn run_citation_backfill_tick(
         }
 
         let mems = db.get_memories_by_source_ids(&locators).await?;
+        let source_kinds: std::collections::HashMap<&str, &str> = evidence_sources
+            .iter()
+            .map(|(locator, source_kind)| (locator.as_str(), source_kind.as_str()))
+            .collect();
         let numbered: Vec<NumberedSource> = mems
             .iter()
             .enumerate()
             .map(|(i, m)| NumberedSource {
                 index: (i + 1) as u32,
-                source_kind: "memory".to_string(),
+                source_kind: source_kinds
+                    .get(m.source_id.as_str())
+                    .copied()
+                    .unwrap_or("memory")
+                    .to_string(),
                 locator: m.source_id.clone(),
                 text: m.content.chars().take(SOURCE_TEXT_CAP).collect(),
             })
@@ -691,12 +706,26 @@ mod tests {
     /// Insert a bare `memories` row so `get_memories_by_source_ids` can find it.
     /// Mirrors the raw-insert pattern used by `synthesis::distill` tests.
     async fn insert_test_memory(db: &crate::db::MemoryDB, source_id: &str, content: &str) {
+        insert_test_memory_with_agent(db, source_id, content, "claude-code").await;
+    }
+
+    async fn insert_test_memory_with_agent(
+        db: &crate::db::MemoryDB,
+        source_id: &str,
+        content: &str,
+        source_agent: &str,
+    ) {
         let now_ts = chrono::Utc::now().timestamp();
         let conn = db.conn.lock().await;
         conn.execute(
             "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
-             VALUES (?1, ?1, ?1, ?2, 0, 'text', 'fact', NULL, 'claude-code', ?3, ?3, 1, 'confirmed', 'memory')",
-            libsql::params![source_id.to_string(), content.to_string(), now_ts],
+             VALUES (?1, ?1, ?1, ?2, 0, 'text', 'fact', NULL, ?3, ?4, ?4, 1, 'confirmed', 'memory')",
+            libsql::params![
+                source_id.to_string(),
+                content.to_string(),
+                source_agent.to_string(),
+                now_ts
+            ],
         )
         .await
         .unwrap();
@@ -742,6 +771,34 @@ mod tests {
                 .contains(&"p_happy".to_string()),
             "page should no longer be citations-missing"
         );
+    }
+
+    #[tokio::test]
+    async fn backfill_preserves_external_file_source_kind() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let page_id = "p_external_file";
+        let source_id = "folder-notes::backfill.md";
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(page_id, "T", None, BACKFILL_BODY, None, None, &[], &now)
+            .await
+            .unwrap();
+        insert_test_memory_with_agent(&db, source_id, BACKFILL_MEM_CONTENT, "folder").await;
+        db.link_page_evidence(page_id, "external_file", Some(source_id), None, "test")
+            .await
+            .unwrap();
+
+        let annotated = format!("{BACKFILL_BODY}[1]");
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(&annotated));
+        let prompts = PromptRegistry::default();
+
+        run_citation_backfill_tick(&db, &llm, &prompts)
+            .await
+            .unwrap();
+
+        let page = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(page.citations.len(), 1, "citations: {:?}", page.citations);
+        assert_eq!(page.citations[0].source_kind, "external_file");
+        assert_eq!(page.citations[0].locator, source_id);
     }
 
     #[tokio::test]
