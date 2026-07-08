@@ -949,7 +949,8 @@ pub(crate) async fn redistill_changed_pages(
 ///   owns the ownership gate itself: a human-owned page (`user_edited` or
 ///   `creation_kind = "authored"`) never gets its prose overwritten — the
 ///   sweep stages a revision card instead (spec §5.1/§5.2) and clears
-///   staleness so the card isn't re-proposed every cycle.
+///   staleness so the card isn't re-proposed every cycle. No-op refreshes
+///   stay stale so a later sweep can retry.
 pub(crate) async fn re_distill_stale_pages(
     db: &MemoryDB,
     llm: Option<&Arc<dyn LlmProvider>>,
@@ -990,12 +991,9 @@ pub(crate) async fn re_distill_stale_pages(
         .await
         {
             Ok(outcome) => {
-                // Any non-error outcome clears staleness: a successful rewrite,
-                // a human-owned gate (a revision card was staged — don't
-                // re-propose it every cycle), or a no-op (orphaned sources /
-                // empty output / fail-closed discard — a later source change
-                // re-marks it stale). Only wrote counts as a recompile.
-                db.clear_page_staleness(&page.id).await?;
+                if outcome.wrote || outcome.gated {
+                    db.clear_page_staleness(&page.id).await?;
+                }
                 if outcome.wrote {
                     recompiled += 1;
                     log::info!("[re-distill-stale] refreshed page '{}'", page.title);
@@ -1006,7 +1004,7 @@ pub(crate) async fn re_distill_stale_pages(
                     );
                 } else {
                     log::info!(
-                        "[re-distill-stale] '{}' yielded no write; cleared staleness",
+                        "[re-distill-stale] '{}' yielded no write; keeping stale for retry",
                         page.title
                     );
                 }
@@ -3275,7 +3273,10 @@ mod tests {
             .await
             .unwrap();
 
-        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new("refreshed body"));
+        // The single `refresh_page` op now owns the citation fail-closed gate;
+        // a write-path fixture must include a verifiable source marker.
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("refreshed body reference material [1]"));
         let prompts = PromptRegistry::default();
 
         let recompiled =
@@ -3350,8 +3351,10 @@ mod tests {
         let before = db.get_page("page_owned").await.unwrap().unwrap();
         assert!(before.user_edited, "precondition: page is human-owned");
 
+        // The ownership gate lives after `refresh_page`'s citation verifier, so
+        // the fixture must first pass citation verification to reach the gate.
         let llm: Arc<dyn LlmProvider> =
-            Arc::new(MockProvider::new("refreshed body reference material"));
+            Arc::new(MockProvider::new("refreshed body reference material [1]"));
         let prompts = PromptRegistry::default();
 
         let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
@@ -3378,6 +3381,60 @@ mod tests {
              instead of silently escalating to source_conflict"
         );
         assert_eq!(revisions[0].target_source_id, "page_owned");
+    }
+
+    #[tokio::test]
+    async fn re_distill_stale_pages_preserves_staleness_when_refresh_noops() {
+        use crate::llm_provider::MockProvider;
+
+        let (db, _db_dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, 'retryable source material', 0, 'text', 'fact', 'test', 'claude-code', ?2, ?2, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_retry".to_string(), now_ts],
+            )
+            .await
+            .unwrap();
+        }
+
+        db.insert_page(
+            "page_retry",
+            "Retry Topic",
+            None,
+            "original body",
+            None,
+            None,
+            &["mem_retry"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_retry", "source_updated")
+            .await
+            .unwrap();
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(""));
+        let prompts = PromptRegistry::default();
+
+        let recompiled = re_distill_stale_pages(&db, Some(&llm), &prompts, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            recompiled, 0,
+            "empty refresh output must not count as a write"
+        );
+
+        let after = db.get_page("page_retry").await.unwrap().unwrap();
+        assert_eq!(
+            after.stale_reason.as_deref(),
+            Some("source_updated"),
+            "a no-op refresh should stay stale so the next sweep can retry"
+        );
     }
 
     #[tokio::test]
