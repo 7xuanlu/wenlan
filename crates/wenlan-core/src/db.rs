@@ -20935,22 +20935,27 @@ impl MemoryDB {
     ) -> Result<String, libsql::Error> {
         let mut rows = conn
             .query(
-                "SELECT source, source_agent FROM memories WHERE source_id = ?1 LIMIT 1",
+                "SELECT source, source_agent, source_id FROM memories \
+                 WHERE source_id = ?1 OR id = ?1 \
+                 ORDER BY CASE WHEN source_id = ?1 THEN 0 ELSE 1 END \
+                 LIMIT 1",
                 libsql::params![source_id],
             )
             .await?;
-        let (source, source_agent) = match rows.next().await? {
+        let (source, source_agent, resolved_source_id) = match rows.next().await? {
             Some(row) => (
                 row.get::<String>(0).unwrap_or_default(),
                 row.get::<Option<String>>(1).unwrap_or(None),
+                row.get::<String>(2)
+                    .unwrap_or_else(|_| source_id.to_string()),
             ),
-            None => (String::new(), None),
+            None => (String::new(), None, source_id.to_string()),
         };
         drop(rows);
         Ok(crate::citations::resolve_page_evidence_source_kind(
             &source,
             source_agent.as_deref(),
-            source_id,
+            &resolved_source_id,
         )
         .to_string())
     }

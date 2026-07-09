@@ -741,6 +741,7 @@ async fn distill_one_cluster_with_tuning(
             let write_result = page_write(
                 db,
                 PageWrite::Create {
+                    page_id: None,
                     req: CreateConceptRequest {
                         title: title.clone(),
                         content: content.clone(),

@@ -284,6 +284,7 @@ async fn apply_cross_space_discovery(
     page_write(
         db,
         PageWrite::Create {
+            page_id: None,
             req,
             agent,
             knowledge_path: None,

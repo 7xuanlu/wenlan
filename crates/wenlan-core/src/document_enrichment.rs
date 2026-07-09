@@ -38,10 +38,12 @@ use std::sync::Arc;
 use crate::db::{DocEnrichmentQueueEntry, MemoryDB, MemoryDetail};
 use crate::error::WenlanError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
+use crate::post_write::{page_write, PageWrite};
 use crate::prompts::PromptRegistry;
 use crate::sources::directory::{
     document_source_id, file_to_documents, provenance_path, FileOutcome,
 };
+use wenlan_types::requests::CreateConceptRequest;
 
 /// Rolling-digest character cap (~15K).
 const DIGEST_CHAR_CAP: usize = 15_000;
@@ -460,23 +462,30 @@ async fn write_source_page(
     chunk_ids: &[String],
 ) -> Result<(), WenlanError> {
     let _ = db.delete_page(page_id).await;
-    let now = chrono::Utc::now().to_rfc3339();
-    let cite: Vec<&str> = chunk_ids.iter().map(|s| s.as_str()).collect();
-    db.insert_page_with_kind(
-        page_id,
-        title,
-        summary,
-        content,
-        None,
-        None,
-        &cite,
-        &now,
-        "source",
-        "unconfirmed",
-        None,
-        None, // citations: SOURCE pages are chunk-granular provenance, not distilled citations
+    let req = CreateConceptRequest {
+        title: title.to_string(),
+        content: content.to_string(),
+        summary: summary.map(str::to_string),
+        entity_id: None,
+        space: None,
+        source_memory_ids: chunk_ids.to_vec(),
+        creation_kind: Some("source".to_string()),
+        workspace: None,
+    };
+    page_write(
+        db,
+        PageWrite::Create {
+            page_id: Some(page_id),
+            req,
+            agent: "doc-enrich",
+            knowledge_path: None,
+            page_min_cluster_size: 1,
+            page_match_threshold: 0.0,
+            citations_json: None,
+        },
     )
     .await
+    .map(|_| ())
 }
 
 /// Retry backoff (seconds) for a paused document, given the attempt count BEFORE
@@ -974,6 +983,46 @@ mod tests {
         assert_eq!(q.status, "paused");
         assert_eq!(q.attempt_count, 1);
         assert!(q.next_retry_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn document_source_page_creation_routes_through_pagewrite() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+        let prompts = PromptRegistry::default();
+
+        let outcome = run_document_enrichment(&db, &entry, None, None, &prompts).await;
+
+        assert!(!outcome.paused);
+        assert!(!outcome.page_id.is_empty());
+        let page = db
+            .get_page(&outcome.page_id)
+            .await
+            .unwrap()
+            .expect("source page");
+        assert_eq!(page.creation_kind, "source");
+        assert_eq!(page.review_status, "unconfirmed");
+        let activity = db.list_agent_activity(20, None, None).await.unwrap();
+        assert!(
+            activity.iter().any(|entry| {
+                entry.action == "page_create"
+                    && entry.memory_ids.as_deref() == Some(&outcome.chunk_ids.join(","))
+            }),
+            "document source-page creation must route through PageWrite and log page_create with chunk provenance, got {activity:?}"
+        );
+        let evidence = db.get_page_evidence(&outcome.page_id).await.unwrap();
+        assert_eq!(evidence.len(), outcome.chunk_ids.len());
+        assert!(
+            evidence
+                .iter()
+                .all(|row| row.source_kind == "external_file"),
+            "document source-page evidence must preserve folder chunk provenance, got {evidence:?}"
+        );
     }
 
     // ── self-healing loop: LLM failure pauses with backoff, then re-claims ────
