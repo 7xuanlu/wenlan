@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=48f15ffc51953d7eb90b7a80805d539ca88b5e2e041f9ee01cc75cbe681ef88d -->
+<!-- README_SYNC: source=README.md sha256=bf29a5dde4cf2efa63e8e847a5f16a3a1ecc3f95601c3b92ac1e8500a6c992b8 -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生时代的、会生长的个人知识库。" width="100%">
@@ -48,7 +48,7 @@ Wenlan（文澜）的名字来自文澜阁。这座皇家藏书楼藏有《四�
 npx -y wenlan setup
 ```
 
-然后下载当前 macOS Apple Silicon build：[wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg)。
+然后打开桌面 app releases 页面，下载最新 macOS Apple Silicon DMG：[wenlan-app releases](https://github.com/7xuanlu/wenlan-app/releases/latest)。
 
 App 源码：[wenlan-app](https://github.com/7xuanlu/wenlan-app)。产品详情：[wenlan.app](https://wenlan.app)。
 

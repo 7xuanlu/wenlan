@@ -46,7 +46,7 @@ Set up Wenlan once:
 npx -y wenlan setup
 ```
 
-Then download the current macOS Apple Silicon build: [wenlan-app-darwin-arm64.dmg](https://github.com/7xuanlu/wenlan/releases/latest/download/wenlan-app-darwin-arm64.dmg).
+Then open the desktop app releases page and download the latest macOS Apple Silicon DMG: [wenlan-app releases](https://github.com/7xuanlu/wenlan-app/releases/latest).
 
 App source: [wenlan-app](https://github.com/7xuanlu/wenlan-app). Product details: [wenlan.app](https://wenlan.app).
 
