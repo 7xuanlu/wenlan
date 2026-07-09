@@ -10,6 +10,8 @@
     },
     "longmemeval_s": {
       "label": "LME_S (deep, 90 Q)",
+      "source_summary": "docs/eval/results/lme_s_90_bge_base_pool20.summary.json",
+      "source_metrics": "retrieval",
       "recall_at_5": 0.8767857142857144,
       "mrr": 0.8145975056689342,
       "ndcg_at_10": 0.8223431120728476,

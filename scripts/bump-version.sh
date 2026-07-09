@@ -51,6 +51,11 @@ jq ".version = \"$NEW_VERSION\"" "$PLUGIN_MANIFEST" > "${PLUGIN_MANIFEST}.tmp"
 mv "${PLUGIN_MANIFEST}.tmp" "$PLUGIN_MANIFEST"
 echo "  Updated $PLUGIN_MANIFEST"
 
+CODEX_PLUGIN_MANIFEST="plugin-codex/.codex-plugin/plugin.json"
+jq ".version = \"${NEW_VERSION}+codex\"" "$CODEX_PLUGIN_MANIFEST" > "${CODEX_PLUGIN_MANIFEST}.tmp"
+mv "${CODEX_PLUGIN_MANIFEST}.tmp" "$CODEX_PLUGIN_MANIFEST"
+echo "  Updated $CODEX_PLUGIN_MANIFEST"
+
 # 4. Plugin's MCP server pin — the wrapper script falls back to
 # `npx -y wenlan-mcp@^X.Y.Z` so a floating tag can't auto-RCE on every
 # Claude Code session. The pin lives in the runner shell script, not
@@ -64,6 +69,22 @@ else
 fi
 echo "  Updated $PLUGIN_MCP_RUNNER (wenlan-mcp pin)"
 
+CODEX_PLUGIN_MCP_RUNNER="plugin-codex/bin/wenlan-mcp-runner.sh"
+if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$CODEX_PLUGIN_MCP_RUNNER"
+else
+    sed -i -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$CODEX_PLUGIN_MCP_RUNNER"
+fi
+echo "  Updated $CODEX_PLUGIN_MCP_RUNNER (wenlan-mcp pin)"
+
+CODEX_PLUGIN_README="plugin-codex/README.md"
+if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$CODEX_PLUGIN_README"
+else
+    sed -i -E "s|(wenlan-mcp@\\^)[0-9]+\\.[0-9]+\\.[0-9]+|\\1${NEW_VERSION}|g" "$CODEX_PLUGIN_README"
+fi
+echo "  Updated $CODEX_PLUGIN_README (wenlan-mcp pin)"
+
 # 5. /setup skill install.sh URL pinned to current tag (not `main`), so the
 # install one-liner is reproducible at the release boundary.
 SETUP_SKILL="plugin/skills/setup/SKILL.md"
@@ -73,6 +94,14 @@ else
     sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$SETUP_SKILL"
 fi
 echo "  Updated $SETUP_SKILL (install.sh tag pin)"
+
+CODEX_SETUP_SKILL="plugin-codex/skills/setup/SKILL.md"
+if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_SETUP_SKILL"
+else
+    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_SETUP_SKILL"
+fi
+echo "  Updated $CODEX_SETUP_SKILL (install.sh tag pin)"
 
 # 6. Cargo.lock workspace member versions. release-please bumps the manifests
 # above but never regenerates the lockfile, so validate-versions.sh (run in

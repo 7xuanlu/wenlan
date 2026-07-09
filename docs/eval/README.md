@@ -12,19 +12,25 @@ This project keeps publishable benchmark numbers in a local gitignored file so R
 
 1. Run benchmark(s) locally and record headline metrics.
 2. Update `${EVAL_BASELINES_DIR:-~/.cache/origin-eval}/readme_metrics.json`.
-3. Regenerate README snapshots:
+3. Check tracked publishable metrics against their tracked source summaries:
+
+```bash
+python3 scripts/update-readme-eval.py --check docs/eval/readme_metrics.example.json
+```
+
+4. Regenerate README snapshots:
 
 ```bash
 python3 scripts/update-readme-eval.py
 ```
 
-4. Check translated README sync:
+5. Check translated README sync:
 
 ```bash
 python3 scripts/check-readme-translations.py
 ```
 
-5. Commit the README and script/docs changes (the local metrics JSON stays untracked).
+6. Commit the README and script/docs changes (the local metrics JSON stays untracked).
 
 ## Notes
 
@@ -32,6 +38,7 @@ python3 scripts/check-readme-translations.py
 - Current README retrieval numbers are retrieval-only, single-run local snapshots unless a reproducibility pass is explicitly documented.
 - LME-S 90 retrieval is saved in `docs/eval/results/lme_s_90_bge_base_pool20.summary.json` with raw rows in `docs/eval/results/lme_s_90_bge_base_pool20.jsonl`.
 - `scripts/update-readme-eval.py` updates the generated retrieval block in English, Simplified Chinese, and Traditional Chinese READMEs.
+- Rows with `source_summary` are checked against tracked summary artifacts before they are treated as publishable README metrics.
 - `scripts/check-readme-translations.py` fails when translated READMEs do not carry the current English README sync hash.
 - Name the retrieval mode once in surrounding prose when all rows use the same mode.
 - Keep `notes` in the metrics JSON for maintainer-facing caveats and run metadata; the root README does not render them.

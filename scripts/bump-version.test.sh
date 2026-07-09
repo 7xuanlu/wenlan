@@ -12,6 +12,9 @@ mkdir -p "$TMPDIR_TEST/crates/wenlan-cli/npm"
 mkdir -p "$TMPDIR_TEST/plugin/.claude-plugin"
 mkdir -p "$TMPDIR_TEST/plugin/bin"
 mkdir -p "$TMPDIR_TEST/plugin/skills/setup"
+mkdir -p "$TMPDIR_TEST/plugin-codex/.codex-plugin"
+mkdir -p "$TMPDIR_TEST/plugin-codex/bin"
+mkdir -p "$TMPDIR_TEST/plugin-codex/skills/setup"
 
 cat > "$TMPDIR_TEST/version.txt" <<EOF
 0.5.0
@@ -38,11 +41,27 @@ cat > "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json" <<EOF
 {"name": "wenlan", "version": "0.4.1"}
 EOF
 
+cat > "$TMPDIR_TEST/plugin-codex/.codex-plugin/plugin.json" <<EOF
+{"name": "wenlan", "version": "0.4.1+codex"}
+EOF
+
 cat > "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" <<EOF
 exec npx -y wenlan-mcp@^0.4.1 "\$@"
 EOF
 
+cat > "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" <<EOF
+exec npx -y wenlan-mcp@^0.4.1 --agent-name "\${agent_name}" "\$@"
+EOF
+
+cat > "$TMPDIR_TEST/plugin-codex/README.md" <<EOF
+Falls back to npx -y wenlan-mcp@^0.4.1 when no local runtime exists.
+EOF
+
 cat > "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" <<EOF
+Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash
+EOF
+
+cat > "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" <<EOF
 Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash
 EOF
 
@@ -98,6 +117,7 @@ WENLAN_CORE_DEP_VER=$(grep -E '^wenlan-core[[:space:]]+=' "$TMPDIR_TEST/Cargo.to
 MCP_NPM_VER=$(jq -r .version "$TMPDIR_TEST/crates/wenlan-mcp/npm/package.json")
 WENLAN_NPM_VER=$(jq -r .version "$TMPDIR_TEST/crates/wenlan-cli/npm/package.json")
 PLUGIN_VER=$(jq -r .version "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json")
+CODEX_PLUGIN_VER=$(jq -r .version "$TMPDIR_TEST/plugin-codex/.codex-plugin/plugin.json")
 
 [[ "$WS_VER" == "0.5.0" ]]   || { echo "FAIL: Cargo.toml not bumped (got $WS_VER)"; exit 1; }
 [[ "$WENLAN_TYPES_DEP_VER" == "0.5.0" ]] || { echo "FAIL: wenlan-types dep not bumped (got $WENLAN_TYPES_DEP_VER)"; exit 1; }
@@ -105,8 +125,12 @@ PLUGIN_VER=$(jq -r .version "$TMPDIR_TEST/plugin/.claude-plugin/plugin.json")
 [[ "$MCP_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: wenlan-mcp npm not bumped (got $MCP_NPM_VER)"; exit 1; }
 [[ "$WENLAN_NPM_VER" == "0.5.0" ]]  || { echo "FAIL: wenlan npm not bumped (got $WENLAN_NPM_VER)"; exit 1; }
 [[ "$PLUGIN_VER" == "0.5.0" ]] || { echo "FAIL: plugin not bumped (got $PLUGIN_VER)"; exit 1; }
+[[ "$CODEX_PLUGIN_VER" == "0.5.0+codex" ]] || { echo "FAIL: Codex plugin not bumped (got $CODEX_PLUGIN_VER)"; exit 1; }
 grep -q 'wenlan-mcp@\^0.5.0' "$TMPDIR_TEST/plugin/bin/wenlan-mcp-runner.sh" || { echo "FAIL: runner pin not bumped"; exit 1; }
 grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" || { echo "FAIL: setup skill installer not bumped"; exit 1; }
+grep -q 'wenlan-mcp@\^0.5.0' "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" || { echo "FAIL: Codex runner pin not bumped"; exit 1; }
+grep -q 'wenlan-mcp@\^0.5.0' "$TMPDIR_TEST/plugin-codex/README.md" || { echo "FAIL: Codex README runner pin not bumped"; exit 1; }
+grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" || { echo "FAIL: Codex setup skill installer not bumped"; exit 1; }
 
 # Cargo.lock: all five workspace members bumped to 0.5.0, exactly as
 # validate-versions.sh reads them (name:version pairs).
