@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MemoryItem } from "../../lib/tauri";
 
 vi.mock("../../lib/tauri", () => ({
@@ -21,9 +21,16 @@ vi.mock("../../lib/tauri", () => ({
   getPendingRevision: vi.fn().mockResolvedValue(null),
   acceptPendingRevision: vi.fn(),
   dismissPendingRevision: vi.fn(),
+  agentDisplayName: (slug: string | null) =>
+    slug ? (({ "claude-code": "Claude Code" }) as Record<string, string>)[slug] ?? slug : null,
 }));
 
 import MemoryCard from "./MemoryCard";
+import { acceptPendingRevision, dismissPendingRevision, getPendingRevision } from "../../lib/tauri";
+
+const mockAcceptPendingRevision = vi.mocked(acceptPendingRevision);
+const mockDismissPendingRevision = vi.mocked(dismissPendingRevision);
+const mockGetPendingRevision = vi.mocked(getPendingRevision);
 
 function makeMemory(overrides: Partial<MemoryItem> = {}): MemoryItem {
   return {
@@ -56,6 +63,7 @@ const defaultProps = {
 describe("MemoryCard insight variant", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetPendingRevision.mockResolvedValue(null);
   });
 
   it("renders content without type badge", () => {
@@ -90,5 +98,80 @@ describe("MemoryCard insight variant", () => {
     render(<MemoryCard memory={memory} {...defaultProps} />);
 
     expect(screen.getByText("preference")).toBeInTheDocument();
+  });
+
+  it("renders parent list row actions and keyboard selection", async () => {
+    mockGetPendingRevision.mockResolvedValueOnce({
+      source_id: "mem-1",
+      content: "Keeps the local-first tradeoff with review context.",
+      source_agent: "claude-code",
+    });
+    const onClick = vi.fn();
+    const onConfirm = vi.fn();
+    const onDelete = vi.fn();
+    const onUnpin = vi.fn();
+    const memory = makeMemory({
+      source_id: "mem-1",
+      title: "Local-first decision",
+      memory_type: "preference",
+      domain: "Wenlan",
+      source_agent: "claude-code",
+      confirmed: true,
+      stability: "confirmed",
+      pinned: true,
+    });
+
+    render(
+      <MemoryCard
+        memory={memory}
+        {...defaultProps}
+        onClick={onClick}
+        onConfirm={onConfirm}
+        onDelete={onDelete}
+        onUnpin={onUnpin}
+        presentation="parent-list"
+      />,
+    );
+
+    const row = screen.getByRole("article", { name: /Local-first decision/i });
+    expect(row).toHaveAttribute("tabindex", "0");
+
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onClick).toHaveBeenCalledWith("mem-1");
+    fireEvent.keyDown(row, { key: " " });
+    expect(onClick).toHaveBeenCalledTimes(2);
+
+    expect(screen.getByRole("button", { name: "Open memory" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Unconfirm memory" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Delete memory" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Unpin memory" })).toBeVisible();
+    expect(screen.queryByText(/[\u2605\u2606]/u)).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Accept update" }));
+    await waitFor(() => {
+      expect(mockAcceptPendingRevision).toHaveBeenCalledWith("mem-1");
+    });
+
+    mockGetPendingRevision.mockResolvedValueOnce({
+      source_id: "mem-1",
+      content: "Keeps the local-first tradeoff with review context.",
+      source_agent: null,
+    });
+    render(
+      <MemoryCard
+        memory={memory}
+        {...defaultProps}
+        onClick={onClick}
+        onConfirm={onConfirm}
+        onDelete={onDelete}
+        onUnpin={onUnpin}
+        presentation="parent-list"
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss update" }));
+    await waitFor(() => {
+      expect(mockDismissPendingRevision).toHaveBeenCalledWith("mem-1");
+    });
   });
 });

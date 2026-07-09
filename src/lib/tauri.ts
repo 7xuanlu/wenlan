@@ -771,6 +771,19 @@ export const FACET_COLORS: Record<string, string> = {
   goal: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
 };
 
+// One agent-slug prettifier for every surface (list row, card, detail).
+export const AGENT_DISPLAY: Record<string, string> = {
+  "claude-code": "Claude Code",
+  claude: "Claude",
+  chatgpt: "ChatGPT",
+  cursor: "Cursor",
+};
+
+export function agentDisplayName(slug: string | null | undefined): string | null {
+  if (!slug) return null;
+  return AGENT_DISPLAY[slug] ?? slug;
+}
+
 export type StabilityTier = "protected" | "standard" | "ephemeral";
 
 export const STABILITY_TIERS: Record<string, StabilityTier> = {

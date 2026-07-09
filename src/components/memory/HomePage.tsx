@@ -166,7 +166,7 @@ export default function HomePage({
         style={{
           border: "1px solid var(--mem-border)",
           background: "var(--mem-surface)",
-          color: "var(--mem-text-primary)",
+          color: "var(--mem-text)",
           borderRadius: 8,
           padding: "7px 11px",
           fontSize: 13,
@@ -315,10 +315,6 @@ function formatSourceCount(t: TFunction, count: number): string {
   return t("home.counts.source", { count });
 }
 
-function formatPageCount(t: TFunction, count: number): string {
-  return t("home.counts.page", { count });
-}
-
 function uniqueSourceCount(pages: Page[]): number {
   const sourceIds = new Set<string>();
   for (const page of pages) {
@@ -398,10 +394,11 @@ function WikiHome({
     <div
       data-testid="wiki-home"
       ref={containerRef}
+      className="wiki-home"
       style={{
         display: "grid",
-        gap: isWideLayout ? 32 : 30,
-        gridTemplateColumns: isWideLayout ? "minmax(0, 1fr) minmax(264px, 300px)" : "minmax(0, 1fr)",
+        gap: isWideLayout ? 24 : 22,
+        gridTemplateColumns: "minmax(0, 1fr)",
         maxWidth: 1280,
         margin: "0 auto",
         width: "100%",
@@ -409,31 +406,42 @@ function WikiHome({
         alignItems: "start",
       }}
     >
-      <div style={{ minWidth: 0 }}>
-        <TodayPages
-          pages={pages}
-          pageCount={allPages.length}
-          onSelectPage={onSelectPage}
-          isWideLayout={isWideLayout}
-        />
-      </div>
-
-      <aside
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-          minWidth: 0,
-        }}
+      <section
+        data-testid="wiki-daily-desk"
+        className="wiki-daily-desk"
       >
+        <TodayHeader />
+
         <HomeContextRail
           pages={allPages}
           directoryItems={directoryItems}
-          pageUpdates={pageUpdates}
+        />
+      </section>
+
+      <div
+        data-testid="wiki-content-grid"
+        className="wiki-content-grid"
+        style={{
+          display: "grid",
+          gap: isWideLayout ? 28 : 24,
+          gridTemplateColumns: isWideLayout ? "minmax(0, 1fr) minmax(320px, 360px)" : "minmax(0, 1fr)",
+          gridColumn: "1 / -1",
+          alignItems: "start",
+          minWidth: 0,
+        }}
+      >
+        <PageList
+          pages={pages}
+          onSelectPage={onSelectPage}
+          isWideLayout={isWideLayout}
+        />
+        <PageUpdatesRail
+          embedded
+          pages={pageUpdates}
           onSelectPage={onSelectPage}
           onOpenDistillReview={onOpenDistillReview}
         />
-      </aside>
+      </div>
     </div>
   );
 }
@@ -460,8 +468,8 @@ function SectionHeading({
       <h2
         style={{
           fontFamily: "var(--mem-font-heading)",
-          fontSize: size === "compact" ? 16 : 21,
-          fontWeight: 400,
+          fontSize: size === "compact" ? 14 : 18,
+          fontWeight: 500,
           color: "var(--mem-text)",
           letterSpacing: 0,
           lineHeight: 1.2,
@@ -475,40 +483,11 @@ function SectionHeading({
   );
 }
 
-function TodayPages({
-  pages,
-  pageCount,
-  onSelectPage,
-  isWideLayout,
-}: {
-  pages: Page[];
-  pageCount: number;
-  onSelectPage?: (pageId: string) => void;
-  isWideLayout: boolean;
-}) {
+function TodayHeader() {
   const { t } = useTranslation();
-  if (!pages.length) return null;
   return (
-    <section style={{ marginBottom: 32 }}>
-      <SectionHeading
-        title={t("home.todayInWenlan")}
-        action={
-          <span
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: 10,
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            {formatPageCount(t, pageCount)}
-          </span>
-        }
-      />
-      <PageList
-        pages={pages}
-        onSelectPage={onSelectPage}
-        isWideLayout={isWideLayout}
-      />
+    <section data-testid="wiki-today-heading" className="wiki-today-heading">
+      <SectionHeading title={t("home.todayInWenlan")} />
     </section>
   );
 }
@@ -525,16 +504,18 @@ function PageList({
   const { t } = useTranslation();
   if (!pages.length) return null;
   return (
-    <div style={{ marginBottom: 32 }}>
+    <div>
       <div
         data-testid="wiki-page-list"
         style={{
           display: "grid",
           gap: 0,
-          borderTop: "1px solid var(--mem-border)",
+          borderTopStyle: "none",
+          borderTopWidth: 0,
+          borderTopColor: "transparent",
         }}
       >
-        {pages.map((page, index) => (
+        {pages.map((page) => (
           <button
             key={page.id}
             type="button"
@@ -554,7 +535,6 @@ function PageList({
               background: "transparent",
               color: "inherit",
               cursor: onSelectPage ? "pointer" : "default",
-              animation: `mem-fade-up 280ms cubic-bezier(0.16, 1, 0.3, 1) ${index * 35}ms both`,
             }}
             onClick={() => onSelectPage?.(page.id)}
           >
@@ -635,53 +615,30 @@ function PageList({
 function HomeContextRail({
   pages,
   directoryItems,
-  pageUpdates,
-  onSelectPage,
-  onOpenDistillReview,
 }: {
   pages: Page[];
   directoryItems: DirectoryItem[];
-  pageUpdates: Page[];
-  onSelectPage?: (pageId: string) => void;
-  onOpenDistillReview?: () => void;
 }) {
   const { t } = useTranslation();
   return (
     <div
       data-testid="wiki-context-rail"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 18,
-      }}
+      className="wiki-context-rail"
     >
       <section
-        style={{
-          borderTop: "1px solid var(--mem-border)",
-          borderBottom: "1px solid color-mix(in srgb, var(--mem-border) 70%, transparent)",
-          padding: "12px 0",
-        }}
+        data-testid="wiki-index-summary"
+        className="wiki-index-bar"
+        aria-label={t("home.index")}
       >
-        <SectionHeading title={t("home.index")} size="compact" />
         <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 10,
-          }}
+          data-testid="wiki-index-strip"
+          className="wiki-index-strip"
         >
-          <ContextMetric testId="pages" label={t("home.pages")} value={formatPageCount(t, pages.length)} />
           <ContextMetric testId="sources" label={t("home.sources")} value={formatSourceCount(t, uniqueSourceCount(pages))} />
           <ContextMetric testId="spaces" label={t("home.spaces")} value={String(directoryItems.length)} />
           <ContextMetric testId="latest" label={t("home.latest")} value={latestPageUpdate(t, pages)} />
         </div>
       </section>
-
-      <PageUpdatesRail
-        pages={pageUpdates}
-        onSelectPage={onSelectPage}
-        onOpenDistillReview={onOpenDistillReview}
-      />
     </div>
   );
 }
@@ -692,10 +649,12 @@ function ContextMetric({ testId, label, value }: { testId: string; label: string
       <p
         style={{
           fontFamily: "var(--mem-font-mono)",
-          fontSize: 9,
+          fontSize: 11,
+          fontWeight: 600,
           color: "var(--mem-text-tertiary)",
-          lineHeight: 1.2,
-          margin: "0 0 4px",
+          letterSpacing: "0.04em",
+          lineHeight: 1.25,
+          margin: "0 0 5px",
           textTransform: "uppercase",
         }}
       >
@@ -704,10 +663,10 @@ function ContextMetric({ testId, label, value }: { testId: string; label: string
       <p
         style={{
           fontFamily: "var(--mem-font-body)",
-          fontSize: 12,
-          fontWeight: 500,
+          fontSize: 14,
+          fontWeight: 600,
           color: "var(--mem-text)",
-          lineHeight: 1.25,
+          lineHeight: 1.3,
           margin: 0,
         }}
       >
@@ -775,13 +734,13 @@ function PageUpdatesRail({
           onClick={onOpenDistillReview}
           style={{
             width: "100%",
-            marginTop: 10,
+            marginTop: 12,
             borderRadius: 6,
-            padding: "7px 10px",
+            padding: "6px 0",
             textAlign: "left",
-            border: "1px solid var(--mem-border)",
+            border: "0",
             backgroundColor: "transparent",
-            color: "var(--mem-text-secondary)",
+            color: "var(--mem-accent-sage)",
             cursor: "pointer",
             fontFamily: "var(--mem-font-body)",
             fontSize: 11,
@@ -812,9 +771,10 @@ function PageUpdateRailItem({
         gap: 6,
         width: "100%",
         textAlign: "left",
-        border: "1px solid color-mix(in srgb, var(--mem-border) 74%, transparent)",
-        borderRadius: 6,
-        padding: "8px",
+        border: "0",
+        borderBottom: "1px solid color-mix(in srgb, var(--mem-border) 68%, transparent)",
+        borderRadius: 0,
+        padding: "8px 0 9px",
         backgroundColor: "transparent",
         color: "inherit",
         cursor: onSelectPage ? "pointer" : "default",

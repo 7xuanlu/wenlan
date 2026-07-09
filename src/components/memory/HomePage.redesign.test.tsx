@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import HomePage from "./HomePage";
@@ -149,9 +149,10 @@ describe("HomePage redesign", () => {
     expect(await screen.findByRole("heading", { name: "Today in Wenlan" })).toBeInTheDocument();
     expect(tauri.listPages).toHaveBeenCalledWith("active", undefined, 1000);
     expect(screen.getByTestId("wiki-home")).toHaveStyle({ display: "grid" });
-    expect(screen.getByTestId("wiki-context-rail")).toHaveTextContent("Index");
+    expect(screen.getByTestId("wiki-index-summary")).toHaveAttribute("aria-label", "Index");
+    expect(within(screen.getByTestId("wiki-context-rail")).queryByRole("heading", { name: "Index" })).toBeNull();
     expect(screen.getByTestId("wiki-context-rail")).not.toHaveTextContent("Recently active");
-    expect(screen.getByTestId("wiki-context-rail")).toHaveTextContent("2 pages");
+    expect(screen.queryByTestId("wiki-context-pages")).toBeNull();
     expect(screen.getByTestId("wiki-context-rail")).toHaveTextContent("6 sources");
     expect(screen.queryByTestId("wiki-space-filter-row")).toBeNull();
     expect(screen.queryByTestId("wiki-recent-spaces")).toBeNull();
@@ -167,6 +168,49 @@ describe("HomePage redesign", () => {
     expect(screen.queryByText("Related sources")).toBeNull();
     expect(screen.queryByText("source-backed")).toBeNull();
     expect(screen.queryByTestId("what-happens-next")).toBeNull();
+  });
+
+  it("keeps today, index, articles, and review items in the expected reading order", async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      bottom: 0,
+      height: 720,
+      left: 0,
+      right: 1000,
+      top: 0,
+      width: 1000,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    vi.mocked(tauri.listPages).mockResolvedValue([
+      page({ id: "page-architecture", title: "Wenlan app architecture", source_memory_ids: ["m1", "m2", "m3"] }),
+      page({ id: "page-policy", title: "Codex workflow policy", source_memory_ids: ["m4"] }),
+    ]);
+
+    try {
+      renderHome();
+
+      await screen.findByTestId("wiki-home");
+      const todayHeading = screen.getByTestId("wiki-today-heading");
+      const contextRail = screen.getByTestId("wiki-context-rail");
+      const pageList = screen.getByTestId("wiki-page-list");
+      const pageUpdates = screen.getByTestId("wiki-page-updates");
+
+      expect(todayHeading.compareDocumentPosition(contextRail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(contextRail.compareDocumentPosition(pageList) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(pageList.compareDocumentPosition(pageUpdates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+      expect(todayHeading).not.toHaveTextContent("2 pages");
+      expect(screen.queryByTestId("wiki-context-pages")).toBeNull();
+
+      expect(screen.getByTestId("wiki-index-summary")).toHaveAttribute("aria-label", "Index");
+      expect(contextRail).not.toHaveTextContent("Needs review");
+      expect(within(contextRail).queryByRole("heading", { name: "Index" })).toBeNull();
+
+      expect(screen.getByTestId("wiki-page-list")).toHaveStyle({ borderTopStyle: "none" });
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 
   it("opens wiki page rows from the home index", async () => {
@@ -290,7 +334,7 @@ describe("HomePage redesign", () => {
     expect(screen.queryByText("Traversal paths")).toBeNull();
   });
 
-  it("keeps page updates secondary in the context rail", async () => {
+  it("keeps page updates secondary to the index", async () => {
     const onOpenDistillReview = vi.fn();
     const onSelectPage = vi.fn();
     const user = userEvent.setup();
@@ -308,16 +352,20 @@ describe("HomePage redesign", () => {
     renderHome({ onOpenDistillReview, onSelectPage });
 
     const contextRail = await screen.findByTestId("wiki-context-rail");
-    expect(contextRail).toHaveTextContent("Index");
+    expect(screen.getByTestId("wiki-index-summary")).toHaveAttribute("aria-label", "Index");
+    expect(within(contextRail).queryByRole("heading", { name: "Index" })).toBeNull();
     expect(contextRail).not.toHaveTextContent("Recently active");
-    expect(contextRail).toHaveTextContent("Page updates");
-    expect(contextRail).toHaveTextContent("Wenlan app architecture");
-    expect(contextRail).toHaveTextContent("3 sources");
-    expect(contextRail).toHaveTextContent("New sources waiting");
-    expect(contextRail).not.toHaveTextContent("Current page");
-    expect(contextRail).toHaveTextContent("Review page changes");
+    expect(contextRail).not.toHaveTextContent("Needs review");
 
-    await user.click(screen.getByRole("button", { name: "Open Wenlan app architecture page update" }));
+    const pageUpdates = screen.getByTestId("wiki-page-updates");
+    expect(pageUpdates).toHaveTextContent("Needs review");
+    expect(pageUpdates).toHaveTextContent("Wenlan app architecture");
+    expect(pageUpdates).toHaveTextContent("3 sources");
+    expect(pageUpdates).toHaveTextContent("New sources waiting");
+    expect(pageUpdates).not.toHaveTextContent("Current page");
+    expect(pageUpdates).toHaveTextContent("Review page changes");
+
+    await user.click(screen.getByRole("button", { name: "Open Wenlan app architecture review item" }));
     expect(onSelectPage).toHaveBeenCalledWith("page-wenlan");
 
     await user.click(screen.getByRole("button", { name: /review page changes/i }));
@@ -431,7 +479,7 @@ describe("HomePage redesign", () => {
     renderHome();
     const strip = await screen.findByTestId("worth-a-glance");
     expect(strip).toBeInTheDocument();
-    expect(strip.textContent).toContain("Pages are current.");
+    expect(strip.textContent).toContain("Nothing to review.");
     expect(strip.textContent).not.toContain("Flagged concept");
     expect(strip.textContent).not.toContain("Fresh concept");
     expect(strip.textContent).not.toContain("Refined memory");
@@ -454,7 +502,7 @@ describe("HomePage redesign", () => {
     renderHome();
 
     const strip = await screen.findByTestId("worth-a-glance");
-    expect(strip).toHaveTextContent("Pages are current.");
+    expect(strip).toHaveTextContent("Nothing to review.");
     expect(strip).not.toHaveTextContent("Proposed update");
     expect(strip).not.toHaveTextContent("The durable updated wording from the daemon.");
     expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
@@ -488,7 +536,7 @@ describe("HomePage redesign", () => {
     renderHome();
 
     const strip = await screen.findByTestId("worth-a-glance");
-    expect(strip).toHaveTextContent("Pages are current.");
+    expect(strip).toHaveTextContent("Nothing to review.");
     expect(strip).not.toHaveTextContent("Entity merge");
     expect(strip).not.toHaveTextContent("86% confidence");
     expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
@@ -520,7 +568,7 @@ describe("HomePage redesign", () => {
     renderHome();
 
     const strip = await screen.findByTestId("worth-a-glance");
-    expect(strip).toHaveTextContent("Pages are current.");
+    expect(strip).toHaveTextContent("Nothing to review.");
     expect(strip).not.toHaveTextContent("Entity suggestion");
     expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
@@ -566,7 +614,7 @@ describe("HomePage redesign", () => {
 
     renderHome();
 
-    expect(await screen.findByText("Pages are current.")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing to review.")).toBeInTheDocument();
     expect(screen.queryByText("Entity merge")).not.toBeInTheDocument();
     expect(screen.queryByText("Contradiction check")).not.toBeInTheDocument();
     expect(screen.queryByText("80% confidence · 2 memories")).not.toBeInTheDocument();
@@ -601,7 +649,7 @@ describe("HomePage redesign", () => {
     );
     expect(rail).toHaveTextContent("Source conflict");
 
-    await userEvent.click(screen.getByRole("button", { name: "Open Conflict page page update" }));
+    await userEvent.click(screen.getByRole("button", { name: "Open Conflict page review item" }));
     expect(onSelectPage).toHaveBeenCalledWith("page-conflict");
   });
 

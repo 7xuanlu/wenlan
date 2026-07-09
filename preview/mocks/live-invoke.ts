@@ -74,7 +74,8 @@ const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
     get(`/api/memory/recent${qs({ limit: a?.limit, since_ms: a?.sinceMs })}`).then(
       (r) => r.memories ?? r,
     ),
-  get_memory_detail: (a) => get(`/api/memory/${enc(a.sourceId)}/detail`),
+  get_memory_detail: (a) =>
+    get(`/api/memory/${enc(a.sourceId)}/detail`).then((r) => r?.memory ?? null),
   list_memories_by_ids: (a) =>
     get(`/api/memory/by-ids?ids=${(a.ids as string[]).map(enc).join(",")}`).then(
       (r) => r.memories ?? r,
@@ -138,7 +139,8 @@ const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   get_profile_narrative: () => get("/api/profile/narrative"),
   list_spaces: () => get("/api/spaces"),
   get_capture_stats: () => get("/api/capture-stats").then((r) => r.stats ?? r),
-  list_all_tags: () => get("/api/tags").then((r) => r.tags ?? r),
+  // TagData shape: the UI reads both r.tags and r.document_tags — no unwrap.
+  list_all_tags: () => get("/api/tags"),
   list_agents: () => get("/api/agents"),
   list_agent_activity: (a) => get(`/api/activities${qs({ limit: a?.limit ?? 50 })}`),
   list_activities: (a) => get(`/api/activities${qs({ limit: a?.limit ?? 50 })}`),

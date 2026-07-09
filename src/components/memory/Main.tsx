@@ -53,6 +53,7 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const externalMemoryIdRef = useRef<string | null>(initialMemoryId ?? null);
   const [view, setView] = useState<View>(
     initialMemoryId ? { kind: "memory", sourceId: initialMemoryId }
     : initialPageId ? { kind: "page", pageId: initialPageId }
@@ -75,6 +76,18 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
       setView({ kind: "page", pageId: initialPageId });
     }
   }, [initialPageId]);
+
+  useEffect(() => {
+    if (initialMemoryId) {
+      externalMemoryIdRef.current = initialMemoryId;
+      setViewHistory([]);
+      setView({ kind: "memory", sourceId: initialMemoryId });
+    } else if (externalMemoryIdRef.current) {
+      externalMemoryIdRef.current = null;
+      setViewHistory([]);
+      setView({ kind: activeTab });
+    }
+  }, [initialMemoryId, activeTab]);
 
   // Navigate forward — pushes current view onto history stack
   const navigateTo = (next: View) => {
@@ -576,6 +589,7 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
                 stabilityFilter={stabilityFilter}
                 onStabilityFilterChange={setStabilityFilter}
                 onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
+                presentation="parent-list"
               />
             </>
           )}

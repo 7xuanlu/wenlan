@@ -71,15 +71,15 @@ function contrastRatio(foreground: string | null, background: string | null): nu
 
 describe("dark theme brand tokens", () => {
   it("uses a deep logo-ink scale instead of orange or flat graphite gray", () => {
-    expect(rootToken("--bg-primary")).toBe("#10161A");
-    expect(rootToken("--bg-secondary")).toBe("#171E22");
-    expect(rootToken("--border")).toBe("#2A373B");
+    expect(rootToken("--bg-primary")).toBe("#11131A");
+    expect(rootToken("--bg-secondary")).toBe("#171A23");
+    expect(rootToken("--border")).toBe("#2B3140");
 
-    expect(darkToken("--mem-bg")).toBe("#10161A");
-    expect(darkToken("--mem-surface")).toBe("#171E22");
-    expect(darkToken("--mem-sidebar")).toBe("#0C1216");
-    expect(darkToken("--mem-border")).toBe("#2A373B");
-    expect(darkToken("--mem-brand-text")).toBe("#E7ECE5");
+    expect(darkToken("--mem-bg")).toBe("#11131A");
+    expect(darkToken("--mem-surface")).toBe("#171A23");
+    expect(darkToken("--mem-sidebar")).toBe("#0E1017");
+    expect(darkToken("--mem-border")).toBe("#2B3140");
+    expect(darkToken("--mem-brand-text")).toBe("#ECEAF3");
   });
 
   it("keeps dark structural surfaces logo-tinted ink, not neutral gray", () => {
@@ -95,9 +95,9 @@ describe("dark theme brand tokens", () => {
   });
 
   it("moves page emphasis to logo-cyan while keeping warm states muted", () => {
-    expect(darkToken("--mem-accent-page")).toBe("#7DB9CF");
-    expect(darkToken("--mem-accent-indigo")).toBe("#9EADEB");
-    expect(darkToken("--mem-accent-warm")).toBe("#A1745D");
+    expect(darkToken("--mem-accent-page")).toBe("#8FB3EA");
+    expect(darkToken("--mem-accent-indigo")).toBe("#A9AEF2");
+    expect(darkToken("--mem-accent-warm")).toBe("#BB8967");
 
     const page = rgb(darkToken("--mem-accent-page") ?? "");
     expect(page.g).toBeGreaterThan(page.r);
@@ -110,8 +110,8 @@ describe("dark theme brand tokens", () => {
   });
 
   it("keeps wiki page icons quieter than page emphasis colors", () => {
-    expect(darkToken("--mem-page-icon")).toBe("#B99A86");
-    expect(darkToken("--mem-page-icon-hover")).toBe("#C9AD9D");
+    expect(darkToken("--mem-page-icon")).toBe("#C19A7B");
+    expect(darkToken("--mem-page-icon-hover")).toBe("#D1AF95");
 
     const icon = rgb(darkToken("--mem-page-icon") ?? "");
     const accent = rgb(darkToken("--mem-accent-page") ?? "");

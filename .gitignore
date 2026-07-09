@@ -26,6 +26,8 @@ app/dist/
 *.tsbuildinfo
 .codegraph/
 .worktrees/
+DESIGN.md
+.omo/
 
 # Editor
 .idea/

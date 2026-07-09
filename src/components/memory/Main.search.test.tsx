@@ -65,11 +65,20 @@ vi.mock("./ImportView", () => ({ ImportView: () => <div /> }));
 
 function renderMain(props: ComponentProps<typeof Main> = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <Main {...props} />
     </QueryClientProvider>,
   );
+  return {
+    ...view,
+    rerenderMain: (nextProps: ComponentProps<typeof Main> = {}) =>
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <Main {...nextProps} />
+        </QueryClientProvider>,
+      ),
+  };
 }
 
 describe("Main search", () => {
@@ -117,5 +126,15 @@ describe("Main search", () => {
     eventListeners.get("focus-search")?.();
 
     expect(searchInput).toHaveFocus();
+  });
+
+  it("opens memory detail when initialMemoryId arrives after mount", async () => {
+    const view = renderMain();
+
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+
+    view.rerenderMain({ initialMemoryId: "memory-1" });
+
+    expect(await screen.findByTestId("memory-detail")).toBeInTheDocument();
   });
 });

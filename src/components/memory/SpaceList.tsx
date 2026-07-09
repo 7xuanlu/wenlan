@@ -224,6 +224,7 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
   const renderSpaceRow = (s: Space, index: number, isSuggested: boolean) => {
     const isDragging = drag?.spaceName === s.name;
     const pageCount = pageCountsBySpace.get(s.name) ?? 0;
+    const isPrimarySpace = s.starred && !isSuggested;
 
     // Calculate visual offset during drag
     let translateY = 0;
@@ -305,8 +306,13 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
           className="flex-1 flex items-center justify-between px-2 py-1.5 rounded-md text-left transition-colors duration-150 hover:bg-[var(--mem-hover)]"
           style={{
             fontFamily: "var(--mem-font-body)",
-            fontSize: "13px",
-            color: isSuggested ? "var(--mem-text-tertiary)" : "var(--mem-text-secondary)",
+            fontSize: isPrimarySpace ? "14px" : "13px",
+            fontWeight: isPrimarySpace ? 500 : 400,
+            color: isPrimarySpace
+              ? "var(--mem-text)"
+              : isSuggested
+                ? "var(--mem-text-tertiary)"
+                : "var(--mem-text-secondary)",
           }}
         >
           <span className="flex min-w-0 items-center gap-1 capitalize truncate">
@@ -319,7 +325,7 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
             </span>
             {s.name}
           </span>
-          <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "11px", opacity: 0.5 }}>
+          <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: isPrimarySpace ? "12px" : "11px", opacity: isPrimarySpace ? 0.62 : 0.5 }}>
             {pageCount || ""}
           </span>
         </button>

@@ -3,12 +3,14 @@ import { useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Masonry from "react-masonry-css";
 import MemoryCard from "./MemoryCard";
+import MemoryListSurface from "./MemoryListSurface";
 import type { MemoryItem } from "../../lib/tauri";
-import { setStability, deleteFileChunks, getVersionChain } from "../../lib/tauri";
+import { setStability, deleteFileChunks, getVersionChain, pinMemory, unpinMemory } from "../../lib/tauri";
 import { readPreference, writePreference } from "../../lib/preferenceStorage";
 
 export type SortMode = "curated" | "recent" | "oldest";
 export type ViewMode = "grid" | "list";
+export type MemoryStreamPresentation = "embedded" | "parent-list";
 
 const VIEW_MODE_KEY = "wenlan-memory-view-mode";
 const LEGACY_VIEW_MODE_KEY = "origin-memory-view-mode";
@@ -27,6 +29,7 @@ interface MemoryStreamProps {
   agentFilter?: string | null;
   onSelectMemory?: (sourceId: string) => void;
   cardVariant?: "full" | "insight";
+  presentation?: MemoryStreamPresentation;
 }
 
 const STABILITY_RANK: Record<string, number> = { confirmed: 3, learned: 2, new: 1 };
@@ -67,6 +70,7 @@ export default function MemoryStream({
   agentFilter = null,
   onSelectMemory,
   cardVariant,
+  presentation = "embedded",
 }: MemoryStreamProps) {
   const queryClient = useQueryClient();
   const [undoItem, setUndoItem] = useState<{ sourceId: string; timer: number } | null>(null);
@@ -115,6 +119,22 @@ export default function MemoryStream({
     },
   });
 
+  const pinMutation = useMutation({
+    mutationFn: (sourceId: string) => pinMemory(sourceId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["memories"] });
+      queryClient.invalidateQueries({ queryKey: ["profile-memories"] });
+    },
+  });
+
+  const unpinMutation = useMutation({
+    mutationFn: (sourceId: string) => unpinMemory(sourceId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["memories"] });
+      queryClient.invalidateQueries({ queryKey: ["profile-memories"] });
+    },
+  });
+
   const { data: versionChain } = useQuery({
     queryKey: ["version-chain", expandedChain],
     queryFn: () => expandedChain ? getVersionChain(expandedChain) : Promise.resolve([]),
@@ -148,10 +168,13 @@ export default function MemoryStream({
       variant={cardVariant ?? "full"}
       onConfirm={(id, confirmed) => confirmMutation.mutate({ sourceId: id, confirmed, prevStability: mem.stability })}
       onDelete={handleDelete}
+      onPin={(id) => pinMutation.mutate(id)}
+      onUnpin={(id) => unpinMutation.mutate(id)}
       expandedChain={expandedChain === mem.source_id}
       onToggleChain={() => setExpandedChain(expandedChain === mem.source_id ? null : mem.source_id)}
       versionChain={expandedChain === mem.source_id ? versionChain ?? [] : []}
       onClick={onSelectMemory}
+      presentation={presentation === "parent-list" ? "parent-list" : "card"}
       style={{
         animation: `mem-fade-up 400ms cubic-bezier(0.16, 1, 0.3, 1) both`,
         animationDelay: `${delay ?? i * 40}ms`,
@@ -215,27 +238,42 @@ export default function MemoryStream({
         </>
       )}
       {/* View toggle */}
-      <button
-        onClick={toggleViewMode}
-        className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-        style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}
-        title={viewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
-      >
-        {viewMode === "grid" ? (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <circle cx="4" cy="6" r="1" fill="currentColor" /><line x1="9" y1="6" x2="21" y2="6" />
-            <circle cx="4" cy="12" r="1" fill="currentColor" /><line x1="9" y1="12" x2="21" y2="12" />
-            <circle cx="4" cy="18" r="1" fill="currentColor" /><line x1="9" y1="18" x2="21" y2="18" />
-          </svg>
-        ) : (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
-            <rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
-          </svg>
-        )}
-      </button>
+      {presentation !== "parent-list" && (
+        <button
+          onClick={toggleViewMode}
+          className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
+          style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}
+          title={viewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
+        >
+          {viewMode === "grid" ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="4" cy="6" r="1" fill="currentColor" /><line x1="9" y1="6" x2="21" y2="6" />
+              <circle cx="4" cy="12" r="1" fill="currentColor" /><line x1="9" y1="12" x2="21" y2="12" />
+              <circle cx="4" cy="18" r="1" fill="currentColor" /><line x1="9" y1="18" x2="21" y2="18" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
+            </svg>
+          )}
+        </button>
+      )}
     </div>
   );
+
+  if (presentation === "parent-list") {
+    return (
+      <MemoryListSurface
+        toolbar={toolbar}
+        memories={regularMemories}
+        filteredToEmpty={filteredToEmpty}
+        renderMemory={renderCard}
+        undoPending={undoItem !== null}
+        onUndo={handleUndo}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3 pb-16">

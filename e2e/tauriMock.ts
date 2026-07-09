@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Page } from "@playwright/test";
 import { APP_LOCALE_STORAGE_KEY, type AppLocale } from "../src/i18n/locales";
+import type { MemoryItem } from "../src/lib/tauri";
 
 type InstallTauriMockOptions = {
   locale: AppLocale;
   rawActions: string[];
+  memories?: readonly MemoryItem[];
 };
 
 export async function installTauriMock(page: Page, options: InstallTauriMockOptions): Promise<void> {
-  await page.addInitScript(({ locale, rawActions, localeStorageKey }) => {
+  await page.addInitScript(({ locale, rawActions, localeStorageKey, memoryFixtures }) => {
     const nowMs = Date.now();
     const nowSeconds = Math.floor(nowMs / 1000);
     const callbacks = new Map<number, (...args: unknown[]) => unknown>();
     let nextCallbackId = 1;
+    const memories = memoryFixtures;
+    const memoriesById = new Map(memories.map((memory) => [memory.source_id, memory]));
 
     window.localStorage.setItem(localeStorageKey, locale);
     window.localStorage.setItem(
@@ -32,16 +36,16 @@ export async function installTauriMock(page: Page, options: InstallTauriMockOpti
     }));
 
     const memoryStats = {
-      total: 0,
+      total: memories.length,
       by_type: {},
       by_domain: {},
-      recent_count: 0,
+      recent_count: memories.length,
     };
 
     const homeStats = {
-      total: 0,
-      new_today: 0,
-      confirmed: 0,
+      total: memories.length,
+      new_today: memories.filter((memory) => memory.stability === "new").length,
+      confirmed: memories.filter((memory) => memory.stability === "confirmed" || memory.confirmed).length,
       total_ingested: 0,
       active_insights: 0,
       distilled_today: 0,
@@ -88,7 +92,17 @@ export async function installTauriMock(page: Page, options: InstallTauriMockOpti
       },
     ];
 
-    const invoke = async (command: string): Promise<unknown> => {
+    const sourceIdFromArgs = (args: unknown): string | null => {
+      const sourceId = typeof args === "object" && args !== null ? Reflect.get(args, "sourceId") : null;
+      return typeof sourceId === "string" ? sourceId : null;
+    };
+
+    const idsFromArgs = (args: unknown): string[] => {
+      const ids = typeof args === "object" && args !== null ? Reflect.get(args, "ids") : null;
+      return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+    };
+
+    const invoke = async (command: string, args?: unknown): Promise<unknown> => {
       if (command.startsWith("plugin:")) return null;
 
       switch (command) {
@@ -105,10 +119,36 @@ export async function installTauriMock(page: Page, options: InstallTauriMockOpti
           return agents;
         case "list_spaces":
           return spaces;
+        case "list_memories_cmd":
+          return memories;
+        case "get_memory_detail": {
+          const sourceId = sourceIdFromArgs(args);
+          return sourceId ? memoriesById.get(sourceId) ?? null : null;
+        }
+        case "list_memories_by_ids":
+          return idsFromArgs(args).flatMap((id) => {
+            const memory = memoriesById.get(id);
+            return memory ? [memory] : [];
+          });
+        case "get_enrichment_status": {
+          const sourceId = sourceIdFromArgs(args) ?? "";
+          return { source_id: sourceId, summary: "", steps: [] };
+        }
+        case "get_version_chain_cmd":
+          return [];
+        case "get_memory_revisions": {
+          const sourceId = sourceIdFromArgs(args) ?? "";
+          return { current_source_id: sourceId, chain_depth: 0, entries: [] };
+        }
+        case "list_all_tags":
+          return { tags: [], document_tags: {}, categories: [], document_categories: {} };
+        case "get_pending_revision":
+          return null;
         case "list_pages":
         case "search_pages":
-        case "list_memories_cmd":
         case "search_entities_cmd":
+        case "list_entities_cmd":
+        case "search":
         case "list_recent_retrievals":
         case "list_recent_changes":
         case "list_recent_memories":
@@ -162,6 +202,7 @@ export async function installTauriMock(page: Page, options: InstallTauriMockOpti
     locale: options.locale,
     rawActions: options.rawActions,
     localeStorageKey: APP_LOCALE_STORAGE_KEY,
+    memoryFixtures: options.memories ?? [],
   });
 }
 

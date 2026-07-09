@@ -21,6 +21,9 @@ vi.mock("../../lib/tauri", () => ({
   getPendingRevision: vi.fn().mockResolvedValue(null),
   acceptPendingRevision: vi.fn(),
   dismissPendingRevision: vi.fn(),
+  pinMemory: vi.fn().mockResolvedValue(undefined),
+  unpinMemory: vi.fn().mockResolvedValue(undefined),
+  agentDisplayName: (slug: string | null) => slug,
 }));
 
 import {
@@ -165,6 +168,24 @@ describe("SpaceDetail context header", () => {
     expect(
       await screen.findByText("12 entities"),
     ).toBeInTheDocument();
+  });
+
+  it("keeps expanded memories in the embedded stream presentation", async () => {
+    renderWithQuery(
+      <SpaceDetail
+        spaceName="Origin"
+        onBack={() => {}}
+        onSelectMemory={() => {}}
+        onSelectPage={() => {}}
+        onEntityClick={() => {}}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Memories (47)" }));
+
+    expect(await screen.findByText("Prefers TDD workflow")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Memory list" })).not.toBeInTheDocument();
+    expect(document.querySelector(".memory-list-shell")).not.toBeInTheDocument();
   });
 
   it("deletes a space with only the daemon-supported keep behavior", async () => {
