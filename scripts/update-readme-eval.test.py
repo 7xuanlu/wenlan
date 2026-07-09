@@ -94,6 +94,49 @@ class UpdateReadmeEvalTests(unittest.TestCase):
                     (root / rel).read_text(encoding="utf-8"),
                 )
 
+    def test_metrics_source_check_detects_lme_s_summary_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            summary = root / "docs/eval/results/lme_s.summary.json"
+            summary.parent.mkdir(parents=True)
+            summary.write_text(
+                """
+{
+  "retrieval": {
+    "recall_at_5": 0.8767857142857144,
+    "mrr": 0.8145975056689342,
+    "ndcg_at_10": 0.8223431120728476
+  }
+}
+""",
+                encoding="utf-8",
+            )
+
+            errors = module.validate_source_summaries(
+                {
+                    "benchmarks": {
+                        "longmemeval_s": {
+                            "source_summary": "docs/eval/results/lme_s.summary.json",
+                            "source_metrics": "retrieval",
+                            "recall_at_5": 0.1,
+                            "mrr": 0.8145975056689342,
+                            "ndcg_at_10": 0.8223431120728476,
+                        }
+                    }
+                },
+                root,
+            )
+
+            self.assertEqual(
+                errors,
+                ["longmemeval_s.recall_at_5: 0.1 does not match docs/eval/results/lme_s.summary.json retrieval.recall_at_5 0.8767857142857144"],
+            )
+
+    def test_tracked_example_metrics_match_tracked_summaries(self) -> None:
+        data = module.load_metrics(module.ROOT / "docs/eval/readme_metrics.example.json")
+
+        self.assertEqual(module.validate_source_summaries(data, module.ROOT), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,10 +7,13 @@ Targets: README files with blocks between EVAL_SNAPSHOT_START / EVAL_SNAPSHOT_EN
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
+from typing import Final, TypeAlias
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,9 @@ BASELINES_DIR = Path(
 METRICS = BASELINES_DIR / "readme_metrics.json"
 START = "<!-- EVAL_SNAPSHOT_START -->"
 END = "<!-- EVAL_SNAPSHOT_END -->"
+METRIC_FIELDS: Final = ("recall_at_5", "mrr", "ndcg_at_10")
+JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject: TypeAlias = dict[str, JsonValue]
 
 
 def pct(v: float | None) -> str:
@@ -34,6 +40,70 @@ def score(v: float | None) -> str:
     if v is None:
         return "-"
     return f"{v:.3f}"
+
+
+def load_metrics(path: Path) -> JsonObject:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"{path}: expected JSON object")
+    return data
+
+
+def object_at(value: JsonValue | None, context: str) -> JsonObject:
+    if isinstance(value, dict):
+        return value
+    raise ValueError(f"{context}: expected object")
+
+
+def string_at(value: JsonValue | None, context: str) -> str:
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"{context}: expected string")
+
+
+def number_at(value: JsonValue | None, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{context}: expected number")
+    return float(value)
+
+
+def validate_source_summaries(data: JsonObject, root: Path) -> list[str]:
+    errors: list[str] = []
+    try:
+        benchmarks = object_at(data.get("benchmarks"), "benchmarks")
+    except ValueError as exc:
+        return [str(exc)]
+
+    for benchmark_key, row_value in benchmarks.items():
+        try:
+            row = object_at(row_value, benchmark_key)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+
+        source_summary_value = row.get("source_summary")
+        if source_summary_value is None:
+            continue
+
+        try:
+            source_summary = string_at(source_summary_value, f"{benchmark_key}.source_summary")
+            source_metrics = string_at(row.get("source_metrics", "retrieval"), f"{benchmark_key}.source_metrics")
+            summary_path = root / source_summary
+            summary = load_metrics(summary_path)
+            source_values = object_at(summary.get(source_metrics), f"{source_summary} {source_metrics}")
+
+            for field in METRIC_FIELDS:
+                actual = number_at(row.get(field), f"{benchmark_key}.{field}")
+                expected = number_at(source_values.get(field), f"{source_summary} {source_metrics}.{field}")
+                if actual != expected:
+                    errors.append(
+                        f"{benchmark_key}.{field}: {actual} does not match "
+                        f"{source_summary} {source_metrics}.{field} {expected}"
+                    )
+        except (OSError, json.JSONDecodeError, SystemExit, ValueError) as exc:
+            errors.append(f"{benchmark_key}: {exc}")
+
+    return errors
 
 
 def benchmark_rows(data: dict) -> list[dict]:
@@ -112,13 +182,33 @@ def update_tree(root: Path, table: str) -> int:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", type=Path, help="validate benchmark rows against tracked source summaries")
+    args = parser.parse_args()
+
+    if args.check:
+        data = load_metrics(args.check)
+        errors = validate_source_summaries(data, ROOT)
+        if errors:
+            for error in errors:
+                print(error, file=sys.stderr)
+            raise SystemExit(1)
+        print(f"Metrics source check passed: {args.check}")
+        return
+
     if not METRICS.exists():
         raise SystemExit(
             f"Missing local metrics file: {METRICS}\n"
             "Create it from docs/eval/readme_metrics.example.json first."
         )
 
-    data = json.loads(METRICS.read_text(encoding="utf-8"))
+    data = load_metrics(METRICS)
+    errors = validate_source_summaries(data, ROOT)
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        raise SystemExit(1)
+
     table = build_table(data)
     changed = update_tree(ROOT, table)
     print(f"Updated {changed} README file(s) from {METRICS}")
