@@ -419,6 +419,10 @@ pub struct ConfigResponse {
     /// Model identifier to use with the external LLM endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_llm_model: Option<String>,
+    /// Whether an external-LLM API key is stored. The key value itself is
+    /// never serialized anywhere.
+    #[serde(default)]
+    pub external_llm_api_key_configured: bool,
 }
 
 // ===== On-device model =====

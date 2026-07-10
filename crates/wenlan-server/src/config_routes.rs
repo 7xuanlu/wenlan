@@ -25,6 +25,8 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
         synthesis_model: cfg.synthesis_model.clone(),
         external_llm_endpoint: cfg.external_llm_endpoint.clone(),
         external_llm_model: cfg.external_llm_model.clone(),
+        // TODO(task-4): replace with the real stored-key presence flag.
+        external_llm_api_key_configured: false,
     }
 }
 
