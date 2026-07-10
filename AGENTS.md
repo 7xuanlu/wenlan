@@ -69,7 +69,7 @@ Pre-commit auto-formats Rust and runs Clippy on changed crates. Pre-push runs wo
 
 ## Cross-platform
 
-Wenlan runs on macOS (arm64, x86_64), Linux (x86_64, aarch64; musl), and Windows (x86_64).
+Wenlan builds from source on macOS (arm64, x86_64), Linux (x86_64, aarch64; glibc), and Windows (x86_64). Current prebuilt releases cover macOS arm64, Linux x86_64/aarch64 with glibc, and Windows x86_64; macOS x86_64 is source-build only.
 
 | OS | Data dir | Service registration |
 |---|---|---|

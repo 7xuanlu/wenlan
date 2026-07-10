@@ -219,6 +219,15 @@ def validate_resolver_parity(root: Path) -> None:
         fail("plugin-codex/bin/resolve-space.sh must match plugin/bin/resolve-space.sh")
 
 
+def validate_codex_readme(root: Path) -> None:
+    path = root / "plugin-codex" / "README.md"
+    text = read_text(root, path)
+    if not re.search(r"(?<![A-Za-z0-9_-])/setup\b", text):
+        fail(f"{rel(root, path)} must direct users to /setup")
+    if re.search(r"(?<![A-Za-z0-9_-])/init\b", text):
+        fail(f"{rel(root, path)} must not advertise the retired /init command")
+
+
 def iter_matching_plugin(plugins: list[Any], plugin_name: str):
     for item in plugins:
         if isinstance(item, dict) and item.get("name") == plugin_name:
@@ -336,6 +345,7 @@ def validate_contract(root: Path) -> None:
         validate_runner(root, surface, config)
 
     validate_resolver_parity(root)
+    validate_codex_readme(root)
     validate_marketplace(root, surfaces["codex"])
 
     validate_skill_surface(

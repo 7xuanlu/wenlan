@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=bf29a5dde4cf2efa63e8e847a5f16a3a1ecc3f95601c3b92ac1e8500a6c992b8 -->
+<!-- README_SYNC: source=README.md sha256=0175f0eb27ebc55eec6f29fe9e1e39d2f90cdafc0eb3d764ea489d5d57e823fb -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生时代的、会生长的个人知识库。" width="100%">
@@ -202,7 +202,7 @@ CLI 细节见：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
 
 ## 从源码构建
 
-Wenlan 可以在 macOS（Apple Silicon + Intel）、Linux（x86_64 + ARM64；glibc）和 Windows（x86_64）上原生构建。npm wrapper（`wenlan`、`wenlan-mcp`）和 `install.sh` 会自动检测平台并拉取匹配的 prebuilt release。大多数用户应该通过 Claude Code 插件或 `npx` 安装。本地开发：
+Wenlan 可以在 macOS（Apple Silicon + Intel）、Linux（x86_64 + ARM64；glibc）和 Windows（x86_64）上从源码构建。当前预编译 release 覆盖 macOS Apple Silicon、使用 glibc 的 Linux x86_64/ARM64，以及 Windows x86_64；macOS Intel 仍仅支持源码构建。npm wrapper（`wenlan`、`wenlan-mcp`）和 `install.sh` 会自动检测受支持的预编译平台。大多数用户应该通过 Claude Code 插件或 `npx` 安装。本地开发：
 
 ```bash
 git clone https://github.com/7xuanlu/wenlan.git
@@ -227,9 +227,9 @@ daemon、MCP server、CLI 和 core crates 的构建细节在上面链接的 crat
 - [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop)：防止 context loss 的 session-end discipline
 
 **Comparisons**
-- [Wenlan vs Basic Memory](https://wenlan.app/learn/origin-vs-basic-memory)：Markdown knowledge base vs AI work-session memory
-- [Wenlan vs claude-mem](https://wenlan.app/learn/origin-vs-claude-mem)：observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/origin-vs-superlocal-memory)：与另一种本地记忆形态的 tradeoffs
+- [Wenlan vs Basic Memory](https://wenlan.app/learn/wenlan-vs-basic-memory)：Markdown knowledge base vs AI work-session memory
+- [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)：observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)：与另一种本地记忆形态的 tradeoffs
 
 **Docs**
 - [Get started](https://wenlan.app/docs/get-started)：install + verify 第一个本地 memory loop

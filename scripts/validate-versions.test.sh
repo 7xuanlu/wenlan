@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMPDIR_TEST=$(mktemp -d)
 trap "rm -rf $TMPDIR_TEST" EXIT
 
@@ -130,3 +131,36 @@ if ! printf '%s\n' "$output" | grep -q "Codex plugin release pin missing"; then
     exit 1
 fi
 echo "PASS test 9: Codex README runner pin missing detected"
+
+assert_release_job_pins_tag() {
+    local workflow="$1"
+    local job="$2"
+    python3 - "$workflow" "$job" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+workflow = Path(sys.argv[1]).read_text()
+job = re.escape(sys.argv[2])
+match = re.search(rf"^  {job}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", workflow, re.MULTILINE | re.DOTALL)
+if not match:
+    raise SystemExit(1)
+body = match.group("body")
+checkout = re.search(r"^      - (?:name: Checkout\n        )?uses: actions/checkout@[^\n]+\n(?P<body>.*?)(?=^      - |\Z)", body, re.MULTILINE | re.DOTALL)
+if not checkout or not re.search(r"^          ref: refs/tags/\$\{\{ env\.RELEASE_TAG \}\}\s*$", checkout.group("body"), re.MULTILINE):
+    raise SystemExit(1)
+verify = re.search(r"^      - name: Verify release checkout\n(?P<body>.*?)(?=^      - |\Z)", body, re.MULTILINE | re.DOTALL)
+if not verify or not re.search(r"^        shell: bash\s*$", verify.group("body"), re.MULTILINE):
+    raise SystemExit(1)
+if 'git rev-parse HEAD' not in verify.group("body") or 'git rev-list -n1 "refs/tags/$RELEASE_TAG"' not in verify.group("body"):
+    raise SystemExit(1)
+PY
+}
+
+for job in prepare-release release docker publish-crates publish-npm; do
+    if ! assert_release_job_pins_tag "$REPO_ROOT/.github/workflows/release.yml" "$job"; then
+        echo "FAIL test 10: $job must checkout and verify RELEASE_TAG"
+        exit 1
+    fi
+done
+echo "PASS test 10: release-producing jobs checkout and verify RELEASE_TAG"
