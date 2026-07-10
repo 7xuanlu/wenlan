@@ -87,22 +87,28 @@ jobs:
           sed -i 's/^          //' release-body.md
           echo "Release body written ($(wc -c < release-body.md) bytes)"
 
-      - name: Create GitHub Release
+      - name: Gate the release behind a prerelease
         run: |
-          PRERELEASE_FLAG=""
-          if [[ "$RELEASE_TAG" == *-* ]]; then
-            PRERELEASE_FLAG="--prerelease"
-          fi
-          # Create as a DRAFT so a failed build below never leaves a public,
-          # torn release. The finalize-release job publishes it only after every
-          # build + publish job succeeds. Draft releases are invisible to
-          # `releases/latest` and do not fire `release: published`.
-          gh release create "$RELEASE_TAG" \
-            --draft \
-            --title "$RELEASE_TAG" \
+          # release-please already created this release — published, carrying the
+          # changelog body — and pushed the tag that triggered this run. Demote it
+          # to a prerelease at once: prereleases are excluded from
+          # `releases/latest`, so installers keep resolving the last good version
+          # while the builds below run. finalize-release promotes it back only
+          # after every build + publish job succeeds.
+          #
+          # A draft cannot serve as the gate. Drafts carry no git tag, and GitHub
+          # does not enforce tag uniqueness for drafts, so `gh release create
+          # --draft` forged a second, empty release beside the real v0.12.0.
+          # `--repo` is passed explicitly so this never depends on git context.
+          gh release edit "$RELEASE_TAG" \
+            --prerelease \
             --notes-file release-body.md \
-            $PRERELEASE_FLAG \
-            || gh release edit "$RELEASE_TAG" --draft --notes-file release-body.md
+            --repo "$GITHUB_REPOSITORY" \
+            || gh release create "$RELEASE_TAG" \
+              --prerelease \
+              --title "$RELEASE_TAG" \
+              --notes-file release-body.md \
+              --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -324,9 +330,9 @@ jobs:
         with:
           files: dist/*
           tag_name: ${{ env.RELEASE_TAG }}
-          # Keep the release a draft while assets upload; finalize-release
-          # flips it public only after every build + publish job succeeds.
-          draft: true
+          # Hold the release as a prerelease while assets upload; finalize-release
+          # promotes it only after every build + publish job succeeds.
+          prerelease: true
           # Don't touch the release body composed in prepare-release.
           append_body: false
           fail_on_unmatched_files: true
@@ -638,16 +644,28 @@ jobs:
           ruby -c tap/Formula/wenlan.rb
 
   finalize-release:
-    name: Publish the draft release
+    name: Promote the prerelease
     # Runs only after EVERY build + publish job succeeds. A failure in any of
     # them skips this job (GitHub requires all `needs` to succeed), so the
-    # release stays a draft — never a public, half-built `releases/latest`.
-    # Flipping draft -> published here is also what fires `release: published`
+    # release stays a prerelease — never a `releases/latest` without artifacts.
+    # Clearing the prerelease flag here is also what fires `release: released`
     # (and notify-marketplace) at the right moment: after the artifacts exist.
     needs: [release, docker-manifest, publish-crates, publish-npm, update-homebrew]
     runs-on: ubuntu-latest
     steps:
-      - name: Publish
-        run: gh release edit "$RELEASE_TAG" --draft=false
+      - name: Promote
+        run: |
+          # A genuine prerelease tag (v1.0.0-rc.1) stays a prerelease.
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            echo "$RELEASE_TAG is a prerelease tag; leaving it unpromoted."
+            exit 0
+          fi
+          # This job has no actions/checkout, so gh has no git context and
+          # `gh release edit` died with "fatal: not a git repository" on every
+          # release since the job was added. --repo supplies the context.
+          gh release edit "$RELEASE_TAG" \
+            --prerelease=false \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
