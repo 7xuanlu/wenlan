@@ -243,29 +243,23 @@ src/components/memory/RefiningList.tsx	quality settling in as you keep working	1
 src/components/memory/RefiningList.tsx	Refining	1
 src/components/memory/RemoteAccessPanel.tsx	ChatGPT	1
 src/components/memory/RemoteAccessPanel.tsx	Claude.ai	1
-src/components/memory/RemoteAccessPanel.tsx	Click again to confirm	1
 src/components/memory/RemoteAccessPanel.tsx	Connected	1
 src/components/memory/RemoteAccessPanel.tsx	Connected (	1
 src/components/memory/RemoteAccessPanel.tsx	Connecting…	1
-src/components/memory/RemoteAccessPanel.tsx	Copied!	2
-src/components/memory/RemoteAccessPanel.tsx	Copy	1
+src/components/memory/RemoteAccessPanel.tsx	Copied!	1
 src/components/memory/RemoteAccessPanel.tsx	Copy URL	3
-src/components/memory/RemoteAccessPanel.tsx	Hide	1
 src/components/memory/RemoteAccessPanel.tsx	How to connect Claude.ai and ChatGPT	1
-src/components/memory/RemoteAccessPanel.tsx	Let Claude.ai and ChatGPT access your memories via a secure tunnel.	1
+src/components/memory/RemoteAccessPanel.tsx	Creates a public HTTPS URL with no authentication for Claude.ai and ChatGPT. Anyone with the URL can access Wenlan; turn Remote Access off when unused.	1
 src/components/memory/RemoteAccessPanel.tsx	ms)	1
 src/components/memory/RemoteAccessPanel.tsx	Reconnect	3
 src/components/memory/RemoteAccessPanel.tsx	Retry	1
-src/components/memory/RemoteAccessPanel.tsx	Rotate	1
 src/components/memory/RemoteAccessPanel.tsx	Settings &rarr; Apps &rarr; Advanced settings &rarr; Enable Developer mode &rarr; Back &rarr; Create app &rarr; Paste URL (No Auth)	1
 src/components/memory/RemoteAccessPanel.tsx	Settings &rarr; Connectors &rarr; Add Custom Connector &rarr; Paste URL	1
 src/components/memory/RemoteAccessPanel.tsx	Share with web-based AI tools	1
-src/components/memory/RemoteAccessPanel.tsx	Show	1
 src/components/memory/RemoteAccessPanel.tsx	Test connection	1
 src/components/memory/RemoteAccessPanel.tsx	Testing…	1
 src/components/memory/RemoteAccessPanel.tsx	This tunnel URL changes when your Mac sleeps or restarts. Enable a stable relay in Settings → Agents to avoid reconnecting.	1
 src/components/memory/RemoteAccessPanel.tsx	This URL is stable — it won't change when your Mac sleeps or restarts.	1
-src/components/memory/RemoteAccessPanel.tsx	Token	1
 src/components/memory/RemoteAccessPanel.tsx	Your MCP URL	1
 src/components/memory/RemoteAccessPanel.tsx	Your MCP URL (stable)	1
 src/components/memory/RetrievalsList.tsx	archived	1
