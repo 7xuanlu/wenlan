@@ -1188,7 +1188,7 @@ pub async fn handle_test_llm(
 ) -> Result<Json<wenlan_types::requests::TestLlmResponse>, ServerError> {
     use wenlan_core::llm_provider::{LlmProvider, LlmRequest, OpenAICompatibleProvider};
 
-    let provider = OpenAICompatibleProvider::new(req.endpoint, req.model);
+    let provider = OpenAICompatibleProvider::new_with_key(req.endpoint, req.model, req.api_key);
     let llm_req = LlmRequest {
         system_prompt: None,
         user_prompt: req
@@ -2370,5 +2370,82 @@ mod search_supplemental_pages_tests {
             "unknown caller must get no pages, got: {:?}",
             parsed.supplemental_pages
         );
+    }
+}
+
+#[cfg(test)]
+mod test_llm_bearer_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use crate::state::ServerState;
+
+    /// Mock OpenAI-compatible server capturing the Authorization header.
+    async fn spawn_mock() -> (std::net::SocketAddr, Arc<Mutex<Vec<Option<String>>>>) {
+        let captured: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let cap = captured.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |headers: axum::http::HeaderMap| {
+                let cap = cap.clone();
+                async move {
+                    cap.lock().unwrap().push(
+                        headers
+                            .get("authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .map(String::from),
+                    );
+                    axum::Json(serde_json::json!({
+                        "choices": [{"message": {"content": "hello"}}]
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (addr, captured)
+    }
+
+    async fn probe(addr: std::net::SocketAddr, body: serde_json::Value) -> StatusCode {
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let router = crate::router::build_router(state);
+        let mut body = body;
+        body["endpoint"] = serde_json::json!(format!("http://{addr}"));
+        body["model"] = serde_json::json!("test-model");
+        router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/llm/test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn test_llm_forwards_bearer_key() {
+        let (addr, captured) = spawn_mock().await;
+        let status = probe(addr, serde_json::json!({"api_key": "sk-test"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            captured.lock().unwrap().as_slice(),
+            &[Some("Bearer sk-test".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_sends_no_auth_header_without_key() {
+        let (addr, captured) = spawn_mock().await;
+        let status = probe(addr, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(captured.lock().unwrap().as_slice(), &[None]);
     }
 }
