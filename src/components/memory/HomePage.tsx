@@ -31,7 +31,6 @@ interface HomePageProps {
 
 const FIRST_CONCEPT_SHOWN_KEY = "onboarding:firstConceptShownCount";
 const MAX_MODAL_SHOWS = 3;
-type DirectoryItem = { name: string; count: number };
 
 function deriveHomePageState(params: {
   intelligenceReady: boolean;
@@ -89,10 +88,6 @@ export default function HomePage({
       [...recentConcepts]
         .sort((a, b) => Date.parse(b.last_modified) - Date.parse(a.last_modified))
         .slice(0, 6),
-    [recentConcepts],
-  );
-  const directoryItems = useMemo(
-    () => directoryFromPages(recentConcepts),
     [recentConcepts],
   );
   const pageUpdateItems = useMemo(
@@ -182,7 +177,6 @@ export default function HomePage({
     return (
       <>
         <WikiHome
-          directoryItems={directoryItems}
           allPages={recentConcepts}
           pages={recentlyRefinedPages}
           pageUpdates={pageUpdateItems}
@@ -268,25 +262,6 @@ export default function HomePage({
   );
 }
 
-function pageSpaceName(page: Page): string {
-  return page.domain?.trim() || page.space?.trim() || "Unsorted";
-}
-
-function directoryFromPages(pages: Page[]): DirectoryItem[] {
-  const counts = new Map<string, number>();
-  for (const page of pages) {
-    const name = pageSpaceName(page);
-    if (name === "Unsorted") continue;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  return Array.from(counts.entries())
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      return a.name.localeCompare(b.name);
-    });
-}
-
 function pageUpdatesFromPages(pages: Page[]): Page[] {
   return [...pages]
     .filter((page) => page.stale_reason?.trim())
@@ -315,14 +290,16 @@ function formatSourceCount(t: TFunction, count: number): string {
   return t("home.counts.source", { count });
 }
 
-function uniqueSourceCount(pages: Page[]): number {
-  const sourceIds = new Set<string>();
-  for (const page of pages) {
-    for (const sourceId of page.source_memory_ids) {
-      sourceIds.add(sourceId);
-    }
-  }
-  return sourceIds.size;
+// The rail's list slices to 3, so the metric counts stale pages itself.
+function needsReviewCount(pages: Page[]): number {
+  return pages.filter((page) => page.stale_reason?.trim()).length;
+}
+
+function updatedTodayCount(pages: Page[]): number {
+  return pages.filter((page) => {
+    const ms = Date.parse(page.last_modified);
+    return !Number.isNaN(ms) && Math.floor((Date.now() - ms) / 86_400_000) <= 0;
+  }).length;
 }
 
 function latestPageUpdate(t: TFunction, pages: Page[]): string {
@@ -375,14 +352,12 @@ function useElementMinWidth<T extends HTMLElement>(minWidth: number) {
 }
 
 function WikiHome({
-  directoryItems,
   allPages,
   pages,
   pageUpdates,
   onSelectPage,
   onOpenDistillReview,
 }: {
-  directoryItems: DirectoryItem[];
   allPages: Page[];
   pages: Page[];
   pageUpdates: Page[];
@@ -412,10 +387,7 @@ function WikiHome({
       >
         <TodayHeader />
 
-        <HomeContextRail
-          pages={allPages}
-          directoryItems={directoryItems}
-        />
+        <HomeContextRail pages={allPages} />
       </section>
 
       <div
@@ -612,13 +584,7 @@ function PageList({
   );
 }
 
-function HomeContextRail({
-  pages,
-  directoryItems,
-}: {
-  pages: Page[];
-  directoryItems: DirectoryItem[];
-}) {
+function HomeContextRail({ pages }: { pages: Page[] }) {
   const { t } = useTranslation();
   return (
     <div
@@ -634,8 +600,9 @@ function HomeContextRail({
           data-testid="wiki-index-strip"
           className="wiki-index-strip"
         >
-          <ContextMetric testId="sources" label={t("home.sources")} value={formatSourceCount(t, uniqueSourceCount(pages))} />
-          <ContextMetric testId="spaces" label={t("home.spaces")} value={String(directoryItems.length)} />
+          <ContextMetric testId="pages" label={t("home.pages")} value={String(pages.length)} />
+          <ContextMetric testId="updated-today" label={t("home.relative.today")} value={String(updatedTodayCount(pages))} />
+          <ContextMetric testId="needs-review" label={t("home.pageUpdates")} value={String(needsReviewCount(pages))} />
           <ContextMetric testId="latest" label={t("home.latest")} value={latestPageUpdate(t, pages)} />
         </div>
       </section>

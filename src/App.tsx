@@ -9,7 +9,7 @@ import { markProcessing, clearProcessing } from "./lib/processingStore";
 import { recordCapture } from "./lib/captureHeartbeat";
 import Spotlight from "./components/Spotlight";
 import RecapDetail from "./components/RecapDetail";
-import IdentityDetail from "./components/memory/IdentityDetail";
+import EntityDetail from "./components/memory/EntityDetail";
 import Main from "./components/memory/Main";
 import SetupWizard from "./components/SetupWizard";
 import { MilestoneToaster } from "./components/onboarding/MilestoneToaster";
@@ -240,12 +240,15 @@ export default function App() {
         <RecapDetail snapshot={selectedSnapshot} onBack={() => setPage(prevPage)} />
       )}
       {page === "entity" && selectedEntityId && (
-        <IdentityDetail
-          entityId={selectedEntityId}
-          onBack={() => setPage(prevPage)}
-          onEntityClick={(id) => setSelectedEntityId(id)}
-          onMemoryClick={(sid) => { setSelectedMemoryId(sid); setSelectedPageId(null); setInitialView(null); setPage("home"); }}
-        />
+        <div className="h-screen overflow-y-auto">
+          <EntityDetail
+            key={selectedEntityId}
+            entityId={selectedEntityId}
+            onBack={() => setPage(prevPage)}
+            onEntityClick={(id) => setSelectedEntityId(id)}
+            onMemoryClick={(sid) => { setSelectedMemoryId(sid); setSelectedPageId(null); setInitialView(null); setPage("home"); }}
+          />
+        </div>
       )}
       <MilestoneToaster />
       <UpdaterDialog />

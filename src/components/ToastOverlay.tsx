@@ -21,7 +21,7 @@ type ToastLabelKey =
 const SOURCE_CONFIG: Record<string, { labelKey: ToastLabelKey; color: string; silent?: boolean }> = {
   clipboard:      { labelKey: "toast.clipboard", color: "#4ade80" },
   screen_capture: { labelKey: "toast.screen",    color: "#fbbf24" },
-  local_files:    { labelKey: "toast.files",     color: "#60a5fa" },
+  local_files:    { labelKey: "toast.files",     color: "#60a5fa", silent: true },
   manual:         { labelKey: "toast.captured",  color: "#c084fc" },
   ambient:        { labelKey: "toast.ambient",   color: "#2dd4bf", silent: true },
   focus:          { labelKey: "toast.focus",     color: "#fbbf24", silent: true },

@@ -253,7 +253,7 @@ html[data-theme="light"] {
 
 .wiki-index-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(112px, max-content));
+  grid-template-columns: repeat(4, minmax(112px, max-content));
   align-items: start;
   justify-content: start;
   width: 100%;
@@ -1594,4 +1594,774 @@ html[data-theme="light"] {
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+/* ── Dossier compat (ported with EntityDetail.tsx; these classes were
+   dropped in the branch redesign — remove when grammars merge) ──── */
+
+.memory-detail-hero-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.memory-detail-title {
+  max-width: 980px;
+  margin: 0;
+  color: var(--mem-text);
+  font-family: var(--mem-font-heading);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.24;
+  text-wrap: balance;
+}
+
+.memory-detail-timestamp {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 11px;
+}
+
+.memory-detail-icon-button:focus-visible,
+.memory-detail-back:focus-visible,
+.memory-detail-text-button:focus-visible,
+.memory-detail-field-button:focus-visible,
+.memory-detail-facet-button:focus-visible,
+.memory-detail-link-button:focus-visible,
+.memory-detail-state-button:focus-visible,
+.memory-detail-tag-edit:focus-visible,
+.memory-detail-disclosure-button:focus-visible,
+.memory-detail-context-row-button:focus-visible,
+.memory-detail-entity-chip:focus-visible,
+.memory-detail-related-card:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+.memory-detail-card {
+  min-width: 0;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  background: var(--mem-detail-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.memory-detail-card.is-recap {
+  border-color: var(--mem-distilled-border);
+  background: var(--mem-detail-surface);
+}
+
+.memory-detail-card.is-editing {
+  border-color: color-mix(in srgb, var(--mem-accent-warm) 58%, var(--mem-border));
+  background: color-mix(in srgb, var(--mem-detail-surface-raised) 62%, var(--mem-detail-surface));
+}
+
+.memory-detail-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--mem-detail-divider);
+  padding: 14px 16px;
+}
+
+.memory-detail-section-title {
+  margin: 0;
+  color: var(--mem-text);
+  font-family: var(--mem-font-heading);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.memory-detail-card-body {
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+
+.memory-detail-metadata-panel {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+}
+
+.memory-detail-context-dock {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 18px;
+  align-items: start;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+.memory-detail-context-dock > .memory-detail-secondary-panel {
+  grid-column: auto;
+  align-self: stretch;
+  height: 100%;
+}
+
+.memory-detail-metadata-list {
+  display: grid;
+}
+
+.memory-detail-metadata-row {
+  display: grid;
+  grid-template-columns: minmax(86px, 0.34fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid var(--mem-detail-divider);
+  min-width: 0;
+  padding-block: 10px;
+}
+
+.memory-detail-metadata-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.memory-detail-metadata-row.is-start {
+  align-items: start;
+}
+
+.memory-detail-metadata-label {
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.memory-detail-metadata-value {
+  min-width: 0;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.memory-detail-metadata-value > button,
+.memory-detail-metadata-value > .relative > button {
+  justify-self: start;
+}
+
+.memory-detail-state-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  padding: 2px 0;
+}
+
+.memory-detail-state-dot {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--mem-accent-amber);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.memory-detail-state-dot.is-on {
+  border-color: var(--mem-accent-warm);
+  background: var(--mem-accent-warm);
+}
+
+.memory-detail-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  border: 1px solid var(--mem-detail-divider);
+  border-radius: 7px;
+  background: var(--mem-detail-surface);
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.35;
+  padding: 4px 7px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.memory-detail-chip.success {
+  border-color: transparent;
+  background: var(--mem-status-success-bg);
+  color: var(--mem-status-success-text);
+}
+
+.memory-detail-chip.warning {
+  border-color: var(--mem-status-warning-border);
+  background: var(--mem-status-warning-bg);
+  color: var(--mem-status-warning-text);
+}
+
+.memory-detail-chip.indigo {
+  border-color: transparent;
+  background: var(--mem-indigo-bg);
+  color: var(--mem-accent-indigo);
+}
+
+@media (max-width: 980px) {
+  .memory-detail-metadata-panel,
+  .memory-detail-secondary-panel,
+  .memory-detail-context-dock {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .memory-detail-hero-row,
+  .memory-detail-card-header,
+  .memory-detail-editor-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .memory-detail-metadata-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
+/* ── Page detail — wiki reading layout (PageDetail.tsx) ───────────── */
+
+.page-detail {
+  display: flex;
+  box-sizing: border-box;
+  width: min(100%, 1130px);
+  margin-inline: auto;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.page-detail-title {
+  margin: 0;
+  color: var(--mem-text);
+  font-family: var(--mem-font-heading);
+  font-size: clamp(24px, 1.6vw + 14px, 30px);
+  font-weight: 500;
+  line-height: 1.22;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.page-detail-dateline {
+  margin-top: 10px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 12px;
+}
+
+.page-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 48px;
+  align-items: start;
+}
+
+/* Reading column: capped measure + roomier type via ContentRenderer vars.
+   Type and width scale together — the measure (chars/line) stays constant. */
+.page-detail-prose {
+  min-width: 0;
+  max-width: 730px;
+  --content-body-size: 15px;
+  --content-body-leading: 1.75;
+  --content-code-size: 13px;
+  --content-para-gap: 1em;
+  --content-heading-gap: 1.6em;
+  --content-h1-size: 20px;
+  --content-h2-size: 18px;
+  --content-h3-size: 15.5px;
+}
+
+.page-detail-lede {
+  border-left: 3px solid var(--mem-accent-page);
+  margin: 2px 0 22px;
+  padding: 2px 0 2px 18px;
+}
+
+.page-detail-lede p {
+  margin: 0;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-heading);
+  font-size: 16.5px;
+  font-style: italic;
+  line-height: 1.6;
+}
+
+@media (max-width: 980px) {
+  .page-detail-grid {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+}
+
+/* ── Entity dossier (EntityDetail.tsx) ─────────────────────────────── */
+
+/* Namespaced header — the shared .memory-detail-header grammar diverges
+   between trees, so the entity page owns its own copy of these three. */
+.entity-dossier-header {
+  display: grid;
+  gap: 14px;
+}
+
+.entity-dossier-hero {
+  padding-block: 2px 4px;
+}
+
+.entity-dossier-hero-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.entity-detail-head {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.entity-detail-seal {
+  display: flex;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  border: 1px solid color-mix(in srgb, var(--mem-accent-sage) 42%, var(--mem-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--mem-accent-sage) 14%, transparent);
+  color: var(--mem-accent-sage);
+  font-family: var(--mem-font-heading);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.entity-status-chip {
+  cursor: pointer;
+}
+
+.entity-delete-question {
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+}
+
+.entity-delete-confirm {
+  border: 1px solid var(--mem-status-warning-border);
+  border-radius: 7px;
+  background: var(--mem-status-warning-bg);
+  color: var(--mem-status-warning-text);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 9px;
+}
+
+.entity-empty {
+  margin: 0;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+}
+
+.entity-count {
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Observations */
+.entity-obs-list {
+  display: grid;
+}
+
+.entity-obs-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-top: 1px solid var(--mem-detail-divider);
+  padding: 9px 0 8px;
+}
+
+.entity-obs-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.entity-obs-state {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+.entity-obs-content {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mem-text);
+  cursor: text;
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  padding: 0;
+  text-align: left;
+}
+
+.entity-obs-content.is-unconfirmed {
+  color: var(--mem-text-secondary);
+}
+
+.entity-obs-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--mem-accent-warm) 55%, var(--mem-border));
+  background: transparent;
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  line-height: 1.55;
+  outline: none;
+  padding: 0 0 1px;
+}
+
+.entity-obs-input:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+.entity-obs-confidence {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.entity-obs-delete {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.entity-obs-row:hover .entity-obs-delete,
+.entity-obs-delete:focus-visible {
+  opacity: 1;
+}
+
+/* No hover on touch — keep the delete target visible */
+@media (pointer: coarse) {
+  .entity-obs-delete {
+    opacity: 1;
+  }
+}
+
+.entity-obs-delete:hover {
+  background: var(--mem-hover);
+  color: var(--mem-status-warning-text);
+}
+
+.entity-obs-add {
+  display: flex;
+  border-top: 1px solid var(--mem-detail-divider);
+  padding-top: 9px;
+}
+
+.entity-obs-add:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* Connection map */
+.entity-graph {
+  position: relative;
+  min-width: 0;
+}
+
+.entity-graph-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.entity-graph-edges line {
+  stroke: color-mix(in srgb, var(--mem-accent-sage) 38%, var(--mem-border));
+  stroke-width: 1px;
+}
+
+.entity-graph-caption {
+  position: absolute;
+  top: 2px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.entity-graph-caption.is-left {
+  left: 2px;
+}
+
+.entity-graph-caption.is-right {
+  right: 2px;
+}
+
+.entity-graph-verb {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  max-width: 24%;
+  overflow: hidden;
+  background: var(--mem-detail-surface);
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 0 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-graph-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  max-width: 30%;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.entity-graph-center-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--mem-accent-sage);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mem-accent-sage) 16%, transparent);
+}
+
+.entity-graph-center-name {
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--mem-detail-surface);
+  color: var(--mem-text);
+  font-family: var(--mem-font-heading);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 0 4px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-graph-node {
+  position: absolute;
+  display: flex;
+  max-width: 26%;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--mem-detail-surface);
+  cursor: pointer;
+  padding: 3px 5px;
+  text-align: left;
+}
+
+.entity-graph-node.is-right {
+  transform: translateY(-50%);
+}
+
+.entity-graph-node.is-left {
+  transform: translate(-100%, -50%);
+  flex-direction: row-reverse;
+  text-align: right;
+}
+
+.entity-graph-node:hover {
+  background: var(--mem-hover-strong);
+}
+
+.entity-graph-node-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--mem-accent-sage);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mem-accent-sage) 30%, transparent);
+}
+
+.entity-graph-node-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.entity-graph-node-name {
+  overflow: hidden;
+  color: var(--mem-accent-sage);
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-graph-node-type {
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.entity-graph-more {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 9px;
+}
+
+/* Relation ledger */
+.entity-relation-list {
+  display: grid;
+  margin-top: 6px;
+  border-top: 1px solid var(--mem-detail-divider);
+}
+
+.entity-relation-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  border: 0;
+  border-top: 1px solid var(--mem-detail-divider);
+  background: transparent;
+  cursor: pointer;
+  padding: 7px 0;
+  text-align: left;
+}
+
+.entity-relation-row:first-child {
+  border-top: 0;
+}
+
+.entity-relation-row:hover .entity-relation-name {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.entity-relation-verb {
+  flex: 0 0 auto;
+  min-width: 120px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.entity-relation-name {
+  color: var(--mem-accent-sage);
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.entity-relation-type {
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 9px;
+}
+
+.entity-meta-mono {
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.entity-appears-hint {
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+}
+
+.entity-error {
+  margin: 0;
+  color: var(--mem-status-warning-text);
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+}
+
+/* Block form (About card) gets breathing room; inline span (header) stays flush */
+p.entity-error {
+  margin-bottom: 8px;
+}
+
+.entity-detail-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 48px 32px;
+}
+
+/* Focus rings match the dossier system */
+.entity-obs-state:focus-visible,
+.entity-obs-content:focus-visible,
+.entity-obs-delete:focus-visible,
+.entity-graph-node:focus-visible,
+.entity-relation-row:focus-visible,
+.entity-status-chip:focus-visible,
+.entity-delete-confirm:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .entity-relation-verb {
+    min-width: 84px;
+  }
+
+  .entity-graph-node {
+    max-width: 34%;
+  }
 }

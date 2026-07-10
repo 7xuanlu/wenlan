@@ -223,12 +223,11 @@ describe("PageDetail", () => {
     expect(screen.getByText(/2 sources/)).toBeInTheDocument();
   });
 
-  it("uses mem- CSS variables (matches MemoryDetail pattern)", async () => {
+  it("uses the page-detail grammar class (matches MemoryDetail's dossier pattern)", async () => {
     const { container } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
     const topDiv = container.firstElementChild as HTMLElement;
-    expect(topDiv.className).toContain("flex");
-    expect(topDiv.className).toContain("flex-col");
+    expect(topDiv.className).toContain("page-detail");
     expect(topDiv.className).not.toContain("h-screen");
   });
 

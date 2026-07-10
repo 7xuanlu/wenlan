@@ -13,7 +13,7 @@ import {
 } from "../../lib/tauri";
 import ActivityFeed from "./ActivityFeed";
 import { useSearch } from "../../hooks/useSearch";
-import IdentityDetail from "./IdentityDetail";
+import EntityDetail from "./EntityDetail";
 import MemoryStream from "./MemoryStream";
 import type { SortMode } from "./MemoryStream";
 import HomePage from "./HomePage";
@@ -450,7 +450,7 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
                         <div className="flex items-center gap-2.5">
                           <span
                             className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
-                            style={{ backgroundColor: "rgba(52, 211, 153, 0.15)", color: "rgb(52, 211, 153)" }}
+                            style={{ backgroundColor: "color-mix(in srgb, var(--mem-accent-sage) 15%, transparent)", color: "var(--mem-accent-sage)" }}
                           >
                             {r.entity.entity_type}
                           </span>
@@ -518,7 +518,8 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
               onComplete={navigateBack}
             />
           ) : view.kind === "entity" ? (
-            <IdentityDetail
+            <EntityDetail
+              key={view.entityId}
               entityId={view.entityId}
               onBack={navigateBack}
               onEntityClick={handleEntityClick}
@@ -530,6 +531,7 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
               onBack={navigateBack}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
               onPageClick={(id) => navigateTo({ kind: "page", pageId: id })}
+              onEntityClick={handleEntityClick}
             />
           ) : view.kind === "distill-review" ? (
             <DistillReviewPanel

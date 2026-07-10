@@ -152,8 +152,9 @@ describe("HomePage redesign", () => {
     expect(screen.getByTestId("wiki-index-summary")).toHaveAttribute("aria-label", "Index");
     expect(within(screen.getByTestId("wiki-context-rail")).queryByRole("heading", { name: "Index" })).toBeNull();
     expect(screen.getByTestId("wiki-context-rail")).not.toHaveTextContent("Recently active");
-    expect(screen.queryByTestId("wiki-context-pages")).toBeNull();
-    expect(screen.getByTestId("wiki-context-rail")).toHaveTextContent("6 sources");
+    expect(screen.getByTestId("wiki-context-pages")).toHaveTextContent("2");
+    expect(screen.getByTestId("wiki-context-updated-today")).toHaveTextContent("2");
+    expect(screen.getByTestId("wiki-context-needs-review")).toHaveTextContent("0");
     expect(screen.queryByTestId("wiki-space-filter-row")).toBeNull();
     expect(screen.queryByTestId("wiki-recent-spaces")).toBeNull();
     expect(screen.queryByText("Wiki pages")).toBeNull();
@@ -201,10 +202,12 @@ describe("HomePage redesign", () => {
       expect(pageList.compareDocumentPosition(pageUpdates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
       expect(todayHeading).not.toHaveTextContent("2 pages");
-      expect(screen.queryByTestId("wiki-context-pages")).toBeNull();
+      expect(screen.getByTestId("wiki-context-pages")).toHaveTextContent("2");
 
       expect(screen.getByTestId("wiki-index-summary")).toHaveAttribute("aria-label", "Index");
-      expect(contextRail).not.toHaveTextContent("Needs review");
+      // Review items stay in the page-updates section, not the rail (the
+      // needs-review metric label is allowed here).
+      expect(within(contextRail).queryByText("Wenlan app architecture")).toBeNull();
       expect(within(contextRail).queryByRole("heading", { name: "Index" })).toBeNull();
 
       expect(screen.getByTestId("wiki-page-list")).toHaveStyle({ borderTopStyle: "none" });
@@ -279,22 +282,22 @@ describe("HomePage redesign", () => {
     expect(screen.getByTestId("wiki-context-rail")).not.toHaveTextContent("Recently active");
   });
 
-  it("counts only named spaces in the context rail without showing compact top filters", async () => {
+  it("counts every stale page in needs review and only today's pages in updated today", async () => {
     vi.mocked(tauri.listPages).mockResolvedValue([
-      page({ id: "page-a", title: "A", domain: "Alpha" }),
-      page({ id: "page-b", title: "B", domain: "Beta" }),
-      page({ id: "page-c", title: "C", domain: "Gamma" }),
-      page({ id: "page-d", title: "D", domain: "Delta" }),
-      page({ id: "page-e", title: "E", domain: "Epsilon" }),
-      page({ id: "page-unsorted", title: "Unassigned" }),
+      page({ id: "page-a", title: "A", stale_reason: "source_updated" }),
+      page({ id: "page-b", title: "B", stale_reason: "source_conflict" }),
+      page({ id: "page-c", title: "C", stale_reason: "source_updated" }),
+      page({ id: "page-d", title: "D", stale_reason: "source_updated", last_modified: "2026-06-01T12:00:00Z" }),
+      page({ id: "page-e", title: "E", last_modified: "2026-06-01T12:00:00Z" }),
     ]);
 
     renderHome();
 
     await screen.findByRole("heading", { name: "Today in Wenlan" });
 
-    expect(screen.queryByTestId("wiki-space-filter-row")).toBeNull();
-    expect(screen.getByTestId("wiki-context-spaces")).toHaveTextContent("5");
+    // The rail's list slices to 3 items; the metric must still count all 4.
+    expect(screen.getByTestId("wiki-context-needs-review")).toHaveTextContent("4");
+    expect(screen.getByTestId("wiki-context-updated-today")).toHaveTextContent("3");
   });
 
   it("does not navigate to the synthetic Unsorted page bucket", async () => {
@@ -355,7 +358,7 @@ describe("HomePage redesign", () => {
     expect(screen.getByTestId("wiki-index-summary")).toHaveAttribute("aria-label", "Index");
     expect(within(contextRail).queryByRole("heading", { name: "Index" })).toBeNull();
     expect(contextRail).not.toHaveTextContent("Recently active");
-    expect(contextRail).not.toHaveTextContent("Needs review");
+    expect(within(contextRail).queryByText("Wenlan app architecture")).toBeNull();
 
     const pageUpdates = screen.getByTestId("wiki-page-updates");
     expect(pageUpdates).toHaveTextContent("Needs review");

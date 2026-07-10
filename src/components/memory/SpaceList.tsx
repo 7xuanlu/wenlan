@@ -253,7 +253,7 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
             className="flex-1 min-w-0 rounded-md px-2 py-1 bg-transparent outline-none"
             style={{
               fontFamily: "var(--mem-font-body)",
-              fontSize: "12px",
+              fontSize: "13px",
               color: "var(--mem-text)",
               border: "1px solid var(--mem-accent-indigo)",
             }}
@@ -306,7 +306,7 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
           className="flex-1 flex items-center justify-between px-2 py-1.5 rounded-md text-left transition-colors duration-150 hover:bg-[var(--mem-hover)]"
           style={{
             fontFamily: "var(--mem-font-body)",
-            fontSize: isPrimarySpace ? "14px" : "13px",
+            fontSize: isPrimarySpace ? "15px" : "14px",
             fontWeight: isPrimarySpace ? 500 : 400,
             color: isPrimarySpace
               ? "var(--mem-text)"
@@ -415,7 +415,7 @@ export default function SpaceList({ onSelectSpace }: SpaceListProps) {
                 className="flex-1 min-w-0 rounded-md px-2 py-1 bg-transparent outline-none"
                 style={{
                   fontFamily: "var(--mem-font-body)",
-                  fontSize: "12px",
+                  fontSize: "13px",
                   color: "var(--mem-text)",
                   border: "1px solid var(--mem-border)",
                 }}

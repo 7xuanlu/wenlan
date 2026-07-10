@@ -71,7 +71,7 @@ export default function Sidebar({
                   <path d="M5 9.5V21h14V9.5" />
                   <path d="M9.5 21v-6h5v6" />
                 </svg>
-                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)" }}>
+                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-secondary)" }}>
                   {t("sidebar.home")}
                 </span>
               </button>
@@ -89,7 +89,7 @@ export default function Sidebar({
                   <line x1="16" y1="17" x2="8" y2="17" />
                   <polyline points="10 9 9 9 8 9" />
                 </svg>
-                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)" }}>
+                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-secondary)" }}>
                   {t("sidebar.memories")}
                 </span>
               </button>
@@ -108,7 +108,7 @@ export default function Sidebar({
                   <line x1="6" y1="8" x2="11" y2="16" />
                   <line x1="18" y1="8" x2="13" y2="16" />
                 </svg>
-                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)" }}>
+                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-secondary)" }}>
                   {t("sidebar.graph")}
                 </span>
               </button>
@@ -125,7 +125,7 @@ export default function Sidebar({
                   <path d="M3 12 12 17 21 12" />
                   <path d="M3 16 12 21 21 16" />
                 </svg>
-                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)" }}>
+                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-secondary)" }}>
                   {t("sidebar.sources")}
                 </span>
               </button>

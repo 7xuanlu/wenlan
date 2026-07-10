@@ -49,7 +49,7 @@ export default function EntitySuggestions() {
             className="flex-1 truncate"
             style={{
               fontFamily: "var(--mem-font-body)",
-              fontSize: "12px",
+              fontSize: "13px",
               color: "var(--mem-text)",
             }}
           >

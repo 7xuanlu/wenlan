@@ -26,7 +26,8 @@
         },
         "alwaysOnTop": false,
         "center": true,
-        "visible": true
+        "visible": true,
+        "zoomHotkeysEnabled": true
       }
     ],
     "macOSPrivateApi": true,

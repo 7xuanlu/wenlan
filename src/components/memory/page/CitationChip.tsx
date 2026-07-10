@@ -94,7 +94,7 @@ export default function CitationChip({
         className="focus-visible:outline-2 focus-visible:outline-[var(--mem-accent-indigo)]"
         style={{
           fontFamily: "var(--mem-font-mono)",
-          fontSize: "10px",
+          fontSize: "11px",
           lineHeight: 1,
           color: unverified ? "var(--mem-text-tertiary)" : "var(--mem-accent-indigo)",
           background: "var(--mem-hover)",

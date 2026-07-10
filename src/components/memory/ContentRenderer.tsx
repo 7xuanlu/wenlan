@@ -23,10 +23,10 @@ const markdownComponents = {
     <p
       style={{
         fontFamily: "var(--mem-font-body)",
-        fontSize: "14px",
-        lineHeight: "1.7",
+        fontSize: "var(--content-body-size, 14px)",
+        lineHeight: "var(--content-body-leading, 1.7)",
         color: "var(--mem-text)",
-        marginBottom: "0.75em",
+        marginBottom: "var(--content-para-gap, 0.75em)",
       }}
     >
       {children}
@@ -46,8 +46,8 @@ const markdownComponents = {
     <li
       style={{
         fontFamily: "var(--mem-font-body)",
-        fontSize: "14px",
-        lineHeight: "1.7",
+        fontSize: "var(--content-body-size, 14px)",
+        lineHeight: "var(--content-body-leading, 1.7)",
         color: "var(--mem-text)",
         paddingLeft: "0.25em",
       }}
@@ -61,7 +61,7 @@ const markdownComponents = {
         listStyleType: "disc",
         paddingLeft: "1.5em",
         color: "var(--mem-text-tertiary)",
-        marginBottom: "0.75em",
+        marginBottom: "var(--content-para-gap, 0.75em)",
       }}
     >
       {children}
@@ -73,7 +73,7 @@ const markdownComponents = {
         listStyleType: "decimal",
         paddingLeft: "1.5em",
         color: "var(--mem-text-tertiary)",
-        marginBottom: "0.75em",
+        marginBottom: "var(--content-para-gap, 0.75em)",
       }}
     >
       {children}
@@ -102,7 +102,7 @@ const markdownComponents = {
     <h1
       style={{
         fontFamily: "var(--mem-font-heading)",
-        fontSize: "18px",
+        fontSize: "var(--content-h1-size, 18px)",
         fontWeight: 500,
         color: "var(--mem-text)",
         marginTop: "1em",
@@ -116,10 +116,10 @@ const markdownComponents = {
     <h2
       style={{
         fontFamily: "var(--mem-font-heading)",
-        fontSize: "16px",
+        fontSize: "var(--content-h2-size, 16px)",
         fontWeight: 500,
         color: "var(--mem-text)",
-        marginTop: "1em",
+        marginTop: "var(--content-heading-gap, 1em)",
         marginBottom: "0.5em",
       }}
     >
@@ -130,7 +130,7 @@ const markdownComponents = {
     <h3
       style={{
         fontFamily: "var(--mem-font-heading)",
-        fontSize: "14px",
+        fontSize: "var(--content-h3-size, 14px)",
         fontWeight: 600,
         color: "var(--mem-text)",
         marginTop: "0.75em",
@@ -152,7 +152,7 @@ const markdownComponents = {
         <code
           style={{
             fontFamily: "var(--mem-font-mono)",
-            fontSize: "12px",
+            fontSize: "var(--content-code-size, 12px)",
             backgroundColor: "var(--mem-hover)",
             padding: "0.15em 0.4em",
             borderRadius: "3px",
@@ -167,7 +167,7 @@ const markdownComponents = {
         className={className}
         style={{
           fontFamily: "var(--mem-font-mono)",
-          fontSize: "12px",
+          fontSize: "var(--content-code-size, 12px)",
         }}
       >
         {children}

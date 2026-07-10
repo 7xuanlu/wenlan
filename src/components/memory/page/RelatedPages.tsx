@@ -11,18 +11,8 @@ export default function RelatedPages({ outbound, onPageClick }: RelatedPagesProp
   if (outbound.length === 0) return null;
 
   return (
-    <div aria-label="Related pages">
-      <h3
-        className="mb-2"
-        style={{
-          fontFamily: "var(--mem-font-mono)",
-          fontSize: "11px",
-          fontWeight: 600,
-          letterSpacing: "0.05em",
-          textTransform: "uppercase",
-          color: "var(--mem-text-tertiary)",
-        }}
-      >
+    <div aria-label="Related pages" className="memory-detail-rail-section">
+      <h3 className="memory-detail-rail-title">
         Related Pages
       </h3>
       <div className="flex flex-wrap gap-1.5">

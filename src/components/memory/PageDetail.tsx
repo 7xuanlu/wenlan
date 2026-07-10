@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import {
   getPage,
   getPageLinks,
   getPageRevisions,
+  getEntityDetail,
   redistillPage,
   updatePage,
   deletePage,
@@ -12,10 +14,12 @@ import {
   exportPageToObsidian,
   listRegisteredSources,
   getPageSources,
+  type Entity,
 } from "../../lib/tauri";
 import ContentRenderer from "./ContentRenderer";
 import RelatedPages from "./page/RelatedPages";
 import PageInfo from "./page/PageInfo";
+import { RailPanelTitle } from "./MemoryDetailPrimitives";
 import { processCitations, stripCitationLinks } from "../../lib/pageCitations";
 import CitationChip from "./page/CitationChip";
 
@@ -24,6 +28,7 @@ interface PageDetailProps {
   onBack: () => void;
   onMemoryClick: (sourceId: string) => void;
   onPageClick?: (pageId: string) => void;
+  onEntityClick?: (entityId: string) => void;
 }
 
 function relativeTimeFromISO(iso: string): string {
@@ -57,7 +62,8 @@ function folderName(path: string): string {
 
 const PAGE_LINK_ANCHOR_PREFIX = "#concept:";
 
-export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick }: PageDetailProps) {
+export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick, onEntityClick }: PageDetailProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
   const [exported, setExported] = useState(false);
@@ -117,6 +123,29 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
     queryFn: () => getPageSources(pageId),
     enabled: !!pageId,
   });
+
+  // Entities on this page = the page's own anchor entity plus the anchor
+  // entities of its source memories. These are enrichment links, not search.
+  const pageEntityIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (page?.entity_id) ids.add(page.entity_id);
+    for (const s of pageSources ?? []) {
+      if (s.memory?.entity_id) ids.add(s.memory.entity_id);
+    }
+    return [...ids];
+  }, [page?.entity_id, pageSources]);
+
+  const entityQueries = useQueries({
+    queries: pageEntityIds.map((id) => ({
+      queryKey: ["entityDetail", id],
+      queryFn: () => getEntityDetail(id),
+      staleTime: 60_000,
+      retry: false,
+    })),
+  });
+  const pageEntities = entityQueries
+    .map((q) => q.data?.entity)
+    .filter((e): e is Entity => !!e);
 
   useEffect(() => {
     setRedistillNotice(null);
@@ -285,12 +314,16 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
 
   // Extract TLDR (first sentence) for native rendering under title.
   // Match first sentence ending with ". " or ".\n" — but not inside [[wikilinks]] or after abbreviations.
-  const sentenceEnd = cleanedContent.search(/\.\s/);
+  // Scan starts after any leading heading lines so a body that opens with
+  // "## Section" doesn't leak raw markdown into the plain-text lede.
+  const leadingHeadings = cleanedContent.match(/^(?:#{1,6}[^\n]*\n+)+/)?.[0].length ?? 0;
+  const bodyAfterHeadings = cleanedContent.slice(leadingHeadings);
+  const sentenceEnd = bodyAfterHeadings.search(/\.\s/);
   const tldr = sentenceEnd > 0 && sentenceEnd < 400
-    ? stripCitationLinks(cleanedContent.slice(0, sentenceEnd + 1).trim())
+    ? stripCitationLinks(bodyAfterHeadings.slice(0, sentenceEnd + 1).trim())
     : "";
   const displayContent = tldr
-    ? cleanedContent.slice(sentenceEnd + 1).trim()
+    ? (cleanedContent.slice(0, leadingHeadings) + bodyAfterHeadings.slice(sentenceEnd + 1).trimStart()).trim()
     : cleanedContent;
 
   // Intercept page/memory link clicks in rendered content (capture phase beats target="_blank")
@@ -313,8 +346,10 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
   const inboundLinks = pageLinks?.inbound ?? [];
   const pageRevisionEntries = pageRevisions?.entries ?? [];
 
+  const hasRail = pageEntities.length > 0 || outboundLinks.length > 0;
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="page-detail">
       {/* Back + Header */}
       <div>
         <button
@@ -327,20 +362,11 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
 
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <h2
-              style={{
-                fontFamily: "var(--mem-font-heading)",
-                fontSize: "20px",
-                color: "var(--mem-text)",
-                fontWeight: 500,
-                lineHeight: "1.4",
-              }}
-            >
+            <h2 className="page-detail-title">
               {page.title}
             </h2>
             <div
-              className="flex items-center gap-2 mt-1.5 flex-wrap"
-              style={{ fontFamily: "var(--mem-font-mono)", fontSize: "11px", color: "var(--mem-text-tertiary)" }}
+              className="page-detail-dateline flex items-center gap-2 flex-wrap"
             >
               <span>Last distilled {relativeTimeFromISO(page.last_compiled)}</span>
               <span style={{ opacity: 0.4 }}>&middot;</span>
@@ -558,46 +584,56 @@ export default function PageDetail({ pageId, onBack, onMemoryClick, onPageClick 
           </div>
         </div>
       ) : (
-        <div onClickCapture={handleContentClick}>
-          {(page.summary || tldr) && (
-            <div
-              className="pl-4 py-2 mb-4"
-              style={{ borderLeft: "3px solid var(--mem-accent-page)" }}
-            >
-              <p
-                style={{
-                  fontFamily: "var(--mem-font-body)",
-                  fontSize: "14px",
-                  color: "var(--mem-text-secondary)",
-                  lineHeight: "1.7",
-                  fontStyle: "italic",
-                }}
-              >
-                {page.summary || tldr}
-              </p>
-            </div>
+        <div className={hasRail ? "page-detail-grid" : undefined}>
+          <div className="page-detail-prose" onClickCapture={handleContentClick}>
+            {(page.summary || tldr) && (
+              <div className="page-detail-lede">
+                <p>{page.summary || tldr}</p>
+              </div>
+            )}
+            <ContentRenderer
+              content={displayContent}
+              variant="detail"
+              renderCitation={(k) => {
+                const c = processed.byOccurrence.get(k);
+                if (!c) return null;
+                return (
+                  <CitationChip
+                    occurrence={k}
+                    citation={c}
+                    sourceMemory={sourceMemoryByLocator.get(c.locator) ?? null}
+                    sourcesLoading={pageSources === undefined}
+                    onOpenMemory={onMemoryClick}
+                  />
+                );
+              }}
+            />
+          </div>
+          {hasRail && (
+            <aside className="memory-detail-rail page-detail-rail">
+              {pageEntities.length > 0 && (
+                <section className="memory-detail-rail-section">
+                  <RailPanelTitle>{t("pageDetail.entities")}</RailPanelTitle>
+                  <div className="memory-detail-entity-chip-list">
+                    {pageEntities.map((e) => (
+                      <button
+                        key={e.id}
+                        type="button"
+                        onClick={() => onEntityClick?.(e.id)}
+                        className="memory-detail-entity-chip"
+                      >
+                        <span className="memory-detail-entity-name">{e.name}</span>
+                        <span className="memory-detail-entity-type">{e.entity_type}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+              <RelatedPages outbound={outboundLinks} onPageClick={onPageClick} />
+            </aside>
           )}
-          <ContentRenderer
-            content={displayContent}
-            variant="detail"
-            renderCitation={(k) => {
-              const c = processed.byOccurrence.get(k);
-              if (!c) return null;
-              return (
-                <CitationChip
-                  occurrence={k}
-                  citation={c}
-                  sourceMemory={sourceMemoryByLocator.get(c.locator) ?? null}
-                  sourcesLoading={pageSources === undefined}
-                  onOpenMemory={onMemoryClick}
-                />
-              );
-            }}
-          />
         </div>
       )}
-
-      {!editing && <RelatedPages outbound={outboundLinks} onPageClick={onPageClick} />}
 
       {!editing && (
         <PageInfo
