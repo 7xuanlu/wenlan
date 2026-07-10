@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
       - 'LICENSE'
@@ -31,6 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       rust:    ${{ steps.filter.outputs.rust }}
+      docs:    ${{ steps.filter.outputs.docs }}
       plugin:  ${{ steps.filter.outputs.plugin }}
       npm:     ${{ steps.filter.outputs.npm }}
       windows: ${{ steps.filter.outputs.windows }}
@@ -68,6 +67,19 @@ jobs:
               - 'scripts/validate-codex-plugin-slice.py'
               - 'scripts/validate-plugin-contract.py'
               - 'scripts/validate-plugin-contract.test.sh'
+            docs:
+              - 'README.md'
+              - 'README.zh-Hans.md'
+              - 'README.zh-Hant.md'
+              - 'docs/eval/**'
+              - 'scripts/check-readme-translations.py'
+              - 'scripts/check-readme-translations.test.sh'
+              - 'scripts/update-readme-eval.py'
+              - 'scripts/update-readme-eval.test.py'
+              - 'scripts/validate-versions.sh'
+              - 'scripts/validate-versions.test.sh'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
             npm:
               - 'crates/*/npm/**'
             windows:
@@ -409,6 +421,21 @@ jobs:
       - name: Quarantined tests (wenlan-mcp + wenlan-types)
         run: cargo nextest run -p wenlan-mcp -p wenlan-types
 
+  docs:
+    name: docs provenance
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Validate README translations and eval provenance
+        run: |
+          python3 scripts/check-readme-translations.py
+          bash scripts/check-readme-translations.test.sh
+          python3 scripts/update-readme-eval.py --check docs/eval/readme_metrics.example.json
+          python3 scripts/update-readme-eval.test.py
+          bash scripts/validate-versions.test.sh
+
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where the test matrix skips via detect-changes) report success instead
   # of stalling forever on a never-run required check.
@@ -419,7 +446,7 @@ jobs:
   # is their normal state on PRs not touching those surfaces.
   conclusion:
     name: conclusion
-    needs: [detect-changes, fmt, lint, test, plugin, npm]
+    needs: [detect-changes, fmt, lint, test, docs, plugin, npm]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -430,7 +457,7 @@ jobs:
             echo "detect-changes did not succeed: $dc"
             exit 1
           fi
-          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}'; do
+          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.docs.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}'; do
             case "$r" in
               success|skipped) ;;
               *) echo "Upstream job failed: $r"; exit 1 ;;

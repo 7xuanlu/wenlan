@@ -13,7 +13,7 @@ codex plugin add wenlan@wenlan-local
 ```
 
 Start a new Codex thread after installing so the skills and MCP server load.
-Then try `/init`, `/brief`, `/capture <memory>`, `/recall <query>`,
+Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`,
 `/pages <query>`, or `/handoff`.
 
 ## Development

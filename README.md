@@ -196,7 +196,7 @@ Retrieval-only snapshot, not end-to-end answer quality. Method and update workfl
 
 ## Build from source
 
-Wenlan builds natively on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). The npm wrapper (`wenlan`, `wenlan-mcp`) and `install.sh` auto-detect your platform and pull the matching prebuilt release. Most users should install through the Claude Code plugin or `npx`. For local development:
+Wenlan builds from source on macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64; glibc), and Windows (x86_64). Current prebuilt releases cover macOS Apple Silicon, Linux x86_64/ARM64 with glibc, and Windows x86_64; macOS Intel remains source-build only. The npm wrapper (`wenlan`, `wenlan-mcp`) and `install.sh` auto-detect supported prebuilt platforms. Most users should install through the Claude Code plugin or `npx`. For local development:
 
 ```bash
 git clone https://github.com/7xuanlu/wenlan.git
@@ -221,9 +221,9 @@ Longer-form writing on AI work memory and how Wenlan compares lives at [wenlan.a
 - [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop): session-end discipline that prevents context loss
 
 **Comparisons**
-- [Wenlan vs Basic Memory](https://wenlan.app/learn/origin-vs-basic-memory): Markdown knowledge base vs AI work-session memory
-- [Wenlan vs claude-mem](https://wenlan.app/learn/origin-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/origin-vs-superlocal-memory): tradeoffs against another local memory shape
+- [Wenlan vs Basic Memory](https://wenlan.app/learn/wenlan-vs-basic-memory): Markdown knowledge base vs AI work-session memory
+- [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem): observer-style Claude Code memory vs MCP-first cross-tool memory
+- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory): tradeoffs against another local memory shape
 
 **Docs**
 - [Get started](https://wenlan.app/docs/get-started): install + verify the first local memory loop
