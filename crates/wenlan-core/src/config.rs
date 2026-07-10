@@ -166,6 +166,7 @@ pub fn load_config() -> Config {
 }
 
 /// True when the config holds any credential — used to tighten file perms.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn stores_secret(config: &Config) -> bool {
     config.anthropic_api_key.is_some() || config.external_llm_api_key.is_some()
 }
