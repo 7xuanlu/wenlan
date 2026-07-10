@@ -1809,7 +1809,7 @@ END;
 // ===== MemoryDB =====
 
 pub struct MemoryDB {
-    _db: libsql::Database,
+    pub(crate) _db: libsql::Database,
     pub(crate) conn: tokio::sync::Mutex<libsql::Connection>,
     embedder: Arc<std::sync::Mutex<TextEmbedding>>,
     chunker: ChunkingEngine,

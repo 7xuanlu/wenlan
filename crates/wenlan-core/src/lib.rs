@@ -36,6 +36,7 @@ pub mod importer;
 pub mod ingest;
 pub mod kg;
 pub mod kg_quality;
+pub mod lint;
 pub mod llm_classifier;
 pub mod llm_provider;
 pub mod maintenance;
