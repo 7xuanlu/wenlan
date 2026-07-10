@@ -133,6 +133,13 @@ pub struct SetupStatusResponse {
     pub local_model_selected: Option<String>,
     pub local_model_loaded: Option<String>,
     pub local_model_cached: bool,
+    pub external_llm: ExternalLlmStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExternalLlmStatus {
+    pub configured: bool,
+    pub loaded: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,9 +211,9 @@ pub async fn handle_get_setup_status(
     let local_model_cached = selected_model
         .map(on_device_models::is_cached)
         .unwrap_or(false);
-    let local_model_loaded = {
+    let (local_model_loaded, external_loaded) = {
         let s = state.read().await;
-        s.loaded_on_device_model.clone()
+        (s.loaded_on_device_model.clone(), s.external_llm.is_some())
     };
     let anthropic_key_configured = has_anthropic_key(&cfg);
     let mode = if anthropic_key_configured {
@@ -216,6 +223,10 @@ pub async fn handle_get_setup_status(
     } else {
         "basic-memory"
     };
+    let external_configured = matches!(
+        (&cfg.external_llm_endpoint, &cfg.external_llm_model),
+        (Some(e), Some(m)) if !e.is_empty() && !m.is_empty()
+    );
 
     Ok(Json(SetupStatusResponse {
         setup_completed: cfg.setup_completed,
@@ -224,6 +235,10 @@ pub async fn handle_get_setup_status(
         local_model_selected: selected_model.map(|model| model.id.to_string()),
         local_model_loaded,
         local_model_cached,
+        external_llm: ExternalLlmStatus {
+            configured: external_configured,
+            loaded: external_loaded,
+        },
     }))
 }
 
@@ -422,6 +437,65 @@ mod setup_status_tests {
         assert_eq!(body["mode"], "basic-memory");
         assert_eq!(body["anthropic_key_configured"], false);
         assert_eq!(body["local_model_selected"], Value::Null);
+        assert_eq!(body["external_llm"]["configured"], false);
+        assert_eq!(body["external_llm"]["loaded"], false);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn setup_status_reports_external_llm_state() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state.clone());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(resp).await;
+        assert_eq!(body["external_llm"]["configured"], false);
+        assert_eq!(body["external_llm"]["loaded"], false);
+
+        // Configure via PUT /api/config -> hot-swap makes it configured AND loaded.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"external_llm_endpoint":"http://localhost:11434/v1","external_llm_model":"llama3"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(resp).await;
+        assert_eq!(body["external_llm"]["configured"], true);
+        assert_eq!(body["external_llm"]["loaded"], true);
     }
 
     #[tokio::test(flavor = "current_thread")]
