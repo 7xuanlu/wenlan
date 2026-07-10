@@ -498,6 +498,48 @@ mod setup_status_tests {
         assert_eq!(body["external_llm"]["loaded"], true);
     }
 
+    /// Divergence case: config on disk has endpoint+model set (so `configured`
+    /// is true), but ServerState was built fresh — never hot-swapped by a PUT
+    /// /api/config call — so `external_llm` in state is still `None`
+    /// (`loaded` is false). This is the case a daemon restart hits: config
+    /// persists across restarts, but the in-memory provider slot does not
+    /// until something re-loads it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn setup_status_reports_configured_but_not_loaded_when_state_untouched() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+
+        // Seed the config file directly — bypass PUT /api/config entirely so
+        // no hot-swap ever runs.
+        let mut cfg = config::load_config();
+        cfg.external_llm_endpoint = Some("http://localhost:11434/v1".to_string());
+        cfg.external_llm_model = Some("llama3".to_string());
+        config::save_config(&cfg).unwrap();
+
+        // Fresh ServerState: external_llm defaults to None (never hot-swapped).
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["external_llm"]["configured"], true);
+        assert_eq!(body["external_llm"]["loaded"], false);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn set_anthropic_key_marks_setup_completed_and_hot_loads_provider() {
         let _lock = crate::TEST_DATA_DIR_LOCK
