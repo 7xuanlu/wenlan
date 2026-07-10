@@ -86,7 +86,12 @@ pub async fn handle_update_config(
         None => {}
         Some(None) => cfg.external_llm_api_key = None,
         Some(Some(v)) => {
-            cfg.external_llm_api_key = if v.trim().is_empty() { None } else { Some(v) };
+            let trimmed = v.trim();
+            cfg.external_llm_api_key = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
         }
     }
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
@@ -829,6 +834,14 @@ mod external_llm_lifecycle_tests {
         put_config(&app, serde_json::json!({"external_llm_api_key": "sk-2"})).await;
         let (_, body) = put_config(&app, serde_json::json!({"external_llm_api_key": ""})).await;
         assert_eq!(body["external_llm_api_key_configured"], false);
+
+        // 4b. A pasted key with trailing whitespace/newline is stored trimmed.
+        put_config(&app, serde_json::json!({"external_llm_api_key": "sk-x\n"})).await;
+        assert_eq!(
+            config::load_config().external_llm_api_key.as_deref(),
+            Some("sk-x"),
+            "stored key must be trimmed of pasted whitespace"
+        );
 
         // 5. Clearing the endpoint clears the slot.
         let (_, body) = put_config(&app, serde_json::json!({"external_llm_endpoint": ""})).await;

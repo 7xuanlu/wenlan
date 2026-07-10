@@ -1250,7 +1250,12 @@ impl LlmProvider for OpenAICompatibleProvider {
             .post(&url)
             .header("content-type", "application/json")
             .json(&body);
-        if let Some(key) = self.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+        if let Some(key) = self
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
             request = request.header("authorization", format!("Bearer {key}"));
         }
         let resp = request

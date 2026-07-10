@@ -2448,4 +2448,16 @@ mod test_llm_bearer_tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(captured.lock().unwrap().as_slice(), &[None]);
     }
+
+    #[tokio::test]
+    async fn test_llm_trims_pasted_whitespace_from_bearer_key() {
+        let (addr, captured) = spawn_mock().await;
+        let status = probe(addr, serde_json::json!({"api_key": "sk-x\n"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            captured.lock().unwrap().as_slice(),
+            &[Some("Bearer sk-x".to_string())],
+            "trailing whitespace/newline in a pasted key must not reach the wire"
+        );
+    }
 }
