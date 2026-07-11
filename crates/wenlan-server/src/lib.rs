@@ -17,6 +17,7 @@ pub mod reflection_debounce;
 mod route_registry;
 pub mod router;
 pub mod routes;
+pub mod runtime_observation;
 pub mod scheduler;
 pub mod security;
 pub mod sensitive_read_routes;

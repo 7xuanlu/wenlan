@@ -1,6 +1,7 @@
 use super::kg::KgRunConfig;
 use super::memories::MemoryFeatureConfig;
 use super::operations::OperationsRunConfig;
+use super::runtime::RuntimeRunConfig;
 use super::serving::ServingRunConfig;
 use wenlan_types::lint::{
     LintConfigFingerprint, LintConfigSelection, LintConfigSetting, LintConfigValue,
@@ -13,6 +14,7 @@ pub(super) struct EffectiveLintConfig {
     pub(super) kg: KgRunConfig,
     pub(super) operations: OperationsRunConfig,
     pub(super) serving: ServingRunConfig,
+    pub(super) runtime: RuntimeRunConfig,
 }
 
 impl EffectiveLintConfig {
@@ -22,6 +24,7 @@ impl EffectiveLintConfig {
         kg: KgRunConfig,
         operations: OperationsRunConfig,
         serving: ServingRunConfig,
+        runtime: RuntimeRunConfig,
     ) -> Self {
         Self {
             page_projection_enabled,
@@ -29,6 +32,7 @@ impl EffectiveLintConfig {
             kg,
             operations,
             serving,
+            runtime,
         }
     }
 
@@ -71,6 +75,7 @@ impl EffectiveLintConfig {
         ];
         selections.extend(self.kg.fingerprint_selections());
         selections.extend(self.operations.fingerprint_selections());
+        selections.extend(self.runtime.fingerprint_selections());
         LintConfigFingerprint::from_effective_config(&selections)
     }
 }

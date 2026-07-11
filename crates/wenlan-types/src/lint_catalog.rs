@@ -79,6 +79,20 @@ pub enum LintMetricCode {
     UnattributedServingChannels,
     RerankerConfiguredPaths,
     RerankerRuntimeReadinessUnavailable,
+    IdentityProfiles,
+    IdentityAgents,
+    IdentitySpaces,
+    DecisionMemories,
+    TaggedDocuments,
+    PinnedMemories,
+    StableMemories,
+    SessionActivities,
+    SessionCaptures,
+    SessionSnapshots,
+    BriefingCacheRows,
+    NarrativeCacheRows,
+    WorkingMemoryTelemetryRows,
+    WorkingMemoryTelemetryUnavailable,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

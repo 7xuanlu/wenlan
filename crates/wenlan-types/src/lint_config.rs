@@ -21,6 +21,11 @@ pub enum LintConfigSetting {
     FactChannelLimit,
     RerankerLightConfigured,
     RerankerDeepConfigured,
+    ProviderSlotsRequested,
+    ModelSlotsConfigured,
+    RerankerPathsRequested,
+    ModelConfigurationIdentity,
+    RuntimeObservationCaptured,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,6 +80,11 @@ impl LintConfigSelection {
             LintConfigSetting::FactChannelLimit => 15,
             LintConfigSetting::RerankerLightConfigured => 16,
             LintConfigSetting::RerankerDeepConfigured => 17,
+            LintConfigSetting::ProviderSlotsRequested => 18,
+            LintConfigSetting::ModelSlotsConfigured => 19,
+            LintConfigSetting::RerankerPathsRequested => 20,
+            LintConfigSetting::ModelConfigurationIdentity => 21,
+            LintConfigSetting::RuntimeObservationCaptured => 22,
         };
         let mut bytes = vec![setting];
         match self.value {

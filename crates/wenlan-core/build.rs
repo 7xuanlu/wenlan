@@ -62,7 +62,7 @@ fn main() {
     // Best-effort: silently skipped in tarball / CI checkouts without .git.
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(output) = std::process::Command::new("git")
-        .args(["rev-parse", "--short=12", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
     {
         if output.status.success() {

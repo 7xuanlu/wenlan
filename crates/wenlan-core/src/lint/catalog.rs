@@ -11,16 +11,20 @@ pub enum ScopeAxis {
     PagesWorkspace,
     MemoriesSpace,
     EntitiesSpace,
+    IdentityGlobal,
     OperationsGlobal,
+    RuntimeGlobal,
     ServingGlobal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintCheckGroup {
+    Identity,
     KnowledgeGraph,
     Memories,
     Operations,
     Pages,
+    Runtime,
     Serving,
 }
 
@@ -35,6 +39,11 @@ pub struct LintCatalogEntry {
 const CATALOG: &[LintCatalogEntry] = &[
     entity_entry("entities.partition_inventory", ScopePolicy::ScopedRows),
     entity_entry("entities.structural_integrity", ScopePolicy::ScopedRows),
+    identity_entry("identity.cache_inventory", ScopePolicy::GlobalAggregateOnly),
+    identity_entry("identity.memory_state_integrity", ScopePolicy::ScopedRows),
+    identity_entry("identity.registry_integrity", ScopePolicy::GlobalOnly),
+    identity_entry("identity.session_structure", ScopePolicy::GlobalOnly),
+    identity_entry("identity.tag_integrity", ScopePolicy::GlobalOnly),
     entity_entry("kg.advisory_inventory", ScopePolicy::GlobalAggregateOnly),
     entity_entry("kg.aggregate_inventory", ScopePolicy::GlobalAggregateOnly),
     memory_kg_entry("kg.substrate_liveness", ScopePolicy::ScopedRows),
@@ -84,6 +93,14 @@ const CATALOG: &[LintCatalogEntry] = &[
     ),
     page_entry("pages.review_status_inventory", ScopePolicy::ScopedRows),
     entity_entry("relations.integrity", ScopePolicy::ScopedRows),
+    runtime_entry("runtime.ingest_worker_liveness", ScopePolicy::GlobalOnly),
+    runtime_entry(
+        "runtime.provider_inventory",
+        ScopePolicy::GlobalAggregateOnly,
+    ),
+    runtime_entry("runtime.schema_contract", ScopePolicy::GlobalOnly),
+    runtime_entry("runtime.search_index_contract", ScopePolicy::GlobalOnly),
+    runtime_entry("runtime.status_parity", ScopePolicy::GlobalAggregateOnly),
     serving_entry("serving.channel.episode", ScopePolicy::ScopedRows),
     serving_entry("serving.channel.fact", ScopePolicy::ScopedRows),
     serving_entry("serving.channel.graph", ScopePolicy::ScopedRows),
@@ -140,6 +157,28 @@ const fn operations_entry(id: &'static str) -> LintCatalogEntry {
     }
 }
 
+const fn identity_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy,
+        scope_axis: if matches!(scope_policy, ScopePolicy::ScopedRows) {
+            ScopeAxis::MemoriesSpace
+        } else {
+            ScopeAxis::IdentityGlobal
+        },
+        group: LintCheckGroup::Identity,
+    }
+}
+
+const fn runtime_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy,
+        scope_axis: ScopeAxis::RuntimeGlobal,
+        group: LintCheckGroup::Runtime,
+    }
+}
+
 const fn serving_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
     LintCatalogEntry {
         id,
@@ -174,3 +213,10 @@ pub fn catalog_entry(check_id: &str) -> Option<&'static LintCatalogEntry> {
         .ok()
         .map(|index| &CATALOG[index])
 }
+
+#[cfg(test)]
+#[path = "catalog_validation.rs"]
+mod validation;
+
+#[cfg(test)]
+pub(crate) use validation::has_valid_owner;

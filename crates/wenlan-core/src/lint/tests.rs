@@ -1,4 +1,4 @@
-use super::catalog::{catalog, catalog_entry, catalog_group, LintCheckGroup, ScopeAxis};
+use super::catalog::{catalog, catalog_entry, catalog_group, has_valid_owner, LintCheckGroup};
 use super::context::{CancellationToken, ExecutionGate, LintClock, PopulationAccounting};
 use super::runner::{
     configured_off_results, validate_catalog_results, LintRunError, LintRunner, TestScenario,
@@ -85,31 +85,7 @@ fn catalog_is_static_ordered_unique_and_group_owned() {
         ids.iter().copied().collect::<BTreeSet<_>>().len(),
         ids.len()
     );
-    assert!(entries.iter().all(|entry| match entry.group {
-        LintCheckGroup::KnowledgeGraph => {
-            (entry.id.starts_with("entities.")
-                || entry.id.starts_with("kg.")
-                || entry.id.starts_with("memory_entities.")
-                || entry.id.starts_with("observations.")
-                || entry.id.starts_with("relations."))
-                && matches!(
-                    entry.scope_axis,
-                    ScopeAxis::EntitiesSpace | ScopeAxis::MemoriesSpace
-                )
-        }
-        LintCheckGroup::Memories => {
-            entry.id.starts_with("memories.") && entry.scope_axis == ScopeAxis::MemoriesSpace
-        }
-        LintCheckGroup::Operations => {
-            entry.id.starts_with("operations.")
-                && entry.scope_axis == ScopeAxis::OperationsGlobal
-                && entry.scope_policy == super::catalog::ScopePolicy::GlobalAggregateOnly
-        }
-        LintCheckGroup::Pages => {
-            entry.id.starts_with("pages.") && entry.scope_axis == ScopeAxis::PagesWorkspace
-        }
-        LintCheckGroup::Serving => entry.id.starts_with("serving."),
-    }));
+    assert!(entries.iter().all(has_valid_owner));
     let policies: BTreeSet<_> = entries.iter().map(|entry| entry.scope_policy).collect();
     assert_eq!(policies.len(), 4);
 }

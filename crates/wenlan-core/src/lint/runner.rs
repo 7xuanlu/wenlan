@@ -18,6 +18,8 @@ use wenlan_types::lint::{
     LintSnapshotReceipts, LintSummaryCode, LintValidationMethod, LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
+mod configuration;
+
 #[derive(Debug, thiserror::Error)]
 pub enum LintRunError {
     #[error("invalid_scope")]
@@ -44,6 +46,7 @@ pub struct LintRunner {
     #[cfg(test)]
     kg_config: Option<super::kg::KgRunConfig>,
     operations_config: super::operations::OperationsRunConfig,
+    runtime_config: super::runtime::RuntimeRunConfig,
 }
 
 #[cfg(test)]
@@ -122,6 +125,7 @@ impl LintRunner {
             #[cfg(test)]
             kg_config: None,
             operations_config: super::operations::OperationsRunConfig::unavailable(),
+            runtime_config: super::runtime::RuntimeRunConfig::capture(),
         }
     }
 
@@ -152,11 +156,6 @@ impl LintRunner {
     #[cfg(test)]
     pub(super) fn with_test_kg_config(mut self, config: super::kg::KgRunConfig) -> Self {
         self.kg_config = Some(config);
-        self
-    }
-
-    pub fn with_sources(mut self, sources: &[wenlan_types::sources::Source]) -> Self {
-        self.operations_config = super::operations::OperationsRunConfig::from_sources(sources);
         self
     }
 
@@ -194,6 +193,7 @@ impl LintRunner {
             kg_config,
             self.operations_config.clone(),
             serving_config,
+            self.runtime_config.clone(),
         );
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
@@ -302,19 +302,13 @@ impl LintRunner {
         }
         let mut results = super::pages::run(context, config.page_projection_enabled).await;
         let page_elapsed = self.page_elapsed(page_started);
+        results.extend(super::identity::run(context).await);
         results.extend(super::memories::run(context, config.memory).await);
         results.extend(super::kg::run(context, config.kg).await);
         results.extend(super::operations::run(context, config.operations.clone()).await);
+        results.extend(super::runtime::run(context, &config.runtime).await);
         results.extend(super::serving::run(context, config.serving).await);
         Ok((results, page_elapsed))
-    }
-
-    fn page_elapsed(&self, page_started: std::time::Duration) -> std::time::Duration {
-        #[cfg(test)]
-        if self.scenario == Some(TestScenario::PageGroupTimeout) {
-            return ExecutionGate::PAGE_BUDGET + std::time::Duration::from_millis(1);
-        }
-        self.clock.elapsed().saturating_sub(page_started)
     }
 }
 
@@ -853,7 +847,7 @@ fn build_report(
         LintCapabilityContext::daemon_operator_endpoint(),
         receipts(db_receipt, page_before, page_after),
         effective_config.fingerprint(),
-        LintProducerReceipt::new(None),
+        LintProducerReceipt::new(effective_config.runtime.runtime_commit()),
         checks,
     )
     .map_err(LintRunError::from)
