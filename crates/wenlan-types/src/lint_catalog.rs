@@ -74,6 +74,11 @@ pub enum LintMetricCode {
     OperationAgeOneTo24Hours,
     OperationAgeOneTo7Days,
     OperationAgeSevenDaysOrMore,
+    AccessTelemetryRows,
+    AgentActivityTelemetryRows,
+    UnattributedServingChannels,
+    RerankerConfiguredPaths,
+    RerankerRuntimeReadinessUnavailable,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

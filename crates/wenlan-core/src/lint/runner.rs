@@ -43,8 +43,6 @@ pub struct LintRunner {
     memory_features: Option<super::memories::TestMemoryFeatures>,
     #[cfg(test)]
     kg_config: Option<super::kg::KgRunConfig>,
-    #[cfg(test)]
-    serving_config: Option<super::serving::ServingRunConfig>,
     operations_config: super::operations::OperationsRunConfig,
 }
 
@@ -123,8 +121,6 @@ impl LintRunner {
             memory_features: None,
             #[cfg(test)]
             kg_config: None,
-            #[cfg(test)]
-            serving_config: None,
             operations_config: super::operations::OperationsRunConfig::unavailable(),
         }
     }
@@ -156,15 +152,6 @@ impl LintRunner {
     #[cfg(test)]
     pub(super) fn with_test_kg_config(mut self, config: super::kg::KgRunConfig) -> Self {
         self.kg_config = Some(config);
-        self
-    }
-
-    #[cfg(test)]
-    pub(super) fn with_test_serving_config(
-        mut self,
-        config: super::serving::ServingRunConfig,
-    ) -> Self {
-        self.serving_config = Some(config);
         self
     }
 
@@ -200,28 +187,7 @@ impl LintRunner {
             #[cfg(not(test))]
             super::kg::KgRunConfig::capture()
         };
-        let reranker_mode = crate::reranker::reranker_mode_resolved(&crate::config::load_config());
-        let legacy_reranker = std::env::var("WENLAN_RERANKER_ENABLED").as_deref() == Ok("1");
-        let reranker_plan = crate::reranker::resolve_reranker_plan(reranker_mode, legacy_reranker);
-        let reranker_enabled = reranker_plan.light.is_some() || reranker_plan.deep.is_some();
-        let serving_config = {
-            #[cfg(test)]
-            if let Some(config) = self.serving_config {
-                config
-            } else {
-                super::serving::ServingRunConfig::new(
-                    memory_config,
-                    kg_config.serving_enabled,
-                    reranker_enabled,
-                )
-            }
-            #[cfg(not(test))]
-            super::serving::ServingRunConfig::new(
-                memory_config,
-                kg_config.serving_enabled,
-                reranker_enabled,
-            )
-        };
+        let serving_config = super::serving::capture(memory_config, kg_config.serving_enabled);
         let effective_config = EffectiveLintConfig::new(
             page_projection_enabled,
             memory_config,

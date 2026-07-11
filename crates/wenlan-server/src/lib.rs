@@ -14,6 +14,7 @@ pub mod memory_routes;
 pub mod onboarding_routes;
 pub mod refinery_routes;
 pub mod reflection_debounce;
+mod route_registry;
 pub mod router;
 pub mod routes;
 pub mod scheduler;

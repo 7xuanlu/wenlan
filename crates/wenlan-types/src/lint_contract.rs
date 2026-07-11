@@ -122,6 +122,10 @@ pub enum LintConfigSetting {
     SourceConfigurationCaptured,
     SourceConfigurationCount,
     SourceSnapshotIdentity,
+    PageRetrievalChannelEnabled,
+    FactChannelLimit,
+    RerankerLightConfigured,
+    RerankerDeepConfigured,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LintConfigValue {
@@ -166,6 +170,10 @@ impl LintConfigSelection {
             LintConfigSetting::SourceConfigurationCaptured => 11,
             LintConfigSetting::SourceConfigurationCount => 12,
             LintConfigSetting::SourceSnapshotIdentity => 13,
+            LintConfigSetting::PageRetrievalChannelEnabled => 14,
+            LintConfigSetting::FactChannelLimit => 15,
+            LintConfigSetting::RerankerLightConfigured => 16,
+            LintConfigSetting::RerankerDeepConfigured => 17,
         };
         let mut bytes = vec![setting];
         match self.value {

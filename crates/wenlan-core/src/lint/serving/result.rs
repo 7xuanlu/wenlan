@@ -7,6 +7,11 @@ use wenlan_types::lint::{
     LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
+mod fact;
+mod inventory;
+pub(crate) use fact::fact_probe;
+pub(crate) use inventory::inventory;
+
 pub(super) fn channel(
     context: &LintContext<'_, '_>,
     id: &'static str,
@@ -61,7 +66,7 @@ pub(super) fn fixed(
         id,
         ResultSpec::new(
             population,
-            population.saturating_sub(u64::from(finding)),
+            if finding { 0 } else { population },
             finding,
             false,
             inventory,
@@ -170,6 +175,12 @@ fn build(clock: &LintClock, id: &'static str, spec: ResultSpec) -> LintCheckResu
             LintMetric::new(
                 LintMetricCode::ObservedRecords,
                 LintMetricValue::Count { value: observed },
+            ),
+            LintMetric::new(
+                LintMetricCode::AffectedRecords,
+                LintMetricValue::Count {
+                    value: eligible.saturating_sub(observed),
+                },
             ),
         ],
         summary_code: if finding {

@@ -3,8 +3,12 @@ use super::context::LintContext;
 use super::memories::MemoryFeatureConfig;
 use wenlan_types::lint::LintCheckResult;
 
+mod config;
+mod fact_probe;
 mod query;
 mod result;
+pub mod routes;
+pub(super) use config::capture;
 
 pub(crate) const ROUTE_SCOPE_ID: &str = "serving.route_scope_contracts";
 pub(crate) const CHANNEL_EPISODE_ID: &str = "serving.channel.episode";
@@ -15,58 +19,40 @@ pub(crate) const CHANNEL_SUMMARY_ID: &str = "serving.channel.summary";
 pub(crate) const FACT_STARVATION_ID: &str = "serving.fact_scope_starvation";
 pub(crate) const OBSERVABILITY_ID: &str = "serving.observability_inventory";
 pub(crate) const RERANKER_ID: &str = "serving.reranker_fallback_inventory";
-pub(crate) const KNOWN_SCOPE_BYPASSES: &[&str] = &[
-    "entity_search",
-    "entity_detail",
-    "page_detail",
-    "page_sources",
-    "page_links",
-    "page_revisions",
-];
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ServingRunConfig {
-    page: bool,
+    pub(crate) page: bool,
     episode: bool,
     fact: bool,
     summary: bool,
     graph: bool,
     pub(crate) reranker: bool,
+    pub(crate) reranker_light: bool,
+    pub(crate) reranker_deep: bool,
+    pub(crate) reranker_paths: u64,
+    pub(crate) fact_limit: usize,
 }
 
 impl ServingRunConfig {
-    pub(crate) const fn new(memory: MemoryFeatureConfig, graph: bool, reranker: bool) -> Self {
+    fn from_captured(
+        memory: MemoryFeatureConfig,
+        graph: bool,
+        page: bool,
+        fact_limit: usize,
+        reranker_light: bool,
+        reranker_deep: bool,
+    ) -> Self {
         Self {
-            page: memory.page,
+            page,
             episode: memory.episode,
             fact: memory.fact,
             summary: memory.summary,
             graph,
-            reranker,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn all_disabled() -> Self {
-        Self {
-            page: false,
-            episode: false,
-            fact: false,
-            summary: false,
-            graph: false,
-            reranker: false,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn all_enabled() -> Self {
-        Self {
-            page: true,
-            episode: true,
-            fact: true,
-            summary: true,
-            graph: true,
-            reranker: true,
+            reranker: reranker_light || reranker_deep,
+            reranker_light,
+            reranker_deep,
+            reranker_paths: u64::from(reranker_light) + u64::from(reranker_deep),
+            fact_limit,
         }
     }
 }
@@ -93,32 +79,6 @@ pub(crate) const fn assess_channel(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FactCandidate<'a> {
-    scope: &'a str,
-    fact: bool,
-}
-
-impl<'a> FactCandidate<'a> {
-    pub(crate) const fn new(scope: &'a str, fact: bool) -> Self {
-        Self { scope, fact }
-    }
-}
-
-pub(crate) fn fact_scope_starved(
-    candidates: &[FactCandidate<'_>],
-    scope: &str,
-    top_k: usize,
-) -> bool {
-    candidates
-        .iter()
-        .any(|candidate| candidate.fact && candidate.scope == scope)
-        && !candidates
-            .iter()
-            .take(top_k)
-            .any(|candidate| candidate.fact && candidate.scope == scope)
-}
-
 pub(crate) async fn run(
     context: &LintContext<'_, '_>,
     config: ServingRunConfig,
@@ -132,7 +92,7 @@ pub(crate) async fn run(
             )
         }
     };
-    let bypasses = u64::try_from(KNOWN_SCOPE_BYPASSES.len()).unwrap_or(u64::MAX);
+    let bypasses = u64::try_from(routes::scope_contract_violations().count()).unwrap_or(u64::MAX);
     let mut results = vec![result::fixed(
         context,
         ROUTE_SCOPE_ID,
@@ -140,7 +100,7 @@ pub(crate) async fn run(
         true,
         false,
     )];
-    for (id, enabled, observed) in [
+    for (id, enabled, count) in [
         (CHANNEL_EPISODE_ID, config.episode, counts.episode),
         (CHANNEL_FACT_ID, config.fact, counts.fact),
         (CHANNEL_GRAPH_ID, config.graph, counts.graph),
@@ -150,27 +110,63 @@ pub(crate) async fn run(
         results.push(result::channel(
             context,
             id,
-            assess_channel(id, enabled, counts.eligible, observed),
+            assess_channel(id, enabled, count.eligible, count.observed),
         ));
     }
-    let fact_probe = [
-        FactCandidate::new("other", true),
-        FactCandidate::new("selected", true),
-    ];
-    results.push(result::fixed(
+    let fact_probe = if config.fact {
+        match fact_probe::run(context, config.fact_limit).await {
+            Ok(probe) => probe,
+            Err(()) => {
+                return super::runner::failed_results_for_group(
+                    context.clock(),
+                    LintCheckGroup::Serving,
+                )
+            }
+        }
+    } else {
+        fact_probe::FactProbe::default()
+    };
+    results.push(result::fact_probe(context, fact_probe));
+    let telemetry = match query::load_telemetry(context).await {
+        Ok(telemetry) => telemetry,
+        Err(()) => {
+            return super::runner::failed_results_for_group(
+                context.clock(),
+                LintCheckGroup::Serving,
+            )
+        }
+    };
+    results.push(result::inventory(
         context,
-        FACT_STARVATION_ID,
-        counts.eligible,
-        config.fact && counts.eligible > 0 && fact_scope_starved(&fact_probe, "selected", 1),
-        false,
+        OBSERVABILITY_ID,
+        vec![
+            (
+                wenlan_types::lint::LintMetricCode::AccessTelemetryRows,
+                telemetry.access,
+            ),
+            (
+                wenlan_types::lint::LintMetricCode::AgentActivityTelemetryRows,
+                telemetry.activity,
+            ),
+            (
+                wenlan_types::lint::LintMetricCode::UnattributedServingChannels,
+                2,
+            ),
+        ],
     ));
-    results.push(result::fixed(context, OBSERVABILITY_ID, 2, false, true));
-    results.push(result::fixed(
+    results.push(result::inventory(
         context,
         RERANKER_ID,
-        u64::from(config.reranker),
-        false,
-        true,
+        vec![
+            (
+                wenlan_types::lint::LintMetricCode::RerankerConfiguredPaths,
+                config.reranker_paths,
+            ),
+            (
+                wenlan_types::lint::LintMetricCode::RerankerRuntimeReadinessUnavailable,
+                1,
+            ),
+        ],
     ));
     results
 }

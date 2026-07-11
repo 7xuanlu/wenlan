@@ -38,7 +38,23 @@ impl EffectiveLintConfig {
                 LintConfigSetting::PageProjectionEnabled,
                 self.page_projection_enabled,
             ),
+            selection(
+                LintConfigSetting::PageRetrievalChannelEnabled,
+                self.serving.page,
+            ),
+            LintConfigSelection::count(
+                LintConfigSetting::FactChannelLimit,
+                u64::try_from(self.serving.fact_limit).unwrap_or(u64::MAX),
+            ),
             selection(LintConfigSetting::RerankerEnabled, self.serving.reranker),
+            selection(
+                LintConfigSetting::RerankerLightConfigured,
+                self.serving.reranker_light,
+            ),
+            selection(
+                LintConfigSetting::RerankerDeepConfigured,
+                self.serving.reranker_deep,
+            ),
             selection(
                 LintConfigSetting::EpisodeChannelEnabled,
                 self.memory.episode,

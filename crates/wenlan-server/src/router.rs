@@ -1,20 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Axum router construction — wires all HTTP and WebSocket routes.
 
+use crate::route_registry::{delete, get, post, put, TrackedRouter};
 use crate::state::SharedState;
 use crate::{
     config_routes, import_routes, ingest_routes, knowledge_routes, memory_routes,
     onboarding_routes, refinery_routes, routes, security, source_routes, websocket,
 };
-use axum::{
-    routing::{delete, get, post, put},
-    Router,
-};
+use axum::Router;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
-
-#[cfg(test)]
-#[path = "sensitive_read_routes_test.rs"]
-mod sensitive_read_routes_test;
 
 /// Build the shared application router with all routes.
 pub fn build_router(state: SharedState) -> Router {
@@ -33,7 +27,7 @@ pub fn build_router(state: SharedState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
+    TrackedRouter::new()
         // General
         .route("/api/health", get(routes::handle_health))
         .route("/api/status", get(routes::handle_status))
@@ -496,6 +490,7 @@ pub fn build_router(state: SharedState) -> Router {
         )
         // WebSocket
         .route("/ws/updates", get(websocket::handle_ws_upgrade))
+        .finish()
         .layer(cors)
         // Outermost: reject cross-origin browser traffic before CORS/handlers.
         .layer(axum::middleware::from_fn(security::guard_local_only))

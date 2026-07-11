@@ -1,7 +1,4 @@
-use super::{
-    assess_channel, fact_scope_starved, ChannelAssessment, FactCandidate, ServingRunConfig,
-    CHANNEL_FACT_ID, ROUTE_SCOPE_ID,
-};
+use super::{assess_channel, ChannelAssessment, CHANNEL_FACT_ID, ROUTE_SCOPE_ID};
 use crate::db::tests::test_db;
 use crate::lint::context::{CancellationToken, LintClock};
 use crate::lint::runner::LintRunner;
@@ -9,6 +6,11 @@ use wenlan_types::lint::{
     LintApplicability, LintMetricCode, LintMetricValue, LintOutcome, LintPrecondition, LintQuery,
     LintSummaryCode,
 };
+
+#[path = "serving_review_fact_test.rs"]
+mod review_fact_tests;
+#[path = "serving_review_test.rs"]
+mod review_tests;
 
 #[test]
 fn enabled_channel_with_dead_eligible_substrate_is_a_finding() {
@@ -31,26 +33,11 @@ fn disabled_channel_is_expected_empty() {
     assert_eq!(result.summary_code(), LintSummaryCode::ExpectedEmpty);
 }
 
-#[test]
-fn global_top_k_before_scope_can_starve_same_scope_facts() {
-    let candidates = [
-        FactCandidate::new("other", true),
-        FactCandidate::new("other", true),
-        FactCandidate::new("work", true),
-    ];
-    assert!(fact_scope_starved(&candidates, "work", 2));
-    assert!(!fact_scope_starved(&candidates, "work", 3));
-}
-
 #[tokio::test]
 async fn runner_reports_known_scope_bypasses_and_preserves_telemetry() {
     let (db, _tmp) = test_db().await;
     let before = telemetry_counts(&db).await;
-    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
-        .with_test_serving_config(ServingRunConfig::all_disabled())
-        .run(&db, &LintQuery { space: None }, None, false)
-        .await
-        .unwrap();
+    let report = run_with_flags(&db, None, false).await.unwrap();
     let route_scope = report
         .checks()
         .iter()
@@ -63,17 +50,7 @@ async fn runner_reports_known_scope_bypasses_and_preserves_telemetry() {
 #[tokio::test]
 async fn unknown_scope_fails_closed_before_serving_checks() {
     let (db, _tmp) = test_db().await;
-    let result = LintRunner::new(LintClock::fixed(), CancellationToken::new())
-        .with_test_serving_config(ServingRunConfig::all_enabled())
-        .run(
-            &db,
-            &LintQuery {
-                space: Some("missing".to_string()),
-            },
-            None,
-            false,
-        )
-        .await;
+    let result = run_with_flags(&db, Some("missing"), false).await;
     assert!(matches!(
         result,
         Err(crate::lint::runner::LintRunError::InvalidScope)
@@ -88,20 +65,7 @@ async fn uncategorized_uses_null_memory_and_page_ownership_axes() {
     insert_memory(&db, "work-memory", Some("work")).await;
     insert_page(&db, "null-page", None).await;
     insert_page(&db, "work-page", Some("work")).await;
-    let config = ServingRunConfig {
-        page: true,
-        ..ServingRunConfig::all_disabled()
-    };
-    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
-        .with_test_serving_config(config)
-        .run(
-            &db,
-            &LintQuery {
-                space: Some("uncategorized".to_string()),
-            },
-            None,
-            false,
-        )
+    let report = run_with_flags(&db, Some("uncategorized"), true)
         .await
         .unwrap();
     let page = report
@@ -127,18 +91,7 @@ async fn cross_scope_canary_cannot_change_scoped_serving_results() {
 }
 
 async fn scoped_serving_json(db: &crate::db::MemoryDB, space: &str) -> serde_json::Value {
-    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
-        .with_test_serving_config(ServingRunConfig::all_disabled())
-        .run(
-            db,
-            &LintQuery {
-                space: Some(space.to_string()),
-            },
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let report = run_with_flags(db, Some(space), false).await.unwrap();
     serde_json::to_value(
         report
             .checks()
@@ -147,6 +100,33 @@ async fn scoped_serving_json(db: &crate::db::MemoryDB, space: &str) -> serde_jso
             .collect::<Vec<_>>(),
     )
     .unwrap()
+}
+
+async fn run_with_flags(
+    db: &crate::db::MemoryDB,
+    space: Option<&str>,
+    page: bool,
+) -> Result<wenlan_types::lint::LintReport, crate::lint::runner::LintRunError> {
+    temp_env::async_with_vars(
+        [
+            (
+                "WENLAN_ENABLE_PAGE_CHANNEL",
+                Some(if page { "1" } else { "0" }),
+            ),
+            ("WENLAN_ENABLE_EPISODE_CHANNEL", Some("0")),
+            ("WENLAN_ENABLE_FACT_CHANNEL", Some("0")),
+            ("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("0")),
+        ],
+        LintRunner::new(LintClock::fixed(), CancellationToken::new()).run(
+            db,
+            &LintQuery {
+                space: space.map(str::to_string),
+            },
+            None,
+            false,
+        ),
+    )
+    .await
 }
 
 async fn insert_memory(db: &crate::db::MemoryDB, id: &str, space: Option<&str>) {
