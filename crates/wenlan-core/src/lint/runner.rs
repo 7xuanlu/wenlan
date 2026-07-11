@@ -43,6 +43,7 @@ pub(super) enum TestScenario {
     MixedQueryFailure,
     PageGroupTimeout,
     ScopedDenominators,
+    ProjectionGenerationDrift,
 }
 
 impl LintRunner {
@@ -68,6 +69,12 @@ impl LintRunner {
         page_root: Option<&Path>,
         page_projection_enabled: bool,
     ) -> Result<LintReport, LintRunError> {
+        let projection_tracker = database.page_projection_tracker();
+        let tracker_before = projection_tracker.sample();
+        #[cfg(test)]
+        if self.scenario == Some(TestScenario::ProjectionGenerationDrift) {
+            drop(projection_tracker.begin_write());
+        }
         let snapshot = database.open_unpinned_lint_snapshot().await?;
         let scope = validate_scope(&snapshot, query).await?;
         let snapshot = snapshot.pin_analysis().await?;
@@ -117,12 +124,22 @@ impl LintRunner {
             (Some(root), Some(_)) => scan_page_root(root)?.normalized_bytes(),
             _ => page_before,
         };
-        if page_before != page_after {
-            checks = inconsistent_results_from_checks(&self.clock, &checks)?;
-        }
+        let page_changed = page_before != page_after;
         let db_receipt = snapshot.finish().await?;
-        if !db_receipt.is_consistent() && page_projection_enabled {
-            checks = inconsistent_results_from_checks(&self.clock, &checks)?;
+        let tracker_after = projection_tracker.sample();
+        let tracker_unstable = tracker_before.has_active_writes()
+            || tracker_after.has_active_writes()
+            || tracker_before.generation() != tracker_after.generation();
+        if page_changed {
+            checks =
+                inconsistent_selected_results(&self.clock, &checks, super::pages::uses_filesystem)?;
+        }
+        if page_projection_enabled && (!db_receipt.is_consistent() || tracker_unstable) {
+            checks = inconsistent_selected_results(
+                &self.clock,
+                &checks,
+                super::pages::uses_cross_store,
+            )?;
         }
         validate_catalog_results(&mut checks)?;
         build_report(
@@ -142,7 +159,9 @@ impl LintRunner {
     ) -> Result<Vec<LintCheckResult>, LintRunError> {
         #[cfg(test)]
         if let Some(scenario) = self.scenario {
-            return run_test_scenario(context, scenario).await;
+            if scenario != TestScenario::ProjectionGenerationDrift {
+                return run_test_scenario(context, scenario).await;
+            }
         }
         Ok(super::pages::run(context, page_projection_enabled).await)
     }
@@ -282,6 +301,7 @@ async fn run_test_scenario(
                 .collect()
         }
         TestScenario::ScopedDenominators => scoped_denominator_results(context),
+        TestScenario::ProjectionGenerationDrift => unreachable!("handled by normal page group"),
     }
 }
 
@@ -386,18 +406,32 @@ fn failed_results_from_checks(
     )
 }
 
-fn inconsistent_results_from_checks(
+fn inconsistent_selected_results(
     clock: &LintClock,
     checks: &[LintCheckResult],
+    affected: impl Fn(&str) -> bool,
 ) -> Result<Vec<LintCheckResult>, LintRunError> {
-    terminal_results_from_checks(
-        clock,
-        checks,
-        LintOutcome::InconsistentSnapshot,
-        LintPrecondition::SnapshotUnstable,
-        LintSummaryCode::SnapshotInconsistent,
-        LintRecommendationCode::RerunAfterSnapshotStabilizes,
-    )
+    checks
+        .iter()
+        .map(|check| {
+            if affected(check.check_id()) {
+                make_result_with_denominator(
+                    check.check_id(),
+                    LintOutcome::InconsistentSnapshot,
+                    LintSeverity::Error,
+                    LintApplicability::Applicable,
+                    LintPrecondition::SnapshotUnstable,
+                    LintSummaryCode::SnapshotInconsistent,
+                    Some(LintRecommendationCode::RerunAfterSnapshotStabilizes),
+                    clock.duration_ms(),
+                    check.coverage().denominator(),
+                )
+                .map_err(LintRunError::from)
+            } else {
+                Ok(check.clone())
+            }
+        })
+        .collect()
 }
 
 fn terminal_results_from_checks(

@@ -1811,6 +1811,7 @@ END;
 pub struct MemoryDB {
     pub(crate) _db: libsql::Database,
     pub(crate) conn: tokio::sync::Mutex<libsql::Connection>,
+    page_projection_tracker: Arc<crate::page_projection_tracker::PageProjectionTracker>,
     embedder: Arc<std::sync::Mutex<TextEmbedding>>,
     chunker: ChunkingEngine,
     embedding_cache: std::sync::Mutex<EmbeddingCache>,
@@ -1845,6 +1846,18 @@ fn title_looks_garbage(title: &str) -> bool {
 }
 
 impl MemoryDB {
+    pub fn page_projection_tracker(
+        &self,
+    ) -> Arc<crate::page_projection_tracker::PageProjectionTracker> {
+        Arc::clone(&self.page_projection_tracker)
+    }
+
+    pub fn begin_page_projection_write(
+        &self,
+    ) -> crate::page_projection_tracker::PageProjectionWriteGuard {
+        self.page_projection_tracker.begin_write()
+    }
+
     /// Convert a multi-word query into FTS5 OR query.
     /// "vector embedding model" → "vector OR embedding OR model"
     fn fts_or_query(query: &str) -> String {
@@ -2043,6 +2056,7 @@ impl MemoryDB {
         let instance = Self {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             embedder: Arc::new(std::sync::Mutex::new(embedder)),
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
@@ -2114,6 +2128,7 @@ impl MemoryDB {
         let instance = Self {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             embedder,
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
@@ -26172,6 +26187,7 @@ pub(crate) mod tests {
         let memory_db = MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             embedder: shared_embedder(),
             // Token-aware chunker matching production; falls back to char-based
             // when the BGE tokenizer isn't in the resolved cache.

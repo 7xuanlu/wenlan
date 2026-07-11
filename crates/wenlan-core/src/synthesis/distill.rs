@@ -738,6 +738,7 @@ async fn distill_one_cluster_with_tuning(
                 crate::citations::process_citation_output(&content, &numbered);
             let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".into());
 
+            let projection_guard = knowledge_writer.map(|_| db.begin_page_projection_write());
             let write_result = page_write(
                 db,
                 PageWrite::Create {
@@ -787,12 +788,18 @@ async fn distill_one_cluster_with_tuning(
 
             if let Some(writer) = knowledge_writer {
                 if let Ok(Some(c)) = db.get_page(&page_id).await {
-                    match writer.write_page(&c) {
+                    match writer.write_page(
+                        projection_guard
+                            .as_ref()
+                            .expect("knowledge writer requires projection guard"),
+                        &c,
+                    ) {
                         Ok(p) => log::info!("[distill] wrote page to {p}"),
                         Err(e) => log::warn!("[distill] knowledge write failed: {e}"),
                     }
                 }
             }
+            drop(projection_guard);
 
             Ok(Some(page_id))
         }
@@ -1104,8 +1111,12 @@ pub(crate) async fn distill_pages_scoped_gated(
     let mut created: Vec<String> = Vec::new();
 
     // Create the writer once, outside the loop
-    let knowledge_writer =
-        knowledge_path.map(|kp| crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf()));
+    let knowledge_writer = knowledge_path.map(|kp| {
+        crate::export::knowledge::KnowledgeWriter::new(
+            kp.to_path_buf(),
+            db.page_projection_tracker(),
+        )
+    });
 
     let kw = knowledge_writer.as_ref();
     for chunk in clusters.chunks(cluster_concurrency) {

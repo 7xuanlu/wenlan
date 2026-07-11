@@ -9,6 +9,9 @@ mod traversal;
 
 pub mod fs;
 
+#[cfg(test)]
+mod integration_tests;
+
 use super::catalog::{catalog, ScopePolicy};
 use super::context::{LintContext, PopulationBasis};
 use super::runner::{configured_off_results, failed_results, prerequisite_results};
@@ -89,4 +92,19 @@ fn record_placeholder_populations(
         }
     }
     Ok(())
+}
+
+pub(crate) fn uses_cross_store(check_id: &str) -> bool {
+    matches!(
+        check_id,
+        state_checks::IDENTITY_ID | state_checks::VERSION_ALIGNMENT_ID | link_checks::ARTIFACT_ID
+    )
+}
+
+pub(crate) fn uses_filesystem(check_id: &str) -> bool {
+    uses_cross_store(check_id)
+        || matches!(
+            check_id,
+            state_checks::STATE_CONTRACT_ID | link_checks::MANIFEST_ID
+        )
 }
