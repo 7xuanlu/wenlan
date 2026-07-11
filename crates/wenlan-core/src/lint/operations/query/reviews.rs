@@ -1,3 +1,4 @@
+use super::refinement::valid_refinement_row;
 use super::{metric, AgeBuckets};
 use crate::lint::operations::read_context::OperationsReadContext;
 use crate::lint::operations::result::Assessment;
@@ -26,26 +27,22 @@ pub(super) async fn load_refinements(
         let status = row.get::<String>(2).map_err(|_| ())?;
         let created = row.get::<String>(3).map_err(|_| ())?;
         let timestamp = parse_timestamp(&created);
-        let known_status = match status.as_str() {
+        match status.as_str() {
             "pending" => {
                 counts.pending = counts.pending.saturating_add(1);
-                true
             }
             "awaiting_review" => {
                 counts.awaiting = counts.awaiting.saturating_add(1);
-                true
             }
             "auto_applied" | "resolved" | "dismissed" => {
                 counts.terminal = counts.terminal.saturating_add(1);
-                true
             }
-            _ => false,
-        };
-        let source_ids_valid = serde_json::from_str::<Vec<String>>(&source_ids)
+            _ => {}
+        }
+        let shape_valid = serde_json::from_str::<Vec<String>>(&source_ids)
             .ok()
-            .is_some_and(|ids| valid_action_sources(&action, &ids));
-        let valid = source_ids_valid
-            && known_status
+            .is_some_and(|ids| valid_refinement_row(&action, &status, &ids));
+        let valid = shape_valid
             && timestamp.is_some_and(|value| ages.observe(value, context.clock().epoch_seconds()));
         if !valid {
             counts.invalid = counts.invalid.saturating_add(1);
@@ -74,21 +71,6 @@ pub(super) async fn load_refinements(
             .into_iter()
             .collect(),
     ))
-}
-
-fn valid_action_sources(action: &str, ids: &[String]) -> bool {
-    let ids_valid = ids.iter().all(|id| !id.trim().is_empty());
-    let distinct = ids.iter().collect::<std::collections::BTreeSet<_>>().len() == ids.len();
-    ids_valid
-        && distinct
-        && match action {
-            "entity_merge" | "relation_conflict" | "detect_contradiction" | "page_merge" => {
-                ids.len() == 2
-            }
-            "cross_space_discovery" => ids.len() >= 2,
-            "page_keep_or_archive" => ids.len() == 1,
-            _ => false,
-        }
 }
 
 pub(super) async fn load_rejections(

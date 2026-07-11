@@ -36,6 +36,7 @@ async fn full_population_is_checked_through_read_only_capability_without_db_muta
         include_str!("../operations/query/imports.rs"),
         include_str!("../operations/query/maintenance.rs"),
         include_str!("../operations/query/queue.rs"),
+        include_str!("../operations/query/refinement.rs"),
         include_str!("../operations/query/reviews.rs"),
         include_str!("../operations/query/source.rs"),
         include_str!("../operations/read_context.rs"),

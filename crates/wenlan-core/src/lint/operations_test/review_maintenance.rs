@@ -94,18 +94,51 @@ async fn terminal_imports_and_every_review_state_are_inventory_or_findings() {
 async fn refinement_actions_enforce_closed_set_and_source_id_shape() {
     let (db, _tmp) = test_db().await;
     let conn = db.conn.lock().await;
-    for (id, action, source_ids) in [
-        ("valid-binary", "entity_merge", "[\"new\",\"existing\"]"),
-        ("valid-page", "page_keep_or_archive", "[\"page\"]"),
-        ("malformed", "page_merge", "not-json"),
-        ("unknown", "invented_action", "[\"a\",\"b\"]"),
-        ("bad-cardinality", "detect_contradiction", "[\"only\"]"),
-        ("blank-id", "cross_space_discovery", "[\"a\",\"\"]"),
+    for (id, action, source_ids, status) in [
+        (
+            "valid-binary",
+            "entity_merge",
+            "[\"new\",\"existing\"]",
+            "awaiting_review",
+        ),
+        (
+            "valid-page",
+            "page_keep_or_archive",
+            "[\"page\"]",
+            "resolved",
+        ),
+        ("malformed", "page_merge", "not-json", "awaiting_review"),
+        ("unknown", "invented_action", "[\"a\",\"b\"]", "pending"),
+        (
+            "bad-cardinality",
+            "detect_contradiction",
+            "[\"only\"]",
+            "pending",
+        ),
+        (
+            "blank-id",
+            "cross_space_discovery",
+            "[\"a\",\"\"]",
+            "awaiting_review",
+        ),
+        (
+            "bad-dedup-state",
+            "dedup_merge",
+            "[\"a\",\"b\"]",
+            "resolved",
+        ),
+        ("bad-suggest-state", "suggest_entity", "[\"a\"]", "resolved"),
+        (
+            "bad-consolidate-state",
+            "consolidate_duplicate",
+            "[\"a\",\"b\"]",
+            "awaiting_review",
+        ),
     ] {
         conn.execute(
             "INSERT INTO refinement_queue (id,action,source_ids,status,created_at)
-             VALUES (?1,?2,?3,'awaiting_review','2023-11-14 22:13:20')",
-            libsql::params![id, action, source_ids],
+             VALUES (?1,?2,?3,?4,'2023-11-14 22:13:20')",
+            libsql::params![id, action, source_ids, status],
         )
         .await
         .unwrap();
@@ -114,9 +147,9 @@ async fn refinement_actions_enforce_closed_set_and_source_id_shape() {
 
     let report = run(&db, &[]).await;
     let result = check(&report, REFINEMENTS);
-    assert_eq!(metric(result, LintMetricCode::ObservedRecords), 6);
-    assert_eq!(metric(result, LintMetricCode::AffectedRecords), 4);
-    assert_eq!(metric(result, LintMetricCode::OperationInvalidStates), 4);
+    assert_eq!(metric(result, LintMetricCode::ObservedRecords), 9);
+    assert_eq!(metric(result, LintMetricCode::AffectedRecords), 7);
+    assert_eq!(metric(result, LintMetricCode::OperationInvalidStates), 7);
 }
 
 #[tokio::test]

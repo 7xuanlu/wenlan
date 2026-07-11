@@ -2,6 +2,8 @@
 mod config_queue;
 #[path = "operations_test/nonmutation.rs"]
 mod nonmutation;
+#[path = "operations_test/refinement_states.rs"]
+mod refinement_states;
 #[path = "operations_test/review_maintenance.rs"]
 mod review_maintenance;
 
