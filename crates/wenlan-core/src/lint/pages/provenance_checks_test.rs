@@ -199,18 +199,13 @@ async fn hundred_thousand_sql_rows_validate_all_and_cap_opaque_samples() {
             .unwrap(),
         99_999
     );
-    let mut records = (0..100_000)
-        .map(|ordinal| {
-            let locator = format!("private-locator-{ordinal:06}");
-            if ordinal < 100 {
-                source(&locator, "memory", &["external_file"])
-            } else {
-                source(&locator, "memory", &["memory"])
-            }
-        })
-        .collect::<Vec<_>>();
-    records[99_999].evidence_kinds.clear();
-    let result = assess_sources(&records, &[])
+    let scope = AppliedScope::global();
+    let clock = LintClock::fixed();
+    let gate = ExecutionGate::new(CancellationToken::new());
+    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let result = super::source::load_and_assess_sources(&context)
+        .await
+        .unwrap()
         .result(SOURCE_COVERAGE_ID, 0)
         .unwrap();
     assert_eq!(result.outcome(), LintOutcome::Finding);

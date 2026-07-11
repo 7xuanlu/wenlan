@@ -5,53 +5,100 @@ use wenlan_types::lint::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Level {
+pub(in crate::lint::pages) enum Level {
     Pass,
     Warning,
     Error,
 }
 
 #[derive(Debug, Default)]
-pub(super) struct Assessment {
+pub(in crate::lint::pages) struct Assessment {
     rows: Vec<Level>,
     inventory: bool,
     metrics: Vec<LintMetric>,
+    aggregate: Option<AggregateAssessment>,
+}
+
+#[derive(Debug)]
+struct AggregateAssessment {
+    population: u64,
+    warning_count: u64,
+    error_count: u64,
 }
 
 impl Assessment {
-    pub(super) fn push(&mut self, level: Level) {
+    pub(in crate::lint::pages) fn push(&mut self, level: Level) {
         self.rows.push(level);
     }
 
-    pub(super) fn mark_inventory(&mut self) {
+    pub(in crate::lint::pages) fn mark_inventory(&mut self) {
         self.inventory = true;
     }
 
-    pub(super) fn set_metrics(&mut self, metrics: Vec<LintMetric>) {
+    pub(in crate::lint::pages) fn set_metrics(&mut self, metrics: Vec<LintMetric>) {
         self.metrics = metrics;
     }
 
-    pub(super) fn population(&self) -> u64 {
-        u64::try_from(self.rows.len()).unwrap_or(u64::MAX)
+    pub(in crate::lint::pages) fn from_aggregate(
+        population: u64,
+        warning_count: u64,
+        error_count: u64,
+        inventory: bool,
+    ) -> Self {
+        Self {
+            rows: Vec::new(),
+            inventory,
+            metrics: Vec::new(),
+            aggregate: Some(AggregateAssessment {
+                population,
+                warning_count,
+                error_count,
+            }),
+        }
     }
 
-    pub(super) fn result(
+    pub(in crate::lint::pages) fn population(&self) -> u64 {
+        self.aggregate.as_ref().map_or_else(
+            || u64::try_from(self.rows.len()).unwrap_or(u64::MAX),
+            |aggregate| aggregate.population,
+        )
+    }
+
+    pub(in crate::lint::pages) fn result(
         self,
         check_id: &str,
         duration_ms: u64,
     ) -> Result<LintCheckResult, wenlan_types::lint::LintContractError> {
-        let level = self.rows.iter().copied().max().unwrap_or(Level::Pass);
-        let defect_positions = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, level)| **level != Level::Pass)
-            .collect::<Vec<_>>();
-        let evidence = defect_positions
-            .iter()
-            .take(usize::from(LINT_MAX_EVIDENCE_PER_CHECK))
-            .filter_map(|(position, _)| {
-                LintOpaqueId::from_sorted_position(*position)
+        let (level, defect_count) = self.aggregate.as_ref().map_or_else(
+            || {
+                let level = self.rows.iter().copied().max().unwrap_or(Level::Pass);
+                let count = self
+                    .rows
+                    .iter()
+                    .filter(|level| **level != Level::Pass)
+                    .count();
+                (level, u64::try_from(count).unwrap_or(u64::MAX))
+            },
+            |aggregate| {
+                let level = if aggregate.error_count > 0 {
+                    Level::Error
+                } else if aggregate.warning_count > 0 {
+                    Level::Warning
+                } else {
+                    Level::Pass
+                };
+                (
+                    level,
+                    aggregate
+                        .warning_count
+                        .saturating_add(aggregate.error_count),
+                )
+            },
+        );
+        let evidence_count = defect_count.min(u64::from(LINT_MAX_EVIDENCE_PER_CHECK));
+        let evidence = (0..usize::try_from(evidence_count).unwrap_or(usize::MAX))
+            .filter_map(|position| {
+                LintOpaqueId::from_sorted_position(position)
                     .map(|opaque_id| LintEvidenceRef::OpaqueId { opaque_id })
             })
             .collect::<Vec<_>>();
@@ -94,7 +141,7 @@ impl Assessment {
                 population,
                 population,
                 LINT_MAX_EVIDENCE_PER_CHECK,
-                defect_positions.len() > usize::from(LINT_MAX_EVIDENCE_PER_CHECK),
+                defect_count > u64::from(LINT_MAX_EVIDENCE_PER_CHECK),
                 u64::try_from(evidence.len()).unwrap_or(u64::MAX),
             )?,
             metrics: self.metrics,
@@ -106,7 +153,7 @@ impl Assessment {
     }
 }
 
-pub(super) fn failed_result(check_id: &str, duration_ms: u64) -> LintCheckResult {
+pub(in crate::lint::pages) fn failed_result(check_id: &str, duration_ms: u64) -> LintCheckResult {
     LintCheckResult::try_new(LintCheckResultInput {
         check_id: check_id.to_string(),
         outcome: LintOutcome::FailedToRun,
