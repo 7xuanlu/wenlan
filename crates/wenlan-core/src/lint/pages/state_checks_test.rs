@@ -500,7 +500,10 @@ async fn runner_uses_pages_workspace_and_keeps_other_workspace_out_of_output() {
             .unwrap();
         assert_eq!(check.outcome(), LintOutcome::Pass, "{check_id}");
     }
-    assert!(!report.complete(), "later Page checks remain prerequisites");
+    assert!(
+        report.complete(),
+        "all catalogued Page checks are conclusive"
+    );
     assert!(!serde_json::to_string(&report)
         .unwrap()
         .contains("CANARY_OTHER"));

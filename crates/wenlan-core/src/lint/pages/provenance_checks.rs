@@ -53,3 +53,7 @@ fn finish(
 #[cfg(test)]
 #[path = "provenance_checks_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "provenance_empty_test.rs"]
+mod empty_tests;

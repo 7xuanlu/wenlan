@@ -87,3 +87,7 @@ mod tests;
 #[cfg(test)]
 #[path = "kg_config_test.rs"]
 mod config_tests;
+
+#[cfg(test)]
+#[path = "kg_uncategorized_test.rs"]
+mod uncategorized_tests;

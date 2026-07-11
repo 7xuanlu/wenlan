@@ -82,11 +82,12 @@ pub(super) async fn load_and_assess_sources(
              FROM classified
          ),
          summary AS (
-           SELECT COUNT(*) + extras.invalid_count AS population,
+           SELECT COUNT(*) + COALESCE((SELECT invalid_count FROM extras), 0) AS population,
                   COALESCE(SUM(CASE WHEN ordered.level = 1 THEN 1 ELSE 0 END), 0) AS warning_count,
-                  COALESCE(SUM(CASE WHEN ordered.level = 2 THEN 1 ELSE 0 END), 0) + extras.invalid_count AS error_count,
-                  extras.extra_count AS extra_count
-             FROM ordered CROSS JOIN extras
+                  COALESCE(SUM(CASE WHEN ordered.level = 2 THEN 1 ELSE 0 END), 0)
+                    + COALESCE((SELECT invalid_count FROM extras), 0) AS error_count,
+                  COALESCE((SELECT extra_count FROM extras), 0) AS extra_count
+             FROM ordered
          )
          SELECT 0 AS row_kind, population, warning_count, error_count, extra_count
            FROM summary
