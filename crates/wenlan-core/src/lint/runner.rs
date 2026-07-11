@@ -1,4 +1,4 @@
-use super::catalog::catalog;
+use super::catalog::{catalog, catalog_entry, catalog_group, LintCheckGroup};
 use super::context::{
     AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext, PopulationBasis,
 };
@@ -135,6 +135,7 @@ impl LintRunner {
         page_root: Option<&Path>,
         page_projection_enabled: bool,
     ) -> Result<LintReport, LintRunError> {
+        let memory_config = super::memories::MemoryFeatureConfig::capture(page_projection_enabled);
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
         #[cfg(test)]
@@ -169,7 +170,7 @@ impl LintRunner {
             record_zero_populations(&context)?;
             failed_results(&self.clock)
         } else {
-            self.run_page_group(&context, page_projection_enabled)
+            self.run_groups(&context, page_projection_enabled, memory_config)
                 .await?
         };
         let page_elapsed = self.page_elapsed(page_started);
@@ -218,20 +219,24 @@ impl LintRunner {
             db_receipt,
             page_before,
             page_after,
+            memory_config,
             checks,
         )
     }
 
-    async fn run_page_group(
+    async fn run_groups(
         &self,
         context: &LintContext<'_, '_>,
         page_projection_enabled: bool,
+        memory_config: super::memories::MemoryFeatureConfig,
     ) -> Result<Vec<LintCheckResult>, LintRunError> {
         #[cfg(test)]
         if let Some(scenario) = self.scenario {
             return run_test_scenario(context, scenario).await;
         }
-        Ok(super::pages::run(context, page_projection_enabled).await)
+        let mut results = super::pages::run(context, page_projection_enabled).await;
+        results.extend(super::memories::run(context, memory_config).await);
+        Ok(results)
     }
 
     fn page_elapsed(&self, page_started: std::time::Duration) -> std::time::Duration {
@@ -430,28 +435,47 @@ pub fn configured_off_results(clock: LintClock) -> Vec<LintCheckResult> {
         .expect("static configured-off lint results are valid")
 }
 
-pub(crate) fn prerequisite_results(clock: &LintClock) -> Vec<LintCheckResult> {
-    catalog()
-        .iter()
-        .map(|entry| {
-            make_result(
-                entry.id,
-                LintOutcome::NotRunPrerequisite,
-                LintSeverity::Error,
-                LintApplicability::NotApplicable,
-                LintPrecondition::MissingPrerequisite,
-                LintSummaryCode::PrerequisiteUnavailable,
-                Some(LintRecommendationCode::RestorePrerequisite),
-                clock.duration_ms(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .expect("static prerequisite lint results are valid")
+pub(crate) fn configured_off_results_for_group(
+    clock: &LintClock,
+    group: LintCheckGroup,
+) -> Vec<LintCheckResult> {
+    configured_off_results(clock.clone())
+        .into_iter()
+        .filter(|result| catalog_entry(result.check_id()).is_some_and(|entry| entry.group == group))
+        .collect()
+}
+
+pub(crate) fn prerequisite_results_for_group(
+    clock: &LintClock,
+    group: LintCheckGroup,
+) -> Vec<LintCheckResult> {
+    terminal_results_for_group(
+        clock,
+        group,
+        LintOutcome::NotRunPrerequisite,
+        LintPrecondition::MissingPrerequisite,
+        LintSummaryCode::PrerequisiteUnavailable,
+        LintRecommendationCode::RestorePrerequisite,
+    )
 }
 
 pub(crate) fn failed_results(clock: &LintClock) -> Vec<LintCheckResult> {
     terminal_results(
         clock,
+        LintOutcome::FailedToRun,
+        LintPrecondition::Ready,
+        LintSummaryCode::ExecutionFailed,
+        LintRecommendationCode::InspectRuntime,
+    )
+}
+
+pub(crate) fn failed_results_for_group(
+    clock: &LintClock,
+    group: LintCheckGroup,
+) -> Vec<LintCheckResult> {
+    terminal_results_for_group(
+        clock,
+        group,
         LintOutcome::FailedToRun,
         LintPrecondition::Ready,
         LintSummaryCode::ExecutionFailed,
@@ -557,6 +581,36 @@ fn terminal_results(
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("static terminal lint results are valid")
+}
+
+fn terminal_results_for_group(
+    clock: &LintClock,
+    group: LintCheckGroup,
+    outcome: LintOutcome,
+    precondition: LintPrecondition,
+    summary: LintSummaryCode,
+    recommendation: LintRecommendationCode,
+) -> Vec<LintCheckResult> {
+    let applicability = if outcome == LintOutcome::NotRunPrerequisite {
+        LintApplicability::NotApplicable
+    } else {
+        LintApplicability::Applicable
+    };
+    catalog_group(group)
+        .map(|entry| {
+            make_result(
+                entry.id,
+                outcome,
+                LintSeverity::Error,
+                applicability,
+                precondition,
+                summary,
+                Some(recommendation),
+                clock.duration_ms(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .expect("static group lint results are valid")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -694,24 +748,47 @@ fn build_report(
     db_receipt: SnapshotReceipt,
     page_before: [u8; 32],
     page_after: [u8; 32],
+    memory_config: super::memories::MemoryFeatureConfig,
     checks: Vec<LintCheckResult>,
 ) -> Result<LintReport, LintRunError> {
     LintReport::try_new(
         scope,
         LintCapabilityContext::daemon_operator_endpoint(),
         receipts(db_receipt, page_before, page_after),
-        LintConfigFingerprint::from_effective_config(&[LintConfigSelection::new(
-            LintConfigSetting::PageProjectionEnabled,
-            if page_projection_enabled {
-                LintConfigValue::Enabled
-            } else {
-                LintConfigValue::Disabled
-            },
-        )]),
+        LintConfigFingerprint::from_effective_config(&[
+            config_selection(
+                LintConfigSetting::PageProjectionEnabled,
+                page_projection_enabled,
+            ),
+            config_selection(
+                LintConfigSetting::EpisodeChannelEnabled,
+                memory_config.episode,
+            ),
+            config_selection(LintConfigSetting::FactChannelEnabled, memory_config.fact),
+            config_selection(
+                LintConfigSetting::SummaryPreludeEnabled,
+                memory_config.summary,
+            ),
+            config_selection(
+                LintConfigSetting::TemporalGroundingEnabled,
+                memory_config.temporal,
+            ),
+        ]),
         LintProducerReceipt::new(None),
         checks,
     )
     .map_err(LintRunError::from)
+}
+
+fn config_selection(setting: LintConfigSetting, enabled: bool) -> LintConfigSelection {
+    LintConfigSelection::new(
+        setting,
+        if enabled {
+            LintConfigValue::Enabled
+        } else {
+            LintConfigValue::Disabled
+        },
+    )
 }
 
 fn receipts(

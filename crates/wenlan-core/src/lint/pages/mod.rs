@@ -12,9 +12,11 @@ pub mod fs;
 #[cfg(test)]
 mod integration_tests;
 
-use super::catalog::{catalog, ScopePolicy};
+use super::catalog::{catalog_group, LintCheckGroup, ScopePolicy};
 use super::context::{LintContext, PopulationBasis};
-use super::runner::{configured_off_results, failed_results, prerequisite_results};
+use super::runner::{
+    configured_off_results_for_group, failed_results_for_group, prerequisite_results_for_group,
+};
 use wenlan_types::lint::LintCheckResult;
 
 pub(crate) async fn run(
@@ -23,21 +25,21 @@ pub(crate) async fn run(
 ) -> Vec<LintCheckResult> {
     if !page_projection_enabled {
         if record_placeholder_populations(context, |_| true).is_err() {
-            return failed_results(context.clock());
+            return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
         }
-        return configured_off_results(context.clock().clone());
+        return configured_off_results_for_group(context.clock(), LintCheckGroup::Pages);
     }
     if context.gate().check(std::time::Duration::ZERO).is_err() {
         if record_placeholder_populations(context, |_| true).is_err() {
-            return failed_results(context.clock());
+            return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
         }
-        return failed_results(context.clock());
+        return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
     }
     if context.page_scan().is_none() {
         if record_placeholder_populations(context, |_| true).is_err() {
-            return failed_results(context.clock());
+            return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
         }
-        return prerequisite_results(context.clock());
+        return prerequisite_results_for_group(context.clock(), LintCheckGroup::Pages);
     }
 
     let mut results = state_checks::run(context).await;
@@ -59,10 +61,10 @@ pub(crate) async fn run(
         link_checks::ARTIFACT_ID,
     ];
     if record_placeholder_populations(context, |id| !implemented_ids.contains(&id)).is_err() {
-        return failed_results(context.clock());
+        return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
     }
     results.extend(
-        prerequisite_results(context.clock())
+        prerequisite_results_for_group(context.clock(), LintCheckGroup::Pages)
             .into_iter()
             .filter(|result| !implemented_ids.contains(&result.check_id())),
     );
@@ -74,7 +76,7 @@ fn record_placeholder_populations(
     include: impl Fn(&str) -> bool,
 ) -> Result<(), ()> {
     let selected = context.scope().filter().is_selected();
-    for entry in catalog() {
+    for entry in catalog_group(LintCheckGroup::Pages) {
         if !include(entry.id) {
             continue;
         }

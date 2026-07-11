@@ -111,6 +111,10 @@ impl<'de> Deserialize<'de> for LintCommitReceipt {
 pub enum LintConfigSetting {
     RerankerEnabled,
     PageProjectionEnabled,
+    EpisodeChannelEnabled,
+    FactChannelEnabled,
+    SummaryPreludeEnabled,
+    TemporalGroundingEnabled,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LintConfigValue {
@@ -130,6 +134,10 @@ impl LintConfigSelection {
         let setting = match self.setting {
             LintConfigSetting::RerankerEnabled => 1,
             LintConfigSetting::PageProjectionEnabled => 2,
+            LintConfigSetting::EpisodeChannelEnabled => 3,
+            LintConfigSetting::FactChannelEnabled => 4,
+            LintConfigSetting::SummaryPreludeEnabled => 5,
+            LintConfigSetting::TemporalGroundingEnabled => 6,
         };
         let value = match self.value {
             LintConfigValue::Enabled => 1,

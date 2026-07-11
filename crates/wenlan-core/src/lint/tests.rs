@@ -1,4 +1,4 @@
-use super::catalog::{catalog, ScopeAxis};
+use super::catalog::{catalog, LintCheckGroup, ScopeAxis};
 use super::context::{CancellationToken, ExecutionGate, LintClock, PopulationAccounting};
 use super::runner::{
     configured_off_results, validate_catalog_results, LintRunError, LintRunner, TestScenario,
@@ -77,7 +77,7 @@ fn result(check_id: &str, outcome: LintOutcome) -> LintCheckResult {
 }
 
 #[test]
-fn catalog_is_static_ordered_unique_and_page_workspace_owned() {
+fn catalog_is_static_ordered_unique_and_group_owned() {
     let entries = catalog();
     let ids = entries.iter().map(|entry| entry.id).collect::<Vec<_>>();
     assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
@@ -85,10 +85,14 @@ fn catalog_is_static_ordered_unique_and_page_workspace_owned() {
         ids.iter().copied().collect::<BTreeSet<_>>().len(),
         ids.len()
     );
-    assert!(ids.iter().all(|id| id.starts_with("pages.")));
-    assert!(entries
-        .iter()
-        .all(|entry| entry.scope_axis == ScopeAxis::PagesWorkspace));
+    assert!(entries.iter().all(|entry| match entry.group {
+        LintCheckGroup::Memories => {
+            entry.id.starts_with("memories.") && entry.scope_axis == ScopeAxis::MemoriesSpace
+        }
+        LintCheckGroup::Pages => {
+            entry.id.starts_with("pages.") && entry.scope_axis == ScopeAxis::PagesWorkspace
+        }
+    }));
     let policies = entries
         .iter()
         .map(|entry| entry.scope_policy)
@@ -226,7 +230,10 @@ async fn runner_mixes_warning_and_real_query_failure_without_leaking_error() {
         .await
         .unwrap();
     assert_eq!(report.totals().checks(), catalog().len() as u32);
-    assert_eq!(report.totals().passed(), 10);
+    assert_eq!(
+        report.totals().passed(),
+        u32::try_from(catalog().len() - 2).unwrap()
+    );
     assert_eq!(report.totals().findings(), 1);
     assert_eq!(report.totals().incomplete(), 1);
     assert!(!report.complete());

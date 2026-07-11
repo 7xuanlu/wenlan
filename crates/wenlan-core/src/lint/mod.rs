@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod context;
+pub mod memories;
 pub mod pages;
 pub mod runner;
 pub mod snapshot;
