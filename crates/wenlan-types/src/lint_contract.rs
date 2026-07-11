@@ -115,6 +115,7 @@ pub enum LintConfigSetting {
     FactChannelEnabled,
     SummaryPreludeEnabled,
     TemporalGroundingEnabled,
+    KnowledgeGraphEnabled,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LintConfigValue {
@@ -138,6 +139,7 @@ impl LintConfigSelection {
             LintConfigSetting::FactChannelEnabled => 4,
             LintConfigSetting::SummaryPreludeEnabled => 5,
             LintConfigSetting::TemporalGroundingEnabled => 6,
+            LintConfigSetting::KnowledgeGraphEnabled => 7,
         };
         let value = match self.value {
             LintConfigValue::Enabled => 1,

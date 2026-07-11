@@ -43,6 +43,16 @@ pub enum LintMetricCode {
     ProjectOutboundLinks,
     ProjectInboundLinks,
     ProjectBrokenLinks,
+    KgEntities,
+    KgEntitiesConfirmed,
+    KgEntitiesScoped,
+    KgEntitiesUncategorized,
+    KgRelations,
+    KgObservations,
+    KgMemoryEntityLinks,
+    KgDuplicateEntityNames,
+    KgHubEntities,
+    KgSemanticSuspicions,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -86,6 +86,17 @@ fn catalog_is_static_ordered_unique_and_group_owned() {
         ids.len()
     );
     assert!(entries.iter().all(|entry| match entry.group {
+        LintCheckGroup::KnowledgeGraph => {
+            (entry.id.starts_with("entities.")
+                || entry.id.starts_with("kg.")
+                || entry.id.starts_with("memory_entities.")
+                || entry.id.starts_with("observations.")
+                || entry.id.starts_with("relations."))
+                && matches!(
+                    entry.scope_axis,
+                    ScopeAxis::EntitiesSpace | ScopeAxis::MemoriesSpace
+                )
+        }
         LintCheckGroup::Memories => {
             entry.id.starts_with("memories.") && entry.scope_axis == ScopeAxis::MemoriesSpace
         }

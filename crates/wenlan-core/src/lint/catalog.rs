@@ -10,10 +10,12 @@ pub enum ScopePolicy {
 pub enum ScopeAxis {
     PagesWorkspace,
     MemoriesSpace,
+    EntitiesSpace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintCheckGroup {
+    KnowledgeGraph,
     Memories,
     Pages,
 }
@@ -27,6 +29,11 @@ pub struct LintCatalogEntry {
 }
 
 const CATALOG: &[LintCatalogEntry] = &[
+    entity_entry("entities.partition_inventory", ScopePolicy::ScopedRows),
+    entity_entry("entities.structural_integrity", ScopePolicy::ScopedRows),
+    entity_entry("kg.advisory_inventory", ScopePolicy::GlobalAggregateOnly),
+    entity_entry("kg.aggregate_inventory", ScopePolicy::GlobalAggregateOnly),
+    memory_kg_entry("kg.substrate_liveness", ScopePolicy::ScopedRows),
     memory_entry("memories.derived.episode", ScopePolicy::ScopedRows),
     memory_entry("memories.derived.fact", ScopePolicy::ScopedRows),
     memory_entry("memories.derived.page_links", ScopePolicy::ScopedRows),
@@ -37,6 +44,8 @@ const CATALOG: &[LintCatalogEntry] = &[
     memory_entry("memories.lifecycle_integrity", ScopePolicy::ScopedRows),
     memory_entry("memories.partition_inventory", ScopePolicy::ScopedRows),
     memory_entry("memories.supersession_integrity", ScopePolicy::ScopedRows),
+    memory_kg_entry("memory_entities.integrity", ScopePolicy::ScopedRows),
+    entity_entry("observations.integrity", ScopePolicy::ScopedRows),
     page_entry("pages.archive_inventory", ScopePolicy::ScopedRows),
     page_entry("pages.citations.partitions", ScopePolicy::ScopedRows),
     page_entry("pages.db.partitions", ScopePolicy::ScopedRows),
@@ -64,7 +73,26 @@ const CATALOG: &[LintCatalogEntry] = &[
         ScopePolicy::DbAnchoredProjection,
     ),
     page_entry("pages.review_status_inventory", ScopePolicy::ScopedRows),
+    entity_entry("relations.integrity", ScopePolicy::ScopedRows),
 ];
+
+const fn entity_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy,
+        scope_axis: ScopeAxis::EntitiesSpace,
+        group: LintCheckGroup::KnowledgeGraph,
+    }
+}
+
+const fn memory_kg_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy,
+        scope_axis: ScopeAxis::MemoriesSpace,
+        group: LintCheckGroup::KnowledgeGraph,
+    }
+}
 
 const fn memory_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
     LintCatalogEntry {

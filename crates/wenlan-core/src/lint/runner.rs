@@ -39,6 +39,8 @@ pub struct LintRunner {
     synchronization: Option<TestSynchronization>,
     #[cfg(test)]
     memory_features: Option<super::memories::TestMemoryFeatures>,
+    #[cfg(test)]
+    kg_enabled: Option<bool>,
 }
 
 #[cfg(test)]
@@ -114,6 +116,8 @@ impl LintRunner {
             synchronization: None,
             #[cfg(test)]
             memory_features: None,
+            #[cfg(test)]
+            kg_enabled: None,
         }
     }
 
@@ -141,6 +145,12 @@ impl LintRunner {
         self
     }
 
+    #[cfg(test)]
+    pub(super) fn with_test_kg_enabled(mut self, enabled: bool) -> Self {
+        self.kg_enabled = Some(enabled);
+        self
+    }
+
     pub async fn run(
         &self,
         database: &MemoryDB,
@@ -157,6 +167,16 @@ impl LintRunner {
             }
             #[cfg(not(test))]
             super::memories::MemoryFeatureConfig::capture(database, page_projection_enabled)
+        };
+        let kg_config = {
+            #[cfg(test)]
+            if let Some(enabled) = self.kg_enabled {
+                super::kg::KgFeatureConfig::for_test(enabled)
+            } else {
+                super::kg::KgFeatureConfig::capture()
+            }
+            #[cfg(not(test))]
+            super::kg::KgFeatureConfig::capture()
         };
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
@@ -196,6 +216,7 @@ impl LintRunner {
                 &context,
                 page_projection_enabled,
                 memory_config,
+                kg_config,
                 page_started,
             )
             .await?
@@ -254,6 +275,7 @@ impl LintRunner {
             page_before,
             page_after,
             memory_config,
+            kg_config,
             checks,
         )
     }
@@ -263,6 +285,7 @@ impl LintRunner {
         context: &LintContext<'_, '_>,
         page_projection_enabled: bool,
         memory_config: super::memories::MemoryFeatureConfig,
+        kg_config: super::kg::KgFeatureConfig,
         page_started: std::time::Duration,
     ) -> Result<(Vec<LintCheckResult>, std::time::Duration), LintRunError> {
         #[cfg(test)]
@@ -273,6 +296,7 @@ impl LintRunner {
         let mut results = super::pages::run(context, page_projection_enabled).await;
         let page_elapsed = self.page_elapsed(page_started);
         results.extend(super::memories::run(context, memory_config).await);
+        results.extend(super::kg::run(context, kg_config).await);
         Ok((results, page_elapsed))
     }
 
@@ -807,6 +831,7 @@ fn record_zero_populations(context: &LintContext<'_, '_>) -> Result<(), LintRunE
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_report(
     scope: LintScope,
     page_projection_enabled: bool,
@@ -814,6 +839,7 @@ fn build_report(
     page_before: [u8; 32],
     page_after: [u8; 32],
     memory_config: super::memories::MemoryFeatureConfig,
+    kg_config: super::kg::KgFeatureConfig,
     checks: Vec<LintCheckResult>,
 ) -> Result<LintReport, LintRunError> {
     LintReport::try_new(
@@ -838,6 +864,7 @@ fn build_report(
                 LintConfigSetting::TemporalGroundingEnabled,
                 memory_config.temporal,
             ),
+            config_selection(LintConfigSetting::KnowledgeGraphEnabled, kg_config.enabled),
         ]),
         LintProducerReceipt::new(None),
         checks,
