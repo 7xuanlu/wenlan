@@ -20,15 +20,13 @@ pub(super) async fn run(
     let Some(embedding) = probe_embedding(context, &scope).await? else {
         return Ok(FactProbe::default());
     };
-    let total = child_count(context).await?;
-    if total == 0 || parent_limit == 0 {
+    if parent_limit == 0 {
         return Ok(FactProbe::default());
     }
-    let ranked = ranked_children(context, &scope, embedding, total).await?;
-    let fetch_limit = parent_limit.saturating_mul(3);
+    let fetch_limit = parent_limit.checked_mul(3).ok_or(())?;
+    let ranked = ranked_children(context, &scope, embedding, fetch_limit).await?;
     let global_hits = ranked
         .iter()
-        .take(fetch_limit)
         .enumerate()
         .map(|(rank, child)| ChildHit {
             parent_id: child.parent_id.clone(),
@@ -112,35 +110,19 @@ async fn probe_embedding(
         .transpose()
 }
 
-async fn child_count(context: &LintContext<'_, '_>) -> Result<i64, ()> {
-    let mut rows = context
-        .snapshot()
-        .query(
-            "SELECT COUNT(*) FROM child_vectors cv WHERE cv.parent_kind='memory' AND cv.embedding IS NOT NULL AND EXISTS (SELECT 1 FROM memories m WHERE m.source='memory' AND m.chunk_index=0 AND m.source_id=cv.parent_id)",
-            libsql::params::Params::None,
-        )
-        .await
-        .map_err(|_| ())?;
-    rows.next()
-        .await
-        .map_err(|_| ())?
-        .ok_or(())?
-        .get(0)
-        .map_err(|_| ())
-}
-
 async fn ranked_children(
     context: &LintContext<'_, '_>,
     scope: &ProbeScope<'_>,
     embedding: Vec<u8>,
-    total: i64,
+    fetch_limit: usize,
 ) -> Result<Vec<RankedChild>, ()> {
+    let fetch_limit = i64::try_from(fetch_limit).map_err(|_| ())?;
     let (scope_expr, params) = match scope {
         ProbeScope::Registered(space) => (
             "m.space=?3",
             vec![
                 libsql::Value::Blob(embedding),
-                libsql::Value::Integer(total),
+                libsql::Value::Integer(fetch_limit),
                 libsql::Value::Text((*space).to_string()),
             ],
         ),
@@ -148,7 +130,7 @@ async fn ranked_children(
             "m.space IS NULL",
             vec![
                 libsql::Value::Blob(embedding),
-                libsql::Value::Integer(total),
+                libsql::Value::Integer(fetch_limit),
             ],
         ),
     };

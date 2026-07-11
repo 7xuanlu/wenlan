@@ -49,6 +49,12 @@ async fn fixture() -> (Router, tempfile::TempDir) {
         .await
         .expect("page");
     }
+    db.log_accesses(&["work-memory".to_string()])
+        .await
+        .expect("access log");
+    db.set_document_tags("memory", "work-memory", vec!["scope-tag".to_string()])
+        .await
+        .expect("document tags");
     let state = Arc::new(RwLock::new(crate::state::ServerState {
         db: Some(db),
         ..Default::default()
@@ -141,6 +147,38 @@ async fn page_search_ignores_space_header_and_returns_cross_scope_rows() {
     assert_eq!(
         workspaces,
         std::collections::BTreeSet::from(["personal", "work"])
+    );
+}
+
+#[tokio::test]
+async fn home_stats_and_tags_observably_return_row_level_data() {
+    let (app, _tmp) = fixture().await;
+    let home = json(
+        app.clone(),
+        Request::builder()
+            .uri("/api/home-stats")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(home["top_memories"][0]["source_id"], "work-memory");
+    assert_eq!(home["top_memories"][0]["space"], "work");
+    assert_eq!(
+        home["top_memories"][0]["content"],
+        "scope probe memory content"
+    );
+
+    let tags = json(
+        app,
+        Request::builder()
+            .uri("/api/tags")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(
+        tags["document_tags"]["memory::work-memory"],
+        serde_json::json!(["scope-tag"])
     );
 }
 

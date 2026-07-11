@@ -2,6 +2,9 @@
 #[path = "lint_contract.rs"]
 mod contract;
 pub use contract::*;
+#[path = "lint_config.rs"]
+mod config;
+pub use config::*;
 #[path = "lint_coverage.rs"]
 mod coverage;
 pub use coverage::*;

@@ -12,7 +12,7 @@ pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Post,"/api/memory/entities/search","entity_search",None,UnauthenticatedLocal,EntitySpace,NotApplicable,NotApplicable,Forbidden),
     row!(Get,"/api/memory/entities/{entity_id}","entity_detail",None,UnauthenticatedLocal,EntitySpace,Missing,NotApplicable,Forbidden),
     row!(Get,"/api/memory/stats","memory_stats",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,AggregateOnly),
-    row!(Get,"/api/home-stats","home_stats",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,AggregateOnly),
+    row!(Get,"/api/home-stats","home_stats_with_memory_rows",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,MixedRowsAndAggregates),
     row!(Get,"/api/memory/entity-suggestions","entity_suggestions",None,UnauthenticatedLocal,EntitySpace,NotApplicable,NotApplicable,Forbidden),
     row!(Get,"/api/spaces","space_list",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,GlobalRead),
     row!(Get,"/api/sources","source_list",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,GlobalRead),

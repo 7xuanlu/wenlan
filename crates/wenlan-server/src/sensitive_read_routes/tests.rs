@@ -1,6 +1,6 @@
 use super::{
-    route, sensitive_read_routes, Capability, DirectIdGate, Method, SelectorPrecedence,
-    UnknownScopePolicy,
+    route, sensitive_read_routes, Capability, CrossScopePolicy, DirectIdGate, Method,
+    SelectorPrecedence, UnknownScopePolicy,
 };
 use std::collections::BTreeSet;
 
@@ -24,6 +24,17 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
     let page_search = route(Method::Post, "/api/pages/search").expect("page search");
     assert_eq!(page_search.selector_precedence, SelectorPrecedence::None);
     assert!(page_search.scope_contract_violation());
+
+    let home_stats = route(Method::Get, "/api/home-stats").expect("home stats");
+    assert_eq!(home_stats.data_class, "home_stats_with_memory_rows");
+    assert_eq!(
+        home_stats.cross_scope_policy,
+        CrossScopePolicy::MixedRowsAndAggregates
+    );
+
+    let tags = route(Method::Get, "/api/tags").expect("tags");
+    assert_eq!(tags.data_class, "document_tag_map");
+    assert_eq!(tags.cross_scope_policy, CrossScopePolicy::GlobalRead);
 
     for path in [
         "/api/memory/{id}/detail",

@@ -36,6 +36,24 @@ async fn snapshot_fact_probe_distinguishes_starvation_from_non_starvation() {
     assert!(pass.evidence().is_empty());
 }
 
+#[tokio::test]
+async fn snapshot_fact_probe_uses_production_ann_limit_before_parent_join() {
+    let (db, _tmp) = exact_ann_limit_fixture().await;
+    let report = temp_env::async_with_vars(
+        [
+            ("WENLAN_ENABLE_FACT_CHANNEL", Some("1")),
+            ("WENLAN_FACT_CHANNEL_LIMIT", Some("1")),
+        ],
+        run(&db, Some("work")),
+    )
+    .await;
+    let finding = check(&report, FACT_STARVATION_ID);
+    assert_eq!(finding.outcome(), LintOutcome::Pass);
+    assert_eq!(metric(finding, LintMetricCode::EligibleRecords), 0);
+    assert_eq!(metric(finding, LintMetricCode::AffectedRecords), 0);
+    assert!(finding.evidence().is_empty());
+}
+
 async fn fact_fixture(selected_near: bool) -> (crate::db::MemoryDB, tempfile::TempDir) {
     let (db, tmp) = test_db().await;
     db.create_space("work", None, false).await.expect("space");
@@ -81,9 +99,47 @@ async fn insert_children(db: &crate::db::MemoryDB, selected_near: bool) {
     }
 }
 
+async fn exact_ann_limit_fixture() -> (crate::db::MemoryDB, tempfile::TempDir) {
+    let (db, tmp) = test_db().await;
+    db.create_space("work", None, false).await.expect("space");
+    for (id, space) in [
+        ("other-a", "other"),
+        ("other-b", "other"),
+        ("work-a", "work"),
+        ("other-far", "other"),
+    ] {
+        insert_memory(&db, id, space).await;
+    }
+    let children = [
+        ("00-orphan", "missing-parent", vector_pair(1.0, 0.0)),
+        ("a-probe", "other-a", vector_pair(0.99, 0.10)),
+        ("b-other", "other-b", vector_pair(0.98, 0.20)),
+        ("c-work", "work-a", vector_pair(0.97, 0.30)),
+        ("d-far", "other-far", vector_pair(0.0, 1.0)),
+    ];
+    let conn = db.conn.lock().await;
+    for (id, parent, embedding) in children {
+        conn.execute(
+            "INSERT INTO child_vectors (id,parent_kind,parent_id,field,content,embedding) VALUES (?1,'memory',?2,'fact','body',vector32(?3))",
+            libsql::params![id, parent, embedding],
+        )
+        .await
+        .expect("child vector");
+    }
+    drop(conn);
+    (db, tmp)
+}
+
 fn vector(x: f32, y: f32) -> String {
     let mut values = vec!["0"; 768];
     values[0] = if x == 0.0 { "0" } else { "1" };
     values[1] = if y == 0.0 { "0" } else { "1" };
+    format!("[{}]", values.join(","))
+}
+
+fn vector_pair(x: f32, y: f32) -> String {
+    let mut values = vec!["0".to_string(); 768];
+    values[0] = x.to_string();
+    values[1] = y.to_string();
     format!("[{}]", values.join(","))
 }

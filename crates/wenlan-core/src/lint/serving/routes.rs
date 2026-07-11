@@ -42,6 +42,7 @@ pub enum UnknownScopePolicy {
 pub enum CrossScopePolicy {
     Forbidden,
     AggregateOnly,
+    MixedRowsAndAggregates,
     GlobalRead,
 }
 

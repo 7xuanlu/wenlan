@@ -13,7 +13,7 @@ pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Get,"/api/indexed-files","indexed_files",None,UnauthenticatedLocal,MemorySpace,NotApplicable,NotApplicable,Forbidden),
     row!(Get,"/api/chunks/{source_id}","document_chunks",None,UnauthenticatedLocal,MemorySpace,Missing,NotApplicable,Forbidden),
     row!(Get,"/api/activities","agent_activity",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,GlobalRead),
-    row!(Get,"/api/tags","tag_list",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,AggregateOnly),
+    row!(Get,"/api/tags","document_tag_map",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,GlobalRead),
     row!(Get,"/api/suggest-tags","tag_suggestions",None,UnauthenticatedLocal,MemorySpace,Missing,NotApplicable,Forbidden),
     row!(Get,"/api/capture-stats","capture_stats",None,UnauthenticatedLocal,Global,NotApplicable,NotApplicable,AggregateOnly),
     row!(Get,"/api/memory/{id}/detail","memory_detail",None,UnauthenticatedLocal,MemorySpace,Missing,NotApplicable,Forbidden),

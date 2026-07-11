@@ -1,7 +1,12 @@
+use axum::extract::Request;
 use axum::handler::Handler;
+use axum::response::IntoResponse;
 use axum::routing::MethodRouter;
+use axum::routing::Route;
 use axum::Router;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
+use tower::{Layer, Service};
 use wenlan_core::lint::serving::routes::{self, Method};
 
 pub(crate) struct TrackedRouter<S = ()> {
@@ -12,6 +17,10 @@ pub(crate) struct TrackedRouter<S = ()> {
 pub(crate) struct TrackedMethodRouter<S = ()> {
     inner: MethodRouter<S>,
     methods: Vec<RegisteredMethod>,
+}
+
+pub(crate) struct FinalizedRouter<S = ()> {
+    inner: Router<S>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,12 +136,54 @@ where
         self
     }
 
-    pub(crate) fn finish(self) -> Router<S> {
+    #[cfg(test)]
+    pub(crate) fn nest<T>(self, _path: &'static str, _router: T) -> Self {
+        panic!("nested router registration bypasses the typed route inventory")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn merge<T>(self, _router: T) -> Self {
+        panic!("merged router registration bypasses the typed route inventory")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn route_service<T>(self, _path: &'static str, _service: T) -> Self {
+        panic!("route service registration bypasses the typed route inventory")
+    }
+
+    pub(crate) fn finish(self) -> FinalizedRouter<S> {
         let expected = routes::sensitive_read_routes()
             .map(|row| ((row.method, row.path), 1usize))
             .collect::<BTreeMap<_, _>>();
         assert_eq!(self.reads, expected, "sensitive route registration drift");
-        self.inner
+        FinalizedRouter { inner: self.inner }
+    }
+}
+
+impl<S> FinalizedRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    pub(crate) fn layer<L>(self, layer: L) -> Self
+    where
+        L: Layer<Route> + Clone + Send + Sync + 'static,
+        L::Service: Service<Request> + Clone + Send + Sync + 'static,
+        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
+        <L::Service as Service<Request>>::Future: Send + 'static,
+    {
+        Self {
+            inner: self.inner.layer(layer),
+        }
+    }
+
+    pub(crate) fn with_state<S2>(self, state: S) -> Router<S2> {
+        self.inner.with_state(state)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn route<T>(self, _path: &'static str, _route: T) -> Self {
+        panic!("route registration attempted after inventory finalization")
     }
 }
 
@@ -172,26 +223,5 @@ const NON_SENSITIVE_MIXED_ROUTES: &[(RegisteredMethod, &str)] = &[
 ];
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    #[should_panic(expected = "unclassified router path")]
-    fn dynamic_helper_registration_cannot_bypass_classification() {
-        fn helper(router: TrackedRouter) -> TrackedRouter {
-            router.route("/api/memory/dynamic-leak", super::get(|| async { "leak" }))
-        }
-        let _ = helper(TrackedRouter::new());
-    }
-
-    #[test]
-    #[should_panic(expected = "unclassified router path")]
-    fn wrong_method_cannot_satisfy_a_sensitive_registration() {
-        let _ = TrackedRouter::<()>::new().route("/api/agents", super::post(|| async { "leak" }));
-    }
-
-    #[test]
-    #[should_panic(expected = "sensitive route registration drift")]
-    fn missing_nested_merged_or_route_service_inventory_fails_finalization() {
-        let _ = TrackedRouter::<()>::new().finish();
-    }
-}
+#[path = "route_registry/tests.rs"]
+mod tests;
