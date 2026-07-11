@@ -63,8 +63,11 @@ impl Action {
                 Status::AutoApplied | Status::Resolved => false,
             },
             Self::ConsolidateDuplicate => match status {
-                Status::Pending | Status::Dismissed => true,
-                Status::AwaitingReview | Status::AutoApplied | Status::Resolved => false,
+                Status::Dismissed => true,
+                Status::Pending
+                | Status::AwaitingReview
+                | Status::AutoApplied
+                | Status::Resolved => false,
             },
             Self::CrossSpaceDiscovery
             | Self::EntityMerge

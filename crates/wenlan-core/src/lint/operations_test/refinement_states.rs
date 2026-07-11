@@ -75,7 +75,7 @@ async fn daemon_promoted_suggest_entity_is_valid_inventory() {
 }
 
 #[tokio::test]
-async fn producer_shaped_consolidate_duplicate_stays_valid_pending_inventory() {
+async fn unexecutable_consolidate_duplicate_pending_is_a_finding() {
     // Given
     let (db, _tmp) = test_db().await;
     db.insert_refinement_proposal(
@@ -102,6 +102,7 @@ async fn producer_shaped_consolidate_duplicate_stays_valid_pending_inventory() {
         "pending"
     );
     let result = check(&report, REFINEMENTS);
-    assert_eq!(result.outcome(), LintOutcome::Pass);
+    assert_eq!(result.outcome(), LintOutcome::Finding);
     assert_eq!(metric(result, LintMetricCode::OperationPending), 1);
+    assert_eq!(metric(result, LintMetricCode::OperationInvalidStates), 1);
 }
