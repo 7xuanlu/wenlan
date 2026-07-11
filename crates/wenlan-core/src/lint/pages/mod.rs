@@ -1,3 +1,4 @@
+mod db_checks;
 mod frontmatter;
 mod path;
 mod provenance_checks;
@@ -37,12 +38,17 @@ pub(crate) async fn run(
 
     let mut results = state_checks::run(context).await;
     results.extend(provenance_checks::run(context).await);
+    results.extend(db_checks::run(context).await);
     let implemented_ids = [
         state_checks::STATE_CONTRACT_ID,
         state_checks::IDENTITY_ID,
         state_checks::VERSION_ALIGNMENT_ID,
         provenance_checks::SOURCE_COVERAGE_ID,
         provenance_checks::CITATION_PARTITIONS_ID,
+        db_checks::PARTITIONS_ID,
+        db_checks::DUPLICATE_TITLES_ID,
+        db_checks::ARCHIVE_ID,
+        db_checks::REVIEW_ID,
     ];
     if record_placeholder_populations(context, |id| !implemented_ids.contains(&id)).is_err() {
         return failed_results(context.clock());

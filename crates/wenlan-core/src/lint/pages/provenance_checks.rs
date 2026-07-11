@@ -1,5 +1,5 @@
 mod citations;
-mod result;
+pub(super) mod result;
 mod source;
 
 use self::citations::load_and_assess_citations;
