@@ -119,6 +119,8 @@ pub enum LintConfigSetting {
     KnowledgeGraphSweepEnabled,
     KnowledgeGraphProviderReady,
     KnowledgeGraphHubCap,
+    SourceConfigurationCaptured,
+    SourceConfigurationCount,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LintConfigValue {
@@ -153,6 +155,8 @@ impl LintConfigSelection {
             LintConfigSetting::KnowledgeGraphSweepEnabled => 8,
             LintConfigSetting::KnowledgeGraphProviderReady => 9,
             LintConfigSetting::KnowledgeGraphHubCap => 10,
+            LintConfigSetting::SourceConfigurationCaptured => 11,
+            LintConfigSetting::SourceConfigurationCount => 12,
         };
         let mut bytes = vec![setting];
         match self.value {

@@ -56,6 +56,24 @@ pub enum LintMetricCode {
     KgServingStatus,
     KgSweepStatus,
     KgProviderReadiness,
+    SourceConfigurations,
+    SourceInvalidConfigurations,
+    SourceTerminalFailures,
+    SourceSyncCheckpoints,
+    SourceConfigurationStatus,
+    OperationActiveRetries,
+    OperationExpiredRetries,
+    OperationPending,
+    OperationAwaitingReview,
+    OperationTerminal,
+    OperationTerminalFailures,
+    OperationInvalidStates,
+    OperationDurableNoProgress,
+    OperationMissingProgressOracles,
+    OperationAgeUnderHour,
+    OperationAgeOneTo24Hours,
+    OperationAgeOneTo7Days,
+    OperationAgeSevenDaysOrMore,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -113,6 +131,11 @@ pub enum LintReasonCode {
     MissingArtifact,
     InvalidCatalogState,
     ExpectedEmptySubstrate,
+    InvalidSourceConfiguration,
+    TerminalOperationFailure,
+    ExpiredRetry,
+    InvalidOperationState,
+    DurableNoProgress,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LintSafeRootRelativePath {

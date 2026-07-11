@@ -1,14 +1,16 @@
 use super::kg::KgRunConfig;
 use super::memories::MemoryFeatureConfig;
+use super::operations::OperationsRunConfig;
 use wenlan_types::lint::{
     LintConfigFingerprint, LintConfigSelection, LintConfigSetting, LintConfigValue,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct EffectiveLintConfig {
     pub(super) page_projection_enabled: bool,
     pub(super) memory: MemoryFeatureConfig,
     pub(super) kg: KgRunConfig,
+    pub(super) operations: OperationsRunConfig,
 }
 
 impl EffectiveLintConfig {
@@ -16,15 +18,17 @@ impl EffectiveLintConfig {
         page_projection_enabled: bool,
         memory: MemoryFeatureConfig,
         kg: KgRunConfig,
+        operations: OperationsRunConfig,
     ) -> Self {
         Self {
             page_projection_enabled,
             memory,
             kg,
+            operations,
         }
     }
 
-    pub(super) fn fingerprint(self) -> LintConfigFingerprint {
+    pub(super) fn fingerprint(&self) -> LintConfigFingerprint {
         let mut selections = vec![
             selection(
                 LintConfigSetting::PageProjectionEnabled,
@@ -45,6 +49,7 @@ impl EffectiveLintConfig {
             ),
         ];
         selections.extend(self.kg.fingerprint_selections());
+        selections.extend(self.operations.fingerprint_selections());
         LintConfigFingerprint::from_effective_config(&selections)
     }
 }

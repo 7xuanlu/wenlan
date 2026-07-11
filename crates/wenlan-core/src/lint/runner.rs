@@ -43,6 +43,7 @@ pub struct LintRunner {
     memory_features: Option<super::memories::TestMemoryFeatures>,
     #[cfg(test)]
     kg_config: Option<super::kg::KgRunConfig>,
+    operations_config: super::operations::OperationsRunConfig,
 }
 
 #[cfg(test)]
@@ -120,6 +121,7 @@ impl LintRunner {
             memory_features: None,
             #[cfg(test)]
             kg_config: None,
+            operations_config: super::operations::OperationsRunConfig::unavailable(),
         }
     }
 
@@ -153,6 +155,11 @@ impl LintRunner {
         self
     }
 
+    pub fn with_sources(mut self, sources: &[wenlan_types::sources::Source]) -> Self {
+        self.operations_config = super::operations::OperationsRunConfig::from_sources(sources);
+        self
+    }
+
     pub async fn run(
         &self,
         database: &MemoryDB,
@@ -180,8 +187,12 @@ impl LintRunner {
             #[cfg(not(test))]
             super::kg::KgRunConfig::capture()
         };
-        let effective_config =
-            EffectiveLintConfig::new(page_projection_enabled, memory_config, kg_config);
+        let effective_config = EffectiveLintConfig::new(
+            page_projection_enabled,
+            memory_config,
+            kg_config,
+            self.operations_config.clone(),
+        );
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
         #[cfg(test)]
@@ -221,6 +232,7 @@ impl LintRunner {
                 page_projection_enabled,
                 effective_config.memory,
                 effective_config.kg,
+                effective_config.operations.clone(),
                 page_started,
             )
             .await?
@@ -288,6 +300,7 @@ impl LintRunner {
         page_projection_enabled: bool,
         memory_config: super::memories::MemoryFeatureConfig,
         kg_config: super::kg::KgRunConfig,
+        operations_config: super::operations::OperationsRunConfig,
         page_started: std::time::Duration,
     ) -> Result<(Vec<LintCheckResult>, std::time::Duration), LintRunError> {
         #[cfg(test)]
@@ -299,6 +312,7 @@ impl LintRunner {
         let page_elapsed = self.page_elapsed(page_started);
         results.extend(super::memories::run(context, memory_config).await);
         results.extend(super::kg::run(context, kg_config).await);
+        results.extend(super::operations::run(context, operations_config).await);
         Ok((results, page_elapsed))
     }
 

@@ -100,6 +100,11 @@ fn catalog_is_static_ordered_unique_and_group_owned() {
         LintCheckGroup::Memories => {
             entry.id.starts_with("memories.") && entry.scope_axis == ScopeAxis::MemoriesSpace
         }
+        LintCheckGroup::Operations => {
+            entry.id.starts_with("operations.")
+                && entry.scope_axis == ScopeAxis::OperationsGlobal
+                && entry.scope_policy == super::catalog::ScopePolicy::GlobalAggregateOnly
+        }
         LintCheckGroup::Pages => {
             entry.id.starts_with("pages.") && entry.scope_axis == ScopeAxis::PagesWorkspace
         }

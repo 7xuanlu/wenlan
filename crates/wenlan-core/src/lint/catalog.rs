@@ -11,12 +11,14 @@ pub enum ScopeAxis {
     PagesWorkspace,
     MemoriesSpace,
     EntitiesSpace,
+    OperationsGlobal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintCheckGroup {
     KnowledgeGraph,
     Memories,
+    Operations,
     Pages,
 }
 
@@ -46,6 +48,12 @@ const CATALOG: &[LintCatalogEntry] = &[
     memory_entry("memories.supersession_integrity", ScopePolicy::ScopedRows),
     memory_kg_entry("memory_entities.integrity", ScopePolicy::ScopedRows),
     entity_entry("observations.integrity", ScopePolicy::ScopedRows),
+    operations_entry("operations.document_queue"),
+    operations_entry("operations.import_checkpoints"),
+    operations_entry("operations.maintenance_backlogs"),
+    operations_entry("operations.refinement_inventory"),
+    operations_entry("operations.rejection_inventory"),
+    operations_entry("operations.source_configuration"),
     page_entry("pages.archive_inventory", ScopePolicy::ScopedRows),
     page_entry("pages.citations.partitions", ScopePolicy::ScopedRows),
     page_entry("pages.db.partitions", ScopePolicy::ScopedRows),
@@ -109,6 +117,15 @@ const fn page_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogE
         scope_policy,
         scope_axis: ScopeAxis::PagesWorkspace,
         group: LintCheckGroup::Pages,
+    }
+}
+
+const fn operations_entry(id: &'static str) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy: ScopePolicy::GlobalAggregateOnly,
+        scope_axis: ScopeAxis::OperationsGlobal,
+        group: LintCheckGroup::Operations,
     }
 }
 
