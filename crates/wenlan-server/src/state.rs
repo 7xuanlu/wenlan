@@ -15,6 +15,33 @@ use wenlan_core::quality_gate::QualityGate;
 use wenlan_core::reranker::Reranker;
 use wenlan_core::tuning::TuningConfig;
 use wenlan_types::responses::RerankerStatus;
+use wenlan_types::sources::Source;
+
+#[derive(Clone, Default)]
+pub struct LintServerConfig {
+    sources: Vec<Source>,
+    page_root: Option<PathBuf>,
+}
+
+impl LintServerConfig {
+    pub(crate) const fn new(sources: Vec<Source>, page_root: Option<PathBuf>) -> Self {
+        Self { sources, page_root }
+    }
+
+    fn capture() -> Self {
+        let config = wenlan_core::config::load_config();
+        let page_root = config.knowledge_path_or_default();
+        Self::new(config.sources, Some(page_root))
+    }
+
+    pub(crate) fn sources(&self) -> &[Source] {
+        &self.sources
+    }
+
+    pub(crate) fn page_root(&self) -> Option<&std::path::Path> {
+        self.page_root.as_deref()
+    }
+}
 
 /// Shared state for the HTTP daemon.
 ///
@@ -76,6 +103,7 @@ pub struct ServerState {
     /// independent ones. `None` when the DB is not initialized — handlers
     /// fall back to the direct per-request upsert path in that case.
     pub ingest_batcher: Option<IngestBatcher>,
+    pub lint_config: LintServerConfig,
 }
 
 impl Default for ServerState {
@@ -100,13 +128,17 @@ impl Default for ServerState {
             write_signal: WriteSignal::new(),
             reflection_debouncer: ReflectionDebouncer::new(),
             ingest_batcher: None,
+            lint_config: LintServerConfig::default(),
         }
     }
 }
 
 impl ServerState {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            lint_config: LintServerConfig::capture(),
+            ..Self::default()
+        }
     }
 }
 

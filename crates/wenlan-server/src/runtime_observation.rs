@@ -7,63 +7,102 @@ use wenlan_core::llm_provider::LlmProvider;
 use wenlan_types::responses::RerankerStatus;
 
 pub async fn from_server_state(state: &ServerState) -> RuntimeObservation {
-    let mut observation = RuntimeObservation::unavailable();
-    observation = observe_provider(
-        observation,
-        ProviderClass::AnthropicRoutine,
-        state.api_llm.as_ref(),
-    );
-    observation = observe_provider(
-        observation,
-        ProviderClass::AnthropicSynthesis,
-        state.synthesis_llm.as_ref(),
-    );
-    observation = observe_provider(
-        observation,
-        ProviderClass::External,
-        state.external_llm.as_ref(),
-    );
-    if let Some(provider) = &state.llm {
-        let model_id = state
-            .loaded_on_device_model
-            .clone()
-            .unwrap_or_else(|| provider.model_id());
-        let readiness = if provider.is_available() && state.loaded_on_device_model.is_some() {
-            RuntimeReadiness::Ready
-        } else {
-            RuntimeReadiness::Failed
-        };
-        observation = observation.with_provider(ProviderClass::OnDevice, model_id, readiness);
+    RuntimeObservationInput::capture(state).observe().await
+}
+
+pub(crate) struct RuntimeObservationInput {
+    api_llm: Option<Arc<dyn LlmProvider>>,
+    synthesis_llm: Option<Arc<dyn LlmProvider>>,
+    external_llm: Option<Arc<dyn LlmProvider>>,
+    llm: Option<Arc<dyn LlmProvider>>,
+    loaded_on_device_model: Option<String>,
+    reranker: Option<Arc<dyn wenlan_core::reranker::Reranker>>,
+    reranker_status: RerankerStatus,
+    reranker_light: Option<Arc<dyn wenlan_core::reranker::Reranker>>,
+    reranker_light_status: RerankerStatus,
+    ingest_worker_closed: Option<bool>,
+    db: Option<Arc<wenlan_core::db::MemoryDB>>,
+}
+
+impl RuntimeObservationInput {
+    pub(crate) fn capture(state: &ServerState) -> Self {
+        Self {
+            api_llm: state.api_llm.clone(),
+            synthesis_llm: state.synthesis_llm.clone(),
+            external_llm: state.external_llm.clone(),
+            llm: state.llm.clone(),
+            loaded_on_device_model: state.loaded_on_device_model.clone(),
+            reranker: state.reranker.clone(),
+            reranker_status: state.reranker_status.clone(),
+            reranker_light: state.reranker_light.clone(),
+            reranker_light_status: state.reranker_light_status.clone(),
+            ingest_worker_closed: state
+                .ingest_batcher
+                .as_ref()
+                .map(|batcher| batcher.is_closed()),
+            db: state.db.clone(),
+        }
     }
-    observation = observe_reranker(
-        observation,
-        RerankerRuntime {
-            path: RerankerPath::Light,
-            status: &state.reranker_light_status,
-            runtime: state.reranker_light.as_ref(),
-        },
-    );
-    observation = observe_reranker(
-        observation,
-        RerankerRuntime {
-            path: RerankerPath::Deep,
-            status: &state.reranker_status,
-            runtime: state.reranker.as_ref(),
-        },
-    );
-    if let Some(batcher) = &state.ingest_batcher {
-        observation = observation.with_ingest_worker_closed(batcher.is_closed());
-    }
-    let status = match &state.db {
-        Some(db) => match db.count_direct().await {
-            Ok(files_indexed) => StatusFilesObservation::Direct(files_indexed),
-            Err(_) => StatusFilesObservation::DirectError {
-                fallback_files_indexed: 0,
+
+    pub(crate) async fn observe(self) -> RuntimeObservation {
+        let mut observation = RuntimeObservation::unavailable();
+        observation = observe_provider(
+            observation,
+            ProviderClass::AnthropicRoutine,
+            self.api_llm.as_ref(),
+        );
+        observation = observe_provider(
+            observation,
+            ProviderClass::AnthropicSynthesis,
+            self.synthesis_llm.as_ref(),
+        );
+        observation = observe_provider(
+            observation,
+            ProviderClass::External,
+            self.external_llm.as_ref(),
+        );
+        if let Some(provider) = &self.llm {
+            let model_id = self
+                .loaded_on_device_model
+                .clone()
+                .unwrap_or_else(|| provider.model_id());
+            let readiness = if provider.is_available() && self.loaded_on_device_model.is_some() {
+                RuntimeReadiness::Ready
+            } else {
+                RuntimeReadiness::Failed
+            };
+            observation = observation.with_provider(ProviderClass::OnDevice, model_id, readiness);
+        }
+        observation = observe_reranker(
+            observation,
+            RerankerRuntime {
+                path: RerankerPath::Light,
+                status: &self.reranker_light_status,
+                runtime: self.reranker_light.as_ref(),
             },
-        },
-        None => StatusFilesObservation::Unavailable,
-    };
-    observation.with_status_files(status)
+        );
+        observation = observe_reranker(
+            observation,
+            RerankerRuntime {
+                path: RerankerPath::Deep,
+                status: &self.reranker_status,
+                runtime: self.reranker.as_ref(),
+            },
+        );
+        if let Some(closed) = self.ingest_worker_closed {
+            observation = observation.with_ingest_worker_closed(closed);
+        }
+        let status = match &self.db {
+            Some(db) => match db.count_direct().await {
+                Ok(files_indexed) => StatusFilesObservation::Direct(files_indexed),
+                Err(_) => StatusFilesObservation::DirectError {
+                    fallback_files_indexed: 0,
+                },
+            },
+            None => StatusFilesObservation::Unavailable,
+        };
+        observation.with_status_files(status)
+    }
 }
 
 fn observe_provider(
