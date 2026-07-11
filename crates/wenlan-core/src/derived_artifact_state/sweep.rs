@@ -2,6 +2,8 @@ use super::summary_eligible_predicate;
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
 
+mod population;
+
 const SWEEP_INTERVAL_SECONDS: i64 = 30 * 60;
 
 #[derive(Debug, Clone, Copy)]
@@ -51,19 +53,7 @@ impl MemoryDB {
         observed_at: i64,
         selection: DerivedFeatureSelection,
     ) -> Result<(), WenlanError> {
-        let episode_gate = i64::try_from(crate::db::episode_word_gate()).unwrap_or(i64::MAX);
         let features = [
-            (
-                "episode",
-                selection.episode,
-                format!(
-                    "COALESCE(m.word_count, 0) >= {episode_gate}
-                     AND NOT EXISTS (
-                         SELECT 1 FROM memories e
-                          WHERE e.source='episode' AND e.episode_of=m.source_id
-                     )"
-                ),
-            ),
             (
                 "fact",
                 selection.fact,
@@ -93,6 +83,19 @@ impl MemoryDB {
             .await
             .map_err(|error| WenlanError::VectorDb(format!("derived sweep begin: {error}")))?;
         let result = async {
+            if selection.episode {
+                let missing = population::missing_episode_sources(&conn).await?;
+                population::reconcile_receipts(&conn, "episode", &missing, observed_at).await?;
+            } else {
+                conn.execute(
+                    "DELETE FROM derived_artifact_sweeps WHERE feature = 'episode'",
+                    (),
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("derived sweep disabled cleanup: {error}"))
+                })?;
+            }
             for (feature, enabled, missing) in features {
                 if !enabled {
                     conn.execute(

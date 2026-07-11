@@ -25,11 +25,21 @@ const BACKSTOP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// Initial delay — lets on-device model warm up before first backstop.
 const INITIAL_DELAY: Duration = Duration::from_secs(60);
+const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// Bounded per-poll drain of the document-enrichment queue. Serial (one doc at a
 /// time); caps how many queued documents a single poll processes so a large
 /// backlog can't monopolize the poll loop (steeps, page-watcher). Per-chunk
 /// checkpointing means the remainder is simply picked up on the next poll.
 const MAX_DOC_ENRICH_PER_POLL: usize = 4;
+
+fn initial_derived_receipt_sweep_at(now: Instant) -> Instant {
+    now.checked_sub(DERIVED_RECEIPT_SWEEP_INTERVAL)
+        .unwrap_or(now)
+}
+
+fn derived_receipt_sweep_due(last: Instant, now: Instant) -> bool {
+    now.duration_since(last) >= DERIVED_RECEIPT_SWEEP_INTERVAL
+}
 
 /// Lightweight write-event tracker shared between store handlers and the scheduler.
 ///
@@ -150,10 +160,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_citation_sweep = Instant::now()
             .checked_sub(CITATION_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
-        const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
-        let mut last_derived_receipt_sweep = Instant::now()
-            .checked_sub(DERIVED_RECEIPT_SWEEP_INTERVAL)
-            .unwrap_or_else(Instant::now);
+        let mut last_derived_receipt_sweep = initial_derived_receipt_sweep_at(Instant::now());
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -400,7 +407,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 last_backstop = now;
             }
 
-            if now.duration_since(last_derived_receipt_sweep) >= DERIVED_RECEIPT_SWEEP_INTERVAL {
+            if derived_receipt_sweep_due(last_derived_receipt_sweep, now) {
                 if let Err(error) = db.record_derived_artifact_sweep().await {
                     tracing::warn!("[scheduler] derived receipt sweep error: {error}");
                 }
@@ -744,6 +751,23 @@ mod tests {
     #[test]
     fn test_adaptive_gap_empty_returns_ceiling() {
         assert_eq!(adaptive_gap(&[]), BURST_GAP_CEILING);
+    }
+
+    #[test]
+    fn derived_receipt_sweep_fires_initially_then_every_thirty_minutes() {
+        let now = Instant::now();
+        let initial = initial_derived_receipt_sweep_at(now);
+        assert!(derived_receipt_sweep_due(initial, now));
+
+        let last = now;
+        assert!(!derived_receipt_sweep_due(
+            last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL - Duration::from_secs(1)
+        ));
+        assert!(derived_receipt_sweep_due(
+            last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL
+        ));
     }
 
     #[test]

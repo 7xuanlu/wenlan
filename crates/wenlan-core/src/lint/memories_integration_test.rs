@@ -69,7 +69,7 @@ async fn durable_sweeps_drive_runner_readiness_and_active_backfill_suppresses_fi
         .await
         .unwrap();
 
-    let guard = db.begin_derived_artifact_backfill(DerivedArtifact::Episode);
+    let guard = db.begin_derived_artifact_write(DerivedArtifact::Episode);
     assert_eq!(
         check(&run_at(&db, 1_003_600, features).await, EPISODE_ID).outcome(),
         LintOutcome::Pass

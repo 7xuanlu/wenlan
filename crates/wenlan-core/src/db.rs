@@ -7766,6 +7766,47 @@ impl MemoryDB {
         if docs.is_empty() {
             return Ok(0);
         }
+        let has_memory_docs = docs.iter().any(|doc| doc.source == "memory");
+        let episode_enabled = has_memory_docs && episode_channel_enabled();
+        let fact_enabled =
+            has_memory_docs && crate::retrieval::fact_channel::fact_channel_enabled();
+        self.upsert_documents_with_derived_channels(docs, episode_enabled, fact_enabled)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn upsert_documents_with_derived_channels_for_test(
+        &self,
+        docs: Vec<RawDocument>,
+        episode_enabled: bool,
+        fact_enabled: bool,
+    ) -> Result<usize, WenlanError> {
+        let has_memory_docs = docs.iter().any(|doc| doc.source == "memory");
+        self.upsert_documents_with_derived_channels(
+            docs,
+            has_memory_docs && episode_enabled,
+            has_memory_docs && fact_enabled,
+        )
+        .await
+    }
+
+    async fn upsert_documents_with_derived_channels(
+        &self,
+        docs: Vec<RawDocument>,
+        episode_enabled: bool,
+        fact_enabled: bool,
+    ) -> Result<usize, WenlanError> {
+        if docs.is_empty() {
+            return Ok(0);
+        }
+        let _episode_activity = episode_enabled.then(|| {
+            self.begin_derived_artifact_write(
+                crate::derived_artifact_state::DerivedArtifact::Episode,
+            )
+        });
+        let _fact_activity = fact_enabled.then(|| {
+            self.begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Fact)
+        });
 
         // Collect all memory rows across all documents
         struct MemoryRow {
@@ -7933,7 +7974,7 @@ impl MemoryDB {
         // verbatim unit, chunk_index=0) and the server-side quality gate by
         // construction (this is core, shared by eval + prod). Never recurses: an
         // incoming `source='episode'` doc is skipped.
-        if episode_channel_enabled() {
+        if episode_enabled {
             let word_gate = episode_word_gate();
             let mut episode_rows: Vec<MemoryRow> = Vec::new();
             let mut episode_texts: Vec<String> = Vec::new();
@@ -8018,7 +8059,7 @@ impl MemoryDB {
         }
         let mut child_rows: Vec<ChildRow> = Vec::new();
         let mut child_texts: Vec<String> = Vec::new();
-        if crate::retrieval::fact_channel::fact_channel_enabled() {
+        if fact_enabled {
             for doc in &docs {
                 if doc.source != "memory" {
                     continue;
@@ -12604,8 +12645,8 @@ impl MemoryDB {
         if !crate::retrieval::fact_channel::fact_channel_enabled() {
             return Ok(0);
         }
-        let _activity = self
-            .begin_derived_artifact_backfill(crate::derived_artifact_state::DerivedArtifact::Fact);
+        let _activity =
+            self.begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Fact);
         // Find primary-chunk memory parents with no child_vectors rows yet.
         let missing: Vec<String> = {
             let conn = self.conn.lock().await;
@@ -19215,9 +19256,8 @@ impl MemoryDB {
     /// follow-up. Returns the number of episode rows written. Idempotent:
     /// re-running yields the same set (paired delete + deterministic ids).
     pub async fn backfill_episodes(&self) -> Result<usize, WenlanError> {
-        let _activity = self.begin_derived_artifact_backfill(
-            crate::derived_artifact_state::DerivedArtifact::Episode,
-        );
+        let _activity = self
+            .begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Episode);
         struct EpisodeParent {
             source_id: String,
             source_text: Option<String>,

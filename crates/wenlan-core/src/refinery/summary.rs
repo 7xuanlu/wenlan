@@ -224,7 +224,7 @@ pub(crate) async fn build_summary_nodes(
     llm: Option<&dyn LlmProvider>,
 ) -> Result<usize, crate::error::WenlanError> {
     let _activity =
-        db.begin_derived_artifact_backfill(crate::derived_artifact_state::DerivedArtifact::Summary);
+        db.begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Summary);
     let buckets = db.load_summary_buckets().await?;
     if buckets.is_empty() {
         return Ok(0);

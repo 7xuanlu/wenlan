@@ -98,7 +98,7 @@ impl Drop for DerivedArtifactGuard {
 }
 
 impl MemoryDB {
-    pub(crate) fn begin_derived_artifact_backfill(
+    pub(crate) fn begin_derived_artifact_write(
         &self,
         artifact: DerivedArtifact,
     ) -> DerivedArtifactGuard {

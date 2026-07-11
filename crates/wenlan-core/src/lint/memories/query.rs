@@ -18,10 +18,14 @@ pub(super) async fn load_records(context: &LintContext<'_, '_>) -> Result<Vec<Me
            SELECT m.source_id,
              CASE WHEN COUNT(*) = COUNT(DISTINCT m.chunk_index)
                     AND COUNT(DISTINCT COALESCE(m.supersedes,'')) = 1
-                    AND SUM(CASE WHEN m.pending_revision NOT IN (0,1)
+                    AND COUNT(DISTINCT m.pending_revision) = 1
+                    AND COUNT(DISTINCT COALESCE(m.is_recap,0)) = 1
+                    AND COUNT(DISTINCT COALESCE(m.stability,'')) = 1
+                    AND COUNT(DISTINCT COALESCE(m.supersede_mode,'')) = 1
+                    AND SUM(CASE WHEN COALESCE(m.pending_revision,-1) NOT IN (0,1)
                                        OR COALESCE(m.is_recap,0) NOT IN (0,1)
-                                       OR m.stability NOT IN ('new','learned','confirmed')
-                                       OR m.supersede_mode NOT IN ('hide','archive','evicted')
+                                       OR COALESCE(m.stability,'') NOT IN ('new','learned','confirmed')
+                                       OR COALESCE(m.supersede_mode,'') NOT IN ('hide','archive','evicted')
                                   THEN 1 ELSE 0 END) = 0
                    THEN 1 ELSE 0 END AS lifecycle_valid,
              MIN(m.supersedes) AS supersedes,
@@ -49,8 +53,8 @@ pub(super) async fn load_records(context: &LintContext<'_, '_>) -> Result<Vec<Me
                           WHERE pe.source_kind='memory' AND pe.locator=m.source_id) AS page_link,
              EXISTS(SELECT 1 FROM summary_node_sources s
                      WHERE s.memory_source_id=m.source_id) AS summary,
-             MAX(CASE WHEN COALESCE(m.word_count,0) >= {episode_gate}
-                      THEN 1 ELSE 0 END) AS episode_eligible,
+             MAX(CASE WHEN m.chunk_index=0 THEN m.source_text END) AS episode_source_text,
+             MAX(CASE WHEN m.chunk_index=0 THEN m.content END) AS episode_content,
              MAX(CASE WHEN TRIM(m.content) != '' THEN 1 ELSE 0 END) AS fact_eligible,
              MAX(CASE WHEN {summary_eligible} THEN 1 ELSE 0 END) AS summary_eligible
            FROM memories m
@@ -70,7 +74,8 @@ pub(super) async fn load_records(context: &LintContext<'_, '_>) -> Result<Vec<Me
                grouped.evicted, grouped.embedding_valid, grouped.needs_reembed,
                grouped.failed_steps, grouped.classified, grouped.event_dated,
                grouped.episode, grouped.fact, grouped.page_link, grouped.summary,
-               grouped.episode_eligible, grouped.fact_eligible, grouped.summary_eligible,
+               grouped.episode_source_text, grouped.episode_content,
+               grouped.fact_eligible, grouped.summary_eligible,
                episode_sweep.first_missing_at, episode_sweep.completed_sweeps,
                fact_sweep.first_missing_at, fact_sweep.completed_sweeps,
                summary_sweep.first_missing_at, summary_sweep.completed_sweeps
@@ -90,8 +95,20 @@ pub(super) async fn load_records(context: &LintContext<'_, '_>) -> Result<Vec<Me
         .map_err(|_| ())?;
     let mut records = Vec::new();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
+        let source_id = row.get::<String>(0).map_err(|_| ())?;
+        let episode_source_text = row.get::<Option<String>>(17).map_err(|_| ())?;
+        let episode_content = row.get::<Option<String>>(18).map_err(|_| ())?;
+        let episode_eligible = episode_content.as_deref().is_some_and(|content| {
+            crate::db::derive_episode(
+                &source_id,
+                episode_source_text.as_deref(),
+                content,
+                episode_gate,
+            )
+            .is_some()
+        });
         records.push(MemoryRecord {
-            source_id: row.get(0).map_err(|_| ())?,
+            source_id,
             lifecycle_valid: row.get::<i64>(1).map_err(|_| ())? != 0,
             supersedes: row.get(2).ok(),
             target_exists: row.get::<i64>(3).map_err(|_| ())? != 0,
@@ -108,12 +125,12 @@ pub(super) async fn load_records(context: &LintContext<'_, '_>) -> Result<Vec<Me
             fact: row.get::<i64>(14).map_err(|_| ())? != 0,
             page_link: row.get::<i64>(15).map_err(|_| ())? != 0,
             summary: row.get::<i64>(16).map_err(|_| ())? != 0,
-            episode_eligible: row.get::<i64>(17).map_err(|_| ())? != 0,
-            fact_eligible: row.get::<i64>(18).map_err(|_| ())? != 0,
-            summary_eligible: row.get::<i64>(19).map_err(|_| ())? != 0,
-            episode_receipt: receipt(&row, 20, 21)?,
-            fact_receipt: receipt(&row, 22, 23)?,
-            summary_receipt: receipt(&row, 24, 25)?,
+            episode_eligible,
+            fact_eligible: row.get::<i64>(19).map_err(|_| ())? != 0,
+            summary_eligible: row.get::<i64>(20).map_err(|_| ())? != 0,
+            episode_receipt: receipt(&row, 21, 22)?,
+            fact_receipt: receipt(&row, 23, 24)?,
+            summary_receipt: receipt(&row, 25, 26)?,
             head: false,
         });
     }

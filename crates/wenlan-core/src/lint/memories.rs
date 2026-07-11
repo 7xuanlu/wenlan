@@ -210,3 +210,7 @@ mod tests;
 #[cfg(test)]
 #[path = "memories_integration_test.rs"]
 mod integration_tests;
+
+#[cfg(test)]
+#[path = "memories_review_regression_test.rs"]
+mod review_regression_tests;
