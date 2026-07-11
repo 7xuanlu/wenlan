@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
-use wenlan_types::lint::{LintOutcome, LintReport, LintSummaryCode};
+use wenlan_types::lint::{LintOutcome, LintRecommendationCode, LintReport, LintSummaryCode};
 
 use crate::client::WenlanClient;
 use crate::output::{print_json, OutputFormat};
@@ -21,12 +21,15 @@ pub async fn run(
         }
     };
     let code = exit_code(&report);
-    let rendered = match format {
-        OutputFormat::Json | OutputFormat::Auto => print_json(&report),
-        OutputFormat::Table if quiet => Ok(()),
-        OutputFormat::Table => {
-            print!("{}", render_human(&report));
-            Ok(())
+    let rendered = if quiet {
+        Ok(())
+    } else {
+        match format {
+            OutputFormat::Json | OutputFormat::Auto => print_json(&report),
+            OutputFormat::Table => {
+                print!("{}", render_human(&report));
+                Ok(())
+            }
         }
     };
     if let Err(error) = rendered {
@@ -105,11 +108,24 @@ fn append_selected(output: &mut String, checks: &[&wenlan_types::lint::LintCheck
     }
     output.push_str(&format!(" ({}):\n", checks.len()));
     for check in checks {
-        output.push_str(&format!(
-            "  {}: {}\n",
-            check.check_id(),
-            summary_name(check.summary_code())
-        ));
+        let summary = summary_name(check.summary_code());
+        match check.recommendation_code() {
+            Some(recommendation) => output.push_str(&format!(
+                "  {}: {summary}; recommendation: {}\n",
+                check.check_id(),
+                recommendation_name(recommendation)
+            )),
+            None => output.push_str(&format!("  {}: {summary}\n", check.check_id())),
+        }
+    }
+}
+
+const fn recommendation_name(recommendation: LintRecommendationCode) -> &'static str {
+    match recommendation {
+        LintRecommendationCode::ReviewFinding => "review_finding",
+        LintRecommendationCode::RestorePrerequisite => "restore_prerequisite",
+        LintRecommendationCode::RerunAfterSnapshotStabilizes => "rerun_after_snapshot_stabilizes",
+        LintRecommendationCode::InspectRuntime => "inspect_runtime",
     }
 }
 
