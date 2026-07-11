@@ -24,6 +24,7 @@ struct AggregateAssessment {
     population: u64,
     warning_count: u64,
     error_count: u64,
+    evidence_positions: Vec<usize>,
 }
 
 impl Assessment {
@@ -44,6 +45,7 @@ impl Assessment {
         warning_count: u64,
         error_count: u64,
         inventory: bool,
+        evidence_positions: Vec<usize>,
     ) -> Self {
         Self {
             rows: Vec::new(),
@@ -53,6 +55,7 @@ impl Assessment {
                 population,
                 warning_count,
                 error_count,
+                evidence_positions,
             }),
         }
     }
@@ -95,8 +98,20 @@ impl Assessment {
                 )
             },
         );
-        let evidence_count = defect_count.min(u64::from(LINT_MAX_EVIDENCE_PER_CHECK));
-        let evidence = (0..usize::try_from(evidence_count).unwrap_or(usize::MAX))
+        let evidence_positions = self.aggregate.as_ref().map_or_else(
+            || {
+                self.rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, level)| **level != Level::Pass)
+                    .map(|(position, _)| position)
+                    .collect::<Vec<_>>()
+            },
+            |aggregate| aggregate.evidence_positions.clone(),
+        );
+        let evidence = evidence_positions
+            .into_iter()
+            .take(usize::from(LINT_MAX_EVIDENCE_PER_CHECK))
             .filter_map(|position| {
                 LintOpaqueId::from_sorted_position(position)
                     .map(|opaque_id| LintEvidenceRef::OpaqueId { opaque_id })

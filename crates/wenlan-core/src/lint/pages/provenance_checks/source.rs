@@ -75,12 +75,27 @@ pub(super) async fn load_and_assess_sources(
              LEFT JOIN page_sources ps
                ON ps.page_id = pe.page_id AND ps.memory_source_id = pe.locator
             WHERE ps.page_id IS NULL
+         ),
+         ordered AS MATERIALIZED (
+           SELECT ROW_NUMBER() OVER (ORDER BY page_id, memory_source_id) AS ordinal,
+                  level
+             FROM classified
+         ),
+         summary AS (
+           SELECT COUNT(*) + extras.invalid_count AS population,
+                  COALESCE(SUM(CASE WHEN ordered.level = 1 THEN 1 ELSE 0 END), 0) AS warning_count,
+                  COALESCE(SUM(CASE WHEN ordered.level = 2 THEN 1 ELSE 0 END), 0) + extras.invalid_count AS error_count,
+                  extras.extra_count AS extra_count
+             FROM ordered CROSS JOIN extras
          )
-         SELECT COUNT(*) + extras.invalid_count,
-                COALESCE(SUM(CASE WHEN classified.level = 1 THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN classified.level = 2 THEN 1 ELSE 0 END), 0) + extras.invalid_count,
-                extras.extra_count
-           FROM classified CROSS JOIN extras",
+         SELECT 0 AS row_kind, population, warning_count, error_count, extra_count
+           FROM summary
+         UNION ALL
+         SELECT 1 AS row_kind, ordinal, level, 0, 0
+           FROM ordered
+          WHERE level != 0
+          ORDER BY row_kind, 2
+          LIMIT 101",
         source_ctes(scope_sql)
     );
     let mut rows = context
@@ -88,12 +103,23 @@ pub(super) async fn load_and_assess_sources(
         .query(&sql, params)
         .await
         .map_err(|_| ())?;
-    let row = rows.next().await.map_err(|_| ())?.ok_or(())?;
-    let population = to_u64(row.get::<i64>(0).map_err(|_| ())?);
-    let warnings = to_u64(row.get::<i64>(1).map_err(|_| ())?);
-    let errors = to_u64(row.get::<i64>(2).map_err(|_| ())?);
-    let extras = to_u64(row.get::<i64>(3).map_err(|_| ())?);
-    let mut assessment = Assessment::from_aggregate(population, warnings, errors, extras > 0);
+    let summary = rows.next().await.map_err(|_| ())?.ok_or(())?;
+    let population = to_u64(summary.get::<i64>(1).map_err(|_| ())?);
+    let warnings = to_u64(summary.get::<i64>(2).map_err(|_| ())?);
+    let errors = to_u64(summary.get::<i64>(3).map_err(|_| ())?);
+    let extras = to_u64(summary.get::<i64>(4).map_err(|_| ())?);
+    let mut evidence_positions = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|_| ())? {
+        let ordinal = to_u64(row.get::<i64>(1).map_err(|_| ())?);
+        let position = ordinal
+            .checked_sub(1)
+            .and_then(|value| usize::try_from(value).ok());
+        if let Some(position) = position {
+            evidence_positions.push(position);
+        }
+    }
+    let mut assessment =
+        Assessment::from_aggregate(population, warnings, errors, extras > 0, evidence_positions);
     assessment.set_metrics(vec![
         count_metric(LintMetricCode::EligibleRecords, population),
         count_metric(LintMetricCode::ObservedRecords, extras),

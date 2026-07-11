@@ -158,7 +158,7 @@ async fn hundred_thousand_sql_rows_validate_all_and_cap_opaque_samples() {
     conn.execute(
         "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 99999)
          INSERT INTO page_evidence (page_id, source_kind, locator, linked_at, link_reason)
-         SELECT 'page-scale', CASE WHEN x <= 100 THEN 'external_file' ELSE 'memory' END,
+         SELECT 'page-scale', CASE WHEN x > 100 AND x <= 200 THEN 'external_file' ELSE 'memory' END,
                 printf('private-locator-%06d', x), 1, 'scale' FROM n",
         (),
     )
@@ -214,6 +214,12 @@ async fn hundred_thousand_sql_rows_validate_all_and_cap_opaque_samples() {
     assert_eq!(result.coverage().evaluated(), 100_000);
     assert_eq!(result.evidence().len(), 100);
     assert!(result.coverage().truncated());
+    assert_eq!(
+        result.evidence().first(),
+        Some(&wenlan_types::lint::LintEvidenceRef::OpaqueId {
+            opaque_id: LintOpaqueId::from_sorted_position(100).unwrap(),
+        })
+    );
     assert!(!serde_json::to_string(&result)
         .unwrap()
         .contains("private-locator"));
