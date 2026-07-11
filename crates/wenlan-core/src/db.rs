@@ -16,6 +16,8 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+mod count;
+
 #[derive(Clone, serde::Serialize)]
 pub struct MigrationProgress {
     pub current: usize,
@@ -12319,25 +12321,6 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("update_timestamp: {}", e)))?;
         Ok(())
-    }
-
-    /// Total number of memories.
-    pub async fn count(&self) -> Result<u64, WenlanError> {
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(*) FROM memories WHERE source != 'episode'",
-                (),
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("count: {}", e)))?;
-
-        if let Ok(Some(row)) = rows.next().await {
-            let count: i64 = row.get(0).unwrap_or(0);
-            Ok(count as u64)
-        } else {
-            Ok(0)
-        }
     }
 
     /// List all indexed files (grouped by source_id).

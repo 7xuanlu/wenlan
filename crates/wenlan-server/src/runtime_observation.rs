@@ -55,7 +55,7 @@ pub async fn from_server_state(state: &ServerState) -> RuntimeObservation {
         observation = observation.with_ingest_worker_closed(batcher.is_closed());
     }
     let status = match &state.db {
-        Some(db) => match db.count().await {
+        Some(db) => match db.count_direct().await {
             Ok(files_indexed) => StatusFilesObservation::Direct(files_indexed),
             Err(_) => StatusFilesObservation::DirectError {
                 fallback_files_indexed: 0,
