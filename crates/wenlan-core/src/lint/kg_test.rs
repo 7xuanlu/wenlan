@@ -23,7 +23,7 @@ async fn structural_orphans_and_invalid_rows_are_errors_without_mutation() {
     seed_corrupt_graph(&db).await;
     let before = fingerprint(&db).await;
 
-    let report = run(&db, None, true).await;
+    let report = run(&db, None, test_config(true)).await;
 
     for (id, affected) in [
         (ENTITY_INTEGRITY, 1),
@@ -54,7 +54,7 @@ async fn scoped_rows_follow_memory_or_entity_ownership_but_aggregates_stay_globa
     let (db, _tmp) = test_db().await;
     seed_valid_scoped_graph(&db).await;
 
-    let report = run(&db, Some("alpha"), true).await;
+    let report = run(&db, Some("alpha"), test_config(true)).await;
 
     assert_eq!(check(&report, ENTITY_INTEGRITY).coverage().denominator(), 1);
     assert_eq!(
@@ -78,7 +78,7 @@ async fn configured_off_is_expected_empty_and_enabled_empty_substrate_is_actiona
     let (db, _tmp) = test_db().await;
     insert_memory(&db, "eligible", None).await;
 
-    let off = run(&db, None, false).await;
+    let off = run(&db, None, test_config(false)).await;
     let off_liveness = check(&off, LIVENESS);
     assert_eq!(off_liveness.outcome(), LintOutcome::Pass);
     assert_eq!(
@@ -87,7 +87,7 @@ async fn configured_off_is_expected_empty_and_enabled_empty_substrate_is_actiona
     );
     assert_eq!(off_liveness.precondition(), LintPrecondition::ConfiguredOff);
 
-    let on = run(&db, None, true).await;
+    let on = run(&db, None, test_config(true)).await;
     let on_liveness = check(&on, LIVENESS);
     assert_eq!(on_liveness.outcome(), LintOutcome::Finding);
     assert_eq!(on_liveness.severity(), LintSeverity::Warning);
@@ -99,7 +99,7 @@ async fn duplicate_names_hubs_and_semantic_suspicion_are_advisory_only() {
     let (db, _tmp) = test_db().await;
     seed_advisory_graph(&db).await;
 
-    let result = check(&run(&db, None, true).await, ADVISORY).clone();
+    let result = check(&run(&db, None, test_config(true)).await, ADVISORY).clone();
 
     assert_eq!(result.outcome(), LintOutcome::Pass);
     assert_eq!(result.severity(), LintSeverity::Info);
@@ -123,7 +123,7 @@ async fn full_population_is_validated_while_opaque_evidence_is_capped() {
     }
     drop(conn);
 
-    let report = run(&db, None, true).await;
+    let report = run(&db, None, test_config(true)).await;
     let result = check(&report, OBSERVATIONS);
     assert_eq!(result.coverage().denominator(), 101);
     assert_eq!(result.coverage().evaluated(), 101);
@@ -135,10 +135,10 @@ async fn full_population_is_validated_while_opaque_evidence_is_capped() {
 async fn run(
     db: &crate::db::MemoryDB,
     space: Option<&str>,
-    kg_enabled: bool,
+    config: super::KgRunConfig,
 ) -> wenlan_types::lint::LintReport {
     LintRunner::new(LintClock::fixed(), CancellationToken::new())
-        .with_test_kg_enabled(kg_enabled)
+        .with_test_kg_config(config)
         .run(
             db,
             &LintQuery {
@@ -149,6 +149,10 @@ async fn run(
         )
         .await
         .unwrap()
+}
+
+fn test_config(serving_enabled: bool) -> super::KgRunConfig {
+    super::KgRunConfig::for_test(serving_enabled, true, true, 20)
 }
 
 fn check<'a>(

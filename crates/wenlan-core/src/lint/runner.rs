@@ -3,13 +3,15 @@ use super::context::{
     AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext, PopulationBasis,
 };
 use super::pages::fs::{scan_page_root, PageFsError, PageScan};
+use super::run_config::EffectiveLintConfig;
 use super::snapshot::{SnapshotError, SnapshotReceipt};
 use crate::db::MemoryDB;
 use std::collections::BTreeSet;
 use std::path::Path;
+#[cfg(test)]
+use wenlan_types::lint::LintConfigFingerprint;
 use wenlan_types::lint::{
     LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
-    LintConfigFingerprint, LintConfigSelection, LintConfigSetting, LintConfigValue,
     LintContractError, LintCoverage, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest,
     LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
     LintProducerReceipt, LintQuery, LintRecommendationCode, LintReport, LintScope, LintSeverity,
@@ -40,7 +42,7 @@ pub struct LintRunner {
     #[cfg(test)]
     memory_features: Option<super::memories::TestMemoryFeatures>,
     #[cfg(test)]
-    kg_enabled: Option<bool>,
+    kg_config: Option<super::kg::KgRunConfig>,
 }
 
 #[cfg(test)]
@@ -117,7 +119,7 @@ impl LintRunner {
             #[cfg(test)]
             memory_features: None,
             #[cfg(test)]
-            kg_enabled: None,
+            kg_config: None,
         }
     }
 
@@ -146,8 +148,8 @@ impl LintRunner {
     }
 
     #[cfg(test)]
-    pub(super) fn with_test_kg_enabled(mut self, enabled: bool) -> Self {
-        self.kg_enabled = Some(enabled);
+    pub(super) fn with_test_kg_config(mut self, config: super::kg::KgRunConfig) -> Self {
+        self.kg_config = Some(config);
         self
     }
 
@@ -170,14 +172,16 @@ impl LintRunner {
         };
         let kg_config = {
             #[cfg(test)]
-            if let Some(enabled) = self.kg_enabled {
-                super::kg::KgFeatureConfig::for_test(enabled)
+            if let Some(config) = self.kg_config {
+                config
             } else {
-                super::kg::KgFeatureConfig::capture()
+                super::kg::KgRunConfig::capture()
             }
             #[cfg(not(test))]
-            super::kg::KgFeatureConfig::capture()
+            super::kg::KgRunConfig::capture()
         };
+        let effective_config =
+            EffectiveLintConfig::new(page_projection_enabled, memory_config, kg_config);
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
         #[cfg(test)]
@@ -215,13 +219,13 @@ impl LintRunner {
             self.run_groups(
                 &context,
                 page_projection_enabled,
-                memory_config,
-                kg_config,
+                effective_config.memory,
+                effective_config.kg,
                 page_started,
             )
             .await?
         };
-        if memory_config.artifact_state_changed(database) {
+        if effective_config.memory.artifact_state_changed(database) {
             checks = inconsistent_selected_results(&self.clock, &checks, |check_id| {
                 catalog_entry(check_id).is_some_and(|entry| entry.group == LintCheckGroup::Memories)
             })?;
@@ -270,12 +274,10 @@ impl LintRunner {
         validate_catalog_results(&mut checks)?;
         build_report(
             scope.into_report(),
-            page_projection_enabled,
             db_receipt,
             page_before,
             page_after,
-            memory_config,
-            kg_config,
+            effective_config,
             checks,
         )
     }
@@ -285,7 +287,7 @@ impl LintRunner {
         context: &LintContext<'_, '_>,
         page_projection_enabled: bool,
         memory_config: super::memories::MemoryFeatureConfig,
-        kg_config: super::kg::KgFeatureConfig,
+        kg_config: super::kg::KgRunConfig,
         page_started: std::time::Duration,
     ) -> Result<(Vec<LintCheckResult>, std::time::Duration), LintRunError> {
         #[cfg(test)]
@@ -831,56 +833,23 @@ fn record_zero_populations(context: &LintContext<'_, '_>) -> Result<(), LintRunE
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_report(
     scope: LintScope,
-    page_projection_enabled: bool,
     db_receipt: SnapshotReceipt,
     page_before: [u8; 32],
     page_after: [u8; 32],
-    memory_config: super::memories::MemoryFeatureConfig,
-    kg_config: super::kg::KgFeatureConfig,
+    effective_config: EffectiveLintConfig,
     checks: Vec<LintCheckResult>,
 ) -> Result<LintReport, LintRunError> {
     LintReport::try_new(
         scope,
         LintCapabilityContext::daemon_operator_endpoint(),
         receipts(db_receipt, page_before, page_after),
-        LintConfigFingerprint::from_effective_config(&[
-            config_selection(
-                LintConfigSetting::PageProjectionEnabled,
-                page_projection_enabled,
-            ),
-            config_selection(
-                LintConfigSetting::EpisodeChannelEnabled,
-                memory_config.episode,
-            ),
-            config_selection(LintConfigSetting::FactChannelEnabled, memory_config.fact),
-            config_selection(
-                LintConfigSetting::SummaryPreludeEnabled,
-                memory_config.summary,
-            ),
-            config_selection(
-                LintConfigSetting::TemporalGroundingEnabled,
-                memory_config.temporal,
-            ),
-            config_selection(LintConfigSetting::KnowledgeGraphEnabled, kg_config.enabled),
-        ]),
+        effective_config.fingerprint(),
         LintProducerReceipt::new(None),
         checks,
     )
     .map_err(LintRunError::from)
-}
-
-fn config_selection(setting: LintConfigSetting, enabled: bool) -> LintConfigSelection {
-    LintConfigSelection::new(
-        setting,
-        if enabled {
-            LintConfigValue::Enabled
-        } else {
-            LintConfigValue::Disabled
-        },
-    )
 }
 
 fn receipts(

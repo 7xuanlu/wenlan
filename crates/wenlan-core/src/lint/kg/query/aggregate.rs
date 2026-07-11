@@ -68,8 +68,11 @@ pub(super) async fn aggregate_counts(context: &LintContext<'_, '_>) -> Result<Ag
     })
 }
 
-pub(super) async fn advisory_metrics(context: &LintContext<'_, '_>) -> Result<Vec<LintMetric>, ()> {
-    let cap = i64::try_from(crate::db::graph_hub_cap()).map_err(|_| ())?;
+pub(super) async fn advisory_metrics(
+    context: &LintContext<'_, '_>,
+    hub_cap: u64,
+) -> Result<Vec<LintMetric>, ()> {
+    let cap = i64::try_from(hub_cap).map_err(|_| ())?;
     let values = scalar_row(
         context,
         "WITH degree AS (

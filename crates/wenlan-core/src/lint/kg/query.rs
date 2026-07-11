@@ -23,14 +23,14 @@ pub(super) struct KgSnapshot {
     pub(super) linked_memories: u64,
 }
 
-pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<KgSnapshot, ()> {
+pub(super) async fn load(context: &LintContext<'_, '_>, hub_cap: u64) -> Result<KgSnapshot, ()> {
     let entities = entity_integrity(context).await?;
     let observations = observation_integrity(context).await?;
     let relations = relation_integrity(context).await?;
     let links = link_integrity(context).await?;
     let partitions = entity_partitions(context).await?;
     let aggregates = aggregate_counts(context).await?;
-    let advisory = advisory_metrics(context).await?;
+    let advisory = advisory_metrics(context, hub_cap).await?;
     let (eligible_memories, linked_memories) = substrate_counts(context).await?;
     Ok(KgSnapshot {
         entities,

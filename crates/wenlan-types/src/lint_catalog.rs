@@ -53,6 +53,9 @@ pub enum LintMetricCode {
     KgDuplicateEntityNames,
     KgHubEntities,
     KgSemanticSuspicions,
+    KgServingStatus,
+    KgSweepStatus,
+    KgProviderReadiness,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

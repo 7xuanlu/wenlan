@@ -115,12 +115,16 @@ pub enum LintConfigSetting {
     FactChannelEnabled,
     SummaryPreludeEnabled,
     TemporalGroundingEnabled,
-    KnowledgeGraphEnabled,
+    KnowledgeGraphServingEnabled,
+    KnowledgeGraphSweepEnabled,
+    KnowledgeGraphProviderReady,
+    KnowledgeGraphHubCap,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LintConfigValue {
     Enabled,
     Disabled,
+    Count(u64),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LintConfigSelection {
@@ -131,7 +135,13 @@ impl LintConfigSelection {
     pub const fn new(setting: LintConfigSetting, value: LintConfigValue) -> Self {
         Self { setting, value }
     }
-    const fn bytes(self) -> [u8; 2] {
+    pub const fn count(setting: LintConfigSetting, value: u64) -> Self {
+        Self {
+            setting,
+            value: LintConfigValue::Count(value),
+        }
+    }
+    fn bytes(self) -> Vec<u8> {
         let setting = match self.setting {
             LintConfigSetting::RerankerEnabled => 1,
             LintConfigSetting::PageProjectionEnabled => 2,
@@ -139,13 +149,21 @@ impl LintConfigSelection {
             LintConfigSetting::FactChannelEnabled => 4,
             LintConfigSetting::SummaryPreludeEnabled => 5,
             LintConfigSetting::TemporalGroundingEnabled => 6,
-            LintConfigSetting::KnowledgeGraphEnabled => 7,
+            LintConfigSetting::KnowledgeGraphServingEnabled => 7,
+            LintConfigSetting::KnowledgeGraphSweepEnabled => 8,
+            LintConfigSetting::KnowledgeGraphProviderReady => 9,
+            LintConfigSetting::KnowledgeGraphHubCap => 10,
         };
-        let value = match self.value {
-            LintConfigValue::Enabled => 1,
-            LintConfigValue::Disabled => 2,
-        };
-        [setting, value]
+        let mut bytes = vec![setting];
+        match self.value {
+            LintConfigValue::Enabled => bytes.push(1),
+            LintConfigValue::Disabled => bytes.push(2),
+            LintConfigValue::Count(value) => {
+                bytes.push(3);
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
