@@ -32,17 +32,12 @@ const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// checkpointing means the remainder is simply picked up on the next poll.
 const MAX_DOC_ENRICH_PER_POLL: usize = 4;
 
-fn initial_derived_receipt_sweep_at(now: Instant) -> Instant {
-    now.checked_sub(DERIVED_RECEIPT_SWEEP_INTERVAL)
-        .unwrap_or(now)
-}
-
-fn derived_receipt_sweep_due(last: Instant, now: Instant) -> bool {
-    now.duration_since(last) >= DERIVED_RECEIPT_SWEEP_INTERVAL
+fn derived_receipt_sweep_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.duration_since(last) >= DERIVED_RECEIPT_SWEEP_INTERVAL)
 }
 
 async fn run_derived_receipt_sweep_if_due<F, Fut, E>(
-    last: &mut Instant,
+    last: &mut Option<Instant>,
     now: Instant,
     sweep: F,
 ) -> Result<bool, E>
@@ -54,7 +49,7 @@ where
         return Ok(false);
     }
     let result = sweep().await;
-    *last = now;
+    *last = Some(now);
     result.map(|()| true)
 }
 
@@ -177,7 +172,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_citation_sweep = Instant::now()
             .checked_sub(CITATION_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
-        let mut last_derived_receipt_sweep = initial_derived_receipt_sweep_at(Instant::now());
+        let mut last_derived_receipt_sweep = None;
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -777,7 +772,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let now = Instant::now();
-        let mut last = initial_derived_receipt_sweep_at(now);
+        let mut last = None;
         let calls = AtomicUsize::new(0);
         assert!(run_derived_receipt_sweep_if_due(&mut last, now, || async {
             calls.fetch_add(1, Ordering::Relaxed);
