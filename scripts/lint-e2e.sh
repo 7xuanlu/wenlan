@@ -41,15 +41,40 @@ resolve_cache() {
     esac
 }
 
+resolve_ort() {
+    local linked="" cache_root host library
+    if [ -n "${WENLAN_TEST_ORT_LIB_LOCATION:-}" ]; then
+        printf '%s\n' "$WENLAN_TEST_ORT_LIB_LOCATION"
+        return
+    fi
+    linked="$(sed -n 's/^cargo:rustc-link-search=native=//p' \
+        "$ROOT"/target/debug/build/ort-sys-*/output 2>/dev/null | head -1 || true)"
+    if [ -n "$linked" ] && [ -f "$linked/libonnxruntime.a" ]; then
+        printf '%s\n' "$linked"
+        return
+    fi
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    case "$(uname -s)" in
+        Darwin) cache_root="$HOME/Library/Caches/ort.pyke.io/dfbin/$host" ;;
+        *) cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/ort.pyke.io/dfbin/$host" ;;
+    esac
+    library="$(find "$cache_root" -type f -name 'libonnxruntime.a' -print 2>/dev/null \
+        | sort | head -1 || true)"
+    [ -n "$library" ] && dirname "$library"
+}
+
 CACHE="$(resolve_cache)"
 [ -d "$CACHE" ] || fail "offline FastEmbed cache missing: $CACHE"
 [ -n "$(find "$CACHE" -type f -print -quit)" ] || fail "offline FastEmbed cache is empty"
+ORT_LIB="$(resolve_ort)"
+[ -f "$ORT_LIB/libonnxruntime.a" ] || fail "offline ONNX Runtime library missing"
 
 HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 echo "==> Building exact git checkout $HEAD in a fresh target"
 (
     cd "$ROOT"
     CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$GIT_TARGET" \
+        ORT_LIB_LOCATION="$ORT_LIB" \
         cargo build --locked -p wenlan-server -p wenlan
 )
 
@@ -229,6 +254,7 @@ git -C "$ROOT" archive HEAD | tar -x -C "$TARBALL_ROOT"
 (
     cd "$TARBALL_ROOT"
     CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$TARBALL_TARGET" \
+        ORT_LIB_LOCATION="$ORT_LIB" \
         cargo build --locked -p wenlan-server
 )
 start_daemon "$TARBALL_TARGET/debug/wenlan-server" tarball
