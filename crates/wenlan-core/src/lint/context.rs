@@ -3,8 +3,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wenlan_types::lint::{
-    LintContractError, LintCoverage, LintValidationMethod, LINT_MAX_EVIDENCE_PER_CHECK,
+    LintContractError, LintCoverage, LintOpaqueId, LintScope, LintValidationMethod,
+    LINT_MAX_EVIDENCE_PER_CHECK,
 };
+
+use super::pages::fs::PageScan;
+use super::snapshot::LintReadSnapshot;
 
 #[derive(Debug, Clone)]
 pub struct CancellationToken(Arc<AtomicBool>);
@@ -102,6 +106,100 @@ impl ExecutionGate {
         } else {
             Ok(())
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScopeFilter {
+    Global,
+    Registered(String),
+    Uncategorized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedScope {
+    report: LintScope,
+    filter: ScopeFilter,
+}
+
+impl AppliedScope {
+    pub(crate) fn global() -> Self {
+        Self {
+            report: LintScope::global(),
+            filter: ScopeFilter::Global,
+        }
+    }
+
+    pub(crate) fn registered(opaque: LintOpaqueId, workspace: String) -> Self {
+        Self {
+            report: LintScope::registered(opaque),
+            filter: ScopeFilter::Registered(workspace),
+        }
+    }
+
+    pub(crate) fn uncategorized() -> Self {
+        Self {
+            report: LintScope::uncategorized(),
+            filter: ScopeFilter::Uncategorized,
+        }
+    }
+
+    pub(crate) fn report(&self) -> &LintScope {
+        &self.report
+    }
+
+    pub(crate) fn into_report(self) -> LintScope {
+        self.report
+    }
+
+    pub(crate) fn filter(&self) -> &ScopeFilter {
+        &self.filter
+    }
+}
+
+pub(crate) struct LintContext<'run, 'database> {
+    snapshot: &'run LintReadSnapshot<'database>,
+    scope: &'run AppliedScope,
+    page_scan: Option<&'run PageScan>,
+    clock: &'run LintClock,
+    gate: &'run ExecutionGate,
+}
+
+impl<'run, 'database> LintContext<'run, 'database> {
+    pub(crate) fn new(
+        snapshot: &'run LintReadSnapshot<'database>,
+        scope: &'run AppliedScope,
+        page_scan: Option<&'run PageScan>,
+        clock: &'run LintClock,
+        gate: &'run ExecutionGate,
+    ) -> Self {
+        Self {
+            snapshot,
+            scope,
+            page_scan,
+            clock,
+            gate,
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> &LintReadSnapshot<'database> {
+        self.snapshot
+    }
+
+    pub(crate) fn scope(&self) -> &AppliedScope {
+        self.scope
+    }
+
+    pub(crate) fn page_scan(&self) -> Option<&PageScan> {
+        self.page_scan
+    }
+
+    pub(crate) fn clock(&self) -> &LintClock {
+        self.clock
+    }
+
+    pub(crate) fn gate(&self) -> &ExecutionGate {
+        self.gate
     }
 }
 

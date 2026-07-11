@@ -1,5 +1,5 @@
 use super::catalog::catalog;
-use super::context::{CancellationToken, ExecutionGate, LintClock};
+use super::context::{AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext};
 use super::pages::fs::{scan_page_root, PageFsError, PageScan};
 use super::snapshot::{SnapshotError, SnapshotReceipt};
 use crate::db::MemoryDB;
@@ -65,12 +65,17 @@ impl LintRunner {
         } else {
             None
         };
+        let context = LintContext::new(
+            &snapshot,
+            &scope,
+            page_scan.as_ref(),
+            &self.clock,
+            &self.gate,
+        );
         let mut checks = if execution_failed {
             failed_results(&self.clock)
-        } else if page_projection_enabled {
-            prerequisite_results(&self.clock)
         } else {
-            configured_off_results(self.clock.clone())
+            super::pages::run(&context, page_projection_enabled).await
         };
         let page_elapsed = self.clock.elapsed().saturating_sub(page_started);
         if self.gate.check(page_elapsed).is_err()
@@ -79,7 +84,7 @@ impl LintRunner {
             checks = failed_results(&self.clock);
         }
         validate_catalog_results(&mut checks)?;
-        validate_scoped_evidence(&scope, &checks)?;
+        validate_scoped_evidence(scope.report(), &checks)?;
 
         let page_before = page_scan
             .as_ref()
@@ -97,9 +102,9 @@ impl LintRunner {
             checks = inconsistent_results(&self.clock);
         }
         validate_catalog_results(&mut checks)?;
-        validate_scoped_evidence(&scope, &checks)?;
+        validate_scoped_evidence(scope.report(), &checks)?;
         build_report(
-            scope,
+            scope.into_report(),
             page_projection_enabled,
             db_receipt,
             page_before,
@@ -112,12 +117,12 @@ impl LintRunner {
 async fn validate_scope(
     snapshot: &super::snapshot::LintReadSnapshot<'_>,
     query: &LintQuery,
-) -> Result<LintScope, LintRunError> {
+) -> Result<AppliedScope, LintRunError> {
     let Some(requested) = query.space.as_deref() else {
-        return Ok(LintScope::global());
+        return Ok(AppliedScope::global());
     };
     if requested == "uncategorized" {
-        return Ok(LintScope::uncategorized());
+        return Ok(AppliedScope::uncategorized());
     }
     let mut rows = snapshot
         .query(
@@ -132,7 +137,7 @@ async fn validate_scope(
     let position = usize::try_from(ordinal).map_err(|_| LintRunError::InvalidScope)?;
     let opaque = wenlan_types::lint::LintOpaqueId::from_sorted_position(position)
         .ok_or(LintRunError::InvalidScope)?;
-    Ok(LintScope::registered(opaque))
+    Ok(AppliedScope::registered(opaque, requested.to_string()))
 }
 
 pub fn configured_off_results(clock: LintClock) -> Vec<LintCheckResult> {
@@ -154,7 +159,7 @@ pub fn configured_off_results(clock: LintClock) -> Vec<LintCheckResult> {
         .expect("static configured-off lint results are valid")
 }
 
-fn prerequisite_results(clock: &LintClock) -> Vec<LintCheckResult> {
+pub(crate) fn prerequisite_results(clock: &LintClock) -> Vec<LintCheckResult> {
     catalog()
         .iter()
         .map(|entry| {
