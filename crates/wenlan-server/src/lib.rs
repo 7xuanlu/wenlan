@@ -18,6 +18,7 @@ pub mod router;
 pub mod routes;
 pub mod scheduler;
 pub mod security;
+pub mod sensitive_read_routes;
 pub mod source_routes;
 pub mod space_header;
 pub mod state;

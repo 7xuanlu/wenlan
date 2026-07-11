@@ -12,6 +12,7 @@ pub enum ScopeAxis {
     MemoriesSpace,
     EntitiesSpace,
     OperationsGlobal,
+    ServingGlobal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub enum LintCheckGroup {
     Memories,
     Operations,
     Pages,
+    Serving,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +84,15 @@ const CATALOG: &[LintCatalogEntry] = &[
     ),
     page_entry("pages.review_status_inventory", ScopePolicy::ScopedRows),
     entity_entry("relations.integrity", ScopePolicy::ScopedRows),
+    serving_entry("serving.channel.episode", ScopePolicy::ScopedRows),
+    serving_entry("serving.channel.fact", ScopePolicy::ScopedRows),
+    serving_entry("serving.channel.graph", ScopePolicy::ScopedRows),
+    serving_entry("serving.channel.page", ScopePolicy::ScopedRows),
+    serving_entry("serving.channel.summary", ScopePolicy::ScopedRows),
+    serving_entry("serving.fact_scope_starvation", ScopePolicy::ScopedRows),
+    serving_global_entry("serving.observability_inventory"),
+    serving_global_entry("serving.reranker_fallback_inventory"),
+    serving_global_entry("serving.route_scope_contracts"),
 ];
 
 const fn entity_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
@@ -126,6 +137,24 @@ const fn operations_entry(id: &'static str) -> LintCatalogEntry {
         scope_policy: ScopePolicy::GlobalAggregateOnly,
         scope_axis: ScopeAxis::OperationsGlobal,
         group: LintCheckGroup::Operations,
+    }
+}
+
+const fn serving_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy,
+        scope_axis: ScopeAxis::MemoriesSpace,
+        group: LintCheckGroup::Serving,
+    }
+}
+
+const fn serving_global_entry(id: &'static str) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy: ScopePolicy::GlobalAggregateOnly,
+        scope_axis: ScopeAxis::ServingGlobal,
+        group: LintCheckGroup::Serving,
     }
 }
 

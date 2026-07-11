@@ -1,6 +1,7 @@
 use super::kg::KgRunConfig;
 use super::memories::MemoryFeatureConfig;
 use super::operations::OperationsRunConfig;
+use super::serving::ServingRunConfig;
 use wenlan_types::lint::{
     LintConfigFingerprint, LintConfigSelection, LintConfigSetting, LintConfigValue,
 };
@@ -11,6 +12,7 @@ pub(super) struct EffectiveLintConfig {
     pub(super) memory: MemoryFeatureConfig,
     pub(super) kg: KgRunConfig,
     pub(super) operations: OperationsRunConfig,
+    pub(super) serving: ServingRunConfig,
 }
 
 impl EffectiveLintConfig {
@@ -19,12 +21,14 @@ impl EffectiveLintConfig {
         memory: MemoryFeatureConfig,
         kg: KgRunConfig,
         operations: OperationsRunConfig,
+        serving: ServingRunConfig,
     ) -> Self {
         Self {
             page_projection_enabled,
             memory,
             kg,
             operations,
+            serving,
         }
     }
 
@@ -34,6 +38,7 @@ impl EffectiveLintConfig {
                 LintConfigSetting::PageProjectionEnabled,
                 self.page_projection_enabled,
             ),
+            selection(LintConfigSetting::RerankerEnabled, self.serving.reranker),
             selection(
                 LintConfigSetting::EpisodeChannelEnabled,
                 self.memory.episode,

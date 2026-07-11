@@ -6,6 +6,7 @@ pub mod operations;
 pub mod pages;
 mod run_config;
 pub mod runner;
+pub mod serving;
 pub mod snapshot;
 
 #[cfg(test)]

@@ -108,6 +108,13 @@ fn catalog_is_static_ordered_unique_and_group_owned() {
         LintCheckGroup::Pages => {
             entry.id.starts_with("pages.") && entry.scope_axis == ScopeAxis::PagesWorkspace
         }
+        LintCheckGroup::Serving => {
+            entry.id.starts_with("serving.")
+                && matches!(
+                    entry.scope_axis,
+                    ScopeAxis::MemoriesSpace | ScopeAxis::ServingGlobal
+                )
+        }
     }));
     let policies = entries
         .iter()

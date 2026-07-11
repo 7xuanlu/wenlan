@@ -43,6 +43,8 @@ pub struct LintRunner {
     memory_features: Option<super::memories::TestMemoryFeatures>,
     #[cfg(test)]
     kg_config: Option<super::kg::KgRunConfig>,
+    #[cfg(test)]
+    serving_config: Option<super::serving::ServingRunConfig>,
     operations_config: super::operations::OperationsRunConfig,
 }
 
@@ -121,6 +123,8 @@ impl LintRunner {
             memory_features: None,
             #[cfg(test)]
             kg_config: None,
+            #[cfg(test)]
+            serving_config: None,
             operations_config: super::operations::OperationsRunConfig::unavailable(),
         }
     }
@@ -152,6 +156,15 @@ impl LintRunner {
     #[cfg(test)]
     pub(super) fn with_test_kg_config(mut self, config: super::kg::KgRunConfig) -> Self {
         self.kg_config = Some(config);
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_serving_config(
+        mut self,
+        config: super::serving::ServingRunConfig,
+    ) -> Self {
+        self.serving_config = Some(config);
         self
     }
 
@@ -187,11 +200,34 @@ impl LintRunner {
             #[cfg(not(test))]
             super::kg::KgRunConfig::capture()
         };
+        let reranker_mode = crate::reranker::reranker_mode_resolved(&crate::config::load_config());
+        let legacy_reranker = std::env::var("WENLAN_RERANKER_ENABLED").as_deref() == Ok("1");
+        let reranker_plan = crate::reranker::resolve_reranker_plan(reranker_mode, legacy_reranker);
+        let reranker_enabled = reranker_plan.light.is_some() || reranker_plan.deep.is_some();
+        let serving_config = {
+            #[cfg(test)]
+            if let Some(config) = self.serving_config {
+                config
+            } else {
+                super::serving::ServingRunConfig::new(
+                    memory_config,
+                    kg_config.serving_enabled,
+                    reranker_enabled,
+                )
+            }
+            #[cfg(not(test))]
+            super::serving::ServingRunConfig::new(
+                memory_config,
+                kg_config.serving_enabled,
+                reranker_enabled,
+            )
+        };
         let effective_config = EffectiveLintConfig::new(
             page_projection_enabled,
             memory_config,
             kg_config,
             self.operations_config.clone(),
+            serving_config,
         );
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
@@ -227,15 +263,8 @@ impl LintRunner {
             record_zero_populations(&context)?;
             (failed_results(&self.clock), std::time::Duration::ZERO)
         } else {
-            self.run_groups(
-                &context,
-                page_projection_enabled,
-                effective_config.memory,
-                effective_config.kg,
-                effective_config.operations.clone(),
-                page_started,
-            )
-            .await?
+            self.run_groups(&context, &effective_config, page_started)
+                .await?
         };
         if effective_config.memory.artifact_state_changed(database) {
             checks = inconsistent_selected_results(&self.clock, &checks, |check_id| {
@@ -297,10 +326,7 @@ impl LintRunner {
     async fn run_groups(
         &self,
         context: &LintContext<'_, '_>,
-        page_projection_enabled: bool,
-        memory_config: super::memories::MemoryFeatureConfig,
-        kg_config: super::kg::KgRunConfig,
-        operations_config: super::operations::OperationsRunConfig,
+        config: &EffectiveLintConfig,
         page_started: std::time::Duration,
     ) -> Result<(Vec<LintCheckResult>, std::time::Duration), LintRunError> {
         #[cfg(test)]
@@ -308,11 +334,12 @@ impl LintRunner {
             let results = run_test_scenario(context, scenario).await?;
             return Ok((results, self.page_elapsed(page_started)));
         }
-        let mut results = super::pages::run(context, page_projection_enabled).await;
+        let mut results = super::pages::run(context, config.page_projection_enabled).await;
         let page_elapsed = self.page_elapsed(page_started);
-        results.extend(super::memories::run(context, memory_config).await);
-        results.extend(super::kg::run(context, kg_config).await);
-        results.extend(super::operations::run(context, operations_config).await);
+        results.extend(super::memories::run(context, config.memory).await);
+        results.extend(super::kg::run(context, config.kg).await);
+        results.extend(super::operations::run(context, config.operations.clone()).await);
+        results.extend(super::serving::run(context, config.serving).await);
         Ok((results, page_elapsed))
     }
 

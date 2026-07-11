@@ -12,6 +12,10 @@ use axum::{
 };
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
+#[cfg(test)]
+#[path = "sensitive_read_routes_test.rs"]
+mod sensitive_read_routes_test;
+
 /// Build the shared application router with all routes.
 pub fn build_router(state: SharedState) -> Router {
     // Reflect CORS only for local origins so a legit localhost/Tauri browser
