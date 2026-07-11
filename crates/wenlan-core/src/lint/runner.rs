@@ -35,6 +35,8 @@ pub struct LintRunner {
     gate: ExecutionGate,
     #[cfg(test)]
     scenario: Option<TestScenario>,
+    #[cfg(test)]
+    synchronization: Option<TestSynchronization>,
 }
 
 #[cfg(test)]
@@ -43,7 +45,60 @@ pub(super) enum TestScenario {
     MixedQueryFailure,
     PageGroupTimeout,
     ScopedDenominators,
-    ProjectionGenerationDrift,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TestSyncPoint {
+    AfterTrackerSample,
+    BeforeReceipts,
+}
+
+#[cfg(test)]
+pub(super) struct TestSynchronization {
+    point: TestSyncPoint,
+    reached: std::sync::Arc<tokio::sync::Barrier>,
+    resume: std::sync::Arc<tokio::sync::Barrier>,
+}
+
+#[cfg(test)]
+pub(super) struct TestSynchronizationControl {
+    reached: std::sync::Arc<tokio::sync::Barrier>,
+    resume: std::sync::Arc<tokio::sync::Barrier>,
+}
+
+#[cfg(test)]
+impl TestSynchronization {
+    pub(super) fn new(point: TestSyncPoint) -> (Self, TestSynchronizationControl) {
+        let reached = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let resume = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        (
+            Self {
+                point,
+                reached: std::sync::Arc::clone(&reached),
+                resume: std::sync::Arc::clone(&resume),
+            },
+            TestSynchronizationControl { reached, resume },
+        )
+    }
+
+    async fn hit(&self, point: TestSyncPoint) {
+        if self.point == point {
+            self.reached.wait().await;
+            self.resume.wait().await;
+        }
+    }
+}
+
+#[cfg(test)]
+impl TestSynchronizationControl {
+    pub(super) async fn wait_until_reached(&self) {
+        self.reached.wait().await;
+    }
+
+    pub(super) async fn resume(&self) {
+        self.resume.wait().await;
+    }
 }
 
 impl LintRunner {
@@ -53,12 +108,23 @@ impl LintRunner {
             gate: ExecutionGate::new(cancellation),
             #[cfg(test)]
             scenario: None,
+            #[cfg(test)]
+            synchronization: None,
         }
     }
 
     #[cfg(test)]
     pub(super) fn with_test_scenario(mut self, scenario: TestScenario) -> Self {
         self.scenario = Some(scenario);
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_synchronization(
+        mut self,
+        synchronization: TestSynchronization,
+    ) -> Self {
+        self.synchronization = Some(synchronization);
         self
     }
 
@@ -72,8 +138,8 @@ impl LintRunner {
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
         #[cfg(test)]
-        if self.scenario == Some(TestScenario::ProjectionGenerationDrift) {
-            drop(projection_tracker.begin_write());
+        if let Some(synchronization) = &self.synchronization {
+            synchronization.hit(TestSyncPoint::AfterTrackerSample).await;
         }
         let snapshot = database.open_unpinned_lint_snapshot().await?;
         let scope = validate_scope(&snapshot, query).await?;
@@ -115,6 +181,10 @@ impl LintRunner {
         validate_catalog_results(&mut checks)?;
         validate_scope_policy(&context, &checks)?;
         drop(context);
+        #[cfg(test)]
+        if let Some(synchronization) = &self.synchronization {
+            synchronization.hit(TestSyncPoint::BeforeReceipts).await;
+        }
 
         let page_before = page_scan
             .as_ref()
@@ -159,9 +229,7 @@ impl LintRunner {
     ) -> Result<Vec<LintCheckResult>, LintRunError> {
         #[cfg(test)]
         if let Some(scenario) = self.scenario {
-            if scenario != TestScenario::ProjectionGenerationDrift {
-                return run_test_scenario(context, scenario).await;
-            }
+            return run_test_scenario(context, scenario).await;
         }
         Ok(super::pages::run(context, page_projection_enabled).await)
     }
@@ -301,7 +369,6 @@ async fn run_test_scenario(
                 .collect()
         }
         TestScenario::ScopedDenominators => scoped_denominator_results(context),
-        TestScenario::ProjectionGenerationDrift => unreachable!("handled by normal page group"),
     }
 }
 

@@ -398,15 +398,14 @@ async fn run_daemon() -> anyhow::Result<()> {
                         pages.len(),
                         knowledge_path.display()
                     );
-                    let guard = db_arc.begin_page_projection_write();
-                    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(
+                    let projection = wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(
                         knowledge_path.clone(),
-                        db_arc.page_projection_tracker(),
+                        &db_arc,
                     );
                     let mut written = 0usize;
                     let mut failed = 0usize;
                     for page in &pages {
-                        match writer.write_page(&guard, page) {
+                        match projection.write_page(page) {
                             Ok(_) => written += 1,
                             Err(e) => {
                                 tracing::warn!(

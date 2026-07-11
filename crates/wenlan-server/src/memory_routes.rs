@@ -1982,17 +1982,14 @@ pub async fn handle_delete_page(
             .ok_or(ServerError::DbNotInitialized)?
     };
 
-    let guard = db.begin_page_projection_write();
+    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+    let projection =
+        wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(knowledge_path, &db);
     db.delete_page(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
-    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(
-        knowledge_path,
-        db.page_projection_tracker(),
-    );
-    if let Err(e) = writer.remove_page(&guard, &id) {
+    if let Err(e) = projection.remove_page(&id) {
         tracing::warn!(
             "[page] DB row deleted but md projection cleanup failed for {}: {}",
             id,
@@ -3360,11 +3357,7 @@ pub async fn handle_refresh_page(
     }
 
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let guard = db.begin_page_projection_write();
-    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(
-        knowledge_path.clone(),
-        db.page_projection_tracker(),
-    );
+    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone(), &db);
 
     // Snapshot the current md content for rollback. If the file is missing
     // we tolerate it — the page may have been created before the projection
@@ -3373,6 +3366,7 @@ pub async fn handle_refresh_page(
     let existing_md_content = existing_state_file
         .as_ref()
         .and_then(|f| std::fs::read_to_string(knowledge_path.join(f)).ok());
+    let projection = writer.begin_projection_write();
 
     // Build the refreshed Page for md rendering. Bump version + last_modified
     // mirror what `update_page_content` writes to the DB row.
@@ -3423,8 +3417,8 @@ pub async fn handle_refresh_page(
     };
 
     // 1. md-first
-    writer
-        .write_page(&guard, &refreshed_page)
+    projection
+        .write_page(&refreshed_page)
         .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
 
     let db_result: Result<(), wenlan_core::error::WenlanError> = async {
@@ -3457,9 +3451,7 @@ pub async fn handle_refresh_page(
             (Some(filename), Some(prev)) => {
                 std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
             }
-            _ => writer
-                .remove_page(&guard, &id)
-                .map_err(|err| err.to_string()),
+            _ => projection.remove_page(&id).map_err(|err| err.to_string()),
         };
         if let Err(rb) = rollback {
             tracing::warn!(

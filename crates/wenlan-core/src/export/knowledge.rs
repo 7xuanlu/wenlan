@@ -43,19 +43,26 @@ pub struct KnowledgeWriter {
 }
 
 impl KnowledgeWriter {
-    pub fn new(
-        path: PathBuf,
-        tracker: std::sync::Arc<crate::page_projection_tracker::PageProjectionTracker>,
-    ) -> Self {
-        Self { path, tracker }
+    pub fn new(path: PathBuf, database: &crate::db::MemoryDB) -> Self {
+        Self {
+            path,
+            tracker: database.page_projection_tracker(),
+        }
+    }
+
+    pub fn begin_projection_write(&self) -> KnowledgeProjectionWriteRef<'_> {
+        KnowledgeProjectionWriteRef {
+            writer: self,
+            guard: self.tracker.begin_write(),
+        }
     }
 
     #[cfg(test)]
     fn new_for_test(path: PathBuf) -> Self {
-        Self::new(
+        Self {
             path,
-            crate::page_projection_tracker::PageProjectionTracker::new(),
-        )
+            tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+        }
     }
 
     #[cfg(test)]
@@ -253,6 +260,43 @@ impl KnowledgeWriter {
         let data = serde_json::to_string_pretty(state)?;
         std::fs::write(&state_path, data)?;
         Ok(())
+    }
+}
+
+pub struct KnowledgeProjectionWriteRef<'writer> {
+    writer: &'writer KnowledgeWriter,
+    guard: crate::page_projection_tracker::PageProjectionWriteGuard,
+}
+
+impl KnowledgeProjectionWriteRef<'_> {
+    pub fn write_page(&self, page: &Page) -> Result<String, WenlanError> {
+        self.writer.write_page(&self.guard, page)
+    }
+
+    pub fn remove_page(&self, page_id: &str) -> Result<(), WenlanError> {
+        self.writer.remove_page(&self.guard, page_id)
+    }
+}
+
+pub struct KnowledgeProjectionWrite {
+    writer: KnowledgeWriter,
+    guard: crate::page_projection_tracker::PageProjectionWriteGuard,
+}
+
+impl KnowledgeProjectionWrite {
+    pub fn new(path: PathBuf, database: &crate::db::MemoryDB) -> Self {
+        Self {
+            writer: KnowledgeWriter::new(path, database),
+            guard: database.begin_page_projection_write(),
+        }
+    }
+
+    pub fn write_page(&self, page: &Page) -> Result<String, WenlanError> {
+        self.writer.write_page(&self.guard, page)
+    }
+
+    pub fn remove_page(&self, page_id: &str) -> Result<(), WenlanError> {
+        self.writer.remove_page(&self.guard, page_id)
     }
 }
 

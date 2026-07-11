@@ -179,11 +179,8 @@ async fn sync_one_file(
         let fresh = crate::export::knowledge::render_markdown_for(&existing);
         let (_, fresh_body) = obsidian::extract_frontmatter(&fresh);
         if raw_body != fresh_body.trim_end_matches('\n') {
-            let guard = db.begin_page_projection_write();
-            let writer = crate::export::knowledge::KnowledgeWriter::new(
-                knowledge_path.to_path_buf(),
-                db.page_projection_tracker(),
-            );
+            let writer =
+                crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf(), db);
             // Only re-project if the writer already maps this page to a file (state
             // entry present) — otherwise write_page's unique_filename would fork a
             // `<slug>-2.md` duplicate against the on-disk file we're reading (real on a
@@ -191,7 +188,7 @@ async fn sync_one_file(
             // pick the canonical file; leave it as-is until a genuine re-distill
             // re-establishes the mapping. The page row is untouched either way.
             if writer.page_filename(&existing.id).is_some() {
-                writer.write_page(&guard, &existing)?;
+                writer.begin_projection_write().write_page(&existing)?;
             }
         }
         return Ok(Outcome::Unchanged);
@@ -243,7 +240,7 @@ mod tests {
     }
 
     fn tracked_writer(db: &MemoryDB, path: &Path) -> KnowledgeWriter {
-        KnowledgeWriter::new(path.to_path_buf(), db.page_projection_tracker())
+        KnowledgeWriter::new(path.to_path_buf(), db)
     }
 
     fn project_page(db: &MemoryDB, writer: &KnowledgeWriter, page: &Page) -> String {
