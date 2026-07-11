@@ -1,7 +1,9 @@
 use crate::db::MemoryDB;
+use crate::lint::observation::{LintRunEvent, LintRunObserver, NoopLintRunObserver};
 use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
@@ -77,6 +79,7 @@ impl LintRows<'_> {
 pub struct LintReadSnapshot<'database> {
     database: &'database libsql::Database,
     observer: libsql::Connection,
+    run_observer: Arc<dyn LintRunObserver>,
     transaction: Option<libsql::Transaction>,
     analysis_digest: Option<StructuralDigest>,
     analysis_data_version: i64,
@@ -84,11 +87,15 @@ pub struct LintReadSnapshot<'database> {
 
 impl<'database> LintReadSnapshot<'database> {
     pub(crate) async fn open(database: &'database libsql::Database) -> Result<Self, SnapshotError> {
-        Self::open_unpinned(database).await?.pin_analysis().await
+        Self::open_unpinned(database, Arc::new(NoopLintRunObserver))
+            .await?
+            .pin_analysis()
+            .await
     }
 
     pub(crate) async fn open_unpinned(
         database: &'database libsql::Database,
+        run_observer: Arc<dyn LintRunObserver>,
     ) -> Result<Self, SnapshotError> {
         let observer = database.connect()?;
         let analysis_data_version = scalar_i64(&observer, "PRAGMA data_version").await?;
@@ -101,6 +108,7 @@ impl<'database> LintReadSnapshot<'database> {
         Ok(Self {
             database,
             observer,
+            run_observer,
             transaction: Some(transaction),
             analysis_digest: None,
             analysis_data_version,
@@ -109,6 +117,7 @@ impl<'database> LintReadSnapshot<'database> {
 
     pub(crate) async fn pin_analysis(mut self) -> Result<Self, SnapshotError> {
         let transaction = self.transaction.as_ref().ok_or(SnapshotError::Closed)?;
+        self.run_observer.observe(LintRunEvent::TransactionQuery);
         self.analysis_digest = Some(structural_digest(transaction).await?);
         Ok(self)
     }
@@ -118,6 +127,7 @@ impl<'database> LintReadSnapshot<'database> {
         sql: &str,
         params: libsql::params::Params,
     ) -> Result<LintRows<'snapshot>, SnapshotError> {
+        self.run_observer.observe(LintRunEvent::TransactionQuery);
         let rows = self
             .transaction
             .as_ref()
@@ -177,8 +187,9 @@ impl MemoryDB {
 
     pub(crate) async fn open_unpinned_lint_snapshot(
         &self,
+        observer: Arc<dyn LintRunObserver>,
     ) -> Result<LintReadSnapshot<'_>, SnapshotError> {
-        LintReadSnapshot::open_unpinned(&self._db).await
+        LintReadSnapshot::open_unpinned(&self._db, observer).await
     }
 }
 

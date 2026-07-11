@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use wenlan_core::access_tracker::AccessTracker;
 use wenlan_core::db::MemoryDB;
+use wenlan_core::lint::observation::{LintRunObserver, NoopLintRunObserver};
 use wenlan_core::llm_provider::LlmProvider;
 use wenlan_core::prompts::PromptRegistry;
 use wenlan_core::quality_gate::QualityGate;
@@ -104,6 +105,7 @@ pub struct ServerState {
     /// fall back to the direct per-request upsert path in that case.
     pub ingest_batcher: Option<IngestBatcher>,
     pub lint_config: LintServerConfig,
+    pub lint_observer: Arc<dyn LintRunObserver>,
 }
 
 impl Default for ServerState {
@@ -129,6 +131,7 @@ impl Default for ServerState {
             reflection_debouncer: ReflectionDebouncer::new(),
             ingest_batcher: None,
             lint_config: LintServerConfig::default(),
+            lint_observer: Arc::new(NoopLintRunObserver),
         }
     }
 }

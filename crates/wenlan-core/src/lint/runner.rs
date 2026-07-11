@@ -1,13 +1,13 @@
 use super::catalog::{catalog, catalog_entry, catalog_group, LintCheckGroup};
-use super::context::{
-    AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext, PopulationBasis,
-};
+use super::context::{CancellationToken, ExecutionGate, LintClock, LintContext, PopulationBasis};
+use super::observation::{LintRunEvent, LintRunObserver, NoopLintRunObserver};
 use super::pages::fs::{scan_page_root, PageFsError, PageScan};
 use super::run_config::EffectiveLintConfig;
 use super::snapshot::{SnapshotError, SnapshotReceipt};
 use crate::db::MemoryDB;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 #[cfg(test)]
 use wenlan_types::lint::LintConfigFingerprint;
 use wenlan_types::lint::{
@@ -19,6 +19,7 @@ use wenlan_types::lint::{
 };
 
 mod configuration;
+mod scope;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LintRunError {
@@ -47,6 +48,7 @@ pub struct LintRunner {
     kg_config: Option<super::kg::KgRunConfig>,
     operations_config: super::operations::OperationsRunConfig,
     runtime_config: super::runtime::RuntimeRunConfig,
+    observer: Arc<dyn LintRunObserver>,
 }
 
 #[cfg(test)]
@@ -126,6 +128,7 @@ impl LintRunner {
             kg_config: None,
             operations_config: super::operations::OperationsRunConfig::unavailable(),
             runtime_config: super::runtime::RuntimeRunConfig::capture(),
+            observer: Arc::new(NoopLintRunObserver),
         }
     }
 
@@ -203,13 +206,16 @@ impl LintRunner {
         if let Some(synchronization) = &self.synchronization {
             synchronization.hit(TestSyncPoint::AfterTrackerSample).await;
         }
-        let snapshot = database.open_unpinned_lint_snapshot().await?;
-        let scope = validate_scope(&snapshot, query).await?;
+        let snapshot = database
+            .open_unpinned_lint_snapshot(Arc::clone(&self.observer))
+            .await?;
+        let scope = scope::validate(&snapshot, query, self.observer.as_ref()).await?;
         let snapshot = snapshot.pin_analysis().await?;
         let mut execution_failed = self.gate.check_run(self.clock.elapsed()).is_err();
 
         let page_started = self.clock.elapsed();
         let page_scan = if page_projection_enabled && !execution_failed {
+            self.observer.observe(LintRunEvent::PageScan);
             match page_root.map(scan_page_root).transpose() {
                 Ok(scan) => scan,
                 Err(_) => {
@@ -231,6 +237,7 @@ impl LintRunner {
             record_zero_populations(&context)?;
             (failed_results(&self.clock), std::time::Duration::ZERO)
         } else {
+            self.observer.observe(LintRunEvent::AggregateChecks);
             self.run_groups(&context, &effective_config, page_started)
                 .await?
         };
@@ -281,6 +288,7 @@ impl LintRunner {
             )?;
         }
         validate_catalog_results(&mut checks)?;
+        self.observer.observe(LintRunEvent::ReportBuild);
         build_report(
             scope.into_report(),
             db_receipt,
@@ -312,32 +320,6 @@ impl LintRunner {
         results.extend(super::serving::run(context, config.serving).await);
         Ok((results, page_elapsed))
     }
-}
-
-async fn validate_scope(
-    snapshot: &super::snapshot::LintReadSnapshot<'_>,
-    query: &LintQuery,
-) -> Result<AppliedScope, LintRunError> {
-    let Some(requested) = query.space.as_deref() else {
-        return Ok(AppliedScope::global());
-    };
-    if requested == "uncategorized" {
-        return Ok(AppliedScope::uncategorized());
-    }
-    let mut rows = snapshot
-        .query(
-            "SELECT (SELECT COUNT(*) FROM spaces prior WHERE prior.name < current.name) FROM spaces current WHERE current.name = ?1 LIMIT 1",
-            libsql::params::Params::Positional(vec![libsql::Value::Text(requested.to_string())]),
-        )
-        .await?;
-    let Some(row) = rows.next().await? else {
-        return Err(LintRunError::InvalidScope);
-    };
-    let ordinal = row.get::<i64>(0).map_err(SnapshotError::from)?;
-    let position = usize::try_from(ordinal).map_err(|_| LintRunError::InvalidScope)?;
-    let opaque = wenlan_types::lint::LintOpaqueId::from_sorted_position(position)
-        .ok_or(LintRunError::InvalidScope)?;
-    Ok(AppliedScope::registered(opaque, requested.to_string()))
 }
 
 #[cfg(test)]

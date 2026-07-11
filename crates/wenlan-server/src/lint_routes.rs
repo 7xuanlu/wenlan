@@ -4,6 +4,7 @@ use crate::runtime_observation::RuntimeObservationInput;
 use crate::state::SharedState;
 use axum::extract::{Query, State};
 use axum::Json;
+use std::sync::Arc;
 use wenlan_core::lint::context::{CancellationToken, LintClock};
 use wenlan_core::lint::runner::{LintRunError, LintRunner};
 use wenlan_types::lint::{LintQuery, LintReport};
@@ -16,17 +17,19 @@ async fn handle_lint(
     State(state): State<SharedState>,
     Query(query): Query<LintQuery>,
 ) -> Result<Json<LintReport>, ServerError> {
-    let (db, config, runtime) = {
+    let (db, config, runtime, lint_observer) = {
         let state = state.read().await;
         let db = state.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (
             db,
             state.lint_config.clone(),
             RuntimeObservationInput::capture(&state),
+            Arc::clone(&state.lint_observer),
         )
     };
     let observation = runtime.observe().await;
     let runner = LintRunner::new(LintClock::capture(), CancellationToken::new())
+        .with_observer(lint_observer)
         .with_sources(config.sources())
         .with_runtime_observation(observation);
     let report = runner

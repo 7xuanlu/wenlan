@@ -3,6 +3,7 @@ pub mod context;
 pub mod identity;
 pub mod kg;
 pub mod memories;
+pub mod observation;
 pub mod operations;
 pub mod pages;
 mod run_config;

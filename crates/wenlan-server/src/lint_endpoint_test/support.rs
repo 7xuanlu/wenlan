@@ -2,10 +2,11 @@ use axum::body::Body;
 use axum::http::{Method, Request};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::{EventEmitter, NoopEmitter};
+use wenlan_core::lint::observation::{LintRunEvent, LintRunObserver};
 use wenlan_types::sources::Source;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +19,23 @@ pub(super) struct Fingerprint {
 pub(super) struct Fixture {
     pub(super) app: crate::router::AppRouter,
     pub(super) db: Arc<MemoryDB>,
+    pub(super) lint_events: LintEventSpy,
     pub(super) root: tempfile::TempDir,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct LintEventSpy(Arc<Mutex<Vec<LintRunEvent>>>);
+
+impl LintEventSpy {
+    pub(super) fn events(&self) -> Vec<LintRunEvent> {
+        self.0.lock().expect("lint event spy").clone()
+    }
+}
+
+impl LintRunObserver for LintEventSpy {
+    fn observe(&self, event: LintRunEvent) {
+        self.0.lock().expect("lint event spy").push(event);
+    }
 }
 
 impl Fixture {
@@ -26,13 +43,20 @@ impl Fixture {
         let root = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn EventEmitter> = Arc::new(NoopEmitter);
         let db = Arc::new(MemoryDB::new(root.path(), emitter).await.expect("database"));
+        let lint_events = LintEventSpy::default();
         let state = crate::state::ServerState {
             db: Some(Arc::clone(&db)),
             lint_config: crate::state::LintServerConfig::new(sources, page_root),
+            lint_observer: Arc::new(lint_events.clone()),
             ..Default::default()
         };
         let app = crate::router::build_router(Arc::new(RwLock::new(state)));
-        Self { app, db, root }
+        Self {
+            app,
+            db,
+            lint_events,
+            root,
+        }
     }
 
     pub(super) async fn fingerprint(&self) -> Fingerprint {

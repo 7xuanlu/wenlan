@@ -1,6 +1,14 @@
 use super::LintRunner;
 
 impl LintRunner {
+    pub fn with_observer(
+        mut self,
+        observer: std::sync::Arc<dyn crate::lint::observation::LintRunObserver>,
+    ) -> Self {
+        self.observer = observer;
+        self
+    }
+
     pub fn with_sources(mut self, sources: &[wenlan_types::sources::Source]) -> Self {
         self.operations_config =
             crate::lint::operations::OperationsRunConfig::from_sources(sources);

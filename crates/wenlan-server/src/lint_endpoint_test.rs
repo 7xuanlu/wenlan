@@ -2,6 +2,7 @@ use axum::body::to_bytes;
 use axum::http::{Method, StatusCode};
 use std::path::PathBuf;
 use tower::ServiceExt;
+use wenlan_core::lint::observation::LintRunEvent;
 use wenlan_types::lint::{LintOutcome, LintReport, LintScopeKind};
 use wenlan_types::sources::{Source, SourceType, SyncStatus};
 
@@ -129,6 +130,14 @@ async fn lint_unknown_scope_fails_closed_before_later_stages() {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&body).expect("typed error"),
         serde_json::json!({"error": "invalid_scope"})
+    );
+    assert_eq!(
+        fixture.lint_events.events(),
+        vec![
+            LintRunEvent::ScopeValidation,
+            LintRunEvent::TransactionQuery,
+        ],
+        "scope validation must own the first transaction query and stop all later stages"
     );
 }
 
