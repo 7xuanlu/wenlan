@@ -214,3 +214,7 @@ mod integration_tests;
 #[cfg(test)]
 #[path = "memories_review_regression_test.rs"]
 mod review_regression_tests;
+
+#[cfg(test)]
+#[path = "memories_lifecycle_regression_test.rs"]
+mod lifecycle_regression_tests;

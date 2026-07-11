@@ -41,6 +41,23 @@ fn derived_receipt_sweep_due(last: Instant, now: Instant) -> bool {
     now.duration_since(last) >= DERIVED_RECEIPT_SWEEP_INTERVAL
 }
 
+async fn run_derived_receipt_sweep_if_due<F, Fut, E>(
+    last: &mut Instant,
+    now: Instant,
+    sweep: F,
+) -> Result<bool, E>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    if !derived_receipt_sweep_due(*last, now) {
+        return Ok(false);
+    }
+    let result = sweep().await;
+    *last = now;
+    result.map(|()| true)
+}
+
 /// Lightweight write-event tracker shared between store handlers and the scheduler.
 ///
 /// `handle_store_memory` calls `record()` after each successful store.
@@ -407,11 +424,13 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 last_backstop = now;
             }
 
-            if derived_receipt_sweep_due(last_derived_receipt_sweep, now) {
-                if let Err(error) = db.record_derived_artifact_sweep().await {
-                    tracing::warn!("[scheduler] derived receipt sweep error: {error}");
-                }
-                last_derived_receipt_sweep = now;
+            if let Err(error) =
+                run_derived_receipt_sweep_if_due(&mut last_derived_receipt_sweep, now, || {
+                    db.record_derived_artifact_sweep()
+                })
+                .await
+            {
+                tracing::warn!("[scheduler] derived receipt sweep error: {error}");
             }
 
             // --- 5. Enrichment sweep: back-fill entity linkage for memories
@@ -753,21 +772,44 @@ mod tests {
         assert_eq!(adaptive_gap(&[]), BURST_GAP_CEILING);
     }
 
-    #[test]
-    fn derived_receipt_sweep_fires_initially_then_every_thirty_minutes() {
-        let now = Instant::now();
-        let initial = initial_derived_receipt_sweep_at(now);
-        assert!(derived_receipt_sweep_due(initial, now));
+    #[tokio::test]
+    async fn derived_receipt_sweep_dispatches_initially_then_every_thirty_minutes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let last = now;
-        assert!(!derived_receipt_sweep_due(
-            last,
-            now + DERIVED_RECEIPT_SWEEP_INTERVAL - Duration::from_secs(1)
-        ));
-        assert!(derived_receipt_sweep_due(
-            last,
-            now + DERIVED_RECEIPT_SWEEP_INTERVAL
-        ));
+        let now = Instant::now();
+        let mut last = initial_derived_receipt_sweep_at(now);
+        let calls = AtomicUsize::new(0);
+        assert!(run_derived_receipt_sweep_if_due(&mut last, now, || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok::<(), ()>(())
+        })
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert!(!run_derived_receipt_sweep_if_due(
+            &mut last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL - Duration::from_secs(1),
+            || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), ()>(())
+            },
+        )
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert!(run_derived_receipt_sweep_if_due(
+            &mut last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL,
+            || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), ()>(())
+            },
+        )
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]

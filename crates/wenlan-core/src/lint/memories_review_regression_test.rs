@@ -65,30 +65,6 @@ async fn source_text_controls_episode_eligibility_in_sweep_and_runner() {
 }
 
 #[tokio::test]
-async fn mixed_chunk_lifecycle_metadata_is_a_structural_finding() {
-    let (db, _tmp) = test_db().await;
-    let conn = db.conn.lock().await;
-    conn.execute(
-        "INSERT INTO memories (
-            id, content, source, source_id, title, chunk_index, last_modified,
-            chunk_type, stability, supersede_mode, pending_revision, is_recap,
-            needs_reembed, memory_type, word_count
-         ) VALUES
-            ('mixed-0', 'first', 'memory', 'mixed-lifecycle', 'mixed', 0, 1,
-             'text', 'new', 'hide', 0, 0, 1, 'fact', 1),
-            ('mixed-1', 'second', 'memory', 'mixed-lifecycle', 'mixed', 1, 1,
-             'text', 'confirmed', 'archive', 1, 1, 1, 'fact', 1)",
-        (),
-    )
-    .await
-    .unwrap();
-    drop(conn);
-
-    let report = run_at(&db, 1_000_000, TestMemoryFeatures::default()).await;
-    assert_eq!(outcome(&report, LIFECYCLE_ID), LintOutcome::Finding);
-}
-
-#[tokio::test]
 async fn archive_predecessor_stays_head_while_evicted_memory_is_excluded() {
     let (db, _tmp) = test_db().await;
     let conn = db.conn.lock().await;
