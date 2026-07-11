@@ -13,6 +13,7 @@ use wenlan_types::sources::Source;
 pub(super) struct Fingerprint {
     database: [u8; 32],
     pages: [u8; 32],
+    projection_active: bool,
     projection_generation: u64,
 }
 
@@ -40,13 +41,22 @@ impl LintRunObserver for LintEventSpy {
 
 impl Fixture {
     pub(super) async fn new(sources: Vec<Source>, page_root: Option<PathBuf>) -> Self {
+        Self::new_at(sources, page_root, None).await
+    }
+
+    pub(super) async fn new_at(
+        sources: Vec<Source>,
+        page_root: Option<PathBuf>,
+        clock_epoch_seconds: Option<i64>,
+    ) -> Self {
         let root = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn EventEmitter> = Arc::new(NoopEmitter);
         let db = Arc::new(MemoryDB::new(root.path(), emitter).await.expect("database"));
         let lint_events = LintEventSpy::default();
         let state = crate::state::ServerState {
             db: Some(Arc::clone(&db)),
-            lint_config: crate::state::LintServerConfig::new(sources, page_root),
+            lint_config: crate::state::LintServerConfig::new(sources, page_root)
+                .with_clock_epoch_seconds(clock_epoch_seconds),
             lint_observer: Arc::new(lint_events.clone()),
             ..Default::default()
         };
@@ -60,10 +70,13 @@ impl Fixture {
     }
 
     pub(super) async fn fingerprint(&self) -> Fingerprint {
+        let projection = self.db.page_projection_tracker().sample();
+        assert!(!projection.has_active_writes());
         Fingerprint {
             database: database_fingerprint(&self.db).await,
             pages: tree_fingerprint(self.root.path()),
-            projection_generation: self.db.page_projection_tracker().sample().generation(),
+            projection_active: projection.has_active_writes(),
+            projection_generation: projection.generation(),
         }
     }
 }

@@ -22,17 +22,38 @@ use wenlan_types::sources::Source;
 pub struct LintServerConfig {
     sources: Vec<Source>,
     page_root: Option<PathBuf>,
+    clock_epoch_seconds: Option<i64>,
 }
 
 impl LintServerConfig {
     pub(crate) const fn new(sources: Vec<Source>, page_root: Option<PathBuf>) -> Self {
-        Self { sources, page_root }
+        Self {
+            sources,
+            page_root,
+            clock_epoch_seconds: None,
+        }
     }
 
     fn capture() -> Self {
         let config = wenlan_core::config::load_config();
         let page_root = config.knowledge_path_or_default();
-        Self::new(config.sources, Some(page_root))
+        Self::new(config.sources, Some(page_root)).with_clock_epoch_seconds(
+            std::env::var("WENLAN_TEST_LINT_EPOCH")
+                .ok()
+                .and_then(|value| value.parse().ok()),
+        )
+    }
+
+    pub(crate) const fn with_clock_epoch_seconds(mut self, value: Option<i64>) -> Self {
+        self.clock_epoch_seconds = value;
+        self
+    }
+
+    pub(crate) fn clock(&self) -> wenlan_core::lint::context::LintClock {
+        self.clock_epoch_seconds.map_or_else(
+            wenlan_core::lint::context::LintClock::capture,
+            wenlan_core::lint::context::LintClock::fixed_at,
+        )
     }
 
     pub(crate) fn sources(&self) -> &[Source] {

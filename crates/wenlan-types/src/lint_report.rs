@@ -161,3 +161,20 @@ pub struct LintQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LintErrorResponse {
+    error: String,
+}
+
+impl LintErrorResponse {
+    pub fn new(error: impl Into<String>) -> Self {
+        Self {
+            error: error.into(),
+        }
+    }
+
+    pub fn error(&self) -> &str {
+        &self.error
+    }
+}

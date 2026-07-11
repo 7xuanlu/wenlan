@@ -174,6 +174,8 @@ async fn full_page_group_does_not_mutate_database_or_projection_tree() {
     let db_before = DbBytesFingerprint::capture(db_root.path()).unwrap();
     let semantic_before = semantic_fingerprint(&db).await;
     let page_before = PageBytesFingerprint::capture(page_root.path()).unwrap();
+    let projection_before = db.page_projection_tracker().sample();
+    assert!(!projection_before.has_active_writes());
 
     for _ in 0..2 {
         LintRunner::new(LintClock::fixed(), CancellationToken::new())
@@ -196,6 +198,12 @@ async fn full_page_group_does_not_mutate_database_or_projection_tree() {
         PageBytesFingerprint::capture(page_root.path()).unwrap()
     );
     assert_eq!(semantic_before, semantic_fingerprint(&db).await);
+    let projection_after = db.page_projection_tracker().sample();
+    assert!(!projection_after.has_active_writes());
+    assert_eq!(
+        projection_after.generation(),
+        projection_before.generation()
+    );
 }
 
 #[tokio::test]

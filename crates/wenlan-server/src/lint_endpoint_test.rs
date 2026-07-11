@@ -3,7 +3,9 @@ use axum::http::{Method, StatusCode};
 use std::path::PathBuf;
 use tower::ServiceExt;
 use wenlan_core::lint::observation::LintRunEvent;
-use wenlan_types::lint::{LintOutcome, LintReport, LintScopeKind};
+use wenlan_types::lint::{
+    LintErrorResponse, LintMetricCode, LintMetricValue, LintOutcome, LintReport, LintScopeKind,
+};
 use wenlan_types::sources::{Source, SourceType, SyncStatus};
 
 #[path = "lint_endpoint_test/support.rs"]
@@ -127,10 +129,8 @@ async fn lint_unknown_scope_fails_closed_before_later_stages() {
         .expect("invalid scope body");
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&body).expect("typed error"),
-        serde_json::json!({"error": "invalid_scope"})
-    );
+    let error = serde_json::from_slice::<LintErrorResponse>(&body).expect("typed error");
+    assert_eq!(error, LintErrorResponse::new("invalid_scope"));
     assert_eq!(
         fixture.lint_events.events(),
         vec![
@@ -171,4 +171,40 @@ async fn lint_endpoint_does_not_mutate_database_or_page_tree() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fixture.fingerprint().await, before);
+}
+
+#[tokio::test]
+async fn lint_endpoint_uses_configured_process_clock_for_age_buckets() {
+    let source = Source {
+        id: "clock-source".to_string(),
+        source_type: SourceType::Directory,
+        path: PathBuf::from("clock-source"),
+        status: SyncStatus::Active,
+        last_sync: None,
+        file_count: 1,
+        memory_count: 0,
+        last_sync_errors: 0,
+        last_sync_error_detail: None,
+    };
+    let fixture = Fixture::new_at(vec![source], None, Some(1_900_000_000)).await;
+    fixture
+        .db
+        .upsert_sync_state("clock-source", "fixture.md", 1, "fixture-hash")
+        .await
+        .expect("sync state");
+
+    let (status, _, report) = report(&fixture, "/api/lint").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let source_check = report
+        .expect("typed report")
+        .checks()
+        .iter()
+        .find(|check| check.check_id() == "operations.source_configuration")
+        .expect("source check")
+        .clone();
+    assert!(source_check.metrics().iter().any(|metric| {
+        metric.code() == LintMetricCode::OperationAgeSevenDaysOrMore
+            && metric.value() == &LintMetricValue::Count { value: 1 }
+    }));
 }

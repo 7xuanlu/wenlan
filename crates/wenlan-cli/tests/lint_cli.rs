@@ -5,7 +5,7 @@ use wenlan_types::lint::LintOutcome;
 
 #[path = "lint_cli/support.rs"]
 mod support;
-use support::{closed_host, report, spawn_report, spawn_value};
+use support::{closed_host, report, spawn_error, spawn_oversized, spawn_report, spawn_value};
 
 fn cli() -> Command {
     Command::cargo_bin("wenlan").expect("wenlan binary built")
@@ -152,6 +152,34 @@ fn lint_transport_and_schema_failures_exit_two_on_stderr_only() {
         .code(2)
         .stdout("")
         .stderr(predicates::str::contains("unsupported_lint_report_schema"));
+}
+
+#[test]
+fn lint_invalid_scope_preserves_typed_daemon_diagnostic() {
+    let (base, _) = spawn_error(422, &json!({"error": "invalid_scope"}));
+
+    cli()
+        .env("WENLAN_HOST", base)
+        .args(["--format", "json", "lint", "--space", "missing"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("wenlan lint: invalid_scope\n");
+}
+
+#[test]
+fn lint_rejects_oversized_daemon_response() {
+    let (base, _) = spawn_oversized();
+
+    cli()
+        .env("WENLAN_HOST", base)
+        .args(["--format", "json", "lint"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicates::str::contains(
+            "lint response exceeds 8388608 bytes",
+        ));
 }
 
 #[test]

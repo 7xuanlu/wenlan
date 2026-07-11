@@ -54,7 +54,6 @@ impl LintClock {
         Self::fixed_at(0)
     }
 
-    #[cfg(test)]
     pub fn fixed_at(epoch_seconds: i64) -> Self {
         Self {
             started: Instant::now(),

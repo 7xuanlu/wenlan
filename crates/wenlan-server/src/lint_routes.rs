@@ -5,7 +5,7 @@ use crate::state::SharedState;
 use axum::extract::{Query, State};
 use axum::Json;
 use std::sync::Arc;
-use wenlan_core::lint::context::{CancellationToken, LintClock};
+use wenlan_core::lint::context::CancellationToken;
 use wenlan_core::lint::runner::{LintRunError, LintRunner};
 use wenlan_types::lint::{LintQuery, LintReport};
 
@@ -28,7 +28,7 @@ async fn handle_lint(
         )
     };
     let observation = runtime.observe().await;
-    let runner = LintRunner::new(LintClock::capture(), CancellationToken::new())
+    let runner = LintRunner::new(config.clock(), CancellationToken::new())
         .with_observer(lint_observer)
         .with_sources(config.sources())
         .with_runtime_observation(observation);

@@ -102,7 +102,23 @@ pub fn spawn_value(value: &Value) -> (String, Receiver<String>) {
     spawn_body(&value.to_string())
 }
 
+pub fn spawn_error(status: u16, value: &Value) -> (String, Receiver<String>) {
+    spawn_status_body(status, &value.to_string())
+}
+
+pub fn spawn_oversized() -> (String, Receiver<String>) {
+    spawn_response(200, "", 8 * 1024 * 1024 + 1)
+}
+
 fn spawn_body(body: &str) -> (String, Receiver<String>) {
+    spawn_status_body(200, body)
+}
+
+fn spawn_status_body(status: u16, body: &str) -> (String, Receiver<String>) {
+    spawn_response(status, body, body.len())
+}
+
+fn spawn_response(status: u16, body: &str, content_length: usize) -> (String, Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture");
     let base = format!("http://{}", listener.local_addr().expect("fixture address"));
     let response_body = body.to_string();
@@ -121,8 +137,8 @@ fn spawn_body(body: &str) -> (String, Receiver<String>) {
             }
         }
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            response_body.len(), response_body
+            "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            content_length, response_body,
         );
         reader
             .get_mut()

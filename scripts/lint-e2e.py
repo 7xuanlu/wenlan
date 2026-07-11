@@ -12,6 +12,12 @@ from typing import Any
 
 VOLATILE_KEYS = {"duration_ms", "observed_at"}
 VOLATILE_FILE_SUFFIXES = ("-shm",)
+INCOMPLETE_OUTCOMES = {
+    "not_run_prerequisite",
+    "inconsistent_snapshot",
+    "failed_to_run",
+}
+MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
 def normalize(value: Any) -> Any:
@@ -31,8 +37,12 @@ def load(path: str) -> Any:
 
 
 def compare(left: str, right: str) -> None:
-    left_value = normalize(load(left))
-    right_value = normalize(load(right))
+    left_report = load(left)
+    right_report = load(right)
+    validate_report(left_report)
+    validate_report(right_report)
+    left_value = normalize(left_report)
+    right_value = normalize(right_report)
     if left_value != right_value:
         raise SystemExit("normalized HTTP and CLI reports differ")
 
@@ -69,8 +79,40 @@ def fingerprint(paths: list[str]) -> str:
     return hasher.hexdigest()
 
 
+def validate_report(report: Any) -> None:
+    checks = report.get("checks")
+    if not isinstance(checks, list):
+        raise SystemExit("report checks must be an array")
+    ids = [check.get("check_id") for check in checks]
+    if any(not isinstance(check_id, str) for check_id in ids):
+        raise SystemExit("every check must have a string check_id")
+    if len(ids) != len(set(ids)) or ids != sorted(ids):
+        raise SystemExit("check IDs must be unique and deterministically ordered")
+    outcomes = [check.get("outcome") for check in checks]
+    allowed = {"pass", "finding", *INCOMPLETE_OUTCOMES}
+    if any(outcome not in allowed for outcome in outcomes):
+        raise SystemExit("report contains an unknown outcome")
+    if any(
+        check.get("severity") != "info"
+        for check in checks
+        if check.get("outcome") == "pass"
+    ):
+        raise SystemExit("pass outcomes must remain informational")
+    expected = {
+        "checks": len(checks),
+        "passed": outcomes.count("pass"),
+        "findings": outcomes.count("finding"),
+        "incomplete": sum(outcome in INCOMPLETE_OUTCOMES for outcome in outcomes),
+    }
+    if report.get("totals") != expected:
+        raise SystemExit(f"report totals do not match outcomes: {expected}")
+    if report.get("complete") is not (expected["incomplete"] == 0):
+        raise SystemExit("report completeness does not match outcomes")
+
+
 def assert_report(args: argparse.Namespace) -> None:
     report = load(args.path)
+    validate_report(report)
     expected_complete = args.complete == "true"
     if report.get("complete") is not expected_complete:
         raise SystemExit(f"unexpected complete value in {args.path}")
@@ -80,9 +122,11 @@ def assert_report(args: argparse.Namespace) -> None:
     expected_producer = None if args.producer == "null" else args.producer
     if producer != expected_producer:
         raise SystemExit(f"unexpected producer receipt in {args.path}: {producer!r}")
-    outcomes = {check["check_id"]: check["outcome"] for check in report["checks"]}
-    if args.finding and outcomes.get(args.finding) != "finding":
-        raise SystemExit(f"missing expected finding {args.finding}")
+    findings = sorted(
+        check["check_id"] for check in report["checks"] if check["outcome"] == "finding"
+    )
+    if findings != sorted(args.finding):
+        raise SystemExit(f"unexpected finding set in {args.path}: {findings}")
     if args.incomplete and report.get("totals", {}).get("incomplete", 0) < 1:
         raise SystemExit("expected an incomplete report")
 
@@ -93,6 +137,16 @@ def assert_private(paths: list[str], canaries: list[str]) -> None:
         for canary in canaries:
             if canary.encode() in data:
                 raise SystemExit(f"privacy canary leaked in {path}: {canary}")
+
+
+def assert_error(http_path: str, cli_stderr_path: str) -> None:
+    envelope = load(http_path)
+    error = envelope.get("error") if isinstance(envelope, dict) else None
+    if not isinstance(error, str):
+        raise SystemExit("HTTP error envelope is not typed")
+    stderr = Path(cli_stderr_path).read_text(encoding="utf-8")
+    if stderr != f"wenlan lint: {error}\n":
+        raise SystemExit("CLI diagnostic does not match HTTP error envelope")
 
 
 def clean_fixture(source: str, destination: str) -> None:
@@ -110,6 +164,7 @@ def clean_fixture(source: str, destination: str) -> None:
     report["totals"]["passed"] += 1
     report["totals"]["findings"] = 0
     report["complete"] = True
+    validate_report(report)
     with open(destination, "w", encoding="utf-8") as handle:
         json.dump(report, handle, separators=(",", ":"), sort_keys=True)
 
@@ -137,12 +192,15 @@ def precedence_fixture(finding_source: str, incomplete_source: str, destination:
         report["totals"]["incomplete"] -= 1
     report["totals"]["findings"] += 1
     report["checks"][report["checks"].index(target)] = findings[0]
+    validate_report(report)
     with open(destination, "w", encoding="utf-8") as handle:
         json.dump(report, handle, separators=(",", ":"), sort_keys=True)
 
 
 def serve_once(fixture: str, port_file: str) -> None:
     body = Path(fixture).read_bytes()
+    if len(body) > MAX_BODY_BYTES:
+        raise SystemExit("fixture exceeds response-size bound")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -178,11 +236,14 @@ def parser() -> argparse.ArgumentParser:
         "--scope", choices=["global", "registered", "uncategorized"], required=True
     )
     report_cmd.add_argument("--producer", required=True)
-    report_cmd.add_argument("--finding")
+    report_cmd.add_argument("--finding", action="append", default=[])
     report_cmd.add_argument("--incomplete", action="store_true")
     private_cmd = commands.add_parser("assert-private")
     private_cmd.add_argument("--canary", action="append", required=True)
     private_cmd.add_argument("paths", nargs="+")
+    error_cmd = commands.add_parser("assert-error")
+    error_cmd.add_argument("http_path")
+    error_cmd.add_argument("cli_stderr_path")
     clean_cmd = commands.add_parser("clean-fixture")
     clean_cmd.add_argument("source")
     clean_cmd.add_argument("destination")
@@ -206,6 +267,8 @@ def main() -> None:
         assert_report(args)
     elif args.command == "assert-private":
         assert_private(args.paths, args.canary)
+    elif args.command == "assert-error":
+        assert_error(args.http_path, args.cli_stderr_path)
     elif args.command == "clean-fixture":
         clean_fixture(args.source, args.destination)
     elif args.command == "precedence-fixture":
