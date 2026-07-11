@@ -53,6 +53,7 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
+              - 'scripts/lint-scale-gate.sh'
               # Release PRs must run the drift guard: 0.10.1 merged with
               # version drift precisely because these two files don't match
               # any glob above, so the rust tests (incl. drift_guard) skipped
@@ -92,6 +93,8 @@ jobs:
               - 'crates/wenlan-server/src/main.rs'
               - 'crates/wenlan-mcp/npm/install.js'
               - 'scripts/smoke-windows.ps1'
+              - 'scripts/lint-scale-gate.sh'
+              - 'crates/wenlan-core/src/lint/**'
               - 'install.sh'
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -220,6 +223,47 @@ jobs:
         # nextest spawns one process per test by default — sidesteps the
         # ONNX atexit FFI race that required --test-threads=1 with cargo test.
         run: cargo nextest run --workspace --lib --test-threads=1
+      - name: Page lint scale gate (Linux time + RSS)
+        if: matrix.os == 'ubuntu-24.04'
+        run: bash scripts/lint-scale-gate.sh "$RUNNER_TEMP/task-19-memory-lint-debugger-linux.txt"
+      - name: Page lint scale gate (Windows functional)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          # Functional portability only; the Linux leg owns time and RSS thresholds.
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "lint-scale-fixture"
+          $receipt = Join-Path $env:RUNNER_TEMP "task-19-memory-lint-debugger-windows.txt"
+          $env:WENLAN_LINT_SCALE_FIXTURE = $fixture
+          $setup = "lint::pages::diagnostic_scale_test::generate_diagnostic_scale_fixture"
+          $gate = "lint::pages::diagnostic_scale_test::production_page_group_scale_gate"
+          $head = git rev-parse HEAD
+          @(
+            "task=19 diagnostic scale and portability gate",
+            "cwd=$PWD",
+            "head=$head",
+            "platform=Windows",
+            "fixture_command=cargo test -p wenlan-core --lib $setup -- --ignored --exact --nocapture",
+            "functional_command=cargo test -p wenlan-core --lib $gate -- --ignored --exact --nocapture",
+            "model_embedder=not constructed or loaded"
+          ) | Set-Content -Path $receipt
+          cargo test -p wenlan-core --lib $setup -- --ignored --exact --nocapture 2>&1 |
+            Tee-Object -FilePath $receipt -Append
+          $setupCode = $LASTEXITCODE
+          if ($setupCode -ne 0) { throw "scale fixture generation failed" }
+          cargo test -p wenlan-core --lib $gate -- --ignored --exact --nocapture 2>&1 |
+            Tee-Object -FilePath $receipt -Append
+          $gateCode = $LASTEXITCODE
+          "exit_code=$gateCode" | Add-Content -Path $receipt
+          if ($gateCode -ne 0) { throw "Windows functional scale gate failed" }
+      - name: Upload Page lint scale receipt
+        if: always() && (matrix.os == 'ubuntu-24.04' || matrix.os == 'windows-2022')
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-19-lint-scale-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/task-19-memory-lint-debugger-*.txt
+          retention-days: 30
+          if-no-files-found: error
       # Integration tests for wenlan-cli + wenlan-server. We deliberately do
       # NOT use `--workspace --tests` because that pulls in wenlan-core's
       # `eval_harness.rs` which requires `ANTHROPIC_API_KEY` (not in CI).

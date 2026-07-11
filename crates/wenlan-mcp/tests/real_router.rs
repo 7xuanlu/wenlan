@@ -45,7 +45,9 @@ async fn boot_test_server() -> (String, Arc<MemoryDB>) {
     let addr: SocketAddr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
+        axum::serve(listener, router.into_make_service())
+            .await
+            .unwrap();
     });
 
     // Keep the tempdir alive for the process lifetime via intentional forget.

@@ -10,6 +10,8 @@ mod traversal;
 pub mod fs;
 
 #[cfg(test)]
+mod diagnostic_scale_test;
+#[cfg(test)]
 mod integration_tests;
 
 use super::catalog::{catalog_group, LintCheckGroup, ScopePolicy};
