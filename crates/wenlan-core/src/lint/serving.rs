@@ -85,12 +85,7 @@ pub(crate) async fn run(
 ) -> Vec<LintCheckResult> {
     let counts = match query::load(context).await {
         Ok(counts) => counts,
-        Err(()) => {
-            return super::runner::failed_results_for_group(
-                context.clock(),
-                LintCheckGroup::Serving,
-            )
-        }
+        Err(()) => return failed_results(context),
     };
     let bypasses = u64::try_from(routes::scope_contract_violations().count()).unwrap_or(u64::MAX);
     let mut results = vec![result::fixed(
@@ -116,12 +111,7 @@ pub(crate) async fn run(
     let fact_probe = if config.fact {
         match fact_probe::run(context, config.fact_limit).await {
             Ok(probe) => probe,
-            Err(()) => {
-                return super::runner::failed_results_for_group(
-                    context.clock(),
-                    LintCheckGroup::Serving,
-                )
-            }
+            Err(()) => return failed_results(context),
         }
     } else {
         fact_probe::FactProbe::default()
@@ -129,12 +119,7 @@ pub(crate) async fn run(
     results.push(result::fact_probe(context, fact_probe));
     let telemetry = match query::load_telemetry(context).await {
         Ok(telemetry) => telemetry,
-        Err(()) => {
-            return super::runner::failed_results_for_group(
-                context.clock(),
-                LintCheckGroup::Serving,
-            )
-        }
+        Err(()) => return failed_results(context),
     };
     results.push(result::inventory(
         context,
@@ -169,6 +154,20 @@ pub(crate) async fn run(
         ],
     ));
     results
+}
+
+fn failed_results(context: &LintContext<'_, '_>) -> Vec<LintCheckResult> {
+    let selected = context.scope().filter().is_selected();
+    for entry in crate::lint::catalog::catalog_group(LintCheckGroup::Serving) {
+        let basis =
+            if selected && entry.scope_policy == crate::lint::catalog::ScopePolicy::ScopedRows {
+                crate::lint::context::PopulationBasis::SelectedScope
+            } else {
+                crate::lint::context::PopulationBasis::Global
+            };
+        let _ = context.record_population(entry.id, basis, 0);
+    }
+    super::runner::failed_results_for_group(context.clock(), LintCheckGroup::Serving)
 }
 
 #[cfg(test)]

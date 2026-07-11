@@ -1,5 +1,6 @@
 mod query;
 mod result;
+mod session;
 
 use crate::lint::catalog::{catalog_group, LintCheckGroup, ScopePolicy};
 use crate::lint::context::{LintContext, PopulationBasis};

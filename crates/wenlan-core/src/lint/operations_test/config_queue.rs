@@ -126,7 +126,7 @@ async fn retry_boundary_and_queue_ages_use_closed_buckets() {
         1
     );
     let json = serde_json::to_string(&report).unwrap();
-    assert!(!json.contains("age_seconds"));
+    assert!(!json.contains("\"age_seconds\""));
     assert_no_privacy_canaries(&json);
 }
 

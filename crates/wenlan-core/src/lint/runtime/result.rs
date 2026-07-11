@@ -14,6 +14,11 @@ pub(super) struct Assessment {
     metrics: Vec<LintMetric>,
 }
 
+pub(super) enum PendingAssessment {
+    Ready(Assessment),
+    Failed(&'static str),
+}
+
 impl Assessment {
     pub(super) const fn new(id: &'static str, population: u64, affected: u64) -> Self {
         Self {
@@ -42,6 +47,16 @@ pub(super) enum BuildError {
     Contract(#[from] LintContractError),
     #[error(transparent)]
     Population(#[from] PopulationLedgerError),
+}
+
+pub(super) fn finish_pending(
+    context: &LintContext<'_, '_>,
+    pending: PendingAssessment,
+) -> Result<LintCheckResult, BuildError> {
+    match pending {
+        PendingAssessment::Ready(assessment) => finish(context, assessment),
+        PendingAssessment::Failed(id) => failed(context, id),
+    }
 }
 
 pub(super) fn finish(
@@ -100,4 +115,29 @@ pub(super) fn finish(
 
 fn metric(code: LintMetricCode, value: u64) -> LintMetric {
     LintMetric::new(code, LintMetricValue::Count { value })
+}
+
+fn failed(context: &LintContext<'_, '_>, id: &'static str) -> Result<LintCheckResult, BuildError> {
+    let result = LintCheckResult::try_new(LintCheckResultInput {
+        check_id: id.to_string(),
+        outcome: LintOutcome::FailedToRun,
+        severity: LintSeverity::Error,
+        applicability: LintApplicability::Applicable,
+        precondition: LintPrecondition::Ready,
+        coverage: LintCoverage::new(
+            LintValidationMethod::FullEnumeration,
+            0,
+            0,
+            LINT_MAX_EVIDENCE_PER_CHECK,
+            false,
+            0,
+        )?,
+        metrics: Vec::new(),
+        summary_code: LintSummaryCode::ExecutionFailed,
+        recommendation_code: Some(LintRecommendationCode::InspectRuntime),
+        evidence: Vec::new(),
+        duration_ms: context.clock().duration_ms(),
+    })?;
+    context.record_population(id, PopulationBasis::Global, 0)?;
+    Ok(result)
 }

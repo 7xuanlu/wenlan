@@ -89,7 +89,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<IdentitySnapsh
     let (scope, params) = memory_scope(context.scope().filter());
     let memory = row_check(context, &MEMORY_SQL.replace("{scope}", &scope), params).await?;
     let tags = row_check(context, TAG_SQL, libsql::params::Params::None).await?;
-    let sessions = row_check(context, SESSION_SQL, libsql::params::Params::None).await?;
+    let sessions = row_check(context, super::session::SQL, libsql::params::Params::None).await?;
     let caches = row_check(context, CACHE_SQL, libsql::params::Params::None).await?;
     let inventory = inventory(context, context.scope().filter()).await?;
     Ok(IdentitySnapshot {
@@ -125,14 +125,6 @@ SELECT CASE WHEN TRIM(t.tag)='' OR t.source NOT IN ('memory','page')
  OR (t.source='memory' AND NOT EXISTS(SELECT 1 FROM memories m WHERE m.source_id=t.source_id))
  OR (t.source='page' AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.id=t.source_id))
  THEN 1 ELSE 0 END FROM document_tags t ORDER BY t.source,t.source_id,t.tag";
-
-const SESSION_SQL: &str = "
-SELECT invalid FROM (
- SELECT 'activity:'||id AS key, CASE WHEN ended_at<started_at THEN 1 ELSE 0 END AS invalid FROM activities
- UNION ALL SELECT 'capture:'||c.source_id, CASE WHEN a.id IS NULL OR (c.snapshot_id IS NOT NULL AND s.id IS NULL) OR c.timestamp<0 THEN 1 ELSE 0 END FROM capture_refs c LEFT JOIN activities a ON a.id=c.activity_id LEFT JOIN session_snapshots s ON s.id=c.snapshot_id
- UNION ALL SELECT 'snapshot:'||s.id, CASE WHEN a.id IS NULL OR s.ended_at<s.started_at OR s.capture_count<0 OR s.capture_count!=(SELECT COUNT(*) FROM capture_refs c WHERE c.snapshot_id=s.id) THEN 1 ELSE 0 END FROM session_snapshots s LEFT JOIN activities a ON a.id=s.activity_id
- UNION ALL SELECT 'event:'||printf('%020d',id), CASE WHEN timestamp<0 OR TRIM(agent_name)='' OR TRIM(action)='' THEN 1 ELSE 0 END FROM agent_activity
-) ORDER BY key";
 
 const CACHE_SQL: &str = "
 SELECT invalid FROM (

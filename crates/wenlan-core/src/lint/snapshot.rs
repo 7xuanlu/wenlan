@@ -239,7 +239,7 @@ where
         digest_bytes(&mut digest, object_type.as_bytes())?;
         digest_bytes(&mut digest, name.as_bytes())?;
         digest_bytes(&mut digest, sql.as_bytes())?;
-        if object_type == "table" {
+        if object_type == "table" && !sql.to_ascii_lowercase().starts_with("create virtual table") {
             tables.push(name);
         }
     }

@@ -1,5 +1,8 @@
 use super::config::{RuntimeConfigSnapshot, RuntimeRunConfig};
-use super::RuntimeObservation;
+use super::{
+    ProviderClass, RerankerPath, RuntimeObservation, RuntimeReadiness, StatusFilesObservation,
+    WorkingMemoryObservation,
+};
 use crate::db::tests::test_db;
 use crate::lint::context::{CancellationToken, LintClock};
 use crate::lint::runner::LintRunner;
@@ -33,13 +36,54 @@ async fn schema_and_index_fixtures_fail_loud_without_status_rescue() {
         config(RuntimeObservation::open(0)).with_query_failure(),
     )
     .await;
-    for id in [SCHEMA, INDEXES, PROVIDERS, STATUS, WORKER] {
+    for id in [SCHEMA, INDEXES, STATUS] {
         assert_eq!(
             check(&failed, id).outcome(),
             LintOutcome::FailedToRun,
             "{id}"
         );
     }
+    assert_eq!(check(&failed, PROVIDERS).outcome(), LintOutcome::Pass);
+    assert_eq!(check(&failed, WORKER).outcome(), LintOutcome::Pass);
+}
+
+#[tokio::test]
+async fn missing_fts_and_malformed_same_name_search_objects_are_findings() {
+    let (db, _temp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "DROP TABLE pages_fts;
+         DROP TRIGGER memories_fts_insert;
+         CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories BEGIN SELECT 1; END;
+         DROP INDEX child_vectors_vec_idx;
+         CREATE INDEX child_vectors_vec_idx ON child_vectors(parent_id);",
+        )
+        .await
+        .unwrap();
+
+    let report = run(&db, config(RuntimeObservation::open(0))).await;
+    assert_eq!(check(&report, INDEXES).outcome(), LintOutcome::Finding);
+    assert!(metric(check(&report, INDEXES)) >= 3);
+}
+
+#[tokio::test]
+async fn missing_memories_is_schema_finding_with_only_dependent_status_incomplete() {
+    let (db, _temp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch("DROP TABLE memories;")
+        .await
+        .unwrap();
+
+    let report = run(&db, config(RuntimeObservation::open(0))).await;
+    assert_eq!(check(&report, SCHEMA).outcome(), LintOutcome::Finding);
+    assert_eq!(check(&report, INDEXES).outcome(), LintOutcome::Finding);
+    assert_eq!(check(&report, STATUS).outcome(), LintOutcome::FailedToRun);
+    assert_eq!(check(&report, PROVIDERS).outcome(), LintOutcome::Pass);
+    assert_eq!(check(&report, WORKER).outcome(), LintOutcome::Pass);
 }
 
 #[tokio::test]
@@ -56,7 +100,9 @@ async fn provider_off_and_worker_observations_are_non_mutating_inventory() {
         1
     );
 
-    let requested = RuntimeConfigSnapshot::new(1, 1, 1);
+    let requested = RuntimeConfigSnapshot::disabled()
+        .with_provider_request(ProviderClass::OnDevice, "model-a")
+        .with_reranker_request(RerankerPath::Light, "reranker-a");
     let unavailable = RuntimeObservation::closed(1);
     let report = run(
         &db,
@@ -97,7 +143,15 @@ fn config(observation: RuntimeObservation) -> RuntimeRunConfig {
 }
 
 async fn run(db: &crate::db::MemoryDB, config: RuntimeRunConfig) -> wenlan_types::lint::LintReport {
-    LintRunner::new(LintClock::fixed(), CancellationToken::new())
+    run_at(db, config, 0).await
+}
+
+async fn run_at(
+    db: &crate::db::MemoryDB,
+    config: RuntimeRunConfig,
+    epoch_seconds: i64,
+) -> wenlan_types::lint::LintReport {
+    LintRunner::new(LintClock::fixed_at(epoch_seconds), CancellationToken::new())
         .with_test_runtime_config(config)
         .run(db, &LintQuery { space: None }, None, false)
         .await
@@ -129,3 +183,6 @@ fn metric_value(result: &wenlan_types::lint::LintCheckResult, code: LintMetricCo
         })
         .unwrap()
 }
+
+#[path = "runtime_readiness_test.rs"]
+mod readiness;

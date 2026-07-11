@@ -193,7 +193,9 @@ impl LintRunner {
             kg_config,
             self.operations_config.clone(),
             serving_config,
-            self.runtime_config.clone(),
+            self.runtime_config
+                .clone()
+                .with_clock_epoch_seconds(self.clock.epoch_seconds()),
         );
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();

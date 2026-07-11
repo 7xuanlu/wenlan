@@ -70,6 +70,34 @@ async fn impossible_registry_session_cache_and_tag_rows_are_findings() {
 }
 
 #[tokio::test]
+async fn cross_owner_and_out_of_window_session_rows_are_findings() {
+    let (db, _temp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "INSERT INTO activities (id,started_at,ended_at) VALUES
+             ('activity-a',100,200),('activity-b',300,400);
+         INSERT INTO session_snapshots
+             (id,activity_id,started_at,ended_at,primary_apps,summary,tags,capture_count,created_at)
+             VALUES
+             ('snapshot-cross','activity-b',310,390,'[]','','[]',1,390),
+             ('snapshot-wide','activity-a',90,210,'[]','','[]',1,210);
+         INSERT INTO capture_refs
+             (source_id,activity_id,snapshot_id,app_name,window_title,timestamp,source)
+             VALUES
+             ('capture-cross','activity-a','snapshot-cross','','',150,''),
+             ('capture-late','activity-a','snapshot-wide','','',250,'');",
+        )
+        .await
+        .unwrap();
+
+    let report = run_lint(&db, None).await;
+    assert_eq!(check(&report, SESSIONS).outcome(), LintOutcome::Finding);
+    assert!(affected(check(&report, SESSIONS)) >= 3);
+}
+
+#[tokio::test]
 async fn full_population_is_evaluated_while_opaque_examples_stop_at_one_hundred() {
     let (db, _temp) = test_db().await;
     for index in 0..101 {

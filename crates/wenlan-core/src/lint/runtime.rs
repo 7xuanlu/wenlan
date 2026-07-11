@@ -1,11 +1,17 @@
 mod config;
+mod config_capture;
+mod observation;
 mod query;
 mod result;
+mod schema;
 
 use crate::lint::catalog::LintCheckGroup;
 use crate::lint::context::{LintContext, PopulationBasis};
-pub use config::RuntimeObservation;
 pub(crate) use config::RuntimeRunConfig;
+pub use observation::{
+    ProviderClass, RerankerPath, RuntimeObservation, RuntimeReadiness, StatusFilesObservation,
+    WorkingMemoryObservation,
+};
 use wenlan_types::lint::LintCheckResult;
 
 pub(crate) const SCHEMA: &str = "runtime.schema_contract";
@@ -18,14 +24,11 @@ pub(crate) async fn run(
     context: &LintContext<'_, '_>,
     config: &RuntimeRunConfig,
 ) -> Vec<LintCheckResult> {
-    let snapshot = match query::load(context, config).await {
-        Ok(snapshot) => snapshot,
-        Err(()) => return failed_results(context),
-    };
+    let snapshot = query::load(context, config).await;
     snapshot
         .assessments(config)
         .into_iter()
-        .map(|assessment| result::finish(context, assessment))
+        .map(|assessment| result::finish_pending(context, assessment))
         .collect::<Result<Vec<_>, _>>()
         .unwrap_or_else(|_| failed_results(context))
 }
