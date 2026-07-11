@@ -49,7 +49,7 @@ HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 echo "==> Building exact git checkout $HEAD in a fresh target"
 (
     cd "$ROOT"
-    CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$GIT_TARGET" \
+    CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$GIT_TARGET" \
         cargo build --locked -p wenlan-server -p wenlan
 )
 
@@ -228,7 +228,7 @@ mkdir -p "$TARBALL_ROOT"
 git -C "$ROOT" archive HEAD | tar -x -C "$TARBALL_ROOT"
 (
     cd "$TARBALL_ROOT"
-    CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$TARBALL_TARGET" \
+    CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$TARBALL_TARGET" \
         cargo build --locked -p wenlan-server
 )
 start_daemon "$TARBALL_TARGET/debug/wenlan-server" tarball
