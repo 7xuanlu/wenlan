@@ -1,6 +1,12 @@
 use super::super::FACT_STARVATION_ID;
 use super::review_tests::{check, insert_memory, metric, run};
 use crate::db::tests::test_db;
+use crate::lint::context::{
+    AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext,
+};
+use crate::lint::serving::fact_probe::{run_with_ann, AnnTopK, RankedChild};
+use crate::lint::snapshot::LintReadSnapshot;
+use std::cell::Cell;
 use wenlan_types::lint::{LintMetricCode, LintOutcome};
 
 #[tokio::test]
@@ -52,6 +58,42 @@ async fn snapshot_fact_probe_uses_production_ann_limit_before_parent_join() {
     assert_eq!(metric(finding, LintMetricCode::EligibleRecords), 1);
     assert_eq!(metric(finding, LintMetricCode::AffectedRecords), 1);
     assert_eq!(finding.evidence().len(), 1);
+}
+
+#[derive(Default)]
+struct RecordingAnn {
+    requested_k: Cell<Option<usize>>,
+}
+
+impl AnnTopK for RecordingAnn {
+    async fn query(
+        &self,
+        _context: &LintContext<'_, '_>,
+        _embedding: Vec<u8>,
+        k: usize,
+    ) -> Result<Vec<RankedChild>, ()> {
+        self.requested_k.set(Some(k));
+        Ok(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn fact_probe_passes_three_times_parent_limit_to_ann_query() {
+    let (db, _tmp) = exact_ann_limit_fixture().await;
+    let snapshot = LintReadSnapshot::open(&db._db).await.expect("snapshot");
+    let scope = AppliedScope::registered(
+        wenlan_types::lint::LintOpaqueId::from_sorted_position(0).expect("opaque scope"),
+        "work".to_string(),
+    );
+    let clock = LintClock::fixed();
+    let gate = ExecutionGate::new(CancellationToken::new());
+    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let ann = RecordingAnn::default();
+
+    run_with_ann(&context, 7, &ann).await.expect("fact probe");
+
+    assert_eq!(ann.requested_k.get(), Some(21));
+    snapshot.finish().await.expect("finish snapshot");
 }
 
 async fn fact_fixture(selected_near: bool) -> (crate::db::MemoryDB, tempfile::TempDir) {

@@ -1,12 +1,11 @@
 use axum::body::{to_bytes, Body};
 use axum::http::Request;
-use axum::Router;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 use wenlan_types::requests::CreateConceptRequest;
 
-async fn fixture() -> (Router, tempfile::TempDir) {
+async fn fixture() -> (crate::router::AppRouter, tempfile::TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
         Arc::new(wenlan_core::events::NoopEmitter);
@@ -62,7 +61,7 @@ async fn fixture() -> (Router, tempfile::TempDir) {
     (crate::router::build_router(state), tmp)
 }
 
-async fn json(app: Router, request: Request<Body>) -> serde_json::Value {
+async fn json(app: crate::router::AppRouter, request: Request<Body>) -> serde_json::Value {
     let response = app.oneshot(request).await.expect("response");
     assert_eq!(response.status(), 200);
     let bytes = to_bytes(response.into_body(), usize::MAX)

@@ -20,7 +20,7 @@ struct SearchResponse {
     results: Vec<SearchResult>,
 }
 
-async fn post_search(router: &axum::Router, body: serde_json::Value) -> SearchResponse {
+async fn post_search(router: &common::AppRouter, body: serde_json::Value) -> SearchResponse {
     let resp = router
         .clone()
         .oneshot(

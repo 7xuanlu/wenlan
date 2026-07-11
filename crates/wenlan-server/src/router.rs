@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Axum router construction — wires all HTTP and WebSocket routes.
 
+pub use crate::route_registry::AppRouter;
 use crate::route_registry::{delete, get, post, put, TrackedRouter};
 use crate::state::SharedState;
 use crate::{
     config_routes, import_routes, ingest_routes, knowledge_routes, memory_routes,
     onboarding_routes, refinery_routes, routes, security, source_routes, websocket,
 };
-use axum::Router;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 /// Build the shared application router with all routes.
-pub fn build_router(state: SharedState) -> Router {
+pub fn build_router(state: SharedState) -> AppRouter {
     // Reflect CORS only for local origins so a legit localhost/Tauri browser
     // can read responses; every other origin is refused. The real protection
     // is `security::guard_local_only` below — this just stops browsers from

@@ -821,7 +821,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // Serve
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service()).await?;
 
     Ok(())
 }

@@ -1,4 +1,7 @@
 use super::*;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use tower::ServiceExt;
 
 #[test]
 #[should_panic(expected = "unclassified router path")]
@@ -22,30 +25,6 @@ fn wrong_method_cannot_satisfy_a_sensitive_registration() {
 }
 
 #[test]
-#[should_panic(expected = "nested router registration")]
-fn nested_router_cannot_bypass_classification() {
-    let nested: Router<()> = Router::new().route("/", axum::routing::get(|| async { "leak" }));
-    let _ = TrackedRouter::<()>::new().nest("/api/nested", nested);
-}
-
-#[test]
-#[should_panic(expected = "merged router registration")]
-fn merged_router_cannot_bypass_classification() {
-    let merged: Router<()> =
-        Router::new().route("/api/merged", axum::routing::get(|| async { "leak" }));
-    let _ = TrackedRouter::<()>::new().merge(merged);
-}
-
-#[test]
-#[should_panic(expected = "route service registration")]
-fn route_service_cannot_bypass_classification() {
-    let service = tower::service_fn(|_request: Request| async {
-        Ok::<_, Infallible>(axum::response::Response::new(axum::body::Body::empty()))
-    });
-    let _ = TrackedRouter::<()>::new().route_service("/api/service", service);
-}
-
-#[test]
 #[should_panic]
 fn duplicate_registration_fails_loud() {
     let router = TrackedRouter::<()>::new()
@@ -54,9 +33,8 @@ fn duplicate_registration_fails_loud() {
     let _ = router.finish();
 }
 
-#[test]
-#[should_panic(expected = "after inventory finalization")]
-fn registration_after_finish_fails_loud() {
+#[tokio::test]
+async fn finalized_inventory_yields_sealed_http_service() {
     let mut router = TrackedRouter::<()>::new();
     for row in routes::sensitive_read_routes() {
         router = match row.method {
@@ -64,7 +42,15 @@ fn registration_after_finish_fails_loud() {
             Method::Post => router.route(row.path, super::post(|| async { "read" })),
         };
     }
-    let finalized = router.finish();
-    let post_finish: TrackedMethodRouter<()> = super::get(|| async { "leak" });
-    let _ = finalized.route("/api/post-finish", post_finish);
+    let app: AppRouter = router.finish().with_state(());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/profile")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
 }

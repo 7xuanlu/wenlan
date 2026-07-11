@@ -9,6 +9,10 @@ use std::convert::Infallible;
 use tower::{Layer, Service};
 use wenlan_core::lint::serving::routes::{self, Method};
 
+#[path = "route_registry/app.rs"]
+mod app;
+pub use app::AppRouter;
+
 pub(crate) struct TrackedRouter<S = ()> {
     inner: Router<S>,
     reads: BTreeMap<(Method, &'static str), usize>,
@@ -136,21 +140,6 @@ where
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn nest<T>(self, _path: &'static str, _router: T) -> Self {
-        panic!("nested router registration bypasses the typed route inventory")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn merge<T>(self, _router: T) -> Self {
-        panic!("merged router registration bypasses the typed route inventory")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn route_service<T>(self, _path: &'static str, _service: T) -> Self {
-        panic!("route service registration bypasses the typed route inventory")
-    }
-
     pub(crate) fn finish(self) -> FinalizedRouter<S> {
         let expected = routes::sensitive_read_routes()
             .map(|row| ((row.method, row.path), 1usize))
@@ -177,13 +166,8 @@ where
         }
     }
 
-    pub(crate) fn with_state<S2>(self, state: S) -> Router<S2> {
-        self.inner.with_state(state)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn route<T>(self, _path: &'static str, _route: T) -> Self {
-        panic!("route registration attempted after inventory finalization")
+    pub(crate) fn with_state(self, state: S) -> AppRouter {
+        AppRouter::new(self.inner.with_state(state))
     }
 }
 

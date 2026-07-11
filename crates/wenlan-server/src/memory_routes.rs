@@ -3588,7 +3588,7 @@ mod recent_memory_endpoint_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
 
     #[tokio::test]
     async fn get_recent_memories_route_is_registered() {
@@ -4059,7 +4059,7 @@ mod search_agent_attribution_tests {
         (Arc::new(RwLock::new(server_state)), tmp)
     }
 
-    async fn fetch_activities(app: axum::Router) -> Vec<wenlan_types::AgentActivityRow> {
+    async fn fetch_activities(app: AppRouter) -> Vec<wenlan_types::AgentActivityRow> {
         let resp = app
             .oneshot(
                 Request::builder()
@@ -4201,7 +4201,7 @@ mod search_rerank_tests {
     }
 
     async fn search_response(
-        app: axum::Router,
+        app: AppRouter,
         body: &'static str,
     ) -> wenlan_types::responses::SearchMemoryResponse {
         let resp = app
@@ -4497,7 +4497,7 @@ mod search_quick_path_page_tests {
     }
 
     async fn search(
-        app: axum::Router,
+        app: AppRouter,
         agent: Option<&str>,
     ) -> wenlan_types::responses::SearchMemoryResponse {
         let mut builder = Request::builder()

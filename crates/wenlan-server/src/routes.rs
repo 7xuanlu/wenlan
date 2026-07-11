@@ -1637,7 +1637,7 @@ mod distill_sweep_route_tests {
     use crate::state::ServerState;
 
     async fn seeded_sweep_app() -> (
-        axum::Router,
+        crate::router::AppRouter,
         Arc<wenlan_core::db::MemoryDB>,
         tempfile::TempDir,
     ) {
@@ -1796,7 +1796,7 @@ mod redistill_contract_tests {
     use crate::state::ServerState;
 
     async fn seeded_user_edited_page() -> (
-        axum::Router,
+        crate::router::AppRouter,
         Arc<wenlan_core::db::MemoryDB>,
         String,
         tempfile::TempDir,
@@ -2241,7 +2241,7 @@ mod search_supplemental_pages_tests {
     /// page sourced from the tier-2 memory (visible to a tier-2 caller), and a
     /// cross-space page (workspace `other`, disjoint sources → always dropped).
     /// Returns the wired app router.
-    async fn seeded_app() -> (axum::Router, tempfile::TempDir, String, String) {
+    async fn seeded_app() -> (crate::router::AppRouter, tempfile::TempDir, String, String) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);

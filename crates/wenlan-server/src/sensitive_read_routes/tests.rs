@@ -57,5 +57,5 @@ fn every_canonical_sensitive_row_is_bound_by_router_construction() {
     let state = std::sync::Arc::new(tokio::sync::RwLock::new(
         crate::state::ServerState::default(),
     ));
-    let _ = crate::router::build_router(state);
+    let _: crate::router::AppRouter = crate::router::build_router(state);
 }
