@@ -3588,7 +3588,7 @@ mod recent_memory_endpoint_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::{router::AppRouter, state::ServerState};
+    use crate::state::ServerState;
 
     #[tokio::test]
     async fn get_recent_memories_route_is_registered() {
@@ -4043,7 +4043,7 @@ mod search_agent_attribution_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
 
     async fn build_state_with_db() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("failed to create tempdir");
@@ -4177,7 +4177,7 @@ mod search_rerank_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
     use wenlan_core::reranker::{NoopReranker, Reranker};
 
     async fn build_state(with_reranker: bool) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
@@ -4375,7 +4375,7 @@ mod search_quick_path_page_tests {
     use tower::ServiceExt;
     use wenlan_types::requests::CreateConceptRequest;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
 
     async fn seed_confirmed_distilled_page(
         db: &wenlan_core::db::MemoryDB,
