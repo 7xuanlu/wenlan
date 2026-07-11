@@ -78,12 +78,18 @@ pub struct LintReadSnapshot<'database> {
     database: &'database libsql::Database,
     observer: libsql::Connection,
     transaction: Option<libsql::Transaction>,
-    analysis_digest: StructuralDigest,
+    analysis_digest: Option<StructuralDigest>,
     analysis_data_version: i64,
 }
 
 impl<'database> LintReadSnapshot<'database> {
     pub(crate) async fn open(database: &'database libsql::Database) -> Result<Self, SnapshotError> {
+        Self::open_unpinned(database).await?.pin_analysis().await
+    }
+
+    pub(crate) async fn open_unpinned(
+        database: &'database libsql::Database,
+    ) -> Result<Self, SnapshotError> {
         let observer = database.connect()?;
         let analysis_data_version = scalar_i64(&observer, "PRAGMA data_version").await?;
         let connection = database.connect()?;
@@ -91,15 +97,20 @@ impl<'database> LintReadSnapshot<'database> {
         let transaction = connection
             .transaction_with_behavior(libsql::TransactionBehavior::ReadOnly)
             .await?;
-        let analysis_digest = structural_digest(&transaction).await?;
 
         Ok(Self {
             database,
             observer,
             transaction: Some(transaction),
-            analysis_digest,
+            analysis_digest: None,
             analysis_data_version,
         })
+    }
+
+    pub(crate) async fn pin_analysis(mut self) -> Result<Self, SnapshotError> {
+        let transaction = self.transaction.as_ref().ok_or(SnapshotError::Closed)?;
+        self.analysis_digest = Some(structural_digest(transaction).await?);
+        Ok(self)
     }
 
     pub async fn query<'snapshot>(
@@ -132,13 +143,14 @@ impl<'database> LintReadSnapshot<'database> {
         F: FnOnce() -> Fut,
         Fut: Future<Output = ()>,
     {
+        let analysis_digest = self.analysis_digest.ok_or(SnapshotError::Closed)?;
         let transaction = self.transaction.take().ok_or(SnapshotError::Closed)?;
         transaction.rollback().await?;
         let post_run_digest = fresh_structural_digest(self.database, post_snapshot_pinned).await?;
         let post_run_data_version = scalar_i64(&self.observer, "PRAGMA data_version").await?;
 
         Ok(SnapshotReceipt {
-            analysis_digest: self.analysis_digest,
+            analysis_digest,
             post_run_digest,
             analysis_data_version: self.analysis_data_version,
             post_run_data_version,
@@ -161,6 +173,12 @@ impl<'database> LintReadSnapshot<'database> {
 impl MemoryDB {
     pub async fn open_lint_snapshot(&self) -> Result<LintReadSnapshot<'_>, SnapshotError> {
         LintReadSnapshot::open(&self._db).await
+    }
+
+    pub(crate) async fn open_unpinned_lint_snapshot(
+        &self,
+    ) -> Result<LintReadSnapshot<'_>, SnapshotError> {
+        LintReadSnapshot::open_unpinned(&self._db).await
     }
 }
 
