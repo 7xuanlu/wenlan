@@ -1,5 +1,6 @@
 mod frontmatter;
 mod path;
+mod provenance_checks;
 mod state;
 mod state_checks;
 mod traversal;
@@ -35,18 +36,21 @@ pub(crate) async fn run(
     }
 
     let mut results = state_checks::run(context).await;
-    let state_ids = [
+    results.extend(provenance_checks::run(context).await);
+    let implemented_ids = [
         state_checks::STATE_CONTRACT_ID,
         state_checks::IDENTITY_ID,
         state_checks::VERSION_ALIGNMENT_ID,
+        provenance_checks::SOURCE_COVERAGE_ID,
+        provenance_checks::CITATION_PARTITIONS_ID,
     ];
-    if record_placeholder_populations(context, |id| !state_ids.contains(&id)).is_err() {
+    if record_placeholder_populations(context, |id| !implemented_ids.contains(&id)).is_err() {
         return failed_results(context.clock());
     }
     results.extend(
         prerequisite_results(context.clock())
             .into_iter()
-            .filter(|result| !state_ids.contains(&result.check_id())),
+            .filter(|result| !implemented_ids.contains(&result.check_id())),
     );
     results
 }
