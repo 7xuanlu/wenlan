@@ -48,10 +48,10 @@ async fn snapshot_fact_probe_uses_production_ann_limit_before_parent_join() {
     )
     .await;
     let finding = check(&report, FACT_STARVATION_ID);
-    assert_eq!(finding.outcome(), LintOutcome::Pass);
-    assert_eq!(metric(finding, LintMetricCode::EligibleRecords), 0);
-    assert_eq!(metric(finding, LintMetricCode::AffectedRecords), 0);
-    assert!(finding.evidence().is_empty());
+    assert_eq!(finding.outcome(), LintOutcome::Finding);
+    assert_eq!(metric(finding, LintMetricCode::EligibleRecords), 1);
+    assert_eq!(metric(finding, LintMetricCode::AffectedRecords), 1);
+    assert_eq!(finding.evidence().len(), 1);
 }
 
 async fn fact_fixture(selected_near: bool) -> (crate::db::MemoryDB, tempfile::TempDir) {

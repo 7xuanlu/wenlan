@@ -24,7 +24,7 @@ pub(super) async fn run(
         return Ok(FactProbe::default());
     }
     let fetch_limit = parent_limit.checked_mul(3).ok_or(())?;
-    let ranked = ranked_children(context, &scope, embedding, fetch_limit).await?;
+    let ranked = ranked_children(context, embedding.clone(), fetch_limit).await?;
     let global_hits = ranked
         .iter()
         .enumerate()
@@ -37,9 +37,9 @@ pub(super) async fn run(
         .into_iter()
         .take(parent_limit)
         .collect::<BTreeSet<_>>();
-    let scoped_hits = ranked
+    let scoped_ranked = ranked_scoped_children(context, &scope, embedding, fetch_limit).await?;
+    let scoped_hits = scoped_ranked
         .iter()
-        .filter(|child| child.in_scope)
         .enumerate()
         .map(|(rank, child)| ChildHit {
             parent_id: child.parent_id.clone(),
@@ -64,7 +64,6 @@ pub(super) async fn run(
 #[derive(Debug)]
 struct RankedChild {
     parent_id: String,
-    in_scope: bool,
 }
 
 enum ProbeScope<'a> {
@@ -112,6 +111,32 @@ async fn probe_embedding(
 
 async fn ranked_children(
     context: &LintContext<'_, '_>,
+    embedding: Vec<u8>,
+    fetch_limit: usize,
+) -> Result<Vec<RankedChild>, ()> {
+    let fetch_limit = i64::try_from(fetch_limit).map_err(|_| ())?;
+    let mut rows = context
+        .snapshot()
+        .query(
+            "SELECT cv.parent_id, vector_distance_cos(cv.embedding, ?1) AS dist FROM vector_top_k('child_vectors_vec_idx', ?1, ?2) vt JOIN child_vectors cv ON cv.rowid=vt.id JOIN memories m ON m.source='memory' AND m.chunk_index=0 AND m.source_id=cv.parent_id WHERE cv.parent_kind='memory' ORDER BY dist, cv.id",
+            libsql::params::Params::Positional(vec![
+                libsql::Value::Blob(embedding),
+                libsql::Value::Integer(fetch_limit),
+            ]),
+        )
+        .await
+        .map_err(|_| ())?;
+    let mut ranked = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|_| ())? {
+        ranked.push(RankedChild {
+            parent_id: row.get::<String>(0).map_err(|_| ())?,
+        });
+    }
+    Ok(ranked)
+}
+
+async fn ranked_scoped_children(
+    context: &LintContext<'_, '_>,
     scope: &ProbeScope<'_>,
     embedding: Vec<u8>,
     fetch_limit: usize,
@@ -135,7 +160,7 @@ async fn ranked_children(
         ),
     };
     let sql = format!(
-        "SELECT cv.parent_id, CASE WHEN {scope_expr} THEN 1 ELSE 0 END AS in_scope, vector_distance_cos(cv.embedding, ?1) AS dist FROM vector_top_k('child_vectors_vec_idx', ?1, ?2) vt JOIN child_vectors cv ON cv.rowid=vt.id JOIN memories m ON m.source='memory' AND m.chunk_index=0 AND m.source_id=cv.parent_id WHERE cv.parent_kind='memory' ORDER BY dist, cv.id"
+        "SELECT cv.parent_id, vector_distance_cos(cv.embedding, ?1) AS dist FROM child_vectors cv JOIN memories m ON m.source='memory' AND m.chunk_index=0 AND m.source_id=cv.parent_id WHERE cv.parent_kind='memory' AND cv.embedding IS NOT NULL AND {scope_expr} ORDER BY dist, cv.id LIMIT ?2"
     );
     let mut rows = context
         .snapshot()
@@ -144,11 +169,8 @@ async fn ranked_children(
         .map_err(|_| ())?;
     let mut ranked = Vec::new();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
-        let parent_id = row.get::<String>(0).map_err(|_| ())?;
-        let in_scope = row.get::<i64>(1).map_err(|_| ())? != 0;
         ranked.push(RankedChild {
-            parent_id,
-            in_scope,
+            parent_id: row.get::<String>(0).map_err(|_| ())?,
         });
     }
     Ok(ranked)
