@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
+pub(super) const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+
 #[cfg(test)]
 pub(crate) use super::frontmatter::{FrontmatterState, VersionValue};
 #[cfg(test)]
@@ -85,6 +87,7 @@ pub(crate) struct PathIssue {
 pub struct PageScan {
     pub(crate) entries: Vec<PageEntry>,
     pub(crate) raw_state: state::RawState,
+    pub(crate) manifest: ManifestProjection,
     pub(crate) path_issues: Vec<PathIssue>,
     before_tree: [u8; 32],
     before_state: Option<[u8; 32]>,
@@ -96,10 +99,36 @@ impl fmt::Debug for PageScan {
             .debug_struct("PageScan")
             .field("entry_count", &self.entries.len())
             .field("state_edge_count", &self.raw_state.edges.len())
+            .field("manifest", &self.manifest)
             .field("path_issue_count", &self.path_issues.len())
             .field("tree_digest", &self.before_tree)
             .field("state_digest", &self.before_state)
             .finish()
+    }
+}
+
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) enum ManifestProjection {
+    #[default]
+    Missing,
+    Invalid,
+    Parsed(BTreeMap<String, Vec<String>>),
+}
+
+impl fmt::Debug for ManifestProjection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("Missing"),
+            Self::Invalid => formatter.write_str("Invalid"),
+            Self::Parsed(pages) => formatter
+                .debug_struct("Parsed")
+                .field("page_count", &pages.len())
+                .field(
+                    "reference_count",
+                    &pages.values().map(Vec::len).sum::<usize>(),
+                )
+                .finish(),
+        }
     }
 }
 
@@ -155,9 +184,18 @@ pub fn scan_page_root(root: &Path) -> Result<PageScan, PageFsError> {
     let root = open_root(root)?;
     let mut entries = Vec::new();
     let mut state_bytes = None;
-    collect_entries(&root, &mut entries, &mut state_bytes)?;
+    let mut manifest_bytes = None;
+    let mut manifest_too_large = false;
+    collect_entries(
+        &root,
+        &mut entries,
+        &mut state_bytes,
+        &mut manifest_bytes,
+        &mut manifest_too_large,
+    )?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let mut raw_state = parse_raw_state(state_bytes.as_deref());
+    let manifest = parse_manifest(manifest_bytes.as_deref(), manifest_too_large);
     let mut path_issues = collect_path_issues(&entries, &mut raw_state);
     let before_tree = tree_digest(&entries);
     let before_state = state_bytes.map(|bytes| Sha256::digest(bytes).into());
@@ -166,9 +204,27 @@ pub fn scan_page_root(root: &Path) -> Result<PageScan, PageFsError> {
     Ok(PageScan {
         entries,
         raw_state,
+        manifest,
         path_issues,
         before_tree,
         before_state,
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct RawManifest {
+    pages: BTreeMap<String, Vec<String>>,
+}
+
+fn parse_manifest(bytes: Option<&[u8]>, too_large: bool) -> ManifestProjection {
+    if too_large {
+        return ManifestProjection::Invalid;
+    }
+    let Some(bytes) = bytes else {
+        return ManifestProjection::Missing;
+    };
+    serde_json::from_slice::<RawManifest>(bytes).map_or(ManifestProjection::Invalid, |manifest| {
+        ManifestProjection::Parsed(manifest.pages)
     })
 }
 

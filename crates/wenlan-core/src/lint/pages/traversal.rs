@@ -30,8 +30,17 @@ pub(super) fn collect_entries(
     root: &Dir,
     entries: &mut Vec<PageEntry>,
     state_bytes: &mut Option<Vec<u8>>,
+    manifest_bytes: &mut Option<Vec<u8>>,
+    manifest_too_large: &mut bool,
 ) -> Result<(), PageFsError> {
-    visit(root, "", entries, state_bytes)
+    visit(
+        root,
+        "",
+        entries,
+        state_bytes,
+        manifest_bytes,
+        manifest_too_large,
+    )
 }
 
 fn visit(
@@ -39,6 +48,8 @@ fn visit(
     prefix: &str,
     entries: &mut Vec<PageEntry>,
     state_bytes: &mut Option<Vec<u8>>,
+    manifest_bytes: &mut Option<Vec<u8>>,
+    manifest_too_large: &mut bool,
 ) -> Result<(), PageFsError> {
     let mut names = directory
         .entries()
@@ -51,7 +62,15 @@ fn visit(
         .collect::<Result<Vec<_>, _>>()?;
     names.sort();
     for name in names {
-        visit_entry(directory, prefix, &name, entries, state_bytes)?;
+        visit_entry(
+            directory,
+            prefix,
+            &name,
+            entries,
+            state_bytes,
+            manifest_bytes,
+            manifest_too_large,
+        )?;
     }
     Ok(())
 }
@@ -62,6 +81,8 @@ fn visit_entry(
     name: &OsStr,
     entries: &mut Vec<PageEntry>,
     state_bytes: &mut Option<Vec<u8>>,
+    manifest_bytes: &mut Option<Vec<u8>>,
+    manifest_too_large: &mut bool,
 ) -> Result<(), PageFsError> {
     let component = component_string(name)?;
     let path = if prefix.is_empty() {
@@ -88,7 +109,14 @@ fn visit_entry(
                 &opened,
                 Frontmatter::unparsed(),
             )?);
-            visit(&child, &path, entries, state_bytes)
+            visit(
+                &child,
+                &path,
+                entries,
+                state_bytes,
+                manifest_bytes,
+                manifest_too_large,
+            )
         }
         EntryKind::File => {
             let mut file = directory
@@ -101,6 +129,15 @@ fn visit_entry(
                 file.read_to_end(&mut bytes)
                     .map_err(|_| PageFsError::ReadPrefix)?;
                 *state_bytes = Some(bytes);
+            } else if path == "_sources/.manifest.json" {
+                if opened.len() > super::fs::MANIFEST_MAX_BYTES {
+                    *manifest_too_large = true;
+                } else {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes)
+                        .map_err(|_| PageFsError::ReadPrefix)?;
+                    *manifest_bytes = Some(bytes);
+                }
             }
             let frontmatter = if scope == EntryScope::PageMarkdown {
                 read_frontmatter(file)?

@@ -21,6 +21,20 @@ pub enum LintMetricCode {
     CitationExternalFileOccurrences,
     CitationExternalUrlOccurrences,
     CitationAuthoredOccurrences,
+    PageOrphanLabels,
+    PageManifestPages,
+    PageManifestReferences,
+    PageSourceStubs,
+    PageManifestDivergences,
+    ProjectPurposeArtifacts,
+    ProjectSchemaArtifacts,
+    ProjectIndexArtifacts,
+    ProjectLogArtifacts,
+    ProjectOverviewArtifacts,
+    ProjectArchiveRecords,
+    ProjectOutboundLinks,
+    ProjectInboundLinks,
+    ProjectBrokenLinks,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
