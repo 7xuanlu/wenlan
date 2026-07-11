@@ -114,6 +114,33 @@ def clean_fixture(source: str, destination: str) -> None:
         json.dump(report, handle, separators=(",", ":"), sort_keys=True)
 
 
+def precedence_fixture(finding_source: str, incomplete_source: str, destination: str) -> None:
+    finding_report = load(finding_source)
+    findings = [
+        check for check in finding_report["checks"] if check["outcome"] == "finding"
+    ]
+    if [check["check_id"] for check in findings] != ["serving.route_scope_contracts"]:
+        raise SystemExit("precedence fixture requires the canonical route-scope finding")
+    report = load(incomplete_source)
+    if report["complete"] or report["totals"]["incomplete"] < 1:
+        raise SystemExit("precedence fixture source must be incomplete")
+    target = next(
+        check
+        for check in report["checks"]
+        if check["check_id"] == "serving.route_scope_contracts"
+    )
+    if target["outcome"] == "finding":
+        raise SystemExit("incomplete source unexpectedly retained the finding")
+    if target["outcome"] == "pass":
+        report["totals"]["passed"] -= 1
+    else:
+        report["totals"]["incomplete"] -= 1
+    report["totals"]["findings"] += 1
+    report["checks"][report["checks"].index(target)] = findings[0]
+    with open(destination, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, separators=(",", ":"), sort_keys=True)
+
+
 def serve_once(fixture: str, port_file: str) -> None:
     body = Path(fixture).read_bytes()
 
@@ -159,6 +186,10 @@ def parser() -> argparse.ArgumentParser:
     clean_cmd = commands.add_parser("clean-fixture")
     clean_cmd.add_argument("source")
     clean_cmd.add_argument("destination")
+    precedence_cmd = commands.add_parser("precedence-fixture")
+    precedence_cmd.add_argument("finding_source")
+    precedence_cmd.add_argument("incomplete_source")
+    precedence_cmd.add_argument("destination")
     serve_cmd = commands.add_parser("serve-once")
     serve_cmd.add_argument("fixture")
     serve_cmd.add_argument("port_file")
@@ -177,6 +208,10 @@ def main() -> None:
         assert_private(args.paths, args.canary)
     elif args.command == "clean-fixture":
         clean_fixture(args.source, args.destination)
+    elif args.command == "precedence-fixture":
+        precedence_fixture(
+            args.finding_source, args.incomplete_source, args.destination
+        )
     elif args.command == "serve-once":
         serve_once(args.fixture, args.port_file)
 

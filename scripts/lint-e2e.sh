@@ -150,6 +150,25 @@ run_pair() {
     [ "$before" = "$after" ] || fail "$name mutated persistent state"
 }
 
+run_fixture() {
+    local name="$1" fixture="$2" expected_exit="$3" code
+    python3 "$PY" serve-once "$fixture" "$WORK/$name-port" &
+    FIXTURE_PID=$!
+    for _ in $(seq 1 30); do [ -s "$WORK/$name-port" ] && break; sleep 0.1; done
+    [ -s "$WORK/$name-port" ] || fail "$name fixture did not publish a port"
+    set +e
+    HOME="$HOME_DIR" WENLAN_DATA_DIR="$DATA_DIR" \
+        WENLAN_HOST="http://127.0.0.1:$(cat "$WORK/$name-port")" \
+        "$CLI" --format json lint >"$WORK/$name-cli.json" 2>"$WORK/$name-cli.err"
+    code=$?
+    set -e
+    wait "$FIXTURE_PID"
+    FIXTURE_PID=""
+    [ "$code" -eq "$expected_exit" ] || fail "$name fixture exit $code, expected $expected_exit"
+    [ ! -s "$WORK/$name-cli.err" ] || fail "$name fixture wrote stderr"
+    python3 "$PY" compare "$fixture" "$WORK/$name-cli.json"
+}
+
 echo "==> Starting isolated exact-checkout daemon"
 start_daemon "$SERVER" git
 HOME="$HOME_DIR" WENLAN_DATA_DIR="$DATA_DIR" WENLAN_HOST="$HOST" \
@@ -162,22 +181,7 @@ python3 "$PY" assert-report "$WORK/baseline-http.json" --complete true --scope g
 
 echo "==> Proving exit 0 with a canonical typed clean fixture"
 python3 "$PY" clean-fixture "$WORK/baseline-http.json" "$WORK/clean.json"
-python3 "$PY" serve-once "$WORK/clean.json" "$WORK/clean-port" &
-FIXTURE_PID=$!
-for _ in $(seq 1 30); do [ -s "$WORK/clean-port" ] && break; sleep 0.1; done
-[ -s "$WORK/clean-port" ] || fail "clean fixture did not publish a port"
-set +e
-HOME="$HOME_DIR" WENLAN_DATA_DIR="$DATA_DIR" \
-    WENLAN_HOST="http://127.0.0.1:$(cat "$WORK/clean-port")" \
-    "$CLI" --format json lint \
-    >"$WORK/clean-cli.json" 2>"$WORK/clean-cli.err"
-clean_exit=$?
-set -e
-wait "$FIXTURE_PID"
-FIXTURE_PID=""
-[ "$clean_exit" -eq 0 ] || fail "clean fixture exit $clean_exit, expected 0"
-[ ! -s "$WORK/clean-cli.err" ] || fail "clean fixture wrote stderr"
-python3 "$PY" compare "$WORK/clean.json" "$WORK/clean-cli.json"
+run_fixture clean "$WORK/clean.json" 0
 
 echo "==> Seeding privacy and path canaries outside the measured lint window"
 mkdir -p "$PAGES/.wenlan" "$PAGES/_sources"
@@ -244,6 +248,11 @@ echo "==> Proving typed incomplete precedence without mutation"
 mv "$PAGES" "$PAGES.missing"
 run_pair incomplete "" 2
 python3 "$PY" assert-report "$WORK/incomplete-http.json" --complete false --scope global \
+    --producer "$HEAD" --incomplete
+python3 "$PY" precedence-fixture "$WORK/baseline-http.json" \
+    "$WORK/incomplete-http.json" "$WORK/precedence.json"
+run_fixture precedence "$WORK/precedence.json" 2
+python3 "$PY" assert-report "$WORK/precedence.json" --complete false --scope global \
     --producer "$HEAD" --finding serving.route_scope_contracts --incomplete
 mv "$PAGES.missing" "$PAGES"
 
