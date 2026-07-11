@@ -5,10 +5,16 @@ use wenlan_types::lint::{
     LintApplicability, LintCheckResult, LintMetric, LintPrecondition, LintSeverity,
 };
 
+mod assessment;
 mod query;
 mod result;
-use query::load_records;
-use result::{base_metrics, finish, partition_assessment};
+use assessment::assessments;
+#[cfg(test)]
+use assessment::{derived, structural};
+use query::{apply_fact_index_visibility, load_records};
+use result::finish;
+#[cfg(test)]
+use result::partition_assessment;
 
 const LIFECYCLE_ID: &str = "memories.lifecycle_integrity";
 const SUPERSESSION_ID: &str = "memories.supersession_integrity";
@@ -30,7 +36,8 @@ struct MemoryRecord {
     replaced_by_active: bool,
     pending_revision: bool,
     recap: bool,
-    embedding_complete: bool,
+    evicted: bool,
+    embedding_valid: bool,
     needs_reembed: bool,
     failed_steps: u64,
     classified: bool,
@@ -39,7 +46,19 @@ struct MemoryRecord {
     fact: bool,
     page_link: bool,
     summary: bool,
+    episode_eligible: bool,
+    fact_eligible: bool,
+    summary_eligible: bool,
+    episode_receipt: Option<DerivedSweepReceipt>,
+    fact_receipt: Option<DerivedSweepReceipt>,
+    summary_receipt: Option<DerivedSweepReceipt>,
     head: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DerivedSweepReceipt {
+    first_missing_at: i64,
+    completed_sweeps: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,27 +68,66 @@ pub(crate) struct MemoryFeatureConfig {
     pub(crate) page: bool,
     pub(crate) summary: bool,
     pub(crate) temporal: bool,
-    readiness: Option<DerivedReadiness>,
+    episode_active: bool,
+    fact_active: bool,
+    summary_active: bool,
+    artifact_sample: crate::derived_artifact_state::DerivedArtifactSample,
 }
 
 impl MemoryFeatureConfig {
-    pub(crate) fn capture(page: bool) -> Self {
+    pub(crate) fn capture(database: &crate::db::MemoryDB, page: bool) -> Self {
+        use crate::derived_artifact_state::DerivedArtifact;
+        let artifact_sample = database.derived_artifact_sample();
         Self {
             episode: crate::db::episode_channel_enabled(),
             fact: crate::retrieval::fact_channel::fact_channel_enabled(),
             page,
             summary: crate::db::global_prelude_enabled(),
             temporal: crate::db::temporal_grounding_enabled(),
-            readiness: None,
+            episode_active: artifact_sample.is_active(DerivedArtifact::Episode),
+            fact_active: artifact_sample.is_active(DerivedArtifact::Fact),
+            summary_active: artifact_sample.is_active(DerivedArtifact::Summary),
+            artifact_sample,
         }
     }
+
+    pub(crate) fn artifact_state_changed(self, database: &crate::db::MemoryDB) -> bool {
+        self.artifact_sample != database.derived_artifact_sample()
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(database: &crate::db::MemoryDB, features: TestMemoryFeatures) -> Self {
+        use crate::derived_artifact_state::DerivedArtifact;
+        let artifact_sample = database.derived_artifact_sample();
+        Self {
+            episode: features.episode,
+            fact: features.fact,
+            page: features.page,
+            summary: features.summary,
+            temporal: features.temporal,
+            episode_active: artifact_sample.is_active(DerivedArtifact::Episode),
+            fact_active: artifact_sample.is_active(DerivedArtifact::Fact),
+            summary_active: artifact_sample.is_active(DerivedArtifact::Summary),
+            artifact_sample,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct TestMemoryFeatures {
+    pub(super) episode: bool,
+    pub(super) fact: bool,
+    pub(super) page: bool,
+    pub(super) summary: bool,
+    pub(super) temporal: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct DerivedReadiness {
     provider_ready: bool,
     active_backfill: bool,
-    completed_sweeps: u8,
+    completed_sweeps: u64,
     missing_age_seconds: u64,
 }
 
@@ -82,6 +140,18 @@ impl DerivedReadiness {
     }
 }
 
+impl DerivedSweepReceipt {
+    fn readiness(self, observed_at: i64, active_backfill: bool) -> DerivedReadiness {
+        DerivedReadiness {
+            provider_ready: true,
+            active_backfill,
+            completed_sweeps: self.completed_sweeps,
+            missing_age_seconds: u64::try_from(observed_at.saturating_sub(self.first_missing_at))
+                .unwrap_or(0),
+        }
+    }
+}
+
 pub(crate) async fn run(
     context: &LintContext<'_, '_>,
     config: MemoryFeatureConfig,
@@ -90,8 +160,15 @@ pub(crate) async fn run(
         Ok(records) => records,
         Err(()) => return failed_memory_results(context),
     };
+    if config.fact
+        && apply_fact_index_visibility(context, &mut records)
+            .await
+            .is_err()
+    {
+        return failed_memory_results(context);
+    }
     mark_heads_and_supersession(&mut records);
-    assessments(&records, config)
+    assessments(&records, config, context.clock().epoch_seconds())
         .into_iter()
         .map(|assessment| finish(context, assessment))
         .collect()
@@ -117,105 +194,19 @@ struct CheckAssessment {
     metrics: Vec<LintMetric>,
 }
 
-fn assessments(records: &[MemoryRecord], config: MemoryFeatureConfig) -> Vec<CheckAssessment> {
-    let heads = records
-        .iter()
-        .filter(|record| record.head)
-        .collect::<Vec<_>>();
-    let lifecycle = structural(LIFECYCLE_ID, records, |record| record.lifecycle_valid);
-    let supersession = structural(SUPERSESSION_ID, records, |record| {
-        record.supersedes.as_deref() != Some(record.source_id.as_str())
-            && record.target_exists
-            && (!record.pending_revision || record.supersedes.is_some())
-    });
-    let embedding = structural(EMBEDDING_ID, &heads, |record| {
-        record.embedding_complete || record.needs_reembed
-    });
-    let enrichment = structural(ENRICHMENT_ID, records, |record| record.failed_steps == 0);
-    let mut checks = vec![lifecycle, supersession, embedding, enrichment];
-    checks.push(partition_assessment(&heads, records));
-    checks.extend([
-        derived(EPISODE_ID, &heads, config.episode, config.readiness, |r| {
-            r.episode
-        }),
-        derived(FACT_ID, &heads, config.fact, config.readiness, |r| r.fact),
-        derived(PAGE_ID, &heads, config.page, None, |r| r.page_link),
-        derived(SUMMARY_ID, &heads, config.summary, config.readiness, |r| {
-            r.summary
-        }),
-        derived(TEMPORAL_ID, &heads, config.temporal, None, |r| {
-            r.event_dated
-        }),
-    ]);
-    checks
-}
-
-fn structural<T>(id: &'static str, records: &[T], valid: impl Fn(&T) -> bool) -> CheckAssessment {
-    CheckAssessment {
-        id,
-        levels: records
-            .iter()
-            .map(|record| {
-                if valid(record) {
-                    LintSeverity::Info
-                } else {
-                    LintSeverity::Error
-                }
-            })
-            .collect(),
-        applicability: if records.is_empty() {
-            LintApplicability::Inventory
-        } else {
-            LintApplicability::Applicable
-        },
-        precondition: LintPrecondition::Ready,
-        metrics: base_metrics(records.len(), records.iter().filter(|r| !valid(r)).count()),
-    }
-}
-
-fn derived(
-    id: &'static str,
-    heads: &[&MemoryRecord],
-    enabled: bool,
-    readiness: Option<DerivedReadiness>,
-    present: impl Fn(&MemoryRecord) -> bool,
-) -> CheckAssessment {
-    let missing = heads.iter().filter(|record| !present(record)).count();
-    let actionable = enabled && readiness.is_some_and(DerivedReadiness::overdue);
-    CheckAssessment {
-        id,
-        levels: heads
-            .iter()
-            .map(|record| {
-                if present(record) || !actionable {
-                    LintSeverity::Info
-                } else {
-                    LintSeverity::Warning
-                }
-            })
-            .collect(),
-        applicability: if !enabled {
-            LintApplicability::ExpectedEmpty
-        } else if actionable {
-            LintApplicability::Applicable
-        } else {
-            LintApplicability::Inventory
-        },
-        precondition: if enabled {
-            LintPrecondition::Ready
-        } else {
-            LintPrecondition::ConfiguredOff
-        },
-        metrics: base_metrics(heads.len(), missing),
-    }
-}
-
 fn mark_heads_and_supersession(records: &mut [MemoryRecord]) {
     for record in records {
-        record.head = !record.pending_revision && !record.recap && !record.replaced_by_active;
+        record.head = !record.pending_revision
+            && !record.recap
+            && !record.evicted
+            && !record.replaced_by_active;
     }
 }
 
 #[cfg(test)]
 #[path = "memories_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "memories_integration_test.rs"]
+mod integration_tests;

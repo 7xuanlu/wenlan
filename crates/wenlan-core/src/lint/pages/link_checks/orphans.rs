@@ -66,6 +66,7 @@ mod architecture_tests {
     #[test]
     fn lint_orphan_module_has_no_mutating_resolver_dependency() {
         let source = include_str!("orphans.rs");
-        assert!(!source.contains("resolve_orphan_page_links"));
+        let forbidden = concat!("resolve_orphan_page_", "links");
+        assert!(!source.contains(forbidden));
     }
 }

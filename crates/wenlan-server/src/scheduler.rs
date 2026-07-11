@@ -150,6 +150,10 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_citation_sweep = Instant::now()
             .checked_sub(CITATION_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
+        const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
+        let mut last_derived_receipt_sweep = Instant::now()
+            .checked_sub(DERIVED_RECEIPT_SWEEP_INTERVAL)
+            .unwrap_or_else(Instant::now);
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -394,6 +398,13 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 )
                 .await;
                 last_backstop = now;
+            }
+
+            if now.duration_since(last_derived_receipt_sweep) >= DERIVED_RECEIPT_SWEEP_INTERVAL {
+                if let Err(error) = db.record_derived_artifact_sweep().await {
+                    tracing::warn!("[scheduler] derived receipt sweep error: {error}");
+                }
+                last_derived_receipt_sweep = now;
             }
 
             // --- 5. Enrichment sweep: back-fill entity linkage for memories

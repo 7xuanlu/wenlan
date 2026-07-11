@@ -4,7 +4,7 @@ use crate::lint::context::{CancellationToken, LintClock};
 use crate::lint::runner::LintRunner;
 use crate::lint::snapshot::LintReadSnapshot;
 use crate::lint::test_support::DbSemanticFingerprint;
-use wenlan_types::lint::{LintApplicability, LintMetricValue, LintQuery};
+use wenlan_types::lint::{LintApplicability, LintMetricCode, LintMetricValue, LintQuery};
 
 fn record(id: &str) -> MemoryRecord {
     MemoryRecord {
@@ -15,7 +15,8 @@ fn record(id: &str) -> MemoryRecord {
         replaced_by_active: false,
         pending_revision: false,
         recap: false,
-        embedding_complete: true,
+        evicted: false,
+        embedding_valid: true,
         needs_reembed: false,
         failed_steps: 0,
         classified: true,
@@ -24,6 +25,12 @@ fn record(id: &str) -> MemoryRecord {
         fact: false,
         page_link: false,
         summary: false,
+        episode_eligible: true,
+        fact_eligible: true,
+        summary_eligible: true,
+        episode_receipt: None,
+        fact_receipt: None,
+        summary_receipt: None,
         head: true,
     }
 }
@@ -31,7 +38,14 @@ fn record(id: &str) -> MemoryRecord {
 #[test]
 fn configured_off_derived_substrate_is_expected_empty() {
     let row = record("mem-a");
-    let result = derived(EPISODE_ID, &[&row], false, None, |r| r.episode);
+    let result = derived(
+        EPISODE_ID,
+        &[&row],
+        false,
+        |_| true,
+        |r| r.episode,
+        |_| None,
+    );
     assert_eq!(result.applicability, LintApplicability::ExpectedEmpty);
     assert_eq!(result.precondition, LintPrecondition::ConfiguredOff);
     assert!(result
@@ -63,7 +77,14 @@ fn missing_derived_artifact_needs_two_sweeps_and_sixty_minutes() {
             missing_age_seconds: 3_599,
         },
     ] {
-        let result = derived(EPISODE_ID, &[&row], true, Some(readiness), |r| r.episode);
+        let result = derived(
+            EPISODE_ID,
+            &[&row],
+            true,
+            |_| true,
+            |r| r.episode,
+            |_| Some(readiness),
+        );
         assert_eq!(result.applicability, LintApplicability::Inventory);
         assert_eq!(result.levels, vec![LintSeverity::Info]);
     }
@@ -73,7 +94,14 @@ fn missing_derived_artifact_needs_two_sweeps_and_sixty_minutes() {
         completed_sweeps: 2,
         missing_age_seconds: 3_600,
     };
-    let result = derived(EPISODE_ID, &[&row], true, Some(overdue), |r| r.episode);
+    let result = derived(
+        EPISODE_ID,
+        &[&row],
+        true,
+        |_| true,
+        |r| r.episode,
+        |_| Some(overdue),
+    );
     assert_eq!(result.applicability, LintApplicability::Applicable);
     assert_eq!(result.levels, vec![LintSeverity::Warning]);
 }
@@ -81,19 +109,17 @@ fn missing_derived_artifact_needs_two_sweeps_and_sixty_minutes() {
 #[test]
 fn structural_failures_are_errors_but_pending_reembed_is_healthy() {
     let mut row = record("mem-a");
-    row.embedding_complete = false;
+    row.embedding_valid = false;
     row.needs_reembed = true;
+    row.embedding_valid = true;
     assert_eq!(
-        structural(EMBEDDING_ID, &[&row], |r| r.embedding_complete
-            || r.needs_reembed)
-        .levels,
+        structural(EMBEDDING_ID, &[&row], |r| r.embedding_valid).levels,
         vec![LintSeverity::Info]
     );
     row.needs_reembed = false;
+    row.embedding_valid = false;
     assert_eq!(
-        structural(EMBEDDING_ID, &[&row], |r| r.embedding_complete
-            || r.needs_reembed)
-        .levels,
+        structural(EMBEDDING_ID, &[&row], |r| r.embedding_valid).levels,
         vec![LintSeverity::Error]
     );
     row.failed_steps = 1;
@@ -107,9 +133,9 @@ fn structural_failures_are_errors_but_pending_reembed_is_healthy() {
 fn vector_liveness_enumerates_each_head_instead_of_accepting_nonzero_total() {
     let present = record("present");
     let mut missing = record("missing");
-    missing.embedding_complete = false;
+    missing.embedding_valid = false;
     let result = structural(EMBEDDING_ID, &[&present, &missing], |record| {
-        record.embedding_complete || record.needs_reembed
+        record.embedding_valid
     });
     assert_eq!(result.levels, vec![LintSeverity::Info, LintSeverity::Error]);
     assert!(result.metrics.iter().any(|metric| {

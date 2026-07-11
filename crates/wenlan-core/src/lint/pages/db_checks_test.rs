@@ -55,7 +55,7 @@ fn unknown_storage_values_are_error_findings() {
         page("b", "active", "future", "confirmed"),
         page("c", "active", "distilled", "future"),
     ] {
-        let partition = assess_partitions(&[row.clone()])
+        let partition = assess_partitions(std::slice::from_ref(&row))
             .result(PARTITIONS_ID, 0)
             .unwrap();
         assert_eq!(partition.outcome(), LintOutcome::Finding);

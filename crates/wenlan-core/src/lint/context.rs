@@ -37,6 +37,7 @@ impl Default for CancellationToken {
 pub struct LintClock {
     started: Instant,
     fixed: bool,
+    epoch_seconds: i64,
 }
 
 impl LintClock {
@@ -44,14 +45,21 @@ impl LintClock {
         Self {
             started: Instant::now(),
             fixed: false,
+            epoch_seconds: chrono::Utc::now().timestamp(),
         }
     }
 
     #[cfg(test)]
     pub fn fixed() -> Self {
+        Self::fixed_at(0)
+    }
+
+    #[cfg(test)]
+    pub fn fixed_at(epoch_seconds: i64) -> Self {
         Self {
             started: Instant::now(),
             fixed: true,
+            epoch_seconds,
         }
     }
 
@@ -65,6 +73,10 @@ impl LintClock {
 
     pub fn duration_ms(&self) -> u64 {
         u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    pub(crate) fn epoch_seconds(&self) -> i64 {
+        self.epoch_seconds
     }
 }
 

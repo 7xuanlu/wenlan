@@ -1,4 +1,4 @@
-use super::catalog::{catalog, LintCheckGroup, ScopeAxis};
+use super::catalog::{catalog, catalog_entry, catalog_group, LintCheckGroup, ScopeAxis};
 use super::context::{CancellationToken, ExecutionGate, LintClock, PopulationAccounting};
 use super::runner::{
     configured_off_results, validate_catalog_results, LintRunError, LintRunner, TestScenario,
@@ -250,11 +250,14 @@ async fn page_group_timeout_with_incomplete_enumeration_fails_the_report() {
         .await
         .unwrap();
     assert!(!report.complete());
-    assert_eq!(report.totals().incomplete(), catalog().len() as u32);
-    assert!(report
-        .checks()
-        .iter()
-        .all(|check| check.outcome() == LintOutcome::FailedToRun));
+    assert_eq!(
+        report.totals().incomplete(),
+        u32::try_from(catalog_group(LintCheckGroup::Pages).count()).unwrap()
+    );
+    assert!(report.checks().iter().all(|check| {
+        let page = catalog_entry(check.check_id()).unwrap().group == LintCheckGroup::Pages;
+        (check.outcome() == LintOutcome::FailedToRun) == page
+    }));
     assert!(report
         .checks()
         .iter()

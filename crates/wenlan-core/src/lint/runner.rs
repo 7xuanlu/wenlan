@@ -37,6 +37,8 @@ pub struct LintRunner {
     scenario: Option<TestScenario>,
     #[cfg(test)]
     synchronization: Option<TestSynchronization>,
+    #[cfg(test)]
+    memory_features: Option<super::memories::TestMemoryFeatures>,
 }
 
 #[cfg(test)]
@@ -110,6 +112,8 @@ impl LintRunner {
             scenario: None,
             #[cfg(test)]
             synchronization: None,
+            #[cfg(test)]
+            memory_features: None,
         }
     }
 
@@ -128,6 +132,15 @@ impl LintRunner {
         self
     }
 
+    #[cfg(test)]
+    pub(super) fn with_test_memory_features(
+        mut self,
+        features: super::memories::TestMemoryFeatures,
+    ) -> Self {
+        self.memory_features = Some(features);
+        self
+    }
+
     pub async fn run(
         &self,
         database: &MemoryDB,
@@ -135,7 +148,16 @@ impl LintRunner {
         page_root: Option<&Path>,
         page_projection_enabled: bool,
     ) -> Result<LintReport, LintRunError> {
-        let memory_config = super::memories::MemoryFeatureConfig::capture(page_projection_enabled);
+        let memory_config = {
+            #[cfg(test)]
+            if let Some(features) = self.memory_features {
+                super::memories::MemoryFeatureConfig::for_test(database, features)
+            } else {
+                super::memories::MemoryFeatureConfig::capture(database, page_projection_enabled)
+            }
+            #[cfg(not(test))]
+            super::memories::MemoryFeatureConfig::capture(database, page_projection_enabled)
+        };
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
         #[cfg(test)]
@@ -166,17 +188,29 @@ impl LintRunner {
             &self.clock,
             &self.gate,
         );
-        let mut checks = if execution_failed {
+        let (mut checks, page_elapsed) = if execution_failed {
             record_zero_populations(&context)?;
-            failed_results(&self.clock)
+            (failed_results(&self.clock), std::time::Duration::ZERO)
         } else {
-            self.run_groups(&context, page_projection_enabled, memory_config)
-                .await?
+            self.run_groups(
+                &context,
+                page_projection_enabled,
+                memory_config,
+                page_started,
+            )
+            .await?
         };
-        let page_elapsed = self.page_elapsed(page_started);
-        if self.gate.check(page_elapsed).is_err()
-            || self.gate.check_run(self.clock.elapsed()).is_err()
-        {
+        if memory_config.artifact_state_changed(database) {
+            checks = inconsistent_selected_results(&self.clock, &checks, |check_id| {
+                catalog_entry(check_id).is_some_and(|entry| entry.group == LintCheckGroup::Memories)
+            })?;
+        }
+        if self.gate.check(page_elapsed).is_err() {
+            checks = failed_selected_results(&self.clock, &checks, |check_id| {
+                catalog_entry(check_id).is_some_and(|entry| entry.group == LintCheckGroup::Pages)
+            })?;
+        }
+        if self.gate.check_run(self.clock.elapsed()).is_err() {
             checks = failed_results_from_checks(&self.clock, &checks)?;
         }
         validate_catalog_results(&mut checks)?;
@@ -229,14 +263,17 @@ impl LintRunner {
         context: &LintContext<'_, '_>,
         page_projection_enabled: bool,
         memory_config: super::memories::MemoryFeatureConfig,
-    ) -> Result<Vec<LintCheckResult>, LintRunError> {
+        page_started: std::time::Duration,
+    ) -> Result<(Vec<LintCheckResult>, std::time::Duration), LintRunError> {
         #[cfg(test)]
         if let Some(scenario) = self.scenario {
-            return run_test_scenario(context, scenario).await;
+            let results = run_test_scenario(context, scenario).await?;
+            return Ok((results, self.page_elapsed(page_started)));
         }
         let mut results = super::pages::run(context, page_projection_enabled).await;
+        let page_elapsed = self.page_elapsed(page_started);
         results.extend(super::memories::run(context, memory_config).await);
-        Ok(results)
+        Ok((results, page_elapsed))
     }
 
     fn page_elapsed(&self, page_started: std::time::Duration) -> std::time::Duration {
@@ -514,6 +551,34 @@ fn inconsistent_selected_results(
                     LintPrecondition::SnapshotUnstable,
                     LintSummaryCode::SnapshotInconsistent,
                     Some(LintRecommendationCode::RerunAfterSnapshotStabilizes),
+                    clock.duration_ms(),
+                    check.coverage().denominator(),
+                )
+                .map_err(LintRunError::from)
+            } else {
+                Ok(check.clone())
+            }
+        })
+        .collect()
+}
+
+fn failed_selected_results(
+    clock: &LintClock,
+    checks: &[LintCheckResult],
+    affected: impl Fn(&str) -> bool,
+) -> Result<Vec<LintCheckResult>, LintRunError> {
+    checks
+        .iter()
+        .map(|check| {
+            if affected(check.check_id()) {
+                make_result_with_denominator(
+                    check.check_id(),
+                    LintOutcome::FailedToRun,
+                    LintSeverity::Error,
+                    LintApplicability::Applicable,
+                    LintPrecondition::Ready,
+                    LintSummaryCode::ExecutionFailed,
+                    Some(LintRecommendationCode::InspectRuntime),
                     clock.duration_ms(),
                     check.coverage().denominator(),
                 )
