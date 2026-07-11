@@ -11,6 +11,7 @@ from typing import Any
 
 
 VOLATILE_KEYS = {"duration_ms", "observed_at"}
+VOLATILE_FILE_SUFFIXES = ("-shm",)
 
 
 def normalize(value: Any) -> Any:
@@ -62,6 +63,8 @@ def fingerprint(paths: list[str]) -> str:
         hash_path(hasher, root.parent, root)
         if root.is_dir():
             for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+                if path.name.endswith(VOLATILE_FILE_SUFFIXES):
+                    continue
                 hash_path(hasher, root, path)
     return hasher.hexdigest()
 
