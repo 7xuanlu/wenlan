@@ -4,12 +4,14 @@ use crate::lint::context::{
     AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext,
 };
 use crate::lint::pages::fs::scan_page_root;
+use crate::lint::runner::LintRunner;
 use crate::lint::snapshot::LintReadSnapshot;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 use wenlan_types::lint::{
-    LintApplicability, LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome, LintSeverity,
+    LintApplicability, LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome, LintQuery,
+    LintSeverity,
 };
 
 #[tokio::test]
@@ -129,7 +131,9 @@ fn manifest_divergence_is_inventory_but_invalid_json_is_error() {
     );
     write(root.path(), "_sources/mem-extra.md", b"stub");
     let scan = scan_page_root(root.path()).unwrap();
-    let result = assess_manifest(&scan, None).result(MANIFEST_ID, 0).unwrap();
+    let result = assess_manifest(&scan, false)
+        .result(MANIFEST_ID, 0)
+        .unwrap();
     assert_eq!(result.outcome(), LintOutcome::Pass);
     assert_eq!(result.applicability(), LintApplicability::Inventory);
     assert_eq!(metric_value(&result, LintMetricCode::PageManifestPages), 1);
@@ -141,7 +145,7 @@ fn manifest_divergence_is_inventory_but_invalid_json_is_error() {
 
     write(root.path(), "_sources/.manifest.json", b"{");
     let invalid = scan_page_root(root.path()).unwrap();
-    let result = assess_manifest(&invalid, None)
+    let result = assess_manifest(&invalid, false)
         .result(MANIFEST_ID, 0)
         .unwrap();
     assert_eq!(result.outcome(), LintOutcome::Finding);
@@ -161,7 +165,9 @@ fn source_symlink_escape_is_a_manifest_containment_error() {
     )
     .unwrap();
     let scan = scan_page_root(root.path()).unwrap();
-    let result = assess_manifest(&scan, None).result(MANIFEST_ID, 0).unwrap();
+    let result = assess_manifest(&scan, false)
+        .result(MANIFEST_ID, 0)
+        .unwrap();
     assert_eq!(result.outcome(), LintOutcome::Finding);
     assert_eq!(result.severity(), LintSeverity::Error);
     assert!(!serde_json::to_string(&result)
@@ -169,16 +175,79 @@ fn source_symlink_escape_is_a_manifest_containment_error() {
         .contains("private-outside"));
 }
 
+#[test]
+fn oversized_manifest_is_bounded_and_classified_as_invalid() {
+    let root = TempDir::new().unwrap();
+    write(
+        root.path(),
+        "_sources/.manifest.json",
+        &vec![b'x'; 1024 * 1024 + 1],
+    );
+    let scan = scan_page_root(root.path()).unwrap();
+    let result = assess_manifest(&scan, false)
+        .result(MANIFEST_ID, 0)
+        .unwrap();
+    assert_eq!(result.outcome(), LintOutcome::Finding);
+    assert_eq!(result.severity(), LintSeverity::Error);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn selected_runner_keeps_global_manifest_errors_without_evidence() {
+    use std::os::unix::fs::symlink;
+
+    let (db, _tmp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "INSERT INTO spaces (id, name, created_at, updated_at) \
+             VALUES ('lint-space', 'alpha', 1, 1)",
+            (),
+        )
+        .await
+        .unwrap();
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("_sources")).unwrap();
+    symlink(
+        "../../private-outside",
+        root.path().join("_sources/escape.md"),
+    )
+    .unwrap();
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .run(
+            &db,
+            &LintQuery {
+                space: Some("alpha".to_string()),
+            },
+            Some(root.path()),
+            true,
+        )
+        .await
+        .unwrap();
+    let manifest = report
+        .checks()
+        .iter()
+        .find(|check| check.check_id() == MANIFEST_ID)
+        .unwrap();
+    assert_eq!(manifest.outcome(), LintOutcome::Finding);
+    assert_eq!(manifest.severity(), LintSeverity::Error);
+    assert!(manifest.evidence().is_empty());
+}
+
 #[tokio::test]
 async fn optional_project_artifacts_are_neutral_inventory_with_structural_counts() {
     let (db, _tmp) = test_db().await;
     let conn = db._db.connect().unwrap();
     insert_page(&conn, "page-active", None, "active").await;
-    insert_page(&conn, "page-archived", None, "archived").await;
+    insert_page(&conn, "page-target", None, "active").await;
+    insert_page(&conn, "page-archived-target", None, "archived").await;
     conn.execute(
         "INSERT INTO page_links (source_page_id, target_page_id, label_key, label) \
          VALUES ('page-active', 'page-target', 'resolved', 'resolved'), \
-                ('page-active', NULL, 'broken', 'broken')",
+                ('page-active', 'page-missing', 'missing', 'missing'), \
+                ('page-active', 'page-archived-target', 'archived', 'archived'), \
+                ('page-active', NULL, 'unresolved', 'unresolved')",
         (),
     )
     .await
@@ -207,21 +276,21 @@ async fn optional_project_artifacts_are_neutral_inventory_with_structural_counts
         .unwrap()
         .result(ARTIFACT_ID, 0)
         .unwrap();
-    assert_eq!(result.outcome(), LintOutcome::Pass);
-    assert_eq!(result.applicability(), LintApplicability::Inventory);
+    assert_eq!(result.outcome(), LintOutcome::Finding);
+    assert_eq!(result.severity(), LintSeverity::Warning);
     assert_eq!(
         metric_value(&result, LintMetricCode::ProjectArchiveRecords),
         1
     );
     assert_eq!(
         metric_value(&result, LintMetricCode::ProjectOutboundLinks),
-        2
+        4
     );
     assert_eq!(
         metric_value(&result, LintMetricCode::ProjectInboundLinks),
         1
     );
-    assert_eq!(metric_value(&result, LintMetricCode::ProjectBrokenLinks), 1);
+    assert_eq!(metric_value(&result, LintMetricCode::ProjectBrokenLinks), 2);
 }
 
 async fn insert_page(conn: &libsql::Connection, id: &str, workspace: Option<&str>, status: &str) {

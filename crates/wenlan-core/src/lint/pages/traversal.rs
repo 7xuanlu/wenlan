@@ -130,12 +130,16 @@ fn visit_entry(
                     .map_err(|_| PageFsError::ReadPrefix)?;
                 *state_bytes = Some(bytes);
             } else if path == "_sources/.manifest.json" {
-                if opened.len() > super::fs::MANIFEST_MAX_BYTES {
+                let mut bytes = Vec::new();
+                (&mut file)
+                    .take(super::fs::MANIFEST_MAX_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| PageFsError::ReadPrefix)?;
+                if bytes.len()
+                    > usize::try_from(super::fs::MANIFEST_MAX_BYTES).unwrap_or(usize::MAX)
+                {
                     *manifest_too_large = true;
                 } else {
-                    let mut bytes = Vec::new();
-                    file.read_to_end(&mut bytes)
-                        .map_err(|_| PageFsError::ReadPrefix)?;
                     *manifest_bytes = Some(bytes);
                 }
             }
