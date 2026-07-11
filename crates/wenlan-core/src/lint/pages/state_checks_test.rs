@@ -111,10 +111,13 @@ fn missing_state_with_recognized_projection_is_error() {
 fn future_state_schema_blocks_all_state_dependent_checks() {
     let (_root, scan) = scan(Some("{\"schema_version\":99,\"pages\":{}}"), &[]);
     let selected_ids = BTreeSet::new();
-    for (_, assessment) in evaluate_all(&scan, &[], false, &selected_ids) {
-        let (outcome, severity, _, _) = outcome(assessment);
-        assert_eq!(outcome, LintOutcome::NotRunPrerequisite);
-        assert_eq!(severity, LintSeverity::Error);
+    for (check_id, assessment) in evaluate_all(&scan, &[], false, &selected_ids) {
+        let result = assessment.result(check_id, 0).unwrap();
+        assert_eq!(result.outcome(), LintOutcome::NotRunPrerequisite);
+        assert_eq!(result.severity(), LintSeverity::Error);
+        assert_eq!(result.applicability(), LintApplicability::NotApplicable);
+        assert_eq!(result.coverage().denominator(), 1);
+        assert!(!crate::lint::runner::synthetic_report(vec![result]).complete());
     }
 }
 
@@ -321,13 +324,127 @@ fn defect_after_sample_cap_is_detected_and_output_is_deterministic() {
         .result(IDENTITY_ID, 0)
         .unwrap();
     assert_eq!(first.outcome(), LintOutcome::Finding);
-    assert!(first.coverage().denominator() > 100);
+    assert_eq!(first.coverage().denominator(), 101);
+    assert_eq!(first.coverage().evaluated(), 101);
     assert_eq!(first.evidence().len(), 100);
     assert!(first.coverage().truncated());
     assert_eq!(
         serde_json::to_vec(&first).unwrap(),
         serde_json::to_vec(&second).unwrap()
     );
+}
+
+#[test]
+fn first_hundred_clean_rows_do_not_hide_defect_101() {
+    let mut state_entries = serde_json::Map::new();
+    let mut files = Vec::new();
+    let mut pages = Vec::new();
+    for index in 0..101 {
+        let id = format!("page_{index:03}");
+        let path = format!("page_{index:03}.md");
+        state_entries.insert(id.clone(), serde_json::json!({"file": path, "version": 1}));
+        files.push((
+            path,
+            format!(
+                "---\norigin_id: {id}\norigin_version: {}\n---\n",
+                if index == 100 { 2 } else { 1 }
+            ),
+        ));
+        pages.push(page(&id, "active", 1));
+    }
+    let raw = serde_json::json!({"schema_version": 2, "pages": state_entries}).to_string();
+    let file_refs = files
+        .iter()
+        .map(|(path, contents)| (path.as_str(), contents.as_str()))
+        .collect::<Vec<_>>();
+    let (_root, scan) = scan(Some(&raw), &file_refs);
+    let result = evaluate_versions(&scan, &pages, false)
+        .result(VERSION_ALIGNMENT_ID, 0)
+        .unwrap();
+    assert_eq!(result.outcome(), LintOutcome::Finding);
+    assert_eq!(result.severity(), LintSeverity::Warning);
+    assert_eq!(result.coverage().denominator(), 101);
+    assert_eq!(result.coverage().evaluated(), 101);
+    assert_eq!(result.evidence().len(), 1);
+    assert!(!result.coverage().truncated());
+    assert!(serde_json::to_string(&result)
+        .unwrap()
+        .contains("\"opaque_id\":101"));
+}
+
+#[test]
+fn swapped_state_paths_are_error_with_exact_population() {
+    let state = "{\"schema_version\":2,\"pages\":{\"page_a\":{\"file\":\"b.md\",\"version\":1},\"page_b\":{\"file\":\"a.md\",\"version\":1}}}";
+    let (_root, scan) = scan(
+        Some(state),
+        &[
+            ("a.md", "---\norigin_id: page_a\norigin_version: 1\n---\n"),
+            ("b.md", "---\norigin_id: page_b\norigin_version: 1\n---\n"),
+        ],
+    );
+    let result = evaluate_identity(
+        &scan,
+        &[page("page_a", "active", 1), page("page_b", "active", 1)],
+        false,
+    )
+    .result(IDENTITY_ID, 0)
+    .unwrap();
+    assert_eq!(result.outcome(), LintOutcome::Finding);
+    assert_eq!(result.severity(), LintSeverity::Error);
+    assert_eq!(result.applicability(), LintApplicability::Applicable);
+    assert_eq!(result.coverage().denominator(), 6);
+    let report = crate::lint::runner::synthetic_report(vec![result]);
+    assert!(report.complete());
+    assert_eq!(report.totals().findings(), 1);
+}
+
+#[test]
+fn reserved_and_non_markdown_targets_are_isolated_errors() {
+    for (target, file) in [
+        (
+            ".wenlan/private.md",
+            Some((".wenlan/private.md", "control")),
+        ),
+        ("page.txt", Some(("page.txt", "not markdown"))),
+    ] {
+        let raw = serde_json::json!({
+            "schema_version": 2,
+            "pages": {"page_a": {"file": target, "version": 1}}
+        })
+        .to_string();
+        let files = file.into_iter().collect::<Vec<_>>();
+        let (_root, scan) = scan(Some(&raw), &files);
+        let result = evaluate_identity(&scan, &[page("page_a", "active", 1)], false)
+            .result(IDENTITY_ID, 0)
+            .unwrap();
+        assert_eq!(result.outcome(), LintOutcome::Finding, "{target}");
+        assert_eq!(result.severity(), LintSeverity::Error, "{target}");
+        assert_eq!(result.coverage().denominator(), 2, "{target}");
+    }
+}
+
+#[test]
+fn source_stub_is_excluded_from_manual_markdown_population_and_output() {
+    let state = "{\"schema_version\":2,\"pages\":{\"page_a\":{\"file\":\"a.md\",\"version\":1}}}";
+    let (_root, scan) = scan(
+        Some(state),
+        &[
+            ("a.md", "---\norigin_id: page_a\norigin_version: 1\n---\n"),
+            (
+                "_sources/CANARY_PRIVATE_STUB.md",
+                "---\norigin_id: page_other\n---\n",
+            ),
+        ],
+    );
+    let result = evaluate_identity(&scan, &[page("page_a", "active", 1)], false)
+        .result(IDENTITY_ID, 0)
+        .unwrap();
+    assert_eq!(result.outcome(), LintOutcome::Pass);
+    assert_eq!(result.coverage().denominator(), 3);
+    assert_eq!(scan.page_markdown().len(), 1);
+    assert!(!serde_json::to_string(&result)
+        .unwrap()
+        .contains("CANARY_PRIVATE_STUB"));
 }
 
 #[tokio::test]
