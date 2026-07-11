@@ -9,6 +9,48 @@ use std::task::{Context, Poll};
 use tower::Service;
 
 #[derive(Clone)]
+/// Finalized HTTP service with no route-composition surface.
+///
+/// ```compile_fail,E0599
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// use wenlan_server::{router::build_router, state::ServerState};
+/// let state = Arc::new(RwLock::new(ServerState::default()));
+/// let app = build_router(state);
+/// let method: axum::routing::MethodRouter<()> = axum::routing::get(|| async {});
+/// app.route("/forbidden", method);
+/// ```
+///
+/// ```compile_fail,E0599
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// use wenlan_server::{router::build_router, state::ServerState};
+/// let state = Arc::new(RwLock::new(ServerState::default()));
+/// let app = build_router(state);
+/// app.nest("/forbidden", axum::Router::<()>::new());
+/// ```
+///
+/// ```compile_fail,E0599
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// use wenlan_server::{router::build_router, state::ServerState};
+/// let state = Arc::new(RwLock::new(ServerState::default()));
+/// let app = build_router(state);
+/// app.merge(axum::Router::<()>::new());
+/// ```
+///
+/// ```compile_fail,E0599
+/// use std::convert::Infallible;
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// use wenlan_server::{router::build_router, state::ServerState};
+/// let state = Arc::new(RwLock::new(ServerState::default()));
+/// let app = build_router(state);
+/// let service = tower::service_fn(|_: axum::http::Request<axum::body::Body>| async {
+///     Ok::<_, Infallible>(axum::http::Response::new(axum::body::Body::empty()))
+/// });
+/// app.route_service("/forbidden", service);
+/// ```
 pub struct AppRouter {
     inner: Router,
 }
