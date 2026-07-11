@@ -6,7 +6,9 @@ use crate::lint::context::{
     AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext,
 };
 use std::collections::BTreeMap;
-use wenlan_types::lint::{LintApplicability, LintOpaqueId, LintOutcome, LintSeverity};
+use wenlan_types::lint::{
+    LintApplicability, LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome, LintSeverity,
+};
 
 fn source(locator: &str, expected: &str, actual: &[&str]) -> SourceRecord {
     SourceRecord {
@@ -85,6 +87,41 @@ fn citation_null_empty_nonempty_and_occurrence_partitions_are_exact() {
     assert_eq!(partitions.page_total(), 3);
     assert_eq!(partitions.occurrences, 4);
     assert!(partitions.partitions_are_exact());
+    assert_eq!(metric(&result, LintMetricCode::CitationNullPages), 1);
+    assert_eq!(metric(&result, LintMetricCode::CitationEmptyPages), 1);
+    assert_eq!(metric(&result, LintMetricCode::CitationNonemptyPages), 1);
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationVerifiedOccurrences),
+        3
+    );
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationUnverifiedOccurrences),
+        1
+    );
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationSentenceOccurrences),
+        2
+    );
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationParagraphOccurrences),
+        2
+    );
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationMemoryOccurrences),
+        1
+    );
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationExternalFileOccurrences),
+        1
+    );
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationExternalUrlOccurrences),
+        1
+    );
+    assert_eq!(
+        metric(&result, LintMetricCode::CitationAuthoredOccurrences),
+        1
+    );
     let json = serde_json::to_string(&result).unwrap();
     assert!(!json.contains("secret"));
 }
@@ -105,11 +142,66 @@ fn malformed_or_unknown_citation_dimensions_are_errors() {
     }
 }
 
-#[test]
-fn hundred_thousand_sources_validate_all_rows_and_cap_opaque_samples() {
+#[tokio::test]
+async fn hundred_thousand_sql_rows_validate_all_and_cap_opaque_samples() {
+    let (db, _tmp) = test_db().await;
+    let conn = db._db.connect().unwrap();
+    insert_page(&conn, "page-scale", "workspace-scale", None).await;
+    conn.execute(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 100000)
+         INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason)
+         SELECT 'page-scale', printf('private-locator-%06d', x), 1, 'scale' FROM n",
+        (),
+    )
+    .await
+    .unwrap();
+    conn.execute(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 99999)
+         INSERT INTO page_evidence (page_id, source_kind, locator, linked_at, link_reason)
+         SELECT 'page-scale', CASE WHEN x <= 100 THEN 'external_file' ELSE 'memory' END,
+                printf('private-locator-%06d', x), 1, 'scale' FROM n",
+        (),
+    )
+    .await
+    .unwrap();
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let mut source_count = snapshot
+        .query(
+            "SELECT COUNT(*) FROM page_sources WHERE page_id = 'page-scale'",
+            libsql::params::Params::None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        source_count
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<i64>(0)
+            .unwrap(),
+        100_000
+    );
+    let mut evidence_count = snapshot
+        .query(
+            "SELECT COUNT(*) FROM page_evidence WHERE page_id = 'page-scale'",
+            libsql::params::Params::None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        evidence_count
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<i64>(0)
+            .unwrap(),
+        99_999
+    );
     let mut records = (0..100_000)
         .map(|ordinal| {
-            let locator = format!("private-locator-{ordinal}");
+            let locator = format!("private-locator-{ordinal:06}");
             if ordinal < 100 {
                 source(&locator, "memory", &["external_file"])
             } else {
@@ -146,12 +238,39 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
     .await;
     insert_memory(&conn, "file::shared", "other", "authored", None).await;
     insert_memory(&conn, "authored-id", "authored-source", "authored", None).await;
+    insert_memory(
+        &conn,
+        "folder-id-locator",
+        "folder::canonical",
+        "memory",
+        Some("folder"),
+    )
+    .await;
+    insert_memory(
+        &conn,
+        "url-id-locator",
+        "https://canonical.example",
+        "webpage",
+        None,
+    )
+    .await;
+    insert_memory(
+        &conn,
+        "authored-id-locator",
+        "authored-canonical",
+        "authored",
+        None,
+    )
+    .await;
     insert_page(&conn, "page-a", "workspace-a", None).await;
     insert_page(&conn, "page-b", "workspace-b", Some("[]")).await;
     for (page, locator, kind) in [
         ("page-a", "file::shared", "external_file"),
         ("page-a", "https://missing.example", "external_url"),
         ("page-a", "authored-source", "authored"),
+        ("page-a", "folder-id-locator", "external_file"),
+        ("page-a", "url-id-locator", "external_url"),
+        ("page-a", "authored-id-locator", "authored"),
         ("page-a", "plain-missing", "memory"),
         ("page-b", "private-canary", "external_file"),
     ] {
@@ -179,6 +298,9 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
         "file::shared".to_string(),
         "https://missing.example".to_string(),
         "authored-source".to_string(),
+        "folder-id-locator".to_string(),
+        "url-id-locator".to_string(),
+        "authored-id-locator".to_string(),
         "plain-missing".to_string(),
     ];
     let writer = db.resolve_source_kinds(&requested).await.unwrap();
@@ -191,7 +313,7 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
     let gate = ExecutionGate::new(CancellationToken::new());
     let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
     let records = load_sources(&context).await.unwrap();
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), 7);
     let lint = records
         .iter()
         .map(|record| (record.locator.as_str(), record.expected_kind.as_str()))
@@ -219,7 +341,7 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
     let global_scope = AppliedScope::global();
     let global_context = LintContext::new(&snapshot, &global_scope, None, &clock, &gate);
     let global_records = load_sources(&global_context).await.unwrap();
-    assert_eq!(global_records.len(), 5);
+    assert_eq!(global_records.len(), 8);
     let global_result = assess_sources(&global_records, &[])
         .result(SOURCE_COVERAGE_ID, 0)
         .unwrap();
@@ -231,6 +353,18 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
         .result(CITATION_PARTITIONS_ID, 0)
         .unwrap();
     assert_eq!(global_citations.coverage().denominator(), 2);
+}
+
+fn metric(result: &LintCheckResult, code: LintMetricCode) -> u64 {
+    result
+        .metrics()
+        .iter()
+        .find(|metric| metric.code() == code)
+        .and_then(|metric| match metric.value() {
+            LintMetricValue::Count { value } => Some(*value),
+            LintMetricValue::Boolean { .. } | LintMetricValue::CatalogCode { .. } => None,
+        })
+        .unwrap()
 }
 
 async fn insert_memory(

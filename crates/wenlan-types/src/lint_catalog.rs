@@ -10,6 +10,17 @@ pub enum LintMetricCode {
     AffectedRecords,
     PendingRecords,
     ReturnedEvidence,
+    CitationNullPages,
+    CitationEmptyPages,
+    CitationNonemptyPages,
+    CitationVerifiedOccurrences,
+    CitationUnverifiedOccurrences,
+    CitationSentenceOccurrences,
+    CitationParagraphOccurrences,
+    CitationMemoryOccurrences,
+    CitationExternalFileOccurrences,
+    CitationExternalUrlOccurrences,
+    CitationAuthoredOccurrences,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

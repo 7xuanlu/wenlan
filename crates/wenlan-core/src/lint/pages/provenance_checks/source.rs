@@ -22,10 +22,14 @@ pub(super) struct ExtraEvidence {
 
 #[derive(Debug)]
 struct SourceBuilder {
+    evidence_kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceShape {
+    source_id: String,
     source: String,
     source_agent: Option<String>,
-    resolved_source_id: String,
-    evidence_kinds: Vec<String>,
 }
 
 pub(super) async fn load_and_assess_sources(
@@ -83,45 +87,61 @@ pub(super) async fn load_sources(context: &LintContext<'_, '_>) -> Result<Vec<So
     let (scope_sql, params) = scoped_pages(context.scope().filter());
     let sql = format!(
         "WITH scoped_pages AS ({scope_sql}),
-         ranked_sources AS (
-           SELECT ps.page_id, ps.memory_source_id, m.source, m.source_agent,
-                  COALESCE(m.source_id, ps.memory_source_id) AS resolved_source_id,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ps.page_id, ps.memory_source_id
-                    ORDER BY CASE
-                      WHEN m.source_id = ps.memory_source_id THEN 0
-                      WHEN m.id = ps.memory_source_id THEN 1
-                      ELSE 2 END,
-                      m.id
-                  ) AS source_rank
+         sources AS (
+           SELECT ps.page_id, ps.memory_source_id
              FROM page_sources ps
              JOIN scoped_pages sp ON sp.id = ps.page_id
-             LEFT JOIN memories m
-               ON m.source_id = ps.memory_source_id OR m.id = ps.memory_source_id
+         ),
+         matched_memory_ids AS (
+           SELECT m.id
+             FROM memories m
+             JOIN (SELECT DISTINCT memory_source_id FROM sources) s
+               ON s.memory_source_id = m.source_id
+           UNION
+           SELECT m.id
+             FROM memories m
+             JOIN (SELECT DISTINCT memory_source_id FROM sources) s
+               ON s.memory_source_id = m.id
          )
-         SELECT rs.page_id, rs.memory_source_id, COALESCE(rs.source, ''),
-                rs.source_agent, rs.resolved_source_id, pe.source_kind
-           FROM ranked_sources rs
+         SELECT 0 AS row_kind, m.id, m.source_id, m.source, m.source_agent, NULL
+           FROM memories m
+           JOIN matched_memory_ids mm ON mm.id = m.id
+         UNION ALL
+         SELECT 1 AS row_kind, s.page_id, s.memory_source_id, NULL, NULL,
+                pe.source_kind
+           FROM sources s
            LEFT JOIN page_evidence pe
-             ON pe.page_id = rs.page_id AND pe.locator = rs.memory_source_id
-          WHERE rs.source_rank = 1
-          ORDER BY rs.page_id, rs.memory_source_id, pe.source_kind"
+             ON pe.page_id = s.page_id AND pe.locator = s.memory_source_id
+          ORDER BY row_kind, 2, 3, 6"
     );
     let mut rows = context
         .snapshot()
         .query(&sql, params)
         .await
         .map_err(|_| ())?;
+    let mut by_source_id = BTreeMap::<String, SourceShape>::new();
+    let mut by_id = BTreeMap::<String, SourceShape>::new();
     let mut grouped = BTreeMap::<(String, String), SourceBuilder>::new();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
-        let page_id = row.get::<String>(0).map_err(|_| ())?;
-        let locator = row.get::<String>(1).map_err(|_| ())?;
+        let row_kind = row.get::<i64>(0).map_err(|_| ())?;
+        if row_kind == 0 {
+            let id = row.get::<String>(1).map_err(|_| ())?;
+            let shape = SourceShape {
+                source_id: row.get(2).map_err(|_| ())?,
+                source: row.get(3).map_err(|_| ())?,
+                source_agent: row.get(4).map_err(|_| ())?,
+            };
+            by_source_id
+                .entry(shape.source_id.clone())
+                .or_insert_with(|| shape.clone());
+            by_id.insert(id, shape);
+            continue;
+        }
+        let page_id = row.get::<String>(1).map_err(|_| ())?;
+        let locator = row.get::<String>(2).map_err(|_| ())?;
         let builder = grouped
             .entry((page_id, locator))
             .or_insert_with(|| SourceBuilder {
-                source: row.get::<String>(2).unwrap_or_default(),
-                source_agent: row.get::<Option<String>>(3).unwrap_or(None),
-                resolved_source_id: row.get::<String>(4).unwrap_or_default(),
                 evidence_kinds: Vec::new(),
             });
         if let Ok(Some(kind)) = row.get::<Option<String>>(5) {
@@ -132,13 +152,21 @@ pub(super) async fn load_sources(context: &LintContext<'_, '_>) -> Result<Vec<So
         .into_iter()
         .map(|((_, _locator), builder)| SourceRecord {
             #[cfg(test)]
-            locator: _locator,
-            expected_kind: resolve_page_evidence_source_kind(
-                &builder.source,
-                builder.source_agent.as_deref(),
-                &builder.resolved_source_id,
-            )
-            .to_string(),
+            locator: _locator.clone(),
+            expected_kind: by_source_id
+                .get(&_locator)
+                .or_else(|| by_id.get(&_locator))
+                .map_or_else(
+                    || resolve_page_evidence_source_kind("", None, &_locator),
+                    |shape| {
+                        resolve_page_evidence_source_kind(
+                            &shape.source,
+                            shape.source_agent.as_deref(),
+                            &shape.source_id,
+                        )
+                    },
+                )
+                .to_string(),
             evidence_kinds: builder.evidence_kinds,
         })
         .collect())

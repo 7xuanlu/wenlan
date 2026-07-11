@@ -92,30 +92,54 @@ pub(super) fn assess_citations(rows: &[Option<String>]) -> (Assessment, Citation
         u64::try_from(rows.len()).unwrap_or(u64::MAX)
     );
     assessment.set_metrics(vec![
-        LintMetric::new(
+        count_metric(
             LintMetricCode::EligibleRecords,
-            LintMetricValue::Count {
-                value: u64::try_from(rows.len()).unwrap_or(u64::MAX),
-            },
+            u64::try_from(rows.len()).unwrap_or(u64::MAX),
         ),
-        LintMetric::new(
-            LintMetricCode::ObservedRecords,
-            LintMetricValue::Count {
-                value: partitions.occurrences,
-            },
+        count_metric(LintMetricCode::ObservedRecords, partitions.occurrences),
+        count_metric(LintMetricCode::AffectedRecords, affected),
+        count_metric(LintMetricCode::PendingRecords, partitions.null_pages),
+        count_metric(LintMetricCode::CitationNullPages, partitions.null_pages),
+        count_metric(LintMetricCode::CitationEmptyPages, partitions.empty_pages),
+        count_metric(
+            LintMetricCode::CitationNonemptyPages,
+            partitions.nonempty_pages,
         ),
-        LintMetric::new(
-            LintMetricCode::AffectedRecords,
-            LintMetricValue::Count { value: affected },
+        count_metric(
+            LintMetricCode::CitationVerifiedOccurrences,
+            partitions.verified,
         ),
-        LintMetric::new(
-            LintMetricCode::PendingRecords,
-            LintMetricValue::Count {
-                value: partitions.null_pages,
-            },
+        count_metric(
+            LintMetricCode::CitationUnverifiedOccurrences,
+            partitions.unverified,
+        ),
+        count_metric(
+            LintMetricCode::CitationSentenceOccurrences,
+            partitions.sentence,
+        ),
+        count_metric(
+            LintMetricCode::CitationParagraphOccurrences,
+            partitions.paragraph,
+        ),
+        count_metric(LintMetricCode::CitationMemoryOccurrences, partitions.memory),
+        count_metric(
+            LintMetricCode::CitationExternalFileOccurrences,
+            partitions.external_file,
+        ),
+        count_metric(
+            LintMetricCode::CitationExternalUrlOccurrences,
+            partitions.external_url,
+        ),
+        count_metric(
+            LintMetricCode::CitationAuthoredOccurrences,
+            partitions.authored,
         ),
     ]);
     (assessment, partitions)
+}
+
+fn count_metric(code: LintMetricCode, value: u64) -> LintMetric {
+    LintMetric::new(code, LintMetricValue::Count { value })
 }
 
 fn add_occurrences(partitions: &mut CitationPartitions, citations: &[PageCitation]) -> bool {
