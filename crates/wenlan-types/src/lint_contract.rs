@@ -121,12 +121,14 @@ pub enum LintConfigSetting {
     KnowledgeGraphHubCap,
     SourceConfigurationCaptured,
     SourceConfigurationCount,
+    SourceSnapshotIdentity,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LintConfigValue {
     Enabled,
     Disabled,
     Count(u64),
+    Digest([u8; 32]),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LintConfigSelection {
@@ -143,6 +145,12 @@ impl LintConfigSelection {
             value: LintConfigValue::Count(value),
         }
     }
+    pub const fn digest(setting: LintConfigSetting, value: [u8; 32]) -> Self {
+        Self {
+            setting,
+            value: LintConfigValue::Digest(value),
+        }
+    }
     fn bytes(self) -> Vec<u8> {
         let setting = match self.setting {
             LintConfigSetting::RerankerEnabled => 1,
@@ -157,6 +165,7 @@ impl LintConfigSelection {
             LintConfigSetting::KnowledgeGraphHubCap => 10,
             LintConfigSetting::SourceConfigurationCaptured => 11,
             LintConfigSetting::SourceConfigurationCount => 12,
+            LintConfigSetting::SourceSnapshotIdentity => 13,
         };
         let mut bytes = vec![setting];
         match self.value {
@@ -165,6 +174,10 @@ impl LintConfigSelection {
             LintConfigValue::Count(value) => {
                 bytes.push(3);
                 bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            LintConfigValue::Digest(value) => {
+                bytes.push(4);
+                bytes.extend_from_slice(&value);
             }
         }
         bytes

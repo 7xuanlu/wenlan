@@ -1,12 +1,12 @@
 use super::{metric, AgeBuckets};
-use crate::lint::context::LintContext;
+use crate::lint::operations::read_context::OperationsReadContext;
 use crate::lint::operations::result::Assessment;
 use crate::lint::operations::DOCUMENT_QUEUE;
 use wenlan_types::lint::{
     LintMetricCode, LintReasonCode, LintSeverity, LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
-pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Assessment, ()> {
+pub(super) async fn load(context: &OperationsReadContext<'_, '_>) -> Result<Assessment, ()> {
     let mut rows = context.snapshot().query(
         "SELECT status,last_completed_chunk,attempt_count,next_retry_at,error_detail,enqueued_at,updated_at
            FROM document_enrichment_queue ORDER BY source_id,file_path",
@@ -28,7 +28,12 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Assessment, ()
             && updated_at >= enqueued_at
             && ages.observe(enqueued_at, context.clock().epoch_seconds());
         let state_valid = match status.as_str() {
-            "pending" | "in_progress" => retry_at.is_none() && error.is_none(),
+            "pending" => retry_at.is_none() && error.is_none(),
+            "in_progress" => match (retry_at, error.as_deref()) {
+                (None, None) => true,
+                (Some(_), Some(value)) => attempts > 0 && !value.is_empty(),
+                _ => false,
+            },
             "paused" => {
                 attempts > 0
                     && retry_at.is_some()
@@ -49,13 +54,13 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Assessment, ()
             counts.invalid = counts.invalid.saturating_add(1);
         }
         if expired || !common_valid || !state_valid {
+            counts.affected = counts.affected.saturating_add(1);
             push_position(&mut positions, counts.population.saturating_sub(1));
         }
     }
-    let affected = counts.invalid.saturating_add(counts.expired_retries);
     let mut metrics = vec![
         metric(LintMetricCode::ObservedRecords, counts.population),
-        metric(LintMetricCode::AffectedRecords, affected),
+        metric(LintMetricCode::AffectedRecords, counts.affected),
         metric(LintMetricCode::PendingRecords, counts.pending),
         metric(
             LintMetricCode::OperationActiveRetries,
@@ -78,7 +83,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Assessment, ()
     Ok(Assessment::inventory(
         DOCUMENT_QUEUE,
         counts.population,
-        affected,
+        counts.affected,
         if counts.invalid > 0 {
             LintSeverity::Error
         } else {
@@ -97,6 +102,7 @@ struct Counts {
     active_retries: u64,
     expired_retries: u64,
     invalid: u64,
+    affected: u64,
 }
 
 fn push_position(positions: &mut Vec<usize>, position: u64) {

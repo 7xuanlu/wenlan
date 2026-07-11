@@ -1,5 +1,5 @@
 use super::{metric, AgeBuckets};
-use crate::lint::context::LintContext;
+use crate::lint::operations::read_context::OperationsReadContext;
 use crate::lint::operations::result::Assessment;
 use crate::lint::operations::MAINTENANCE_BACKLOGS;
 use crate::reconcile::FrontierState;
@@ -19,7 +19,7 @@ const KEYS: [&str; 6] = [
     FRONTIER_CAPTURES,
 ];
 
-pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Assessment, ()> {
+pub(super) async fn load(context: &OperationsReadContext<'_, '_>) -> Result<Assessment, ()> {
     let mut rows = context
         .snapshot()
         .query(

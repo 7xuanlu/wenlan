@@ -2,7 +2,7 @@ use super::{check, fingerprint, run, QUEUE};
 use crate::db::tests::test_db;
 
 #[tokio::test]
-async fn full_queue_population_is_checked_without_mutation_or_mutating_sql() {
+async fn full_population_is_checked_through_read_only_capability_without_db_mutation() {
     // Given
     let (db, _tmp) = test_db().await;
     let conn = db.conn.lock().await;
@@ -30,15 +30,34 @@ async fn full_queue_population_is_checked_without_mutation_or_mutating_sql() {
     assert_eq!(result.evidence().len(), 100);
     assert_eq!(before, fingerprint(&db).await);
     let source = concat!(
+        include_str!("../operations.rs"),
+        include_str!("../operations/config.rs"),
         include_str!("../operations/query.rs"),
         include_str!("../operations/query/imports.rs"),
         include_str!("../operations/query/maintenance.rs"),
         include_str!("../operations/query/queue.rs"),
         include_str!("../operations/query/reviews.rs"),
         include_str!("../operations/query/source.rs"),
+        include_str!("../operations/read_context.rs"),
+        include_str!("../operations/result.rs"),
     )
-    .to_ascii_uppercase();
-    for forbidden in ["INSERT ", "UPDATE ", "DELETE ", "ENQUEUE_", "EMIT_"] {
+    .to_ascii_lowercase();
+    for forbidden in [
+        "memorydb",
+        "std::fs",
+        "reqwest",
+        "enqueue_document",
+        "mark_paused",
+        "mark_done",
+        "insert_refinement",
+        "resolve_refinement",
+        "emit(",
+        "llmprovider",
+        "gpu",
+        "update ",
+        "insert ",
+        "delete ",
+    ] {
         assert!(
             !source.contains(forbidden),
             "mutating seam present: {forbidden}"

@@ -1,5 +1,6 @@
 mod config;
 mod query;
+mod read_context;
 mod result;
 
 use crate::lint::catalog::{catalog_group, LintCheckGroup};
@@ -19,7 +20,8 @@ pub(crate) async fn run(
     context: &LintContext<'_, '_>,
     config: OperationsRunConfig,
 ) -> Vec<LintCheckResult> {
-    let assessments = match query::load(context, config).await {
+    let read_context = read_context::OperationsReadContext::from_lint(context);
+    let assessments = match query::load(&read_context, config).await {
         Ok(assessments) => assessments,
         Err(()) => return failed_results(context),
     };

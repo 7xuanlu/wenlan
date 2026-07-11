@@ -1,6 +1,6 @@
 use super::{metric, AgeBuckets};
-use crate::lint::context::LintContext;
 use crate::lint::operations::config::OperationsRunConfig;
+use crate::lint::operations::read_context::OperationsReadContext;
 use crate::lint::operations::result::Assessment;
 use crate::lint::operations::SOURCE_CONFIGURATION;
 use std::collections::BTreeSet;
@@ -10,7 +10,7 @@ use wenlan_types::lint::{
 };
 
 pub(super) async fn load(
-    context: &LintContext<'_, '_>,
+    context: &OperationsReadContext<'_, '_>,
     config: OperationsRunConfig,
 ) -> Result<Assessment, ()> {
     let mut affected_positions = config

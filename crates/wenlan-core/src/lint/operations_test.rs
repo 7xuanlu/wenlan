@@ -22,7 +22,15 @@ const REJECTIONS: &str = "operations.rejection_inventory";
 const MAINTENANCE: &str = "operations.maintenance_backlogs";
 
 async fn run(db: &crate::db::MemoryDB, sources: &[Source]) -> wenlan_types::lint::LintReport {
-    LintRunner::new(LintClock::fixed_at(NOW), CancellationToken::new())
+    run_at(db, sources, NOW).await
+}
+
+async fn run_at(
+    db: &crate::db::MemoryDB,
+    sources: &[Source],
+    observed_at: i64,
+) -> wenlan_types::lint::LintReport {
+    LintRunner::new(LintClock::fixed_at(observed_at), CancellationToken::new())
         .with_sources(sources)
         .run(db, &LintQuery { space: None }, None, false)
         .await

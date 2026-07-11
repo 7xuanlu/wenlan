@@ -1,12 +1,14 @@
 use super::{metric, AgeBuckets};
-use crate::lint::context::LintContext;
+use crate::lint::operations::read_context::OperationsReadContext;
 use crate::lint::operations::result::Assessment;
 use crate::lint::operations::{REFINEMENT_INVENTORY, REJECTION_INVENTORY};
 use wenlan_types::lint::{
     LintMetricCode, LintReasonCode, LintSeverity, LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
-pub(super) async fn load_refinements(context: &LintContext<'_, '_>) -> Result<Assessment, ()> {
+pub(super) async fn load_refinements(
+    context: &OperationsReadContext<'_, '_>,
+) -> Result<Assessment, ()> {
     let mut rows = context
         .snapshot()
         .query(
@@ -39,9 +41,10 @@ pub(super) async fn load_refinements(context: &LintContext<'_, '_>) -> Result<As
             }
             _ => false,
         };
-        let source_ids_valid = serde_json::from_str::<Vec<String>>(&source_ids).is_ok();
-        let valid = !action.trim().is_empty()
-            && source_ids_valid
+        let source_ids_valid = serde_json::from_str::<Vec<String>>(&source_ids)
+            .ok()
+            .is_some_and(|ids| valid_action_sources(&action, &ids));
+        let valid = source_ids_valid
             && known_status
             && timestamp.is_some_and(|value| ages.observe(value, context.clock().epoch_seconds()));
         if !valid {
@@ -73,7 +76,24 @@ pub(super) async fn load_refinements(context: &LintContext<'_, '_>) -> Result<As
     ))
 }
 
-pub(super) async fn load_rejections(context: &LintContext<'_, '_>) -> Result<Assessment, ()> {
+fn valid_action_sources(action: &str, ids: &[String]) -> bool {
+    let ids_valid = ids.iter().all(|id| !id.trim().is_empty());
+    let distinct = ids.iter().collect::<std::collections::BTreeSet<_>>().len() == ids.len();
+    ids_valid
+        && distinct
+        && match action {
+            "entity_merge" | "relation_conflict" | "detect_contradiction" | "page_merge" => {
+                ids.len() == 2
+            }
+            "cross_space_discovery" => ids.len() >= 2,
+            "page_keep_or_archive" => ids.len() == 1,
+            _ => false,
+        }
+}
+
+pub(super) async fn load_rejections(
+    context: &OperationsReadContext<'_, '_>,
+) -> Result<Assessment, ()> {
     let mut rows = context
         .snapshot()
         .query(

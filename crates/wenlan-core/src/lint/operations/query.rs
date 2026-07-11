@@ -6,11 +6,11 @@ mod source;
 
 use super::config::OperationsRunConfig;
 use super::result::Assessment;
-use crate::lint::context::LintContext;
+use crate::lint::operations::read_context::OperationsReadContext;
 use wenlan_types::lint::{LintMetric, LintMetricCode, LintMetricValue};
 
 pub(super) async fn load(
-    context: &LintContext<'_, '_>,
+    context: &OperationsReadContext<'_, '_>,
     config: OperationsRunConfig,
 ) -> Result<Vec<Assessment>, ()> {
     Ok(vec![

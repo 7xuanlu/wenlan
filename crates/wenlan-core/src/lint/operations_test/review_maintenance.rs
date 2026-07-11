@@ -31,7 +31,7 @@ async fn terminal_imports_and_every_review_state_are_inventory_or_findings() {
     .enumerate()
     {
         conn.execute(
-            "INSERT INTO refinement_queue (id,action,source_ids,status,created_at) VALUES (?1,'detect_contradiction','[]',?2,'2023-11-14 22:13:20')",
+            "INSERT INTO refinement_queue (id,action,source_ids,status,created_at) VALUES (?1,'detect_contradiction','[\"left\",\"right\"]',?2,'2023-11-14 22:13:20')",
             libsql::params![format!("ref-{index}"), *status],
         ).await.unwrap();
     }
@@ -75,12 +75,66 @@ async fn terminal_imports_and_every_review_state_are_inventory_or_findings() {
         ),
         3
     );
+    assert_eq!(
+        metric(
+            check(&report, REFINEMENTS),
+            LintMetricCode::OperationInvalidStates
+        ),
+        0
+    );
     assert_eq!(check(&report, REJECTIONS).outcome(), LintOutcome::Pass);
     assert_eq!(
         metric(check(&report, REJECTIONS), LintMetricCode::ObservedRecords),
         1
     );
     assert_no_privacy_canaries(&serde_json::to_string(&report).unwrap());
+}
+
+#[tokio::test]
+async fn refinement_actions_enforce_closed_set_and_source_id_shape() {
+    let (db, _tmp) = test_db().await;
+    let conn = db.conn.lock().await;
+    for (id, action, source_ids) in [
+        ("valid-binary", "entity_merge", "[\"new\",\"existing\"]"),
+        ("valid-page", "page_keep_or_archive", "[\"page\"]"),
+        ("malformed", "page_merge", "not-json"),
+        ("unknown", "invented_action", "[\"a\",\"b\"]"),
+        ("bad-cardinality", "detect_contradiction", "[\"only\"]"),
+        ("blank-id", "cross_space_discovery", "[\"a\",\"\"]"),
+    ] {
+        conn.execute(
+            "INSERT INTO refinement_queue (id,action,source_ids,status,created_at)
+             VALUES (?1,?2,?3,'awaiting_review','2023-11-14 22:13:20')",
+            libsql::params![id, action, source_ids],
+        )
+        .await
+        .unwrap();
+    }
+    drop(conn);
+
+    let report = run(&db, &[]).await;
+    let result = check(&report, REFINEMENTS);
+    assert_eq!(metric(result, LintMetricCode::ObservedRecords), 6);
+    assert_eq!(metric(result, LintMetricCode::AffectedRecords), 4);
+    assert_eq!(metric(result, LintMetricCode::OperationInvalidStates), 4);
+}
+
+#[tokio::test]
+async fn import_affected_records_count_unique_rows() {
+    let (db, _tmp) = test_db().await;
+    db.conn.lock().await.execute(
+        "INSERT INTO import_state
+         (id,vendor,source_path,processed_conversations,stage,error_message,started_at,updated_at)
+         VALUES ('one','invalid-vendor','opaque',-1,'error','failure','2023-11-14T22:13:20Z','2023-11-14T22:13:20Z')",
+        libsql::params::Params::None,
+    ).await.unwrap();
+
+    let report = run(&db, &[]).await;
+    let result = check(&report, IMPORTS);
+    assert_eq!(metric(result, LintMetricCode::ObservedRecords), 1);
+    assert_eq!(metric(result, LintMetricCode::AffectedRecords), 1);
+    assert_eq!(metric(result, LintMetricCode::OperationTerminalFailures), 1);
+    assert_eq!(metric(result, LintMetricCode::OperationInvalidStates), 1);
 }
 
 #[tokio::test]
