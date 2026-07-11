@@ -1,5 +1,7 @@
 use super::catalog::catalog;
-use super::context::{AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext};
+use super::context::{
+    AppliedScope, CancellationToken, ExecutionGate, LintClock, LintContext, PopulationBasis,
+};
 use super::pages::fs::{scan_page_root, PageFsError, PageScan};
 use super::snapshot::{SnapshotError, SnapshotReceipt};
 use crate::db::MemoryDB;
@@ -31,6 +33,16 @@ pub enum LintRunError {
 pub struct LintRunner {
     clock: LintClock,
     gate: ExecutionGate,
+    #[cfg(test)]
+    scenario: Option<TestScenario>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TestScenario {
+    MixedQueryFailure,
+    PageGroupTimeout,
+    ScopedDenominators,
 }
 
 impl LintRunner {
@@ -38,7 +50,15 @@ impl LintRunner {
         Self {
             clock,
             gate: ExecutionGate::new(cancellation),
+            #[cfg(test)]
+            scenario: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_scenario(mut self, scenario: TestScenario) -> Self {
+        self.scenario = Some(scenario);
+        self
     }
 
     pub async fn run(
@@ -73,18 +93,21 @@ impl LintRunner {
             &self.gate,
         );
         let mut checks = if execution_failed {
+            record_zero_populations(&context)?;
             failed_results(&self.clock)
         } else {
-            super::pages::run(&context, page_projection_enabled).await
+            self.run_page_group(&context, page_projection_enabled)
+                .await?
         };
-        let page_elapsed = self.clock.elapsed().saturating_sub(page_started);
+        let page_elapsed = self.page_elapsed(page_started);
         if self.gate.check(page_elapsed).is_err()
             || self.gate.check_run(self.clock.elapsed()).is_err()
         {
-            checks = failed_results(&self.clock);
+            checks = failed_results_from_checks(&self.clock, &checks)?;
         }
         validate_catalog_results(&mut checks)?;
-        validate_scoped_evidence(scope.report(), &checks)?;
+        validate_scope_policy(&context, &checks)?;
+        drop(context);
 
         let page_before = page_scan
             .as_ref()
@@ -95,14 +118,13 @@ impl LintRunner {
             _ => page_before,
         };
         if page_before != page_after {
-            checks = inconsistent_results(&self.clock);
+            checks = inconsistent_results_from_checks(&self.clock, &checks)?;
         }
         let db_receipt = snapshot.finish().await?;
         if !db_receipt.is_consistent() && page_projection_enabled {
-            checks = inconsistent_results(&self.clock);
+            checks = inconsistent_results_from_checks(&self.clock, &checks)?;
         }
         validate_catalog_results(&mut checks)?;
-        validate_scoped_evidence(scope.report(), &checks)?;
         build_report(
             scope.into_report(),
             page_projection_enabled,
@@ -111,6 +133,26 @@ impl LintRunner {
             page_after,
             checks,
         )
+    }
+
+    async fn run_page_group(
+        &self,
+        context: &LintContext<'_, '_>,
+        page_projection_enabled: bool,
+    ) -> Result<Vec<LintCheckResult>, LintRunError> {
+        #[cfg(test)]
+        if let Some(scenario) = self.scenario {
+            return run_test_scenario(context, scenario).await;
+        }
+        Ok(super::pages::run(context, page_projection_enabled).await)
+    }
+
+    fn page_elapsed(&self, page_started: std::time::Duration) -> std::time::Duration {
+        #[cfg(test)]
+        if self.scenario == Some(TestScenario::PageGroupTimeout) {
+            return ExecutionGate::PAGE_BUDGET + std::time::Duration::from_millis(1);
+        }
+        self.clock.elapsed().saturating_sub(page_started)
     }
 }
 
@@ -138,6 +180,148 @@ async fn validate_scope(
     let opaque = wenlan_types::lint::LintOpaqueId::from_sorted_position(position)
         .ok_or(LintRunError::InvalidScope)?;
     Ok(AppliedScope::registered(opaque, requested.to_string()))
+}
+
+#[cfg(test)]
+async fn run_test_scenario(
+    context: &LintContext<'_, '_>,
+    scenario: TestScenario,
+) -> Result<Vec<LintCheckResult>, LintRunError> {
+    match scenario {
+        TestScenario::MixedQueryFailure => {
+            record_zero_populations(context)?;
+            let failed = match context
+                .snapshot()
+                .query(
+                    "SELECT CANARY_RAW_QUERY_ERROR_7f31 FROM pages",
+                    libsql::params::Params::None,
+                )
+                .await
+            {
+                Err(_) => true,
+                Ok(mut rows) => rows.next().await.is_err(),
+            };
+            if !failed {
+                return Err(LintRunError::CatalogMismatch);
+            }
+            catalog()
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| match index {
+                    0 => make_result(
+                        entry.id,
+                        LintOutcome::Pass,
+                        LintSeverity::Info,
+                        LintApplicability::Applicable,
+                        LintPrecondition::Ready,
+                        LintSummaryCode::CheckPassed,
+                        None,
+                        context.clock().duration_ms(),
+                    ),
+                    1 => make_result(
+                        entry.id,
+                        LintOutcome::Finding,
+                        LintSeverity::Warning,
+                        LintApplicability::Applicable,
+                        LintPrecondition::Ready,
+                        LintSummaryCode::FindingDetected,
+                        Some(LintRecommendationCode::ReviewFinding),
+                        context.clock().duration_ms(),
+                    ),
+                    2 => make_result(
+                        entry.id,
+                        LintOutcome::FailedToRun,
+                        LintSeverity::Error,
+                        LintApplicability::Applicable,
+                        LintPrecondition::Ready,
+                        LintSummaryCode::ExecutionFailed,
+                        Some(LintRecommendationCode::InspectRuntime),
+                        context.clock().duration_ms(),
+                    ),
+                    _ => make_result(
+                        entry.id,
+                        LintOutcome::Pass,
+                        LintSeverity::Info,
+                        LintApplicability::Applicable,
+                        LintPrecondition::Ready,
+                        LintSummaryCode::CheckPassed,
+                        None,
+                        context.clock().duration_ms(),
+                    ),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(LintRunError::from)
+        }
+        TestScenario::PageGroupTimeout => {
+            let mut population = super::context::PopulationAccounting::new(101);
+            for ordinal in 1..=100 {
+                population.validate(ordinal, true);
+            }
+            if population.coverage().is_ok() {
+                return Err(LintRunError::CatalogMismatch);
+            }
+            catalog()
+                .iter()
+                .map(|entry| {
+                    context
+                        .record_population(entry.id, PopulationBasis::Global, 101)
+                        .map_err(|_| LintRunError::CatalogMismatch)?;
+                    make_result_with_denominator(
+                        entry.id,
+                        LintOutcome::Pass,
+                        LintSeverity::Info,
+                        LintApplicability::Applicable,
+                        LintPrecondition::Ready,
+                        LintSummaryCode::CheckPassed,
+                        None,
+                        context.clock().duration_ms(),
+                        101,
+                    )
+                    .map_err(LintRunError::from)
+                })
+                .collect()
+        }
+        TestScenario::ScopedDenominators => scoped_denominator_results(context),
+    }
+}
+
+#[cfg(test)]
+fn scoped_denominator_results(
+    context: &LintContext<'_, '_>,
+) -> Result<Vec<LintCheckResult>, LintRunError> {
+    if !context.scope().filter().is_selected() {
+        return Err(LintRunError::CatalogMismatch);
+    }
+    catalog()
+        .iter()
+        .map(|entry| {
+            let selected_policy = matches!(
+                entry.scope_policy,
+                super::catalog::ScopePolicy::ScopedRows
+                    | super::catalog::ScopePolicy::DbAnchoredProjection
+            );
+            let (basis, denominator) = if selected_policy {
+                (PopulationBasis::SelectedScope, 3)
+            } else {
+                (PopulationBasis::Global, 9)
+            };
+            context
+                .record_population(entry.id, basis, denominator)
+                .map_err(|_| LintRunError::CatalogMismatch)?;
+            make_result_with_denominator(
+                entry.id,
+                LintOutcome::Pass,
+                LintSeverity::Info,
+                LintApplicability::Applicable,
+                LintPrecondition::Ready,
+                LintSummaryCode::CheckPassed,
+                None,
+                context.clock().duration_ms(),
+                denominator,
+            )
+            .map_err(LintRunError::from)
+        })
+        .collect()
 }
 
 pub fn configured_off_results(clock: LintClock) -> Vec<LintCheckResult> {
@@ -178,7 +362,7 @@ pub(crate) fn prerequisite_results(clock: &LintClock) -> Vec<LintCheckResult> {
         .expect("static prerequisite lint results are valid")
 }
 
-fn failed_results(clock: &LintClock) -> Vec<LintCheckResult> {
+pub(crate) fn failed_results(clock: &LintClock) -> Vec<LintCheckResult> {
     terminal_results(
         clock,
         LintOutcome::FailedToRun,
@@ -188,14 +372,65 @@ fn failed_results(clock: &LintClock) -> Vec<LintCheckResult> {
     )
 }
 
-fn inconsistent_results(clock: &LintClock) -> Vec<LintCheckResult> {
-    terminal_results(
+fn failed_results_from_checks(
+    clock: &LintClock,
+    checks: &[LintCheckResult],
+) -> Result<Vec<LintCheckResult>, LintRunError> {
+    terminal_results_from_checks(
         clock,
+        checks,
+        LintOutcome::FailedToRun,
+        LintPrecondition::Ready,
+        LintSummaryCode::ExecutionFailed,
+        LintRecommendationCode::InspectRuntime,
+    )
+}
+
+fn inconsistent_results_from_checks(
+    clock: &LintClock,
+    checks: &[LintCheckResult],
+) -> Result<Vec<LintCheckResult>, LintRunError> {
+    terminal_results_from_checks(
+        clock,
+        checks,
         LintOutcome::InconsistentSnapshot,
         LintPrecondition::SnapshotUnstable,
         LintSummaryCode::SnapshotInconsistent,
         LintRecommendationCode::RerunAfterSnapshotStabilizes,
     )
+}
+
+fn terminal_results_from_checks(
+    clock: &LintClock,
+    checks: &[LintCheckResult],
+    outcome: LintOutcome,
+    precondition: LintPrecondition,
+    summary: LintSummaryCode,
+    recommendation: LintRecommendationCode,
+) -> Result<Vec<LintCheckResult>, LintRunError> {
+    catalog()
+        .iter()
+        .map(|entry| {
+            let denominator = checks
+                .iter()
+                .find(|check| check.check_id() == entry.id)
+                .ok_or(LintRunError::CatalogMismatch)?
+                .coverage()
+                .denominator();
+            make_result_with_denominator(
+                entry.id,
+                outcome,
+                LintSeverity::Error,
+                LintApplicability::Applicable,
+                precondition,
+                summary,
+                Some(recommendation),
+                clock.duration_ms(),
+                denominator,
+            )
+            .map_err(LintRunError::from)
+        })
+        .collect()
 }
 
 fn terminal_results(
@@ -234,6 +469,31 @@ fn make_result(
     recommendation_code: Option<LintRecommendationCode>,
     duration_ms: u64,
 ) -> Result<LintCheckResult, LintContractError> {
+    make_result_with_denominator(
+        check_id,
+        outcome,
+        severity,
+        applicability,
+        precondition,
+        summary_code,
+        recommendation_code,
+        duration_ms,
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_result_with_denominator(
+    check_id: &str,
+    outcome: LintOutcome,
+    severity: LintSeverity,
+    applicability: LintApplicability,
+    precondition: LintPrecondition,
+    summary_code: LintSummaryCode,
+    recommendation_code: Option<LintRecommendationCode>,
+    duration_ms: u64,
+    denominator: u64,
+) -> Result<LintCheckResult, LintContractError> {
     LintCheckResult::try_new(LintCheckResultInput {
         check_id: check_id.to_string(),
         outcome,
@@ -242,8 +502,8 @@ fn make_result(
         precondition,
         coverage: LintCoverage::new(
             LintValidationMethod::FullEnumeration,
-            0,
-            0,
+            denominator,
+            denominator,
             LINT_MAX_EVIDENCE_PER_CHECK,
             false,
             0,
@@ -270,24 +530,59 @@ pub fn validate_catalog_results(checks: &mut [LintCheckResult]) -> Result<(), Li
     Ok(())
 }
 
-fn validate_scoped_evidence(
-    scope: &LintScope,
+fn validate_scope_policy(
+    context: &LintContext<'_, '_>,
     checks: &[LintCheckResult],
 ) -> Result<(), LintRunError> {
-    if scope.kind() == wenlan_types::lint::LintScopeKind::Global {
-        return Ok(());
-    }
     for check in checks {
         let entry =
             super::catalog::catalog_entry(check.check_id()).ok_or(LintRunError::CatalogMismatch)?;
-        if matches!(
+        let receipt = context
+            .population(check.check_id())
+            .map_err(|_| LintRunError::CatalogMismatch)?
+            .ok_or(LintRunError::CatalogMismatch)?;
+        let selected = context.scope().filter().is_selected();
+        let expected_basis = if selected
+            && matches!(
+                entry.scope_policy,
+                super::catalog::ScopePolicy::ScopedRows
+                    | super::catalog::ScopePolicy::DbAnchoredProjection
+            ) {
+            PopulationBasis::SelectedScope
+        } else {
+            PopulationBasis::Global
+        };
+        let global_policy = matches!(
             entry.scope_policy,
             super::catalog::ScopePolicy::GlobalAggregateOnly
                 | super::catalog::ScopePolicy::GlobalOnly
-        ) && !check.evidence().is_empty()
+        );
+        if receipt.basis != expected_basis
+            || receipt.denominator != check.coverage().denominator()
+            || (selected && global_policy && !check.evidence().is_empty())
         {
             return Err(LintRunError::CatalogMismatch);
         }
+    }
+    Ok(())
+}
+
+fn record_zero_populations(context: &LintContext<'_, '_>) -> Result<(), LintRunError> {
+    let selected = context.scope().filter().is_selected();
+    for entry in catalog() {
+        let basis = if selected
+            && matches!(
+                entry.scope_policy,
+                super::catalog::ScopePolicy::ScopedRows
+                    | super::catalog::ScopePolicy::DbAnchoredProjection
+            ) {
+            PopulationBasis::SelectedScope
+        } else {
+            PopulationBasis::Global
+        };
+        context
+            .record_population(entry.id, basis, 0)
+            .map_err(|_| LintRunError::CatalogMismatch)?;
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wenlan_types::lint::{
     LintContractError, LintCoverage, LintOpaqueId, LintScope, LintValidationMethod,
@@ -116,6 +116,28 @@ pub(crate) enum ScopeFilter {
     Uncategorized,
 }
 
+impl ScopeFilter {
+    pub(crate) fn is_selected(&self) -> bool {
+        !matches!(self, Self::Global)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PopulationBasis {
+    Global,
+    SelectedScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PopulationReceipt {
+    pub(crate) basis: PopulationBasis,
+    pub(crate) denominator: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("lint scope population accounting failed")]
+pub(crate) struct PopulationLedgerError;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppliedScope {
     report: LintScope,
@@ -144,10 +166,6 @@ impl AppliedScope {
         }
     }
 
-    pub(crate) fn report(&self) -> &LintScope {
-        &self.report
-    }
-
     pub(crate) fn into_report(self) -> LintScope {
         self.report
     }
@@ -163,6 +181,7 @@ pub(crate) struct LintContext<'run, 'database> {
     page_scan: Option<&'run PageScan>,
     clock: &'run LintClock,
     gate: &'run ExecutionGate,
+    populations: Mutex<BTreeMap<&'static str, PopulationReceipt>>,
 }
 
 impl<'run, 'database> LintContext<'run, 'database> {
@@ -179,6 +198,7 @@ impl<'run, 'database> LintContext<'run, 'database> {
             page_scan,
             clock,
             gate,
+            populations: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -200,6 +220,32 @@ impl<'run, 'database> LintContext<'run, 'database> {
 
     pub(crate) fn gate(&self) -> &ExecutionGate {
         self.gate
+    }
+
+    pub(crate) fn record_population(
+        &self,
+        check_id: &'static str,
+        basis: PopulationBasis,
+        denominator: u64,
+    ) -> Result<(), PopulationLedgerError> {
+        let mut populations = self.populations.lock().map_err(|_| PopulationLedgerError)?;
+        if populations
+            .insert(check_id, PopulationReceipt { basis, denominator })
+            .is_some()
+        {
+            return Err(PopulationLedgerError);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn population(
+        &self,
+        check_id: &str,
+    ) -> Result<Option<PopulationReceipt>, PopulationLedgerError> {
+        self.populations
+            .lock()
+            .map(|populations| populations.get(check_id).copied())
+            .map_err(|_| PopulationLedgerError)
     }
 }
 

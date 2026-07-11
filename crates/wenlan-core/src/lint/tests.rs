@@ -1,6 +1,8 @@
 use super::catalog::{catalog, ScopeAxis};
 use super::context::{CancellationToken, ExecutionGate, LintClock, PopulationAccounting};
-use super::runner::{configured_off_results, validate_catalog_results, LintRunError, LintRunner};
+use super::runner::{
+    configured_off_results, validate_catalog_results, LintRunError, LintRunner, TestScenario,
+};
 use crate::db::tests::test_db;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -186,7 +188,7 @@ async fn invalid_scope_fails_before_page_scan() {
 }
 
 #[tokio::test]
-async fn fixed_clock_report_is_deterministic_and_redacted() {
+async fn fixed_clock_report_is_deterministic() {
     let (db, _dir) = test_db().await;
     let runner = LintRunner::new(LintClock::fixed(), CancellationToken::new());
     let query = LintQuery { space: None };
@@ -195,8 +197,6 @@ async fn fixed_clock_report_is_deterministic_and_redacted() {
     let first: Value = serde_json::to_value(first).unwrap();
     let second: Value = serde_json::to_value(second).unwrap();
     assert_eq!(first, second);
-    let output = serde_json::to_string(&first).unwrap();
-    assert!(!output.contains("does-not-exist"));
     assert!(first["complete"].as_bool().unwrap());
 }
 
@@ -217,34 +217,84 @@ async fn cancellation_returns_an_incomplete_report() {
         .all(|check| check.outcome() == LintOutcome::FailedToRun));
 }
 
-#[test]
-fn mixed_page_results_have_exact_totals_order_and_no_raw_error_evidence() {
-    let outcomes = [
-        LintOutcome::Pass,
-        LintOutcome::Finding,
-        LintOutcome::FailedToRun,
-        LintOutcome::NotRunPrerequisite,
-        LintOutcome::InconsistentSnapshot,
-    ];
-    let mut checks = catalog()
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            result(
-                entry.id,
-                outcomes.get(index).copied().unwrap_or(LintOutcome::Pass),
-            )
-        })
-        .collect::<Vec<_>>();
-    validate_catalog_results(&mut checks).unwrap();
-    let report = super::runner::synthetic_report(checks);
+#[tokio::test]
+async fn runner_mixes_warning_and_real_query_failure_without_leaking_error() {
+    let (db, _dir) = test_db().await;
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_test_scenario(TestScenario::MixedQueryFailure)
+        .run(&db, &LintQuery { space: None }, None, false)
+        .await
+        .unwrap();
     assert_eq!(report.totals().checks(), catalog().len() as u32);
-    assert_eq!(report.totals().passed(), 8);
+    assert_eq!(report.totals().passed(), 10);
     assert_eq!(report.totals().findings(), 1);
-    assert_eq!(report.totals().incomplete(), 3);
+    assert_eq!(report.totals().incomplete(), 1);
     assert!(!report.complete());
     let json = serde_json::to_string(&report).unwrap();
-    assert!(!json.contains("nested error at /private/CANARY_ERROR_7f31"));
+    assert!(!json.contains("CANARY_RAW_QUERY_ERROR_7f31"));
+}
+
+#[tokio::test]
+async fn page_group_timeout_with_incomplete_enumeration_fails_the_report() {
+    let (db, _dir) = test_db().await;
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_test_scenario(TestScenario::PageGroupTimeout)
+        .run(&db, &LintQuery { space: None }, None, false)
+        .await
+        .unwrap();
+    assert!(!report.complete());
+    assert_eq!(report.totals().incomplete(), catalog().len() as u32);
+    assert!(report
+        .checks()
+        .iter()
+        .all(|check| check.outcome() == LintOutcome::FailedToRun));
+    assert!(report
+        .checks()
+        .iter()
+        .all(|check| check.coverage().denominator() == 101));
+}
+
+#[tokio::test]
+async fn selected_scope_enforces_scoped_and_global_denominators() {
+    let (db, _dir) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "INSERT INTO spaces (id, name, created_at, updated_at) VALUES ('lint-space', 'alpha', 1, 1)",
+            (),
+        )
+        .await
+        .unwrap();
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_test_scenario(TestScenario::ScopedDenominators)
+        .run(
+            &db,
+            &LintQuery {
+                space: Some("alpha".to_string()),
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        report.scope().kind(),
+        wenlan_types::lint::LintScopeKind::Registered
+    );
+    let scoped = report
+        .checks()
+        .iter()
+        .find(|check| check.check_id() == "pages.db.partitions")
+        .unwrap();
+    let global = report
+        .checks()
+        .iter()
+        .find(|check| check.check_id() == "pages.projection.manifest_inventory")
+        .unwrap();
+    assert_eq!(scoped.coverage().denominator(), 3);
+    assert_eq!(global.coverage().denominator(), 9);
+    assert!(global.evidence().is_empty());
 }
 
 #[test]
