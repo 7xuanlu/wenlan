@@ -1,6 +1,6 @@
 {
   "name": "wenlan",
-  "description": "AI work memory for Claude Code. Carries sessions, decisions, lessons, and project context forward, then turns them into searchable memory and wiki pages.",
+  "description": "A Claude Code plugin that distills what your agents learn into source-cited wiki pages, refreshed between sessions from the memories they capture in flow.",
   "version": "0.12.0",
   "author": {
     "name": "Qi-Xuan Lu",

@@ -1,6 +1,6 @@
 # Wenlan
 
-AI work memory for Claude Code. Wenlan carries sessions, decisions, lessons, and project context forward, then turns them into searchable memory and wiki pages.
+A Claude Code plugin that distills what your agents learn into source-cited wiki pages, refreshed between sessions from the memories they capture in flow.
 
 ## 30-Second Setup
 

@@ -1,0 +1,19 @@
+{
+  "name": "7xuanlu-wenlan",
+  "owner": {
+    "name": "Qi-Xuan Lu",
+    "url": "https://github.com/7xuanlu"
+  },
+  "plugins": [
+    {
+      "name": "wenlan",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/7xuanlu/wenlan.git",
+        "path": "plugin"
+      },
+      "description": "A Claude Code plugin that distills what your agents learn into source-cited wiki pages, refreshed between sessions from the memories they capture in flow.",
+      "category": "memory"
+    }
+  ]
+}
