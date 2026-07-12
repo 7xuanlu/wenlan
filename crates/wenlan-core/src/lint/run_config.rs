@@ -17,17 +17,23 @@ pub(super) struct EffectiveLintConfig {
     pub(super) runtime: RuntimeRunConfig,
     semantic_provider_ready: bool,
     semantic_provider_on_device: bool,
+    semantic_external_egress_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SemanticProviderConfig {
     ready: bool,
     on_device: bool,
+    external_egress_enabled: bool,
 }
 
 impl SemanticProviderConfig {
-    pub(super) const fn new(ready: bool, on_device: bool) -> Self {
-        Self { ready, on_device }
+    pub(super) const fn new(ready: bool, on_device: bool, external_egress_enabled: bool) -> Self {
+        Self {
+            ready,
+            on_device,
+            external_egress_enabled,
+        }
     }
 }
 
@@ -50,6 +56,7 @@ impl EffectiveLintConfig {
             runtime,
             semantic_provider_ready: semantic_provider.ready,
             semantic_provider_on_device: semantic_provider.on_device,
+            semantic_external_egress_enabled: semantic_provider.external_egress_enabled,
         }
     }
 
@@ -97,7 +104,10 @@ impl EffectiveLintConfig {
                 LintConfigSetting::SemanticProviderOnDevice,
                 self.semantic_provider_on_device,
             ),
-            selection(LintConfigSetting::SemanticExternalEgressEnabled, false),
+            selection(
+                LintConfigSetting::SemanticExternalEgressEnabled,
+                self.semantic_external_egress_enabled,
+            ),
         ];
         selections.extend(self.kg.fingerprint_selections());
         selections.extend(self.operations.fingerprint_selections());

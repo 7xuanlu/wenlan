@@ -68,11 +68,10 @@ pub(super) async fn run(
     context: &LintContext<'_, '_>,
     provider: Option<&dyn LlmProvider>,
 ) -> Vec<LintCheckResult> {
-    let Some(provider) = provider
-        .filter(|provider| provider.backend() == LlmBackend::OnDevice && provider.is_available())
-    else {
+    let Some(provider) = provider.filter(|provider| provider.is_available()) else {
         return terminal_results(context, LintOutcome::NotRunPrerequisite);
     };
+    let provider_on_device = provider.backend() == LlmBackend::OnDevice;
     if context
         .gate()
         .check_run_for(context.profile(), context.clock().elapsed())
@@ -115,6 +114,7 @@ pub(super) async fn run(
                 id,
                 verdicts.get(*id).expect("validated semantic verdict"),
                 &candidates,
+                provider_on_device,
             )
         })
         .collect()
@@ -281,6 +281,7 @@ fn semantic_result(
     id: &'static str,
     refs: &[u64],
     candidates: &CandidateSet,
+    provider_on_device: bool,
 ) -> LintCheckResult {
     let Some((eligible, sample)) = semantic_population(id, candidates) else {
         return terminal_result(context, id, LintOutcome::NotRunPrerequisite);
@@ -329,7 +330,7 @@ fn semantic_result(
                 metric(LintMetricCode::ObservedRecords, sample),
                 metric(LintMetricCode::AffectedRecords, affected),
                 metric(LintMetricCode::SemanticModelCalls, 1),
-                boolean_metric(LintMetricCode::SemanticProviderOnDevice, true),
+                boolean_metric(LintMetricCode::SemanticProviderOnDevice, provider_on_device),
             ],
             summary_code: if finding {
                 LintSummaryCode::FindingDetected

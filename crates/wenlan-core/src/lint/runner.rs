@@ -207,6 +207,10 @@ impl LintRunner {
             self.semantic_provider.as_deref().is_some_and(|provider| {
                 provider.backend() == crate::llm_provider::LlmBackend::OnDevice
             });
+        let semantic_external_egress_enabled =
+            self.semantic_provider.as_deref().is_some_and(|provider| {
+                provider.backend() != crate::llm_provider::LlmBackend::OnDevice
+            });
         let effective_config = EffectiveLintConfig::new(
             page_projection_enabled,
             memory_config,
@@ -216,7 +220,11 @@ impl LintRunner {
             self.runtime_config
                 .clone()
                 .with_clock_epoch_seconds(self.clock.epoch_seconds()),
-            SemanticProviderConfig::new(semantic_provider_ready, semantic_provider_on_device),
+            SemanticProviderConfig::new(
+                semantic_provider_ready,
+                semantic_provider_on_device,
+                semantic_external_egress_enabled,
+            ),
         );
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();

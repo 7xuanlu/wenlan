@@ -6,7 +6,7 @@ use crate::llm_provider::LlmError;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use wenlan_types::lint::{LintGateEffect, LintProfile, LintQuery};
+use wenlan_types::lint::{LintGateEffect, LintMetricCode, LintMetricValue, LintProfile, LintQuery};
 
 struct FakeProvider {
     backend: LlmBackend,
@@ -175,7 +175,7 @@ async fn deep_semantic_advisories_use_one_bounded_local_call() {
 }
 
 #[tokio::test]
-async fn general_and_external_provider_paths_make_no_semantic_call() {
+async fn general_profile_makes_no_semantic_call() {
     let (db, _dir) = fixture().await;
     let general = Arc::new(FakeProvider::new(LlmBackend::OnDevice, &response("[]")));
     let report = run(&db, LintProfile::General, Arc::clone(&general)).await;
@@ -184,15 +184,27 @@ async fn general_and_external_provider_paths_make_no_semantic_call() {
         .checks()
         .iter()
         .all(|check| !check.check_id().contains(".semantic.")));
+}
 
-    let external = Arc::new(FakeProvider::new(LlmBackend::Api, &response("[]")));
+#[tokio::test]
+async fn deep_semantic_advisories_accept_an_available_api_provider() {
+    let (db, _dir) = fixture().await;
+    let external = Arc::new(FakeProvider::new(LlmBackend::Api, &response("[1]")));
     let report = run(&db, LintProfile::Deep, Arc::clone(&external)).await;
-    assert_eq!(external.calls.load(Ordering::SeqCst), 0);
+
+    assert_eq!(external.calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         check(&report, CONTRADICTION).outcome(),
-        LintOutcome::NotRunPrerequisite
+        LintOutcome::Finding
     );
-    assert!(!report.complete());
+    assert_eq!(
+        check(&report, CONTRADICTION)
+            .metrics()
+            .iter()
+            .find(|metric| metric.code() == LintMetricCode::SemanticProviderOnDevice)
+            .map(|metric| metric.value()),
+        Some(&LintMetricValue::Boolean { value: false })
+    );
 }
 
 #[tokio::test]
