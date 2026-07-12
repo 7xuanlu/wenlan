@@ -1,6 +1,6 @@
 # Wenlan
 
-Distills what your agents learn into source-cited wiki pages, refreshed between sessions from the memories they capture in flow.
+A living knowledge base your agents build as they work. What they learn becomes source-cited wiki pages that refresh between sessions, so each new thread starts from your latest work.
 
 ## 30-Second Setup
 
