@@ -77,12 +77,19 @@ The short reel below shows the product loop: source-backed pages, source cards, 
 ### Claude Code in 30 seconds
 
 ```text
-/plugin marketplace add 7xuanlu/claude-plugins
-/plugin install wenlan@7xuanlu
+/plugin marketplace add 7xuanlu/wenlan
+/plugin install wenlan@7xuanlu-wenlan
 /setup
 ```
 
 If Claude Code asks for a restart after installing, restart once, then run `/setup`. The plugin handles local runtime setup, MCP wiring, local memory setup, and the first round-trip check.
+
+Prefer one storefront for everything? [`7xuanlu/claude-plugins`](https://github.com/7xuanlu/claude-plugins) lists Wenlan alongside [boule](https://github.com/7xuanlu/boule) and [ultrapowers](https://github.com/7xuanlu/ultrapowers):
+
+```text
+/plugin marketplace add 7xuanlu/claude-plugins
+/plugin install wenlan@7xuanlu
+```
 
 Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 
