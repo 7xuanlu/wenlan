@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/7xuanlu/wenlan/compare/v0.12.1...v0.13.0) (2026-07-12)
+
+
+### Features
+
+* external-LLM API key (Bearer), config hot-swap, external status ([#342](https://github.com/7xuanlu/wenlan/issues/342)) ([960095c](https://github.com/7xuanlu/wenlan/commit/960095c457a7992c69fc77a7d1b2f3d6b77d9f5e))
+
 ## [0.12.1](https://github.com/7xuanlu/wenlan/compare/v0.12.0...v0.12.1) (2026-07-12)
 
 
