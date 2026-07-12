@@ -67,6 +67,10 @@ pub struct Config {
     pub external_llm_endpoint: Option<String>,
     #[serde(default)]
     pub external_llm_model: Option<String>,
+    /// Bearer key for the external OpenAI-compatible endpoint. Never returned
+    /// by any API response — see the key-lifecycle contract in the design spec.
+    #[serde(default)]
+    pub external_llm_api_key: Option<String>,
     /// Persistent cross-encoder reranker mode (`off`/`lite`/`full`). Daemon-read
     /// at startup via `reranker_mode_resolved`; the `WENLAN_RERANKER_MODE` env
     /// var overrides it. Set with `wenlan models reranker <mode>`.
@@ -161,6 +165,12 @@ pub fn load_config() -> Config {
     config
 }
 
+/// True when the config holds any credential — used to tighten file perms.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn stores_secret(config: &Config) -> bool {
+    config.anthropic_api_key.is_some() || config.external_llm_api_key.is_some()
+}
+
 pub fn save_config(config: &Config) -> Result<(), WenlanError> {
     let path = config_path();
     if let Some(parent) = path.parent() {
@@ -169,9 +179,9 @@ pub fn save_config(config: &Config) -> Result<(), WenlanError> {
     let json = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, &json)?;
 
-    // Restrict file permissions when API key is present (user-only read/write)
+    // Restrict file permissions when any credential is present (user-only read/write)
     #[cfg(unix)]
-    if config.anthropic_api_key.is_some() {
+    if stores_secret(config) {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(&path, perms).ok();
@@ -421,5 +431,30 @@ mod tests {
         let paths = config.directory_source_paths();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], PathBuf::from("/a"));
+    }
+
+    #[test]
+    fn test_external_llm_api_key_roundtrip_and_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.external_llm_api_key.is_none());
+        let cfg = Config {
+            external_llm_api_key: Some("sk-test".into()),
+            ..Config::default()
+        };
+        let restored: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(restored.external_llm_api_key.as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn test_stores_secret_covers_both_keys() {
+        assert!(!stores_secret(&Config::default()));
+        assert!(stores_secret(&Config {
+            anthropic_api_key: Some("k".into()),
+            ..Config::default()
+        }));
+        assert!(stores_secret(&Config {
+            external_llm_api_key: Some("k".into()),
+            ..Config::default()
+        }));
     }
 }

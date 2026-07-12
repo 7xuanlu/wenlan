@@ -25,6 +25,11 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
         synthesis_model: cfg.synthesis_model.clone(),
         external_llm_endpoint: cfg.external_llm_endpoint.clone(),
         external_llm_model: cfg.external_llm_model.clone(),
+        external_llm_api_key_configured: cfg
+            .external_llm_api_key
+            .as_deref()
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false),
     }
 }
 
@@ -36,9 +41,13 @@ pub async fn handle_get_config() -> Result<Json<ConfigResponse>, ServerError> {
 
 /// PUT /api/config — update config fields (partial update).
 pub async fn handle_update_config(
+    State(state): State<SharedState>,
     Json(req): Json<UpdateConfigRequest>,
 ) -> Result<Json<ConfigResponse>, ServerError> {
     let mut cfg = config::load_config();
+    let external_touched = req.external_llm_endpoint.is_some()
+        || req.external_llm_model.is_some()
+        || req.external_llm_api_key.is_some();
     if let Some(v) = req.skip_apps {
         cfg.skip_apps = v;
     }
@@ -67,12 +76,29 @@ pub async fn handle_update_config(
         cfg.synthesis_model = Some(v);
     }
     if let Some(v) = req.external_llm_endpoint {
-        cfg.external_llm_endpoint = Some(v);
+        cfg.external_llm_endpoint = if v.is_empty() { None } else { Some(v) };
     }
     if let Some(v) = req.external_llm_model {
-        cfg.external_llm_model = Some(v);
+        cfg.external_llm_model = if v.is_empty() { None } else { Some(v) };
+    }
+    // Key lifecycle contract: omitted = preserve; null/"" = clear; value = replace.
+    match req.external_llm_api_key {
+        None => {}
+        Some(None) => cfg.external_llm_api_key = None,
+        Some(Some(v)) => {
+            let trimmed = v.trim();
+            cfg.external_llm_api_key = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
     }
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+    if external_touched {
+        let mut s = state.write().await;
+        apply_external_provider(&mut s, &cfg);
+    }
     Ok(Json(config_to_response(&cfg)))
 }
 
@@ -112,6 +138,13 @@ pub struct SetupStatusResponse {
     pub local_model_selected: Option<String>,
     pub local_model_loaded: Option<String>,
     pub local_model_cached: bool,
+    pub external_llm: ExternalLlmStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExternalLlmStatus {
+    pub configured: bool,
+    pub loaded: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +185,25 @@ fn apply_anthropic_provider(state: &mut crate::state::ServerState, cfg: &config:
     state.synthesis_llm = None;
 }
 
+/// (Re)build or clear the external OpenAI-compatible provider from config.
+/// Mirrors `apply_anthropic_provider` so `PUT /api/config` hot-swaps the slot.
+fn apply_external_provider(state: &mut crate::state::ServerState, cfg: &config::Config) {
+    match (&cfg.external_llm_endpoint, &cfg.external_llm_model) {
+        (Some(endpoint), Some(model)) if !endpoint.is_empty() && !model.is_empty() => {
+            state.external_llm = Some(Arc::new(
+                wenlan_core::llm_provider::OpenAICompatibleProvider::new_with_key(
+                    endpoint.clone(),
+                    model.clone(),
+                    cfg.external_llm_api_key.clone(),
+                ),
+            ));
+        }
+        _ => {
+            state.external_llm = None;
+        }
+    }
+}
+
 /// GET /api/setup/status — return setup + model/key status for every client.
 pub async fn handle_get_setup_status(
     State(state): State<SharedState>,
@@ -164,9 +216,9 @@ pub async fn handle_get_setup_status(
     let local_model_cached = selected_model
         .map(on_device_models::is_cached)
         .unwrap_or(false);
-    let local_model_loaded = {
+    let (local_model_loaded, external_loaded) = {
         let s = state.read().await;
-        s.loaded_on_device_model.clone()
+        (s.loaded_on_device_model.clone(), s.external_llm.is_some())
     };
     let anthropic_key_configured = has_anthropic_key(&cfg);
     let mode = if anthropic_key_configured {
@@ -176,6 +228,10 @@ pub async fn handle_get_setup_status(
     } else {
         "basic-memory"
     };
+    let external_configured = matches!(
+        (&cfg.external_llm_endpoint, &cfg.external_llm_model),
+        (Some(e), Some(m)) if !e.is_empty() && !m.is_empty()
+    );
 
     Ok(Json(SetupStatusResponse {
         setup_completed: cfg.setup_completed,
@@ -184,6 +240,10 @@ pub async fn handle_get_setup_status(
         local_model_selected: selected_model.map(|model| model.id.to_string()),
         local_model_loaded,
         local_model_cached,
+        external_llm: ExternalLlmStatus {
+            configured: external_configured,
+            loaded: external_loaded,
+        },
     }))
 }
 
@@ -382,6 +442,107 @@ mod setup_status_tests {
         assert_eq!(body["mode"], "basic-memory");
         assert_eq!(body["anthropic_key_configured"], false);
         assert_eq!(body["local_model_selected"], Value::Null);
+        assert_eq!(body["external_llm"]["configured"], false);
+        assert_eq!(body["external_llm"]["loaded"], false);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn setup_status_reports_external_llm_state() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state.clone());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(resp).await;
+        assert_eq!(body["external_llm"]["configured"], false);
+        assert_eq!(body["external_llm"]["loaded"], false);
+
+        // Configure via PUT /api/config -> hot-swap makes it configured AND loaded.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"external_llm_endpoint":"http://localhost:11434/v1","external_llm_model":"llama3"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(resp).await;
+        assert_eq!(body["external_llm"]["configured"], true);
+        assert_eq!(body["external_llm"]["loaded"], true);
+    }
+
+    /// Divergence case: config on disk has endpoint+model set (so `configured`
+    /// is true), but ServerState was built fresh — never hot-swapped by a PUT
+    /// /api/config call — so `external_llm` in state is still `None`
+    /// (`loaded` is false). This is the case a daemon restart hits: config
+    /// persists across restarts, but the in-memory provider slot does not
+    /// until something re-loads it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn setup_status_reports_configured_but_not_loaded_when_state_untouched() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+
+        // Seed the config file directly — bypass PUT /api/config entirely so
+        // no hot-swap ever runs.
+        let mut cfg = config::load_config();
+        cfg.external_llm_endpoint = Some("http://localhost:11434/v1".to_string());
+        cfg.external_llm_model = Some("llama3".to_string());
+        config::save_config(&cfg).unwrap();
+
+        // Fresh ServerState: external_llm defaults to None (never hot-swapped).
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/setup/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["external_llm"]["configured"], true);
+        assert_eq!(body["external_llm"]["loaded"], false);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -560,5 +721,131 @@ mod config_model_fields_tests {
             Some("http://localhost:11434/v1")
         );
         assert_eq!(cfg.external_llm_model.as_deref(), Some("llama3"));
+    }
+}
+
+#[cfg(test)]
+mod external_llm_lifecycle_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use serde_json::Value;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::state::ServerState;
+
+    struct DataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
+            }
+        }
+    }
+
+    async fn response_json(resp: axum::response::Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn put_config(app: &axum::Router, body: serde_json::Value) -> (StatusCode, Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        (status, response_json(resp).await)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn external_key_lifecycle_and_hot_swap() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state.clone());
+
+        // 1. Set endpoint + model + key: hot-swap ON, flag true, value never echoed.
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "external_llm_endpoint": "http://localhost:11434/v1",
+                "external_llm_model": "llama3",
+                "external_llm_api_key": "sk-secret-123"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["external_llm_api_key_configured"], true);
+        assert!(
+            !body.to_string().contains("sk-secret-123"),
+            "key value must never be serialized"
+        );
+        assert!(
+            state.read().await.external_llm.is_some(),
+            "hot-swap must load the slot"
+        );
+
+        // 2. Omitted field preserves the stored key.
+        let (_, body) = put_config(&app, serde_json::json!({"clipboard_enabled": true})).await;
+        assert_eq!(body["external_llm_api_key_configured"], true);
+        assert_eq!(
+            config::load_config().external_llm_api_key.as_deref(),
+            Some("sk-secret-123")
+        );
+
+        // 3. Explicit null clears the key (endpoint+model remain -> slot stays loaded, keyless).
+        let (_, body) = put_config(&app, serde_json::json!({"external_llm_api_key": null})).await;
+        assert_eq!(body["external_llm_api_key_configured"], false);
+        assert!(config::load_config().external_llm_api_key.is_none());
+        assert!(state.read().await.external_llm.is_some());
+
+        // 4. Empty string also clears.
+        put_config(&app, serde_json::json!({"external_llm_api_key": "sk-2"})).await;
+        let (_, body) = put_config(&app, serde_json::json!({"external_llm_api_key": ""})).await;
+        assert_eq!(body["external_llm_api_key_configured"], false);
+
+        // 4b. A pasted key with trailing whitespace/newline is stored trimmed.
+        put_config(&app, serde_json::json!({"external_llm_api_key": "sk-x\n"})).await;
+        assert_eq!(
+            config::load_config().external_llm_api_key.as_deref(),
+            Some("sk-x"),
+            "stored key must be trimmed of pasted whitespace"
+        );
+
+        // 5. Clearing the endpoint clears the slot.
+        let (_, body) = put_config(&app, serde_json::json!({"external_llm_endpoint": ""})).await;
+        assert_eq!(body["external_llm_endpoint"], Value::Null);
+        assert!(state.read().await.external_llm.is_none());
     }
 }

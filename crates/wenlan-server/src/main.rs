@@ -482,9 +482,10 @@ async fn run_daemon() -> anyhow::Result<()> {
         (&config.external_llm_endpoint, &config.external_llm_model)
     {
         if !endpoint.is_empty() && !model.is_empty() {
-            let provider = wenlan_core::llm_provider::OpenAICompatibleProvider::new(
+            let provider = wenlan_core::llm_provider::OpenAICompatibleProvider::new_with_key(
                 endpoint.clone(),
                 model.clone(),
+                config.external_llm_api_key.clone(),
             );
             server_state.external_llm = Some(Arc::new(provider));
             tracing::info!("External LLM provider initialized from config");
