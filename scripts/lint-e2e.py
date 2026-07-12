@@ -176,6 +176,7 @@ def clean_fixture(source: str, destination: str) -> None:
     finding["recommendation_code"] = None
     report["totals"]["passed"] += 1
     report["totals"]["findings"] = 0
+    report["totals"]["actionable_findings"] -= 1
     report["complete"] = True
     validate_report(report)
     with open(destination, "w", encoding="utf-8") as handle:
@@ -204,6 +205,7 @@ def precedence_fixture(finding_source: str, incomplete_source: str, destination:
     else:
         report["totals"]["incomplete"] -= 1
     report["totals"]["findings"] += 1
+    report["totals"]["actionable_findings"] += 1
     report["checks"][report["checks"].index(target)] = findings[0]
     validate_report(report)
     with open(destination, "w", encoding="utf-8") as handle:
