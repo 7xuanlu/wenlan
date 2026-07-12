@@ -328,6 +328,16 @@ pub struct AddSourceRequest {
 
 // ===== Config =====
 
+/// Distinguishes an omitted JSON field (outer None) from an explicit `null`
+/// (Some(None)). Used for tri-state secret updates.
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateConfigRequest {
     #[serde(default)]
@@ -356,6 +366,14 @@ pub struct UpdateConfigRequest {
     /// Model identifier to use with the external LLM endpoint.
     #[serde(default)]
     pub external_llm_model: Option<String>,
+    /// API key for the external endpoint. Tri-state: omitted = preserve stored
+    /// key; `null` or `""` = clear; non-empty = replace. Never echoed back.
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub external_llm_api_key: Option<Option<String>>,
 }
 
 // ===== Chunks / indexed files =====
@@ -509,6 +527,9 @@ pub struct TestLlmRequest {
     /// Optional override prompt. Defaults to "Say 'hello' and nothing else." server-side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Optional bearer key for this probe only — not persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -633,5 +654,29 @@ mod on_device_model_request_test {
             serde_json::to_string(&req).unwrap(),
             r#"{"model_id":"qwen3-4b"}"#
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_config_request_external_key_tristate() {
+        let r: UpdateConfigRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(r.external_llm_api_key, None); // omitted
+        let r: UpdateConfigRequest =
+            serde_json::from_str(r#"{"external_llm_api_key":null}"#).unwrap();
+        assert_eq!(r.external_llm_api_key, Some(None)); // explicit null
+        let r: UpdateConfigRequest =
+            serde_json::from_str(r#"{"external_llm_api_key":"sk-x"}"#).unwrap();
+        assert_eq!(r.external_llm_api_key, Some(Some("sk-x".to_string())));
+    }
+
+    #[test]
+    fn test_llm_request_api_key_optional() {
+        let r: TestLlmRequest =
+            serde_json::from_str(r#"{"endpoint":"http://x","model":"m"}"#).unwrap();
+        assert!(r.api_key.is_none());
     }
 }
