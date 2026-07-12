@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 use wenlan_types::lint::{
-    LintGateEffect, LintOutcome, LintProfile, LintRecommendationCode, LintReport, LintSummaryCode,
+    LintCheckGroup, LintEvidenceRef, LintGateEffect, LintMetricCode, LintMetricValue, LintOutcome,
+    LintProfile, LintReasonCode, LintRecommendationCode, LintReport, LintSummaryCode,
 };
 
 use crate::client::WenlanClient;
@@ -15,8 +15,13 @@ pub async fn run(
     quiet: bool,
     profile: Option<LintProfile>,
     space: Option<String>,
+    external_egress: bool,
 ) -> ExitCode {
-    let report = match client.lint(profile, space).await {
+    if external_egress && profile != Some(LintProfile::Deep) {
+        eprintln!("wenlan lint: --allow-external requires --profile deep");
+        return ExitCode::from(2);
+    }
+    let report = match client.lint(profile, space, external_egress).await {
         Ok(report) => report,
         Err(error) => {
             eprintln!("wenlan lint: {error:#}");
@@ -54,13 +59,12 @@ pub const fn exit_code(report: &LintReport) -> u8 {
 
 fn render_human(report: &LintReport) -> String {
     let totals = report.totals();
-    let mut groups = BTreeMap::<&str, (u32, u32, u32)>::new();
+    let mut groups = [(0_u32, 0_u32, 0_u32); 7];
     for check in report.checks() {
-        let group = check
-            .check_id()
-            .split_once('.')
-            .map_or("other", |(group, _)| group);
-        let counts = groups.entry(group).or_default();
+        let Some(group) = LintCheckGroup::for_check_id(check.check_id()) else {
+            continue;
+        };
+        let counts = &mut groups[group_index(group)];
         counts.0 += 1;
         match check.outcome() {
             LintOutcome::Pass => {}
@@ -79,9 +83,14 @@ fn render_human(report: &LintReport) -> String {
         if totals.advisory_findings() == 1 { "y" } else { "ies" },
         totals.incomplete()
     );
-    for (group, (checks, findings, incomplete)) in groups {
+    for group in LintCheckGroup::ALL {
+        let (checks, findings, incomplete) = groups[group_index(group)];
+        if checks == 0 {
+            continue;
+        }
         output.push_str(&format!(
-            "  {group}: {checks} check{}, {findings} findings, {incomplete} incomplete\n",
+            "  {}: {checks} check{}, {findings} findings, {incomplete} incomplete\n",
+            group.as_str(),
             if checks == 1 { "" } else { "s" }
         ));
     }
@@ -130,6 +139,81 @@ fn append_selected(output: &mut String, checks: &[&wenlan_types::lint::LintCheck
             )),
             None => output.push_str(&format!("  {}: {summary}\n", check.check_id())),
         }
+        let affected = check.metrics().iter().find_map(|metric| {
+            if metric.code() == LintMetricCode::AffectedRecords {
+                match metric.value() {
+                    LintMetricValue::Count { value } => Some(*value),
+                    LintMetricValue::Boolean { .. } | LintMetricValue::CatalogCode { .. } => None,
+                }
+            } else {
+                None
+            }
+        });
+        let mut evidence_items = check
+            .evidence()
+            .iter()
+            .take(8)
+            .map(evidence_name)
+            .collect::<Vec<_>>();
+        if check.evidence().len() > evidence_items.len() {
+            evidence_items.push(format!(
+                "+{}_more",
+                check.evidence().len() - evidence_items.len()
+            ));
+        }
+        let evidence = evidence_items.join(",");
+        output.push_str(&format!(
+            "    affected={}; evaluated={}/{}; evidence={}; truncated={}\n",
+            affected.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+            check.coverage().evaluated(),
+            check.coverage().denominator(),
+            if evidence.is_empty() {
+                "none"
+            } else {
+                &evidence
+            },
+            check.coverage().truncated(),
+        ));
+    }
+}
+
+const fn group_index(group: LintCheckGroup) -> usize {
+    match group {
+        LintCheckGroup::Identity => 0,
+        LintCheckGroup::KnowledgeGraph => 1,
+        LintCheckGroup::Memories => 2,
+        LintCheckGroup::Operations => 3,
+        LintCheckGroup::Pages => 4,
+        LintCheckGroup::Runtime => 5,
+        LintCheckGroup::Serving => 6,
+    }
+}
+
+fn evidence_name(evidence: &LintEvidenceRef) -> String {
+    match evidence {
+        LintEvidenceRef::OpaqueId { opaque_id } => format!("opaque:{}", opaque_id.ordinal()),
+        LintEvidenceRef::ReasonCode { reason_code } => {
+            format!("reason:{}", reason_name(*reason_code))
+        }
+        LintEvidenceRef::SafeRootRelativePath {
+            safe_root_relative_path,
+        } => format!("path:{safe_root_relative_path:?}"),
+    }
+}
+
+const fn reason_name(reason: LintReasonCode) -> &'static str {
+    match reason {
+        LintReasonCode::MissingArtifact => "missing_artifact",
+        LintReasonCode::InvalidCatalogState => "invalid_catalog_state",
+        LintReasonCode::ExpectedEmptySubstrate => "expected_empty_substrate",
+        LintReasonCode::InvalidSourceConfiguration => "invalid_source_configuration",
+        LintReasonCode::TerminalOperationFailure => "terminal_operation_failure",
+        LintReasonCode::ExpiredRetry => "expired_retry",
+        LintReasonCode::InvalidOperationState => "invalid_operation_state",
+        LintReasonCode::DurableNoProgress => "durable_no_progress",
+        LintReasonCode::SemanticProviderUnavailable => "semantic_provider_unavailable",
+        LintReasonCode::InsufficientSemanticEvidence => "insufficient_semantic_evidence",
+        LintReasonCode::SemanticExecutionFailure => "semantic_execution_failure",
     }
 }
 

@@ -59,6 +59,9 @@ enum Commands {
         /// Limit checks to one registered space, or `uncategorized`.
         #[arg(long)]
         space: Option<String>,
+        /// Permit a deep semantic pass to use an already configured external provider.
+        #[arg(long)]
+        allow_external: bool,
     },
     /// Manage local models.
     Models {
@@ -160,8 +163,20 @@ async fn main() -> anyhow::Result<ExitCode> {
         Commands::Background { command } => commands::service::run_background(command)?,
         Commands::Restart => commands::service::restart()?,
         Commands::Doctor => commands::setup::run_doctor().await?,
-        Commands::Lint { profile, space } => {
-            return Ok(commands::lint::run(&client, format, cli.quiet, profile, space).await)
+        Commands::Lint {
+            profile,
+            space,
+            allow_external,
+        } => {
+            return Ok(commands::lint::run(
+                &client,
+                format,
+                cli.quiet,
+                profile,
+                space,
+                allow_external,
+            )
+            .await)
         }
         Commands::Models { command } => commands::setup::run_model(command).await?,
         Commands::Keys { command } => commands::setup::run_key(command).await?,

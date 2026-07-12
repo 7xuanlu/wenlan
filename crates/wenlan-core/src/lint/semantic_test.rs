@@ -6,7 +6,10 @@ use crate::llm_provider::LlmError;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use wenlan_types::lint::{LintGateEffect, LintMetricCode, LintMetricValue, LintProfile, LintQuery};
+use wenlan_types::lint::{
+    LintEvidenceRef, LintGateEffect, LintMetricCode, LintMetricValue, LintProfile, LintQuery,
+    LintReasonCode,
+};
 
 struct FakeProvider {
     backend: LlmBackend,
@@ -100,6 +103,12 @@ async fn check_specific_evidence_gaps_are_incomplete_not_clean() {
             LintOutcome::NotRunPrerequisite,
             "{id} must not pass without its own evidence population"
         );
+        assert_eq!(
+            check(&report, id).evidence(),
+            &[LintEvidenceRef::ReasonCode {
+                reason_code: LintReasonCode::InsufficientSemanticEvidence,
+            }]
+        );
     }
 
     let (db, _dir) = fixture().await;
@@ -118,6 +127,30 @@ async fn check_specific_evidence_gaps_are_incomplete_not_clean() {
             "{id} must not pass without memory evidence"
         );
     }
+}
+
+#[tokio::test]
+async fn missing_provider_reports_a_closed_reason_code() {
+    let (db, _dir) = fixture().await;
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .run(
+            &db,
+            &LintQuery {
+                profile: Some(LintProfile::Deep),
+                space: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        check(&report, CONTRADICTION).evidence(),
+        &[LintEvidenceRef::ReasonCode {
+            reason_code: LintReasonCode::SemanticProviderUnavailable,
+        }]
+    );
 }
 
 async fn run(

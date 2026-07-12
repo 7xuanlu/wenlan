@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use serde_json::{json, Value};
 use wenlan_types::lint::{LintGateEffect, LintOutcome};
 
 #[path = "lint_cli/support.rs"]
 mod support;
 use support::{
-    closed_host, report, report_with_gates, spawn_error, spawn_oversized, spawn_report, spawn_value,
+    closed_host, report, report_with_evidence_count, report_with_gates, spawn_error,
+    spawn_oversized, spawn_report, spawn_value,
 };
 
 fn cli() -> Command {
@@ -57,6 +59,42 @@ fn lint_deep_profile_is_forwarded_as_the_canonical_query() {
 }
 
 #[test]
+fn lint_deep_external_egress_consent_is_forwarded_without_selecting_a_provider_slot() {
+    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let (base, request) = spawn_report(&expected);
+
+    cli()
+        .env("WENLAN_HOST", base)
+        .args([
+            "--format",
+            "json",
+            "lint",
+            "--profile",
+            "deep",
+            "--allow-external",
+        ])
+        .assert()
+        .code(0)
+        .stderr("");
+
+    assert_eq!(
+        request.recv().unwrap(),
+        "GET /api/lint?profile=deep&external_egress=true HTTP/1.1\r\n"
+    );
+}
+
+#[test]
+fn lint_external_egress_requires_deep_before_transport() {
+    cli()
+        .env("WENLAN_HOST", closed_host())
+        .args(["lint", "--allow-external"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("wenlan lint: --allow-external requires --profile deep\n");
+}
+
+#[test]
 fn lint_quiet_json_suppresses_output_without_changing_exit() {
     let expected = report(&[("pages.sample", LintOutcome::Finding)]);
     let (base, _) = spawn_report(&expected);
@@ -102,7 +140,52 @@ fn lint_human_finding_is_actionable_and_exits_one() {
         .stdout(predicates::str::contains(
             "pages.sample: finding_detected; recommendation: review_finding",
         ))
+        .stdout(predicates::str::contains(
+            "affected=1; evaluated=3/3; evidence=opaque:1,reason:invalid_catalog_state; truncated=false",
+        ))
         .stderr("");
+}
+
+#[test]
+fn lint_human_uses_the_seven_canonical_catalog_groups() {
+    let expected = report(&[
+        ("entities.sample", LintOutcome::Finding),
+        ("memory_entities.sample", LintOutcome::Finding),
+        ("relations.sample", LintOutcome::Finding),
+    ]);
+    let (base, _) = spawn_report(&expected);
+
+    let output = cli()
+        .env("WENLAN_HOST", base)
+        .args(["lint", "--format", "table"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("knowledge_graph: 3 checks, 3 findings, 0 incomplete"));
+    assert!(!output.contains("\n  entities:"));
+    assert!(!output.contains("\n  memory_entities:"));
+    assert!(!output.contains("\n  relations:"));
+}
+
+#[test]
+fn lint_human_caps_evidence_without_hiding_the_population() {
+    let expected = report_with_evidence_count("pages.sample", 12);
+    let (base, _) = spawn_report(&expected);
+
+    cli()
+        .env("WENLAN_HOST", base)
+        .args(["lint", "--format", "table"])
+        .assert()
+        .code(1)
+        .stdout(predicates::str::contains(
+            "evidence=opaque:1,opaque:2,opaque:3,opaque:4,opaque:5,opaque:6,opaque:7,opaque:8,+4_more",
+        ))
+        .stdout(predicates::str::contains("evaluated=12/12"))
+        .stdout(predicates::str::contains("opaque:9").not());
 }
 
 #[test]

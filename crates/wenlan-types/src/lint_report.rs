@@ -225,6 +225,35 @@ impl LintQuery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LintRequestQuery {
+    #[serde(flatten)]
+    lint: LintQuery,
+    #[serde(default, skip_serializing_if = "is_false")]
+    external_egress: bool,
+}
+
+impl LintRequestQuery {
+    pub const fn new(lint: LintQuery, external_egress: bool) -> Self {
+        Self {
+            lint,
+            external_egress,
+        }
+    }
+
+    pub const fn lint(&self) -> &LintQuery {
+        &self.lint
+    }
+
+    pub const fn external_egress(&self) -> bool {
+        self.external_egress
+    }
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LintErrorResponse {
     error: String,
 }

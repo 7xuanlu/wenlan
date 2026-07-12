@@ -7,9 +7,11 @@ use std::thread;
 use wenlan_types::lint::{
     LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
     LintConfigFingerprint, LintCoverage, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest,
-    LintGateEffect, LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
-    LintProducerReceipt, LintRecommendationCode, LintReport, LintScope, LintSeverity,
-    LintSnapshotReceipts, LintSummaryCode, LintValidationMethod, LINT_GENERAL_CHECK_COUNT,
+    LintEvidenceRef, LintGateEffect, LintMetric, LintMetricCode, LintMetricValue, LintOpaqueId,
+    LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
+    LintProducerReceipt, LintReasonCode, LintRecommendationCode, LintReport, LintScope,
+    LintSeverity, LintSnapshotReceipts, LintSummaryCode, LintValidationMethod,
+    LINT_GENERAL_CHECK_COUNT,
 };
 
 pub fn report(checks: &[(&str, LintOutcome)]) -> LintReport {
@@ -27,6 +29,45 @@ pub fn report_with_gates(checks: &[(&str, LintOutcome, LintGateEffect)]) -> Lint
             .map(|(id, outcome, gate_effect)| check(id, *outcome, *gate_effect))
             .collect(),
     )
+}
+
+pub fn report_with_evidence_count(check_id: &str, evidence_count: usize) -> LintReport {
+    build_report(vec![check_with_evidence_count(check_id, evidence_count)])
+}
+
+fn check_with_evidence_count(id: &str, evidence_count: usize) -> LintCheckResult {
+    let evidence = (0..evidence_count)
+        .map(|position| LintEvidenceRef::OpaqueId {
+            opaque_id: LintOpaqueId::from_sorted_position(position).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    LintCheckResult::try_new(LintCheckResultInput {
+        check_id: id.to_string(),
+        outcome: LintOutcome::Finding,
+        severity: LintSeverity::Warning,
+        applicability: LintApplicability::Applicable,
+        precondition: LintPrecondition::Ready,
+        coverage: LintCoverage::new(
+            LintValidationMethod::FullEnumeration,
+            evidence_count as u64,
+            evidence_count as u64,
+            100,
+            false,
+            evidence_count as u64,
+        )
+        .expect("valid evidence fixture coverage"),
+        metrics: vec![LintMetric::new(
+            LintMetricCode::AffectedRecords,
+            LintMetricValue::Count {
+                value: evidence_count as u64,
+            },
+        )],
+        summary_code: LintSummaryCode::FindingDetected,
+        recommendation_code: Some(LintRecommendationCode::ReviewFinding),
+        evidence,
+        duration_ms: 1,
+    })
+    .expect("valid evidence fixture")
 }
 
 fn build_report(mut checks: Vec<LintCheckResult>) -> LintReport {
@@ -98,6 +139,31 @@ fn check(id: &str, outcome: LintOutcome, gate_effect: LintGateEffect) -> LintChe
             Some(LintRecommendationCode::InspectRuntime),
         ),
     };
+    let (coverage, metrics, evidence) = if outcome == LintOutcome::Finding {
+        (
+            LintCoverage::new(LintValidationMethod::FullEnumeration, 3, 3, 100, false, 2)
+                .expect("valid finding coverage"),
+            vec![LintMetric::new(
+                LintMetricCode::AffectedRecords,
+                LintMetricValue::Count { value: 1 },
+            )],
+            vec![
+                LintEvidenceRef::OpaqueId {
+                    opaque_id: LintOpaqueId::from_sorted_position(0).unwrap(),
+                },
+                LintEvidenceRef::ReasonCode {
+                    reason_code: LintReasonCode::InvalidCatalogState,
+                },
+            ],
+        )
+    } else {
+        (
+            LintCoverage::new(LintValidationMethod::FullEnumeration, 0, 0, 100, false, 0)
+                .expect("valid fixture coverage"),
+            Vec::new(),
+            Vec::new(),
+        )
+    };
     LintCheckResult::try_new_with_gate_effect(
         LintCheckResultInput {
             check_id: id.to_string(),
@@ -105,12 +171,11 @@ fn check(id: &str, outcome: LintOutcome, gate_effect: LintGateEffect) -> LintChe
             severity,
             applicability,
             precondition,
-            coverage: LintCoverage::new(LintValidationMethod::FullEnumeration, 0, 0, 100, false, 0)
-                .expect("valid fixture coverage"),
-            metrics: Vec::new(),
+            coverage,
+            metrics,
             summary_code,
             recommendation_code,
-            evidence: Vec::new(),
+            evidence,
             duration_ms: 1,
         },
         gate_effect,

@@ -1,3 +1,4 @@
+pub use wenlan_types::lint::LintCheckGroup;
 use wenlan_types::lint::{LintGateEffect, LintProfile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -17,17 +18,6 @@ pub enum ScopeAxis {
     OperationsGlobal,
     RuntimeGlobal,
     ServingGlobal,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LintCheckGroup {
-    Identity,
-    KnowledgeGraph,
-    Memories,
-    Operations,
-    Pages,
-    Runtime,
-    Serving,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

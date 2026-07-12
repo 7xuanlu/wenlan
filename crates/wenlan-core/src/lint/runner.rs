@@ -50,6 +50,7 @@ pub struct LintRunner {
     operations_config: super::operations::OperationsRunConfig,
     runtime_config: super::runtime::RuntimeRunConfig,
     semantic_provider: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+    semantic_external_egress_enabled: bool,
     observer: Arc<dyn LintRunObserver>,
     #[cfg(test)]
     run_timeout_override: Option<std::time::Duration>,
@@ -134,6 +135,7 @@ impl LintRunner {
             operations_config: super::operations::OperationsRunConfig::unavailable(),
             runtime_config: super::runtime::RuntimeRunConfig::capture(),
             semantic_provider: None,
+            semantic_external_egress_enabled: false,
             observer: Arc::new(NoopLintRunObserver),
             #[cfg(test)]
             run_timeout_override: None,
@@ -207,8 +209,8 @@ impl LintRunner {
             self.semantic_provider.as_deref().is_some_and(|provider| {
                 provider.backend() == crate::llm_provider::LlmBackend::OnDevice
             });
-        let semantic_external_egress_enabled =
-            self.semantic_provider.as_deref().is_some_and(|provider| {
+        let semantic_external_egress_enabled = self.semantic_external_egress_enabled
+            || self.semantic_provider.as_deref().is_some_and(|provider| {
                 provider.backend() != crate::llm_provider::LlmBackend::OnDevice
             });
         let effective_config = EffectiveLintConfig::new(
@@ -366,6 +368,11 @@ impl LintRunner {
         provider: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Self {
         self.semantic_provider = provider;
+        self
+    }
+
+    pub fn with_semantic_external_egress_enabled(mut self, enabled: bool) -> Self {
+        self.semantic_external_egress_enabled = enabled;
         self
     }
 

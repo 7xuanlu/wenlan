@@ -1,8 +1,12 @@
+use async_trait::async_trait;
 use axum::body::to_bytes;
 use axum::http::{Method, StatusCode};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tower::ServiceExt;
 use wenlan_core::lint::observation::LintRunEvent;
+use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 use wenlan_types::lint::{
     LintErrorResponse, LintMetricCode, LintMetricValue, LintOutcome, LintProfile, LintReport,
     LintScopeKind,
@@ -12,6 +16,28 @@ use wenlan_types::sources::{Source, SourceType, SyncStatus};
 #[path = "lint_endpoint_test/support.rs"]
 mod support;
 use support::{request, Fixture};
+
+struct FakeApiProvider {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl LlmProvider for FakeApiProvider {
+    async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(r#"{"verdicts":[{"check_id":"memories.semantic.classification","refs":[]},{"check_id":"memories.semantic.contradiction","refs":[]},{"check_id":"memories.semantic.staleness","refs":[]},{"check_id":"pages.semantic.faithfulness","refs":[]},{"check_id":"pages.semantic.provenance_adequacy","refs":[]},{"check_id":"serving.semantic.retrieval_quality","refs":[] }]}"#.to_string())
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn name(&self) -> &str {
+        "fake-api"
+    }
+    fn backend(&self) -> LlmBackend {
+        LlmBackend::Api
+    }
+}
 
 async fn report(fixture: &Fixture, uri: &str) -> (StatusCode, String, Option<LintReport>) {
     let response = fixture
@@ -58,6 +84,77 @@ async fn lint_profile_is_typed_and_unknown_values_fail_before_runner_work() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(decoded.is_none());
     assert_eq!(fixture.lint_events.events(), before_events);
+}
+
+#[tokio::test]
+async fn lint_deep_requires_explicit_external_egress_before_using_configured_api_provider() {
+    let provider = Arc::new(FakeApiProvider {
+        calls: AtomicUsize::new(0),
+    });
+    let configured: Arc<dyn LlmProvider> = provider.clone();
+    let fixture = Fixture::new_with_state(Vec::new(), None, move |state| {
+        state.synthesis_llm = Some(configured);
+    })
+    .await;
+    fixture.seed_semantic_candidates().await;
+
+    let (status, _, _) = report(&fixture, "/api/lint?profile=deep").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+
+    let (status, _, decoded) =
+        report(&fixture, "/api/lint?profile=deep&external_egress=true").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert!(decoded
+        .expect("typed deep report")
+        .checks()
+        .iter()
+        .any(|check| {
+            check.check_id() == "memories.semantic.classification"
+                && check.outcome() == LintOutcome::Pass
+        }));
+}
+
+#[tokio::test]
+async fn lint_external_egress_is_rejected_for_general_profile_before_runner_work() {
+    let fixture = Fixture::new(Vec::new(), None).await;
+    let before_events = fixture.lint_events.events();
+
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(request(Method::GET, "/api/lint?external_egress=true"))
+        .await
+        .expect("invalid egress response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("invalid egress body");
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error = serde_json::from_slice::<LintErrorResponse>(&body).expect("typed error");
+    assert_eq!(
+        error,
+        LintErrorResponse::new("external_egress_requires_deep")
+    );
+    assert_eq!(fixture.lint_events.events(), before_events);
+}
+
+#[tokio::test]
+async fn lint_deep_records_external_egress_consent_even_without_a_ready_provider() {
+    let fixture = Fixture::new(Vec::new(), None).await;
+
+    let (_, _, local) = report(&fixture, "/api/lint?profile=deep").await;
+    let (_, _, external) = report(&fixture, "/api/lint?profile=deep&external_egress=true").await;
+
+    assert_ne!(
+        local.expect("local deep report").config_fingerprint(),
+        external
+            .expect("external-consented deep report")
+            .config_fingerprint(),
+        "effective config must record operator egress consent even when no provider is ready"
+    );
 }
 
 #[tokio::test]

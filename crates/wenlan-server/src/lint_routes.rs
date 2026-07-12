@@ -7,7 +7,7 @@ use axum::Json;
 use std::sync::Arc;
 use wenlan_core::lint::context::CancellationToken;
 use wenlan_core::lint::runner::{LintRunError, LintRunner};
-use wenlan_types::lint::{LintQuery, LintReport};
+use wenlan_types::lint::{LintQuery, LintReport, LintRequestQuery};
 
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
     router.route("/api/lint", get(handle_lint))
@@ -15,8 +15,15 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
 
 async fn handle_lint(
     State(state): State<SharedState>,
-    Query(query): Query<LintQuery>,
+    Query(request): Query<LintRequestQuery>,
 ) -> Result<Json<LintReport>, ServerError> {
+    let query = request.lint();
+    if request.external_egress() && query.applied_profile() != wenlan_types::lint::LintProfile::Deep
+    {
+        return Err(ServerError::ValidationError(
+            "external_egress_requires_deep".to_string(),
+        ));
+    }
     let (db, config, runtime, lint_observer, semantic_provider) = {
         let state = state.read().await;
         let db = state.db.clone().ok_or(ServerError::DbNotInitialized)?;
@@ -25,7 +32,7 @@ async fn handle_lint(
             state.lint_config.clone(),
             RuntimeObservationInput::capture(&state),
             Arc::clone(&state.lint_observer),
-            state.llm.clone(),
+            select_semantic_provider(&state, query, request.external_egress()),
         )
     };
     let observation = runtime.observe().await;
@@ -33,17 +40,41 @@ async fn handle_lint(
         .with_observer(lint_observer)
         .with_sources(config.sources())
         .with_runtime_observation(observation)
+        .with_semantic_external_egress_enabled(request.external_egress())
         .with_semantic_provider(semantic_provider);
     let report = runner
-        .run(
-            &db,
-            &query,
-            config.page_root(),
-            config.page_root().is_some(),
-        )
+        .run(&db, query, config.page_root(), config.page_root().is_some())
         .await
         .map_err(map_lint_error)?;
     Ok(Json(report))
+}
+
+fn select_semantic_provider(
+    state: &crate::state::ServerState,
+    query: &LintQuery,
+    external_egress: bool,
+) -> Option<Arc<dyn wenlan_core::llm_provider::LlmProvider>> {
+    if query.applied_profile() != wenlan_types::lint::LintProfile::Deep {
+        return None;
+    }
+    if external_egress {
+        for provider in [
+            &state.synthesis_llm,
+            &state.api_llm,
+            &state.external_llm,
+            &state.llm,
+        ] {
+            if provider
+                .as_deref()
+                .is_some_and(|provider| provider.is_available())
+            {
+                return provider.clone();
+            }
+        }
+        None
+    } else {
+        state.llm.clone()
+    }
 }
 
 fn map_lint_error(error: LintRunError) -> ServerError {

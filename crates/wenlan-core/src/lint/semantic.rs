@@ -7,7 +7,7 @@ use std::time::Duration;
 use wenlan_types::lint::{
     LintApplicability, LintCheckResult, LintCheckResultInput, LintCoverage, LintEvidenceRef,
     LintMetric, LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome, LintPrecondition,
-    LintRecommendationCode, LintSeverity, LintSummaryCode, LintValidationMethod,
+    LintReasonCode, LintRecommendationCode, LintSeverity, LintSummaryCode, LintValidationMethod,
     LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
@@ -69,26 +69,51 @@ pub(super) async fn run(
     provider: Option<&dyn LlmProvider>,
 ) -> Vec<LintCheckResult> {
     let Some(provider) = provider else {
-        return terminal_results(context, LintOutcome::NotRunPrerequisite, false);
+        return terminal_results(
+            context,
+            LintOutcome::NotRunPrerequisite,
+            false,
+            LintReasonCode::SemanticProviderUnavailable,
+        );
     };
     let provider_on_device = provider.backend() == LlmBackend::OnDevice;
     if !provider.is_available() {
-        return terminal_results(context, LintOutcome::NotRunPrerequisite, provider_on_device);
+        return terminal_results(
+            context,
+            LintOutcome::NotRunPrerequisite,
+            provider_on_device,
+            LintReasonCode::SemanticProviderUnavailable,
+        );
     }
     if context
         .gate()
         .check_run_for(context.profile(), context.clock().elapsed())
         .is_err()
     {
-        return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+        return terminal_results(
+            context,
+            LintOutcome::FailedToRun,
+            provider_on_device,
+            LintReasonCode::SemanticExecutionFailure,
+        );
     }
     let candidates = match load_candidates(context).await {
         Ok(candidates) if !candidates.records.is_empty() => candidates,
         Ok(_) => {
-            return terminal_results(context, LintOutcome::NotRunPrerequisite, provider_on_device);
+            return terminal_results(
+                context,
+                LintOutcome::NotRunPrerequisite,
+                provider_on_device,
+                LintReasonCode::InsufficientSemanticEvidence,
+            );
         }
         Err(()) => {
-            return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+            return terminal_results(
+                context,
+                LintOutcome::FailedToRun,
+                provider_on_device,
+                LintReasonCode::SemanticExecutionFailure,
+            );
         }
     };
     let request = LlmRequest {
@@ -102,7 +127,12 @@ pub(super) async fn run(
     let raw = match tokio::time::timeout(MODEL_TIMEOUT, provider.generate(request)).await {
         Ok(Ok(raw)) => raw,
         Ok(Err(_)) | Err(_) => {
-            return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+            return terminal_results(
+                context,
+                LintOutcome::FailedToRun,
+                provider_on_device,
+                LintReasonCode::SemanticExecutionFailure,
+            );
         }
     };
     if context
@@ -110,12 +140,22 @@ pub(super) async fn run(
         .check_run_for(context.profile(), context.clock().elapsed())
         .is_err()
     {
-        return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+        return terminal_results(
+            context,
+            LintOutcome::FailedToRun,
+            provider_on_device,
+            LintReasonCode::SemanticExecutionFailure,
+        );
     }
     let verdicts = match parse_response(&raw, &candidates) {
         Ok(verdicts) => verdicts,
         Err(()) => {
-            return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+            return terminal_results(
+                context,
+                LintOutcome::FailedToRun,
+                provider_on_device,
+                LintReasonCode::SemanticExecutionFailure,
+            );
         }
     };
     IDS.iter()
@@ -300,6 +340,7 @@ fn semantic_result(
             id,
             LintOutcome::NotRunPrerequisite,
             provider_on_device,
+            LintReasonCode::InsufficientSemanticEvidence,
         );
     };
     let evidence = refs
@@ -372,9 +413,10 @@ fn terminal_results(
     context: &LintContext<'_, '_>,
     outcome: LintOutcome,
     provider_on_device: bool,
+    reason_code: LintReasonCode,
 ) -> Vec<LintCheckResult> {
     IDS.iter()
-        .map(|id| terminal_result(context, id, outcome, provider_on_device))
+        .map(|id| terminal_result(context, id, outcome, provider_on_device, reason_code))
         .collect()
 }
 
@@ -383,6 +425,7 @@ fn terminal_result(
     id: &'static str,
     outcome: LintOutcome,
     provider_on_device: bool,
+    reason_code: LintReasonCode,
 ) -> LintCheckResult {
     let prerequisite = outcome == LintOutcome::NotRunPrerequisite;
     let result = LintCheckResult::try_new_with_gate_effect(
@@ -406,7 +449,7 @@ fn terminal_result(
                 0,
                 LINT_MAX_EVIDENCE_PER_CHECK,
                 false,
-                0,
+                1,
             )
             .expect("empty semantic coverage is valid"),
             metrics: vec![boolean_metric(
@@ -423,7 +466,7 @@ fn terminal_result(
             } else {
                 LintRecommendationCode::InspectRuntime
             }),
-            evidence: Vec::new(),
+            evidence: vec![LintEvidenceRef::ReasonCode { reason_code }],
             duration_ms: context.clock().duration_ms(),
         },
         catalog_entry(id)

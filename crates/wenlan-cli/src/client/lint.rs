@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::{WenlanClient, DEFAULT_HOST};
 use anyhow::{bail, Context, Result};
-use wenlan_types::lint::{LintErrorResponse, LintProfile, LintQuery, LintReport};
+use wenlan_types::lint::{LintErrorResponse, LintProfile, LintQuery, LintReport, LintRequestQuery};
 
 const MAX_LINT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -17,12 +17,16 @@ impl WenlanClient {
         &self,
         profile: Option<LintProfile>,
         space: Option<String>,
+        external_egress: bool,
     ) -> Result<LintReport> {
         let url = format!("{}/api/lint", self.base_url);
         let response = self
             .http
             .get(&url)
-            .query(&LintQuery { profile, space })
+            .query(&LintRequestQuery::new(
+                LintQuery { profile, space },
+                external_egress,
+            ))
             .send()
             .await
             .with_context(|| format!("GET {url} failed"))?;
@@ -31,7 +35,10 @@ impl WenlanClient {
         if !status.is_success() {
             if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
                 if let Ok(error) = serde_json::from_slice::<LintErrorResponse>(&body) {
-                    if error.error() == "invalid_scope" {
+                    if matches!(
+                        error.error(),
+                        "invalid_scope" | "external_egress_requires_deep"
+                    ) {
                         bail!(error.error().to_string());
                     }
                 }

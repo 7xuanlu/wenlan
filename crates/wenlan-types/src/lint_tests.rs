@@ -131,7 +131,7 @@ fn report(scope: LintScope, checks: Vec<LintCheckResult>) -> LintReport {
 }
 
 #[test]
-fn report_roundtrips_v1_for_each_applied_scope_kind() {
+fn report_roundtrips_v2_for_each_applied_scope_kind() {
     let scopes = [
         LintScope::global(),
         LintScope::registered(LintOpaqueId::from_sorted_position(0).unwrap()),
@@ -145,7 +145,7 @@ fn report_roundtrips_v1_for_each_applied_scope_kind() {
         let decoded: LintReport = serde_json::from_value(encoded.clone()).unwrap();
 
         assert!(decoded.complete());
-        assert_eq!(encoded["report_schema_version"], json!(1));
+        assert_eq!(encoded["report_schema_version"], json!(2));
         assert_eq!(encoded["check_catalog_version"], json!(1));
         assert_eq!(encoded["profile"], json!("general"));
         assert_eq!(
@@ -254,7 +254,7 @@ fn rejects_unknown_enums_and_unsupported_schema_versions() {
     assert!(serde_json::from_value::<LintReport>(unknown_enum).is_err());
 
     let mut unsupported_schema = serde_json::to_value(&report).unwrap();
-    unsupported_schema["report_schema_version"] = json!(2);
+    unsupported_schema["report_schema_version"] = json!(3);
     assert!(serde_json::from_value::<LintReport>(unsupported_schema).is_err());
 }
 
@@ -380,6 +380,38 @@ fn query_defaults_to_general_and_accepts_only_closed_profiles() {
         vec![check(LintOutcome::Pass, LintSeverity::Info).unwrap()],
     );
     assert_eq!(general.profile(), LintProfile::General);
+
+    let request: LintRequestQuery = serde_json::from_value(json!({
+        "profile": "deep",
+        "space": "requested-space",
+        "external_egress": true
+    }))
+    .unwrap();
+    assert_eq!(request.lint().applied_profile(), LintProfile::Deep);
+    assert_eq!(request.lint().space.as_deref(), Some("requested-space"));
+    assert!(request.external_egress());
+    assert_eq!(
+        serde_json::to_value(LintRequestQuery::new(
+            LintQuery::new(Some(LintProfile::Deep), None),
+            false,
+        ))
+        .unwrap(),
+        json!({ "profile": "deep" })
+    );
+}
+
+#[test]
+fn check_group_resolver_uses_the_canonical_seven_groups() {
+    assert_eq!(LintCheckGroup::ALL.len(), 7);
+    assert_eq!(
+        LintCheckGroup::for_check_id("memory_entities.integrity"),
+        Some(LintCheckGroup::KnowledgeGraph)
+    );
+    assert_eq!(
+        LintCheckGroup::for_check_id("pages.projection.identity"),
+        Some(LintCheckGroup::Pages)
+    );
+    assert_eq!(LintCheckGroup::for_check_id("fixture.padding"), None);
 }
 
 #[test]

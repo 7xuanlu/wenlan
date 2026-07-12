@@ -49,17 +49,35 @@ impl Fixture {
         page_root: Option<PathBuf>,
         clock_epoch_seconds: Option<i64>,
     ) -> Self {
+        Self::new_with_state_at(sources, page_root, clock_epoch_seconds, |_| {}).await
+    }
+
+    pub(super) async fn new_with_state(
+        sources: Vec<Source>,
+        page_root: Option<PathBuf>,
+        configure: impl FnOnce(&mut crate::state::ServerState),
+    ) -> Self {
+        Self::new_with_state_at(sources, page_root, None, configure).await
+    }
+
+    async fn new_with_state_at(
+        sources: Vec<Source>,
+        page_root: Option<PathBuf>,
+        clock_epoch_seconds: Option<i64>,
+        configure: impl FnOnce(&mut crate::state::ServerState),
+    ) -> Self {
         let root = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn EventEmitter> = Arc::new(NoopEmitter);
         let db = Arc::new(MemoryDB::new(root.path(), emitter).await.expect("database"));
         let lint_events = LintEventSpy::default();
-        let state = crate::state::ServerState {
+        let mut state = crate::state::ServerState {
             db: Some(Arc::clone(&db)),
             lint_config: crate::state::LintServerConfig::new(sources, page_root)
                 .with_clock_epoch_seconds(clock_epoch_seconds),
             lint_observer: Arc::new(lint_events.clone()),
             ..Default::default()
         };
+        configure(&mut state);
         let app = crate::router::build_router(Arc::new(RwLock::new(state)));
         Self {
             app,
@@ -67,6 +85,19 @@ impl Fixture {
             lint_events,
             root,
         }
+    }
+
+    pub(super) async fn seed_semantic_candidates(&self) {
+        self.db
+            .store_raw_import_memory(
+                "lint_semantic_source",
+                "candidate",
+                Some("candidate"),
+                None,
+                0,
+            )
+            .await
+            .expect("seed semantic candidates");
     }
 
     pub(super) async fn fingerprint(&self) -> Fingerprint {

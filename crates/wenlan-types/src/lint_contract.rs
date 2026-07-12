@@ -2,7 +2,7 @@
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{fmt, num::NonZeroU64};
 
-pub const LINT_REPORT_SCHEMA_VERSION: u16 = 1;
+pub const LINT_REPORT_SCHEMA_VERSION: u16 = 2;
 pub const LINT_CHECK_CATALOG_VERSION: u16 = 1;
 pub const LINT_MAX_EVIDENCE_PER_CHECK: u16 = 100;
 pub const LINT_GENERAL_CHECK_COUNT: usize = 55;
@@ -157,7 +157,7 @@ impl LintOpaqueId {
             .and_then(NonZeroU64::new)
             .map(Self)
     }
-    pub(crate) const fn ordinal(self) -> u64 {
+    pub const fn ordinal(self) -> u64 {
         self.0.get()
     }
 }

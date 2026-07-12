@@ -165,6 +165,9 @@ pub enum LintReasonCode {
     ExpiredRetry,
     InvalidOperationState,
     DurableNoProgress,
+    SemanticProviderUnavailable,
+    InsufficientSemanticEvidence,
+    SemanticExecutionFailure,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LintSafeRootRelativePath {
