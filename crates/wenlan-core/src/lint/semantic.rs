@@ -2,12 +2,14 @@ use super::catalog::catalog_entry;
 use super::context::{LintContext, PopulationBasis, ScopeFilter};
 use crate::llm_provider::{LlmBackend, LlmProvider, LlmRequest};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use wenlan_types::lint::{
-    LintApplicability, LintCheckResult, LintCheckResultInput, LintCoverage, LintEvidenceRef,
-    LintMetric, LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome, LintPrecondition,
-    LintReasonCode, LintRecommendationCode, LintSeverity, LintSummaryCode, LintValidationMethod,
+    LintAgentRecord, LintAgentRecordKind, LintAgentSubmission, LintAgentWork, LintApplicability,
+    LintCheckResult, LintCheckResultInput, LintCoverage, LintDigest, LintEvidenceRef, LintMetric,
+    LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome, LintPrecondition, LintReasonCode,
+    LintRecommendationCode, LintSeverity, LintSummaryCode, LintValidationMethod,
     LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
@@ -49,6 +51,26 @@ struct CandidateSet {
     memory_eligible: u64,
     page_eligible: u64,
     faithful_page_eligible: u64,
+    population_digest: [u8; 32],
+}
+
+#[derive(Clone, Default)]
+pub(super) enum AgentRequest {
+    #[default]
+    Disabled,
+    Prepare,
+    Submit(LintAgentSubmission),
+}
+
+impl AgentRequest {
+    pub(super) const fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
+pub(super) struct SemanticRun {
+    pub(super) results: Vec<LintCheckResult>,
+    pub(super) agent_work: Option<LintAgentWork>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +87,22 @@ struct SemanticVerdict {
 }
 
 pub(super) async fn run(
+    context: &LintContext<'_, '_>,
+    provider: Option<&dyn LlmProvider>,
+    agent_request: &AgentRequest,
+) -> SemanticRun {
+    match agent_request {
+        AgentRequest::Disabled => SemanticRun {
+            results: run_provider(context, provider).await,
+            agent_work: None,
+        },
+        AgentRequest::Prepare | AgentRequest::Submit(_) => {
+            run_calling_agent(context, agent_request).await
+        }
+    }
+}
+
+async fn run_provider(
     context: &LintContext<'_, '_>,
     provider: Option<&dyn LlmProvider>,
 ) -> Vec<LintCheckResult> {
@@ -166,12 +204,125 @@ pub(super) async fn run(
                 verdicts.get(*id).expect("validated semantic verdict"),
                 &candidates,
                 provider_on_device,
+                false,
             )
         })
         .collect()
 }
 
+async fn run_calling_agent(
+    context: &LintContext<'_, '_>,
+    agent_request: &AgentRequest,
+) -> SemanticRun {
+    if context
+        .gate()
+        .check_run_for(context.profile(), context.clock().elapsed())
+        .is_err()
+    {
+        return SemanticRun {
+            results: terminal_results(
+                context,
+                LintOutcome::FailedToRun,
+                false,
+                LintReasonCode::SemanticExecutionFailure,
+            ),
+            agent_work: None,
+        };
+    }
+    let candidates = match load_candidates(context).await {
+        Ok(candidates) if !candidates.records.is_empty() => candidates,
+        Ok(_) => {
+            return SemanticRun {
+                results: terminal_results(
+                    context,
+                    LintOutcome::NotRunPrerequisite,
+                    false,
+                    LintReasonCode::InsufficientSemanticEvidence,
+                ),
+                agent_work: None,
+            };
+        }
+        Err(()) => {
+            return SemanticRun {
+                results: terminal_results(
+                    context,
+                    LintOutcome::FailedToRun,
+                    false,
+                    LintReasonCode::SemanticExecutionFailure,
+                ),
+                agent_work: None,
+            };
+        }
+    };
+    let work = match build_agent_work(context, &candidates) {
+        Ok(work) => work,
+        Err(()) => {
+            return SemanticRun {
+                results: terminal_results(
+                    context,
+                    LintOutcome::FailedToRun,
+                    false,
+                    LintReasonCode::SemanticExecutionFailure,
+                ),
+                agent_work: None,
+            };
+        }
+    };
+    let AgentRequest::Submit(submission) = agent_request else {
+        return SemanticRun {
+            results: terminal_results(
+                context,
+                LintOutcome::NotRunPrerequisite,
+                false,
+                LintReasonCode::SemanticAgentAdjudicationRequired,
+            ),
+            agent_work: Some(work),
+        };
+    };
+    if submission.work_digest() != work.work_digest() {
+        return SemanticRun {
+            results: inconsistent_results(context, LintReasonCode::SemanticAgentWorkStale),
+            agent_work: Some(work),
+        };
+    }
+    let verdicts = match validate_agent_submission(submission, &candidates) {
+        Ok(verdicts) => verdicts,
+        Err(()) => {
+            return SemanticRun {
+                results: terminal_results(
+                    context,
+                    LintOutcome::FailedToRun,
+                    false,
+                    LintReasonCode::SemanticAgentSubmissionInvalid,
+                ),
+                agent_work: Some(work),
+            };
+        }
+    };
+    SemanticRun {
+        results: IDS
+            .iter()
+            .map(|id| {
+                semantic_result(
+                    context,
+                    id,
+                    verdicts.get(*id).expect("validated agent verdict"),
+                    &candidates,
+                    false,
+                    true,
+                )
+            })
+            .collect(),
+        agent_work: Some(work),
+    }
+}
+
 async fn load_candidates(context: &LintContext<'_, '_>) -> Result<CandidateSet, ()> {
+    let mut population_digest = Sha256::new();
+    update_digest_bytes(
+        &mut population_digest,
+        b"wenlan-lint-semantic-population-v1",
+    );
     let (memory_scope, memory_params) = scope_clause(context.scope().filter(), "m.space");
     let mut memory_rows = context
         .snapshot()
@@ -192,6 +343,9 @@ async fn load_candidates(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
     while let Some(row) = memory_rows.next().await.map_err(|_| ())? {
         let content = row.get::<String>(0).map_err(|_| ())?;
         let memory_type = row.get::<Option<String>>(1).map_err(|_| ())?;
+        update_digest_bytes(&mut population_digest, b"memory");
+        update_digest_bytes(&mut population_digest, content.as_bytes());
+        update_optional_digest_bytes(&mut population_digest, memory_type.as_deref());
         if records.len() < MEMORY_SAMPLE_CAP && !content.trim().is_empty() {
             records.push(Candidate {
                 kind: CandidateKind::Memory,
@@ -236,6 +390,10 @@ async fn load_candidates(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         let content = row.get::<String>(0).map_err(|_| ())?;
         let evidence_count = u64::try_from(row.get::<i64>(1).map_err(|_| ())?).map_err(|_| ())?;
         let source_excerpt = row.get::<Option<String>>(2).map_err(|_| ())?;
+        update_digest_bytes(&mut population_digest, b"page");
+        update_digest_bytes(&mut population_digest, content.as_bytes());
+        population_digest.update(evidence_count.to_le_bytes());
+        update_optional_digest_bytes(&mut population_digest, source_excerpt.as_deref());
         if source_excerpt.is_some() {
             faithful_page_eligible = faithful_page_eligible.saturating_add(1);
         }
@@ -256,6 +414,7 @@ async fn load_candidates(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         memory_eligible,
         page_eligible,
         faithful_page_eligible,
+        population_digest: population_digest.finalize().into(),
     })
 }
 
@@ -319,6 +478,117 @@ fn parse_response(raw: &str, candidates: &CandidateSet) -> Result<BTreeMap<Strin
     }
 }
 
+fn build_agent_work(
+    context: &LintContext<'_, '_>,
+    candidates: &CandidateSet,
+) -> Result<LintAgentWork, ()> {
+    let records = candidates
+        .records
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            LintAgentRecord::try_new(
+                u16::try_from(index + 1).map_err(|_| ())?,
+                match candidate.kind {
+                    CandidateKind::Memory => LintAgentRecordKind::Memory,
+                    CandidateKind::Page => LintAgentRecordKind::Page,
+                },
+                candidate.excerpt.clone(),
+                candidate.memory_type.clone(),
+                candidate.evidence_count,
+                candidate.source_excerpt.clone(),
+            )
+            .map_err(|_| ())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut digest = Sha256::new();
+    digest.update(b"wenlan-lint-agent-work-v1");
+    digest.update(
+        context
+            .snapshot()
+            .analysis_digest()
+            .map_err(|_| ())?
+            .as_bytes(),
+    );
+    digest.update(
+        context
+            .page_scan()
+            .map(|scan| scan.normalized_bytes())
+            .unwrap_or([0; 32]),
+    );
+    match context.scope().filter() {
+        ScopeFilter::Global => digest.update(b"global"),
+        ScopeFilter::Registered(value) => {
+            digest.update(b"registered");
+            update_digest_bytes(&mut digest, value.as_bytes());
+        }
+        ScopeFilter::Uncategorized => digest.update(b"uncategorized"),
+    }
+    digest.update(candidates.memory_eligible.to_le_bytes());
+    digest.update(candidates.page_eligible.to_le_bytes());
+    digest.update(candidates.faithful_page_eligible.to_le_bytes());
+    digest.update(candidates.population_digest);
+    update_digest_bytes(&mut digest, &serde_json::to_vec(&records).map_err(|_| ())?);
+    let digest: [u8; 32] = digest.finalize().into();
+    let work_digest =
+        LintDigest::from_u64(u64::from_le_bytes(digest[..8].try_into().map_err(|_| ())?));
+    LintAgentWork::try_new(
+        work_digest,
+        candidates.memory_eligible,
+        candidates.page_eligible,
+        candidates.faithful_page_eligible,
+        records,
+    )
+    .map_err(|_| ())
+}
+
+fn update_digest_bytes(digest: &mut Sha256, value: &[u8]) {
+    digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+    digest.update(value);
+}
+
+fn update_optional_digest_bytes(digest: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            digest.update([1]);
+            update_digest_bytes(digest, value.as_bytes());
+        }
+        None => digest.update([0]),
+    }
+}
+
+fn validate_agent_submission(
+    submission: &LintAgentSubmission,
+    candidates: &CandidateSet,
+) -> Result<BTreeMap<String, Vec<u64>>, ()> {
+    let mut output = BTreeMap::new();
+    for verdict in submission.verdicts() {
+        let check_id = verdict.check_id().as_str();
+        if output.contains_key(check_id)
+            || verdict.refs().contains(&0)
+            || !verdict.refs().windows(2).all(|pair| pair[0] < pair[1])
+            || (semantic_population(check_id, candidates).is_none() && !verdict.refs().is_empty())
+        {
+            return Err(());
+        }
+        let mut refs = Vec::with_capacity(verdict.refs().len());
+        for reference in verdict.refs() {
+            let position = usize::from(reference.saturating_sub(1));
+            let candidate = candidates.records.get(position).ok_or(())?;
+            if !kind_allowed(check_id, candidate.kind) {
+                return Err(());
+            }
+            refs.push(u64::from(*reference));
+        }
+        output.insert(check_id.to_string(), refs);
+    }
+    if output.len() == IDS.len() {
+        Ok(output)
+    } else {
+        Err(())
+    }
+}
+
 fn kind_allowed(check_id: &str, kind: CandidateKind) -> bool {
     match check_id {
         CLASSIFICATION | CONTRADICTION | STALENESS | RETRIEVAL => kind == CandidateKind::Memory,
@@ -333,6 +603,7 @@ fn semantic_result(
     refs: &[u64],
     candidates: &CandidateSet,
     provider_on_device: bool,
+    agent_submitted: bool,
 ) -> LintCheckResult {
     let Some((eligible, sample)) = semantic_population(id, candidates) else {
         return terminal_result(
@@ -386,8 +657,15 @@ fn semantic_result(
                 metric(LintMetricCode::SemanticEligibleRecords, eligible),
                 metric(LintMetricCode::ObservedRecords, sample),
                 metric(LintMetricCode::AffectedRecords, affected),
-                metric(LintMetricCode::SemanticModelCalls, 1),
+                metric(
+                    LintMetricCode::SemanticModelCalls,
+                    u64::from(!agent_submitted),
+                ),
                 boolean_metric(LintMetricCode::SemanticProviderOnDevice, provider_on_device),
+                metric(
+                    LintMetricCode::SemanticAgentSubmissions,
+                    u64::from(agent_submitted),
+                ),
             ],
             summary_code: if finding {
                 LintSummaryCode::FindingDetected
@@ -418,6 +696,53 @@ fn terminal_results(
     IDS.iter()
         .map(|id| terminal_result(context, id, outcome, provider_on_device, reason_code))
         .collect()
+}
+
+fn inconsistent_results(
+    context: &LintContext<'_, '_>,
+    reason_code: LintReasonCode,
+) -> Vec<LintCheckResult> {
+    IDS.iter()
+        .map(|id| inconsistent_result(context, id, reason_code))
+        .collect()
+}
+
+fn inconsistent_result(
+    context: &LintContext<'_, '_>,
+    id: &'static str,
+    reason_code: LintReasonCode,
+) -> LintCheckResult {
+    let result = LintCheckResult::try_new_with_gate_effect(
+        LintCheckResultInput {
+            check_id: id.to_string(),
+            outcome: LintOutcome::InconsistentSnapshot,
+            severity: LintSeverity::Error,
+            applicability: LintApplicability::Applicable,
+            precondition: LintPrecondition::SnapshotUnstable,
+            coverage: LintCoverage::new(
+                LintValidationMethod::IntrinsicSample,
+                0,
+                0,
+                LINT_MAX_EVIDENCE_PER_CHECK,
+                false,
+                1,
+            )
+            .expect("empty agent snapshot coverage is valid"),
+            metrics: vec![metric(LintMetricCode::SemanticAgentSubmissions, 0)],
+            summary_code: LintSummaryCode::SnapshotInconsistent,
+            recommendation_code: Some(LintRecommendationCode::RerunAfterSnapshotStabilizes),
+            evidence: vec![LintEvidenceRef::ReasonCode { reason_code }],
+            duration_ms: context.clock().duration_ms(),
+        },
+        catalog_entry(id)
+            .expect("semantic check is cataloged")
+            .gate_effect,
+    )
+    .expect("semantic snapshot contract is static");
+    context
+        .record_population(id, population_basis(context), 0)
+        .expect("semantic population is recorded once");
+    result
 }
 
 fn terminal_result(
@@ -452,10 +777,10 @@ fn terminal_result(
                 1,
             )
             .expect("empty semantic coverage is valid"),
-            metrics: vec![boolean_metric(
-                LintMetricCode::SemanticProviderOnDevice,
-                provider_on_device,
-            )],
+            metrics: vec![
+                boolean_metric(LintMetricCode::SemanticProviderOnDevice, provider_on_device),
+                metric(LintMetricCode::SemanticAgentSubmissions, 0),
+            ],
             summary_code: if prerequisite {
                 LintSummaryCode::PrerequisiteUnavailable
             } else {

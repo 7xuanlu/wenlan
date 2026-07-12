@@ -71,6 +71,8 @@ pub struct LintReport {
     snapshots: LintSnapshotReceipts,
     config_fingerprint: LintConfigFingerprint,
     producer_receipt: LintProducerReceipt,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_work: Option<LintAgentWork>,
     checks: Vec<LintCheckResult>,
     totals: LintTotals,
     complete: bool,
@@ -85,6 +87,8 @@ struct LintReportWire {
     snapshots: LintSnapshotReceipts,
     config_fingerprint: LintConfigFingerprint,
     producer_receipt: LintProducerReceipt,
+    #[serde(default)]
+    agent_work: Option<LintAgentWork>,
     checks: Vec<LintCheckResult>,
     totals: LintTotals,
     complete: bool,
@@ -116,8 +120,34 @@ impl LintReport {
         snapshots: LintSnapshotReceipts,
         config_fingerprint: LintConfigFingerprint,
         producer_receipt: LintProducerReceipt,
-        mut checks: Vec<LintCheckResult>,
+        checks: Vec<LintCheckResult>,
     ) -> Result<Self, LintContractError> {
+        Self::try_new_for_profile_with_agent_work(
+            profile,
+            scope,
+            capability_context,
+            snapshots,
+            config_fingerprint,
+            producer_receipt,
+            checks,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new_for_profile_with_agent_work(
+        profile: LintProfile,
+        scope: LintScope,
+        capability_context: LintCapabilityContext,
+        snapshots: LintSnapshotReceipts,
+        config_fingerprint: LintConfigFingerprint,
+        producer_receipt: LintProducerReceipt,
+        mut checks: Vec<LintCheckResult>,
+        agent_work: Option<LintAgentWork>,
+    ) -> Result<Self, LintContractError> {
+        if profile == LintProfile::General && agent_work.is_some() {
+            return Err(LintContractError::InvalidAgentWork);
+        }
         checks.sort_by(|left, right| left.check_id().cmp(right.check_id()));
         let totals = LintTotals::from_checks(&checks)?;
         let complete = checks.iter().all(|check| check.outcome.is_complete());
@@ -130,6 +160,7 @@ impl LintReport {
             snapshots,
             config_fingerprint,
             producer_receipt,
+            agent_work,
             checks,
             totals,
             complete,
@@ -162,6 +193,9 @@ impl LintReport {
     pub fn producer_receipt(&self) -> &LintProducerReceipt {
         &self.producer_receipt
     }
+    pub fn agent_work(&self) -> Option<&LintAgentWork> {
+        self.agent_work.as_ref()
+    }
 }
 impl<'de> Deserialize<'de> for LintReport {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -187,7 +221,7 @@ impl<'de> Deserialize<'de> for LintReport {
         if wire.checks.len() != expected_checks || unique_ids.len() != wire.checks.len() {
             return Err(D::Error::custom(LintContractError::InvalidCatalogShape));
         }
-        let report = Self::try_new_for_profile(
+        let report = Self::try_new_for_profile_with_agent_work(
             wire.profile,
             wire.scope,
             wire.capability_context,
@@ -195,6 +229,7 @@ impl<'de> Deserialize<'de> for LintReport {
             wire.config_fingerprint,
             wire.producer_receipt,
             wire.checks,
+            wire.agent_work,
         )
         .map_err(D::Error::custom)?;
         if report.totals != wire.totals {
@@ -230,13 +265,16 @@ pub struct LintRequestQuery {
     lint: LintQuery,
     #[serde(default, skip_serializing_if = "is_false")]
     external_egress: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    agent_assist: bool,
 }
 
 impl LintRequestQuery {
-    pub const fn new(lint: LintQuery, external_egress: bool) -> Self {
+    pub const fn new(lint: LintQuery, external_egress: bool, agent_assist: bool) -> Self {
         Self {
             lint,
             external_egress,
+            agent_assist,
         }
     }
 
@@ -246,6 +284,10 @@ impl LintRequestQuery {
 
     pub const fn external_egress(&self) -> bool {
         self.external_egress
+    }
+
+    pub const fn agent_assist(&self) -> bool {
+        self.agent_assist
     }
 }
 

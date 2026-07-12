@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -185,6 +185,53 @@ fn check(id: &str, outcome: LintOutcome, gate_effect: LintGateEffect) -> LintChe
 
 pub fn spawn_report(report: &LintReport) -> (String, Receiver<String>) {
     spawn_body(&serde_json::to_string(report).expect("serialize typed lint report"))
+}
+
+#[derive(Debug)]
+pub struct CapturedRequest {
+    pub request_line: String,
+    pub body: Vec<u8>,
+}
+
+pub fn spawn_report_capture(report: &LintReport) -> (String, Receiver<CapturedRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture");
+    let base = format!("http://{}", listener.local_addr().expect("fixture address"));
+    let response_body = serde_json::to_string(report).expect("serialize typed lint report");
+    let (sent, received) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept request");
+        let mut reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).expect("request line");
+        let mut content_length = 0_usize;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("request header");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if let Some(value) = line
+                .to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .and_then(|value| value.trim().parse().ok())
+            {
+                content_length = value;
+            }
+        }
+        let mut body = vec![0; content_length];
+        reader.read_exact(&mut body).expect("request body");
+        sent.send(CapturedRequest { request_line, body })
+            .expect("capture request");
+        let response = format!(
+            "HTTP/1.1 200 Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(), response_body,
+        );
+        reader
+            .get_mut()
+            .write_all(response.as_bytes())
+            .expect("write response");
+    });
+    (base, received)
 }
 
 pub fn spawn_value(value: &Value) -> (String, Receiver<String>) {

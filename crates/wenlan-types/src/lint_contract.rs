@@ -2,7 +2,7 @@
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{fmt, num::NonZeroU64};
 
-pub const LINT_REPORT_SCHEMA_VERSION: u16 = 2;
+pub const LINT_REPORT_SCHEMA_VERSION: u16 = 3;
 pub const LINT_CHECK_CATALOG_VERSION: u16 = 1;
 pub const LINT_MAX_EVIDENCE_PER_CHECK: u16 = 100;
 pub const LINT_GENERAL_CHECK_COUNT: usize = 55;
@@ -24,6 +24,9 @@ pub enum LintContractError {
     InvalidTotals,
     InvalidCompleteness,
     InvalidCatalogShape,
+    InvalidAgentRecord,
+    InvalidAgentWork,
+    InvalidAgentSubmission,
     TooManyChecks,
 }
 
@@ -44,6 +47,9 @@ impl LintContractError {
             Self::InvalidTotals => "invalid_lint_totals",
             Self::InvalidCompleteness => "invalid_lint_completeness",
             Self::InvalidCatalogShape => "invalid_lint_catalog_shape",
+            Self::InvalidAgentRecord => "invalid_lint_agent_record",
+            Self::InvalidAgentWork => "invalid_lint_agent_work",
+            Self::InvalidAgentSubmission => "invalid_lint_agent_submission",
             Self::TooManyChecks => "too_many_lint_checks",
         }
     }

@@ -103,6 +103,7 @@ pub enum LintMetricCode {
     SemanticEligibleRecords,
     SemanticModelCalls,
     SemanticProviderOnDevice,
+    SemanticAgentSubmissions,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +169,9 @@ pub enum LintReasonCode {
     SemanticProviderUnavailable,
     InsufficientSemanticEvidence,
     SemanticExecutionFailure,
+    SemanticAgentAdjudicationRequired,
+    SemanticAgentWorkStale,
+    SemanticAgentSubmissionInvalid,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LintSafeRootRelativePath {

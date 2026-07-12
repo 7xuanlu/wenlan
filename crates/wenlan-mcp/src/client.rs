@@ -170,6 +170,24 @@ impl WenlanClient {
         Self::parse_response(&bytes)
     }
 
+    pub async fn post_with_query<Q: Serialize, B: Serialize, R: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &Q,
+        body: &B,
+    ) -> Result<R, WenlanError> {
+        let url = format!("{}{}", self.base_url, path);
+        let agent = self.agent_name.clone();
+        let resp = self
+            .send_with_retry(|| {
+                let req = self.client.post(&url).query(query).json(body);
+                Self::attach_common_headers(req, agent.as_deref())
+            })
+            .await?;
+        let bytes = Self::read_body(resp).await?;
+        Self::parse_response(&bytes)
+    }
+
     /// POST request with empty body, deserialize JSON response.
     /// Used for mutate endpoints where the id is in the path and no body is needed.
     pub async fn post_empty<R: DeserializeOwned>(&self, path: &str) -> Result<R, WenlanError> {

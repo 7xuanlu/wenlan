@@ -38,7 +38,10 @@ CODEX_REQUIRED_GUARDRAILS = {
     ],
 }
 LINT_SHARED_GUARDRAILS = [
-    "exactly one lint MCP call",
+    "General uses exactly one lint MCP call",
+    "Agent-assisted Deep uses exactly two lint MCP calls",
+    "never evaluate records outside agent_work",
+    "submit verdicts exactly once",
     "no CLI or HTTP fallback",
     "global",
     "uncategorized",

@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use wenlan_types::lint::{
-    LintCheckGroup, LintEvidenceRef, LintGateEffect, LintMetricCode, LintMetricValue, LintOutcome,
-    LintProfile, LintReasonCode, LintRecommendationCode, LintReport, LintSummaryCode,
+    LintAgentSubmission, LintCheckGroup, LintEvidenceRef, LintGateEffect, LintMetricCode,
+    LintMetricValue, LintOutcome, LintProfile, LintReasonCode, LintRecommendationCode, LintReport,
+    LintSummaryCode,
 };
 
 use crate::client::WenlanClient;
 use crate::output::{print_json, OutputFormat};
 
+const MAX_AGENT_SUBMISSION_BYTES: usize = 64 * 1024;
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     client: &WenlanClient,
     format: OutputFormat,
@@ -16,12 +22,47 @@ pub async fn run(
     profile: Option<LintProfile>,
     space: Option<String>,
     external_egress: bool,
+    agent_assist: bool,
+    agent_submission: Option<PathBuf>,
 ) -> ExitCode {
     if external_egress && profile != Some(LintProfile::Deep) {
         eprintln!("wenlan lint: --allow-external requires --profile deep");
         return ExitCode::from(2);
     }
-    let report = match client.lint(profile, space, external_egress).await {
+    if (agent_assist || agent_submission.is_some()) && profile != Some(LintProfile::Deep) {
+        eprintln!(
+            "wenlan lint: {} requires --profile deep",
+            if agent_submission.is_some() {
+                "--agent-submission"
+            } else {
+                "--agent-assist"
+            }
+        );
+        return ExitCode::from(2);
+    }
+    let submission = match agent_submission {
+        Some(path) => match read_agent_submission(&path) {
+            Ok(submission) => Some(submission),
+            Err(error) => {
+                eprintln!(
+                    "wenlan lint: reading agent submission {} failed: {error:#}",
+                    path.display()
+                );
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+    let report = match client
+        .lint(
+            profile,
+            space,
+            external_egress,
+            agent_assist,
+            submission.as_ref(),
+        )
+        .await
+    {
         Ok(report) => report,
         Err(error) => {
             eprintln!("wenlan lint: {error:#}");
@@ -45,6 +86,17 @@ pub async fn run(
         return ExitCode::from(2);
     }
     ExitCode::from(code)
+}
+
+fn read_agent_submission(path: &Path) -> anyhow::Result<LintAgentSubmission> {
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(MAX_AGENT_SUBMISSION_BYTES + 1).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_AGENT_SUBMISSION_BYTES {
+        anyhow::bail!("agent submission exceeds {MAX_AGENT_SUBMISSION_BYTES}-byte limit");
+    }
+    serde_json::from_slice(&bytes).map_err(Into::into)
 }
 
 pub const fn exit_code(report: &LintReport) -> u8 {
@@ -92,6 +144,13 @@ fn render_human(report: &LintReport) -> String {
             "  {}: {checks} check{}, {findings} findings, {incomplete} incomplete\n",
             group.as_str(),
             if checks == 1 { "" } else { "s" }
+        ));
+    }
+    if let Some(work) = report.agent_work() {
+        output.push_str(&format!(
+            "Agent work: {} bounded records; digest={}\n",
+            work.records().len(),
+            work.work_digest().as_str()
         ));
     }
     append_findings(&mut output, "Findings", report, LintGateEffect::Actionable);
@@ -214,6 +273,9 @@ const fn reason_name(reason: LintReasonCode) -> &'static str {
         LintReasonCode::SemanticProviderUnavailable => "semantic_provider_unavailable",
         LintReasonCode::InsufficientSemanticEvidence => "insufficient_semantic_evidence",
         LintReasonCode::SemanticExecutionFailure => "semantic_execution_failure",
+        LintReasonCode::SemanticAgentAdjudicationRequired => "semantic_agent_adjudication_required",
+        LintReasonCode::SemanticAgentWorkStale => "semantic_agent_work_stale",
+        LintReasonCode::SemanticAgentSubmissionInvalid => "semantic_agent_submission_invalid",
     }
 }
 

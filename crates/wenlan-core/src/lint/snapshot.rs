@@ -141,6 +141,10 @@ impl<'database> LintReadSnapshot<'database> {
         })
     }
 
+    pub(crate) fn analysis_digest(&self) -> Result<StructuralDigest, SnapshotError> {
+        self.analysis_digest.ok_or(SnapshotError::Closed)
+    }
+
     pub async fn finish(self) -> Result<SnapshotReceipt, SnapshotError> {
         self.finish_inner(|| std::future::ready(())).await
     }

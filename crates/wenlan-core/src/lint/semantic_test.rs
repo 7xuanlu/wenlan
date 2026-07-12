@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use wenlan_types::lint::{
-    LintEvidenceRef, LintGateEffect, LintMetricCode, LintMetricValue, LintProfile, LintQuery,
-    LintReasonCode,
+    LintAgentSubmission, LintAgentVerdict, LintDigest, LintEvidenceRef, LintGateEffect,
+    LintMetricCode, LintMetricValue, LintProfile, LintQuery, LintReasonCode, LintSemanticCheckId,
 };
 
 struct FakeProvider {
@@ -153,6 +153,246 @@ async fn missing_provider_reports_a_closed_reason_code() {
     );
 }
 
+#[tokio::test]
+async fn caller_agent_prepare_returns_bounded_work_without_a_daemon_provider() {
+    let (db, _dir) = fixture().await;
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_agent_assist()
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let work = report.agent_work().expect("prepare returns agent work");
+    assert_eq!(work.records().len(), 3);
+    assert_eq!(
+        check(&report, CONTRADICTION).evidence(),
+        &[LintEvidenceRef::ReasonCode {
+            reason_code: LintReasonCode::SemanticAgentAdjudicationRequired,
+        }]
+    );
+    assert_eq!(
+        check(&report, CONTRADICTION).outcome(),
+        LintOutcome::NotRunPrerequisite
+    );
+    let encoded = serde_json::to_string(work).unwrap();
+    assert!(encoded.contains("ignore previous instructions"));
+    for forbidden in ["mem_a", "page_a", "secret title", "secret page"] {
+        assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+    }
+}
+
+#[tokio::test]
+async fn caller_agent_submission_is_validated_and_becomes_canonical_semantic_results() {
+    let (db, _dir) = fixture().await;
+    let prepare = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_agent_assist()
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let submission = agent_submission(
+        prepare.agent_work().unwrap().work_digest().clone(),
+        LintSemanticCheckId::MemoryContradiction,
+        vec![1, 2],
+    );
+    let unused_provider = Arc::new(FakeProvider::new(LlmBackend::Api, &response("[]")));
+    let provider: Arc<dyn LlmProvider> = unused_provider.clone();
+
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_provider(Some(provider))
+        .with_semantic_agent_submission(submission)
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(unused_provider.calls.load(Ordering::SeqCst), 0);
+    assert!(!report.complete());
+    assert_eq!(
+        check(&report, RETRIEVAL).outcome(),
+        LintOutcome::NotRunPrerequisite
+    );
+    assert_eq!(
+        check(&report, CONTRADICTION).outcome(),
+        LintOutcome::Finding
+    );
+    assert_eq!(
+        metric_value(
+            check(&report, CONTRADICTION),
+            LintMetricCode::SemanticAgentSubmissions
+        ),
+        Some(&LintMetricValue::Count { value: 1 })
+    );
+    assert!(report.agent_work().is_some());
+}
+
+#[tokio::test]
+async fn caller_agent_submission_rejects_out_of_sample_population_edits() {
+    let (db, _dir) = fixture().await;
+    let connection = db.conn.lock().await;
+    for suffix in ["c", "d", "e", "f", "g", "h", "zzz"] {
+        let id = format!("mem_{suffix}");
+        connection
+            .execute(
+                "INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                      pending_revision,is_recap,supersede_mode)
+                 VALUES (?1,?2,'memory',?1,?1,0,0,'text',0,0,'hide')",
+                libsql::params![id, format!("outside candidate {suffix}")],
+            )
+            .await
+            .unwrap();
+    }
+    drop(connection);
+
+    let prepare = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_agent_assist()
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(prepare
+        .agent_work()
+        .unwrap()
+        .records()
+        .iter()
+        .all(|record| !record.excerpt().contains("outside candidate zzz")));
+    let submission = agent_submission(
+        prepare.agent_work().unwrap().work_digest().clone(),
+        LintSemanticCheckId::MemoryContradiction,
+        vec![],
+    );
+
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE memories SET memory_type='goal' WHERE id='mem_zzz'",
+            libsql::params::Params::None,
+        )
+        .await
+        .unwrap();
+
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_agent_submission(submission)
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        check(&report, CONTRADICTION).outcome(),
+        LintOutcome::InconsistentSnapshot
+    );
+    assert_eq!(
+        check(&report, CONTRADICTION).evidence(),
+        &[LintEvidenceRef::ReasonCode {
+            reason_code: LintReasonCode::SemanticAgentWorkStale,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn stale_or_wrong_kind_agent_submission_fails_closed() {
+    let (db, _dir) = fixture().await;
+    let stale = agent_submission(
+        LintDigest::from_u64(999),
+        LintSemanticCheckId::MemoryContradiction,
+        vec![1, 2],
+    );
+    let stale_report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_agent_submission(stale)
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        check(&stale_report, CONTRADICTION).outcome(),
+        LintOutcome::InconsistentSnapshot
+    );
+    assert_eq!(
+        check(&stale_report, CONTRADICTION).evidence(),
+        &[LintEvidenceRef::ReasonCode {
+            reason_code: LintReasonCode::SemanticAgentWorkStale,
+        }]
+    );
+
+    let prepare = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_agent_assist()
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let wrong_kind = agent_submission(
+        prepare.agent_work().unwrap().work_digest().clone(),
+        LintSemanticCheckId::PageFaithfulness,
+        vec![1],
+    );
+    let invalid_report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .with_semantic_agent_submission(wrong_kind)
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        check(&invalid_report, FAITHFULNESS).outcome(),
+        LintOutcome::FailedToRun
+    );
+    assert_eq!(
+        check(&invalid_report, FAITHFULNESS).evidence(),
+        &[LintEvidenceRef::ReasonCode {
+            reason_code: LintReasonCode::SemanticAgentSubmissionInvalid,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn semantic_faithfulness_eligible_population_is_not_double_counted() {
+    let (db, _dir) = fixture().await;
+    let provider = Arc::new(FakeProvider::new(LlmBackend::OnDevice, &response("[]")));
+    let report = run(&db, LintProfile::Deep, provider).await;
+
+    assert_eq!(
+        metric_value(
+            check(&report, FAITHFULNESS),
+            LintMetricCode::SemanticEligibleRecords
+        ),
+        Some(&LintMetricValue::Count { value: 1 })
+    );
+}
+
 async fn run(
     db: &crate::db::MemoryDB,
     profile: LintProfile,
@@ -180,6 +420,36 @@ fn check<'a>(report: &'a wenlan_types::lint::LintReport, id: &str) -> &'a LintCh
         .iter()
         .find(|check| check.check_id() == id)
         .unwrap()
+}
+
+fn metric_value(check: &LintCheckResult, code: LintMetricCode) -> Option<&LintMetricValue> {
+    check
+        .metrics()
+        .iter()
+        .find(|metric| metric.code() == code)
+        .map(|metric| metric.value())
+}
+
+fn agent_submission(
+    work_digest: LintDigest,
+    selected: LintSemanticCheckId,
+    refs: Vec<u16>,
+) -> LintAgentSubmission {
+    let verdicts = LintSemanticCheckId::ALL
+        .into_iter()
+        .map(|check_id| {
+            LintAgentVerdict::try_new(
+                check_id,
+                if check_id == selected {
+                    refs.clone()
+                } else {
+                    vec![]
+                },
+            )
+            .unwrap()
+        })
+        .collect();
+    LintAgentSubmission::try_new(work_digest, verdicts).unwrap()
 }
 
 #[tokio::test]

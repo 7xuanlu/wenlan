@@ -45,7 +45,7 @@ REQUIRED_SKILL_INTERFACE = {
     },
     "lint": {
         "display_name": "Wenlan Lint",
-        "short_description": "Run read-only Wenlan system diagnostics",
+        "short_description": "Run general or agent-assisted deep diagnostics",
     },
     "pages": {
         "display_name": "Wenlan Pages",

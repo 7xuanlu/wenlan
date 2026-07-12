@@ -120,6 +120,19 @@ pub(super) fn request(method: Method, uri: &str) -> Request<Body> {
         .expect("request")
 }
 
+pub(super) fn json_request<T: serde::Serialize>(
+    method: Method,
+    uri: &str,
+    body: &T,
+) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(body).expect("json body")))
+        .expect("request")
+}
+
 async fn database_fingerprint(db: &MemoryDB) -> [u8; 32] {
     let snapshot = db.open_lint_snapshot().await.expect("snapshot");
     let receipt = snapshot.finish().await.expect("snapshot finish");

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::{WenlanClient, DEFAULT_HOST};
 use anyhow::{bail, Context, Result};
-use wenlan_types::lint::{LintErrorResponse, LintProfile, LintQuery, LintReport, LintRequestQuery};
+use wenlan_types::lint::{
+    LintAgentSubmission, LintErrorResponse, LintProfile, LintQuery, LintReport, LintRequestQuery,
+};
 
 const MAX_LINT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -18,18 +20,25 @@ impl WenlanClient {
         profile: Option<LintProfile>,
         space: Option<String>,
         external_egress: bool,
+        agent_assist: bool,
+        submission: Option<&LintAgentSubmission>,
     ) -> Result<LintReport> {
         let url = format!("{}/api/lint", self.base_url);
-        let response = self
-            .http
-            .get(&url)
-            .query(&LintRequestQuery::new(
-                LintQuery { profile, space },
-                external_egress,
-            ))
-            .send()
-            .await
-            .with_context(|| format!("GET {url} failed"))?;
+        let query = LintRequestQuery::new(
+            LintQuery { profile, space },
+            external_egress,
+            agent_assist || submission.is_some(),
+        );
+        let request = match submission {
+            Some(submission) => self.http.post(&url).query(&query).json(submission),
+            None => self.http.get(&url).query(&query),
+        };
+        let response = request.send().await.with_context(|| {
+            format!(
+                "{} {url} failed",
+                if submission.is_some() { "POST" } else { "GET" }
+            )
+        })?;
         let status = response.status();
         let body = read_lint_body(response, &url).await?;
         if !status.is_success() {
@@ -37,7 +46,10 @@ impl WenlanClient {
                 if let Ok(error) = serde_json::from_slice::<LintErrorResponse>(&body) {
                     if matches!(
                         error.error(),
-                        "invalid_scope" | "external_egress_requires_deep"
+                        "invalid_scope"
+                            | "external_egress_requires_deep"
+                            | "agent_assist_requires_deep"
+                            | "agent_assist_required_for_submission"
                     ) {
                         bail!(error.error().to_string());
                     }

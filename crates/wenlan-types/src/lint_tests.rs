@@ -131,7 +131,7 @@ fn report(scope: LintScope, checks: Vec<LintCheckResult>) -> LintReport {
 }
 
 #[test]
-fn report_roundtrips_v2_for_each_applied_scope_kind() {
+fn report_roundtrips_v3_for_each_applied_scope_kind() {
     let scopes = [
         LintScope::global(),
         LintScope::registered(LintOpaqueId::from_sorted_position(0).unwrap()),
@@ -145,7 +145,7 @@ fn report_roundtrips_v2_for_each_applied_scope_kind() {
         let decoded: LintReport = serde_json::from_value(encoded.clone()).unwrap();
 
         assert!(decoded.complete());
-        assert_eq!(encoded["report_schema_version"], json!(2));
+        assert_eq!(encoded["report_schema_version"], json!(3));
         assert_eq!(encoded["check_catalog_version"], json!(1));
         assert_eq!(encoded["profile"], json!("general"));
         assert_eq!(
@@ -254,7 +254,7 @@ fn rejects_unknown_enums_and_unsupported_schema_versions() {
     assert!(serde_json::from_value::<LintReport>(unknown_enum).is_err());
 
     let mut unsupported_schema = serde_json::to_value(&report).unwrap();
-    unsupported_schema["report_schema_version"] = json!(3);
+    unsupported_schema["report_schema_version"] = json!(4);
     assert!(serde_json::from_value::<LintReport>(unsupported_schema).is_err());
 }
 
@@ -384,19 +384,133 @@ fn query_defaults_to_general_and_accepts_only_closed_profiles() {
     let request: LintRequestQuery = serde_json::from_value(json!({
         "profile": "deep",
         "space": "requested-space",
-        "external_egress": true
+        "external_egress": true,
+        "agent_assist": true
     }))
     .unwrap();
     assert_eq!(request.lint().applied_profile(), LintProfile::Deep);
     assert_eq!(request.lint().space.as_deref(), Some("requested-space"));
     assert!(request.external_egress());
+    assert!(request.agent_assist());
     assert_eq!(
         serde_json::to_value(LintRequestQuery::new(
             LintQuery::new(Some(LintProfile::Deep), None),
             false,
+            false,
         ))
         .unwrap(),
         json!({ "profile": "deep" })
+    );
+}
+
+#[test]
+fn agent_work_and_submission_are_bounded_typed_contracts() {
+    let work = LintAgentWork::try_new(
+        LintDigest::from_u64(9),
+        2,
+        1,
+        1,
+        vec![
+            LintAgentRecord::try_new(
+                1,
+                LintAgentRecordKind::Memory,
+                "bounded memory excerpt".to_string(),
+                Some("fact".to_string()),
+                None,
+                None,
+            )
+            .unwrap(),
+            LintAgentRecord::try_new(
+                2,
+                LintAgentRecordKind::Page,
+                "bounded page excerpt".to_string(),
+                None,
+                Some(1),
+                Some("bounded source excerpt".to_string()),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(work.records().len(), 2);
+
+    let verdicts = LintSemanticCheckId::ALL
+        .into_iter()
+        .map(|check_id| {
+            LintAgentVerdict::try_new(
+                check_id,
+                if check_id == LintSemanticCheckId::MemoryContradiction {
+                    vec![1]
+                } else {
+                    vec![]
+                },
+            )
+            .unwrap()
+        })
+        .collect();
+    let submission = LintAgentSubmission::try_new(work.work_digest().clone(), verdicts).unwrap();
+    let encoded = serde_json::to_value(&submission).unwrap();
+    let decoded: LintAgentSubmission = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded, submission);
+
+    let report = LintReport::try_new_for_profile_with_agent_work(
+        LintProfile::Deep,
+        LintScope::global(),
+        LintCapabilityContext::daemon_operator_endpoint(),
+        snapshots(),
+        LintConfigFingerprint::from_effective_config(&[]),
+        LintProducerReceipt::new(None),
+        (0..LINT_DEEP_CHECK_COUNT)
+            .map(|index| {
+                check_with_id(
+                    &format!("catalog.open_deep_check_{index:02}"),
+                    LintOutcome::Pass,
+                    LintSeverity::Info,
+                )
+                .unwrap()
+            })
+            .collect(),
+        Some(work.clone()),
+    )
+    .unwrap();
+    let decoded: LintReport =
+        serde_json::from_value(serde_json::to_value(&report).unwrap()).unwrap();
+    assert_eq!(decoded.agent_work(), Some(&work));
+
+    assert_eq!(
+        LintReport::try_new_for_profile_with_agent_work(
+            LintProfile::General,
+            LintScope::global(),
+            LintCapabilityContext::daemon_operator_endpoint(),
+            snapshots(),
+            LintConfigFingerprint::from_effective_config(&[]),
+            LintProducerReceipt::new(None),
+            (0..LINT_GENERAL_CHECK_COUNT)
+                .map(|index| {
+                    check_with_id(
+                        &format!("catalog.open_general_check_{index:02}"),
+                        LintOutcome::Pass,
+                        LintSeverity::Info,
+                    )
+                    .unwrap()
+                })
+                .collect(),
+            Some(work.clone()),
+        ),
+        Err(LintContractError::InvalidAgentWork)
+    );
+
+    assert!(LintAgentRecord::try_new(
+        1,
+        LintAgentRecordKind::Memory,
+        "x".repeat(LINT_AGENT_EXCERPT_CHAR_CAP + 1),
+        None,
+        None,
+        None,
+    )
+    .is_err());
+    assert!(
+        LintAgentVerdict::try_new(LintSemanticCheckId::MemoryContradiction, vec![2, 1],).is_err()
     );
 }
 

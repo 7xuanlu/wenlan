@@ -11,12 +11,12 @@ use std::sync::Arc;
 #[cfg(test)]
 use wenlan_types::lint::LintConfigFingerprint;
 use wenlan_types::lint::{
-    LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
-    LintContractError, LintCoverage, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest,
-    LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
-    LintProducerReceipt, LintProfile, LintQuery, LintRecommendationCode, LintReport, LintScope,
-    LintSeverity, LintSnapshotReceipts, LintSummaryCode, LintValidationMethod,
-    LINT_MAX_EVIDENCE_PER_CHECK,
+    LintAgentSubmission, LintAgentWork, LintApplicability, LintCapabilityContext, LintCheckResult,
+    LintCheckResultInput, LintContractError, LintCoverage, LintDbSnapshotMode,
+    LintDbSnapshotReceipt, LintDigest, LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt,
+    LintPrecondition, LintProducerReceipt, LintProfile, LintQuery, LintRecommendationCode,
+    LintReport, LintScope, LintSeverity, LintSnapshotReceipts, LintSummaryCode,
+    LintValidationMethod, LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
 mod configuration;
@@ -51,6 +51,7 @@ pub struct LintRunner {
     runtime_config: super::runtime::RuntimeRunConfig,
     semantic_provider: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     semantic_external_egress_enabled: bool,
+    semantic_agent_request: super::semantic::AgentRequest,
     observer: Arc<dyn LintRunObserver>,
     #[cfg(test)]
     run_timeout_override: Option<std::time::Duration>,
@@ -136,6 +137,7 @@ impl LintRunner {
             runtime_config: super::runtime::RuntimeRunConfig::capture(),
             semantic_provider: None,
             semantic_external_egress_enabled: false,
+            semantic_agent_request: super::semantic::AgentRequest::Disabled,
             observer: Arc::new(NoopLintRunObserver),
             #[cfg(test)]
             run_timeout_override: None,
@@ -226,6 +228,7 @@ impl LintRunner {
                 semantic_provider_ready,
                 semantic_provider_on_device,
                 semantic_external_egress_enabled,
+                self.semantic_agent_request.is_enabled(),
             ),
         );
         let projection_tracker = database.page_projection_tracker();
@@ -269,11 +272,12 @@ impl LintRunner {
             &self.gate,
             profile,
         );
-        let (mut checks, page_elapsed) = if execution_failed {
+        let (mut checks, page_elapsed, agent_work) = if execution_failed {
             record_zero_populations(&context, profile)?;
             (
                 failed_results_for_profile(&self.clock, profile),
                 std::time::Duration::ZERO,
+                None,
             )
         } else {
             self.observer.observe(LintRunEvent::AggregateChecks);
@@ -294,6 +298,7 @@ impl LintRunner {
                 None => (
                     failed_results_for_context(&context, profile)?,
                     self.page_elapsed(page_started),
+                    None,
                 ),
             }
         };
@@ -360,6 +365,7 @@ impl LintRunner {
             page_after,
             effective_config,
             checks,
+            agent_work,
         )
     }
 
@@ -373,6 +379,16 @@ impl LintRunner {
 
     pub fn with_semantic_external_egress_enabled(mut self, enabled: bool) -> Self {
         self.semantic_external_egress_enabled = enabled;
+        self
+    }
+
+    pub fn with_semantic_agent_assist(mut self) -> Self {
+        self.semantic_agent_request = super::semantic::AgentRequest::Prepare;
+        self
+    }
+
+    pub fn with_semantic_agent_submission(mut self, submission: LintAgentSubmission) -> Self {
+        self.semantic_agent_request = super::semantic::AgentRequest::Submit(submission);
         self
     }
 
@@ -406,11 +422,18 @@ impl LintRunner {
         context: &LintContext<'_, '_>,
         config: &EffectiveLintConfig,
         page_started: std::time::Duration,
-    ) -> Result<(Vec<LintCheckResult>, std::time::Duration), LintRunError> {
+    ) -> Result<
+        (
+            Vec<LintCheckResult>,
+            std::time::Duration,
+            Option<LintAgentWork>,
+        ),
+        LintRunError,
+    > {
         #[cfg(test)]
         if let Some(scenario) = self.scenario {
             let results = run_test_scenario(context, scenario).await?;
-            return Ok((results, self.page_elapsed(page_started)));
+            return Ok((results, self.page_elapsed(page_started), None));
         }
         let mut results = super::pages::run(context, config.page_projection_enabled).await;
         let page_elapsed = self.page_elapsed(page_started);
@@ -422,9 +445,16 @@ impl LintRunner {
         results.extend(super::serving::run(context, config.serving).await);
         if context.profile() == LintProfile::Deep {
             results.extend(super::deep::run(context, &config.operations).await);
-            results.extend(super::semantic::run(context, self.semantic_provider.as_deref()).await);
+            let semantic = super::semantic::run(
+                context,
+                self.semantic_provider.as_deref(),
+                &self.semantic_agent_request,
+            )
+            .await;
+            results.extend(semantic.results);
+            return Ok((results, page_elapsed, semantic.agent_work));
         }
-        Ok((results, page_elapsed))
+        Ok((results, page_elapsed, None))
     }
 }
 
@@ -992,6 +1022,7 @@ fn failed_results_for_context(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_report(
     profile: LintProfile,
     scope: LintScope,
@@ -1000,8 +1031,9 @@ fn build_report(
     page_after: [u8; 32],
     effective_config: EffectiveLintConfig,
     checks: Vec<LintCheckResult>,
+    agent_work: Option<LintAgentWork>,
 ) -> Result<LintReport, LintRunError> {
-    LintReport::try_new_for_profile(
+    LintReport::try_new_for_profile_with_agent_work(
         profile,
         scope,
         LintCapabilityContext::daemon_operator_endpoint(),
@@ -1009,6 +1041,7 @@ fn build_report(
         effective_config.fingerprint(),
         LintProducerReceipt::new(effective_config.runtime.runtime_commit()),
         checks,
+        agent_work,
     )
     .map_err(LintRunError::from)
 }

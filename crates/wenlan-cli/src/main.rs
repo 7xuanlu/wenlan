@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use clap::{Parser, Subcommand};
 use output::OutputFormat;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use wenlan_cli::{client, commands, output};
 use wenlan_types::lint::LintProfile;
@@ -62,6 +63,12 @@ enum Commands {
         /// Permit a deep semantic pass to use an already configured external provider.
         #[arg(long)]
         allow_external: bool,
+        /// Return bounded semantic work for the calling agent to adjudicate.
+        #[arg(long)]
+        agent_assist: bool,
+        /// Submit typed agent verdicts produced from a prior prepare report.
+        #[arg(long, value_name = "JSON_FILE")]
+        agent_submission: Option<PathBuf>,
     },
     /// Manage local models.
     Models {
@@ -167,6 +174,8 @@ async fn main() -> anyhow::Result<ExitCode> {
             profile,
             space,
             allow_external,
+            agent_assist,
+            agent_submission,
         } => {
             return Ok(commands::lint::run(
                 &client,
@@ -175,6 +184,8 @@ async fn main() -> anyhow::Result<ExitCode> {
                 profile,
                 space,
                 allow_external,
+                agent_assist,
+                agent_submission,
             )
             .await)
         }

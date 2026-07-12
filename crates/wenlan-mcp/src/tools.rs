@@ -206,6 +206,82 @@ pub struct LintParams {
     #[schemars(description = "Optional registered space, or uncategorized.")]
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
+    #[schemars(description = "Prepare bounded semantic work for the calling agent. Deep only.")]
+    #[serde(default)]
+    pub agent_assist: bool,
+    #[schemars(description = "Typed verdicts over a prior agent-assist work packet. Deep only.")]
+    #[serde(default)]
+    pub agent_submission: Option<LintAgentSubmissionParam>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+pub enum LintSemanticCheckParam {
+    #[serde(rename = "memories.semantic.classification")]
+    MemoryClassification,
+    #[serde(rename = "memories.semantic.contradiction")]
+    MemoryContradiction,
+    #[serde(rename = "memories.semantic.staleness")]
+    MemoryStaleness,
+    #[serde(rename = "pages.semantic.faithfulness")]
+    PageFaithfulness,
+    #[serde(rename = "pages.semantic.provenance_adequacy")]
+    PageProvenanceAdequacy,
+    #[serde(rename = "serving.semantic.retrieval_quality")]
+    RetrievalQuality,
+}
+
+impl LintSemanticCheckParam {
+    pub const ALL: [Self; 6] = [
+        Self::MemoryClassification,
+        Self::MemoryContradiction,
+        Self::MemoryStaleness,
+        Self::PageFaithfulness,
+        Self::PageProvenanceAdequacy,
+        Self::RetrievalQuality,
+    ];
+}
+
+impl From<LintSemanticCheckParam> for wenlan_types::lint::LintSemanticCheckId {
+    fn from(value: LintSemanticCheckParam) -> Self {
+        match value {
+            LintSemanticCheckParam::MemoryClassification => Self::MemoryClassification,
+            LintSemanticCheckParam::MemoryContradiction => Self::MemoryContradiction,
+            LintSemanticCheckParam::MemoryStaleness => Self::MemoryStaleness,
+            LintSemanticCheckParam::PageFaithfulness => Self::PageFaithfulness,
+            LintSemanticCheckParam::PageProvenanceAdequacy => Self::PageProvenanceAdequacy,
+            LintSemanticCheckParam::RetrievalQuality => Self::RetrievalQuality,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct LintAgentVerdictParam {
+    pub check_id: LintSemanticCheckParam,
+    pub refs: Vec<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct LintAgentSubmissionParam {
+    pub work_digest: String,
+    pub verdicts: Vec<LintAgentVerdictParam>,
+}
+
+impl TryFrom<LintAgentSubmissionParam> for wenlan_types::lint::LintAgentSubmission {
+    type Error = wenlan_types::lint::LintContractError;
+
+    fn try_from(value: LintAgentSubmissionParam) -> Result<Self, Self::Error> {
+        let verdicts = value
+            .verdicts
+            .into_iter()
+            .map(|verdict| {
+                wenlan_types::lint::LintAgentVerdict::try_new(verdict.check_id.into(), verdict.refs)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::try_new(
+            wenlan_types::lint::LintDigest::from_hex(&value.work_digest)?,
+            verdicts,
+        )
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -876,12 +952,30 @@ impl WenlanMcpServer {
     }
 
     pub async fn lint_impl(&self, params: LintParams) -> Result<CallToolResult, McpError> {
-        let query = wenlan_types::lint::LintQuery::new(
-            params.profile.map(Into::into),
-            effective_space(&params.space),
+        let profile = params.profile.map(Into::into);
+        let submission: Option<wenlan_types::lint::LintAgentSubmission> = params
+            .agent_submission
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|error: wenlan_types::lint::LintContractError| {
+                McpError::invalid_params(error.to_string(), None)
+            })?;
+        let agent_assist = params.agent_assist || submission.is_some();
+        if agent_assist && profile != Some(wenlan_types::lint::LintProfile::Deep) {
+            return Err(McpError::invalid_params("agent_assist_requires_deep", None));
+        }
+        let query = wenlan_types::lint::LintRequestQuery::new(
+            wenlan_types::lint::LintQuery::new(profile, effective_space(&params.space)),
+            false,
+            agent_assist,
         );
-        let report: wenlan_types::lint::LintReport =
-            try_call!(self.client.get_with_query("/api/lint", &query), "lint");
+        let report: wenlan_types::lint::LintReport = match submission.as_ref() {
+            Some(submission) => try_call!(
+                self.client.post_with_query("/api/lint", &query, submission),
+                "lint"
+            ),
+            None => try_call!(self.client.get_with_query("/api/lint", &query), "lint"),
+        };
         let value = serde_json::to_value(report)
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
         Ok(CallToolResult::structured(value))
@@ -1779,7 +1873,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic and capability-gated semantic advisory checks. Results are the canonical typed report; incomplete takes precedence over findings.",
+        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic checks and semantic advisory checks adjudicated either by the daemon's configured provider or, with explicit agent_assist consent, by the calling agent through a bounded typed prepare-and-submit protocol. Results are the canonical typed report; incomplete takes precedence over findings.",
         annotations(title = "Lint", read_only_hint = true, open_world_hint = false)
     )]
     async fn lint(

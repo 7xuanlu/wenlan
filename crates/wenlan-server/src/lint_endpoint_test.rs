@@ -8,14 +8,14 @@ use tower::ServiceExt;
 use wenlan_core::lint::observation::LintRunEvent;
 use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 use wenlan_types::lint::{
-    LintErrorResponse, LintMetricCode, LintMetricValue, LintOutcome, LintProfile, LintReport,
-    LintScopeKind,
+    LintAgentSubmission, LintAgentVerdict, LintErrorResponse, LintMetricCode, LintMetricValue,
+    LintOutcome, LintProfile, LintReasonCode, LintReport, LintScopeKind, LintSemanticCheckId,
 };
 use wenlan_types::sources::{Source, SourceType, SyncStatus};
 
 #[path = "lint_endpoint_test/support.rs"]
 mod support;
-use support::{request, Fixture};
+use support::{json_request, request, Fixture};
 
 struct FakeApiProvider {
     calls: AtomicUsize,
@@ -155,6 +155,118 @@ async fn lint_deep_records_external_egress_consent_even_without_a_ready_provider
             .config_fingerprint(),
         "effective config must record operator egress consent even when no provider is ready"
     );
+}
+
+#[tokio::test]
+async fn lint_calling_agent_prepare_and_submit_share_the_canonical_endpoint() {
+    let fixture = Fixture::new(Vec::new(), None).await;
+    fixture.seed_semantic_candidates().await;
+
+    let (_, _, daemon_deep) = report(&fixture, "/api/lint?profile=deep").await;
+    let (status, _, prepared) = report(&fixture, "/api/lint?profile=deep&agent_assist=true").await;
+    assert_eq!(status, StatusCode::OK);
+    let prepared = prepared.expect("typed prepare report");
+    assert_ne!(
+        daemon_deep
+            .expect("daemon deep report")
+            .config_fingerprint(),
+        prepared.config_fingerprint(),
+        "effective config must record calling-agent consent"
+    );
+    let work = prepared.agent_work().expect("agent work");
+    assert!(prepared.checks().iter().any(|check| {
+        check.check_id() == "memories.semantic.classification"
+            && check.evidence().iter().any(|evidence| {
+                matches!(
+                    evidence,
+                    wenlan_types::lint::LintEvidenceRef::ReasonCode {
+                        reason_code: LintReasonCode::SemanticAgentAdjudicationRequired
+                    }
+                )
+            })
+    }));
+    let submission = agent_submission(work.work_digest().clone());
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/lint?profile=deep&agent_assist=true",
+            &submission,
+        ))
+        .await
+        .expect("agent submission response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("agent submission body");
+    let final_report: LintReport = serde_json::from_slice(&body).expect("typed final report");
+    assert!(final_report.checks().iter().any(|check| {
+        check.check_id() == "memories.semantic.classification"
+            && check.outcome() == LintOutcome::Finding
+    }));
+}
+
+#[tokio::test]
+async fn lint_agent_assist_is_deep_only_and_read_only() {
+    let fixture = Fixture::new(Vec::new(), None).await;
+    fixture.seed_semantic_candidates().await;
+    let before = fixture.fingerprint().await;
+
+    let invalid = fixture
+        .app
+        .clone()
+        .oneshot(request(Method::GET, "/api/lint?agent_assist=true"))
+        .await
+        .expect("invalid agent-assist response");
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let invalid_body = to_bytes(invalid.into_body(), usize::MAX)
+        .await
+        .expect("invalid agent-assist body");
+    assert_eq!(
+        serde_json::from_slice::<LintErrorResponse>(&invalid_body).unwrap(),
+        LintErrorResponse::new("agent_assist_requires_deep")
+    );
+
+    let (_, _, prepared) = report(&fixture, "/api/lint?profile=deep&agent_assist=true").await;
+    let submission = agent_submission(
+        prepared
+            .unwrap()
+            .agent_work()
+            .expect("agent work")
+            .work_digest()
+            .clone(),
+    );
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/lint?profile=deep&agent_assist=true",
+            &submission,
+        ))
+        .await
+        .expect("agent submission response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(fixture.fingerprint().await, before);
+}
+
+fn agent_submission(work_digest: wenlan_types::lint::LintDigest) -> LintAgentSubmission {
+    let verdicts = LintSemanticCheckId::ALL
+        .into_iter()
+        .map(|check_id| {
+            LintAgentVerdict::try_new(
+                check_id,
+                if check_id == LintSemanticCheckId::MemoryClassification {
+                    vec![1]
+                } else {
+                    vec![]
+                },
+            )
+            .unwrap()
+        })
+        .collect();
+    LintAgentSubmission::try_new(work_digest, verdicts).unwrap()
 }
 
 #[tokio::test]
