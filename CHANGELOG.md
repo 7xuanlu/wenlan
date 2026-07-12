@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1](https://github.com/7xuanlu/wenlan/compare/v0.12.0...v0.12.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* enforce release and public contract drift checks ([#341](https://github.com/7xuanlu/wenlan/issues/341)) ([9a59085](https://github.com/7xuanlu/wenlan/commit/9a590858f34336ece715a4b6ab537865b31df6cc))
+* route document source pages through PageWrite ([a0861b2](https://github.com/7xuanlu/wenlan/commit/a0861b241767a58e46008bf2236c7dde54ca56d8))
+
 ## [0.12.0](https://github.com/7xuanlu/wenlan/compare/v0.11.0...v0.12.0) (2026-07-08)
 
 
