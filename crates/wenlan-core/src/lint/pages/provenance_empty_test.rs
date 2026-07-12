@@ -12,7 +12,14 @@ async fn empty_fresh_database_has_conclusive_zero_source_coverage() {
     let scope = AppliedScope::global();
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
 
     let checks = run(&context).await;
     let source = checks

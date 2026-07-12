@@ -1,7 +1,9 @@
 use super::{
-    scan_page_root, EntryScope, FrontmatterState, PageFsError, RawStateIssue, RawStateKind,
-    StateEntryIssue, StateEntryStatus, VersionValue,
+    scan_page_root, scan_page_root_deep, EntryScope, FrontmatterState, PageFsError, RawStateIssue,
+    RawStateKind, StateEntryIssue, StateEntryStatus, VersionValue, DEEP_PAGE_BODY_MAX_BYTES,
+    STATE_MAX_BYTES,
 };
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -277,4 +279,51 @@ fn scanner_receipt_detects_mutation_and_stays_deterministic() {
         .verify_unchanged(dir.path())
         .expect("changed receipt")
         .is_consistent());
+}
+
+#[test]
+fn deep_scan_hashes_only_canonical_page_body() {
+    let dir = root();
+    write(
+        dir.path(),
+        "page.md",
+        b"---\norigin_id: page_a\norigin_version: 1\n---\nbody\n\n<!-- origin:sources:start -->\n## Sources\n- [[mem_a]]\n<!-- origin:sources:end -->\n",
+    );
+
+    let general = scan_page_root(dir.path()).expect("general scan");
+    assert_eq!(general.entry("page.md").unwrap().body_digest, None);
+    let deep = scan_page_root_deep(dir.path()).expect("deep scan");
+    assert_eq!(
+        deep.entry("page.md").unwrap().body_digest,
+        Some(Sha256::digest(b"body").into())
+    );
+}
+
+#[test]
+fn general_scan_stays_bounded_while_deep_scan_enforces_body_budget() {
+    let dir = root();
+    let oversized = vec![b'x'; usize::try_from(DEEP_PAGE_BODY_MAX_BYTES + 1).unwrap()];
+    write(dir.path(), "large.md", &oversized);
+
+    assert!(scan_page_root(dir.path()).is_ok());
+    assert!(matches!(
+        scan_page_root_deep(dir.path()),
+        Err(PageFsError::BodyBudgetExceeded)
+    ));
+}
+
+#[test]
+fn state_file_read_is_bounded_for_both_profiles() {
+    let dir = root();
+    let oversized = vec![b'x'; usize::try_from(STATE_MAX_BYTES + 1).unwrap()];
+    write(dir.path(), ".wenlan/state.json", &oversized);
+
+    assert!(matches!(
+        scan_page_root(dir.path()),
+        Err(PageFsError::StateBudgetExceeded)
+    ));
+    assert!(matches!(
+        scan_page_root_deep(dir.path()),
+        Err(PageFsError::StateBudgetExceeded)
+    ));
 }

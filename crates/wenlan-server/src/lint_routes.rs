@@ -17,7 +17,7 @@ async fn handle_lint(
     State(state): State<SharedState>,
     Query(query): Query<LintQuery>,
 ) -> Result<Json<LintReport>, ServerError> {
-    let (db, config, runtime, lint_observer) = {
+    let (db, config, runtime, lint_observer, semantic_provider) = {
         let state = state.read().await;
         let db = state.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (
@@ -25,13 +25,15 @@ async fn handle_lint(
             state.lint_config.clone(),
             RuntimeObservationInput::capture(&state),
             Arc::clone(&state.lint_observer),
+            state.llm.clone(),
         )
     };
     let observation = runtime.observe().await;
     let runner = LintRunner::new(config.clock(), CancellationToken::new())
         .with_observer(lint_observer)
         .with_sources(config.sources())
-        .with_runtime_observation(observation);
+        .with_runtime_observation(observation)
+        .with_semantic_provider(semantic_provider);
     let report = runner
         .run(
             &db,

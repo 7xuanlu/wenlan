@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LintTotals {
     checks: u32,
     passed: u32,
     findings: u32,
+    actionable_findings: u32,
+    advisory_findings: u32,
     incomplete: u32,
 }
 impl LintTotals {
@@ -17,12 +20,20 @@ impl LintTotals {
             checks: checks_count,
             passed: 0,
             findings: 0,
+            actionable_findings: 0,
+            advisory_findings: 0,
             incomplete: 0,
         };
         for check in checks {
             match check.outcome {
                 LintOutcome::Pass => totals.passed += 1,
-                LintOutcome::Finding => totals.findings += 1,
+                LintOutcome::Finding => {
+                    totals.findings += 1;
+                    match check.gate_effect() {
+                        LintGateEffect::Actionable => totals.actionable_findings += 1,
+                        LintGateEffect::Advisory => totals.advisory_findings += 1,
+                    }
+                }
                 LintOutcome::NotRunPrerequisite
                 | LintOutcome::InconsistentSnapshot
                 | LintOutcome::FailedToRun => totals.incomplete += 1,
@@ -35,6 +46,12 @@ impl LintTotals {
     }
     pub const fn findings(&self) -> u32 {
         self.findings
+    }
+    pub const fn actionable_findings(&self) -> u32 {
+        self.actionable_findings
+    }
+    pub const fn advisory_findings(&self) -> u32 {
+        self.advisory_findings
     }
     pub const fn passed(&self) -> u32 {
         self.passed
@@ -79,6 +96,26 @@ impl LintReport {
         snapshots: LintSnapshotReceipts,
         config_fingerprint: LintConfigFingerprint,
         producer_receipt: LintProducerReceipt,
+        checks: Vec<LintCheckResult>,
+    ) -> Result<Self, LintContractError> {
+        Self::try_new_for_profile(
+            LintProfile::General,
+            scope,
+            capability_context,
+            snapshots,
+            config_fingerprint,
+            producer_receipt,
+            checks,
+        )
+    }
+
+    pub fn try_new_for_profile(
+        profile: LintProfile,
+        scope: LintScope,
+        capability_context: LintCapabilityContext,
+        snapshots: LintSnapshotReceipts,
+        config_fingerprint: LintConfigFingerprint,
+        producer_receipt: LintProducerReceipt,
         mut checks: Vec<LintCheckResult>,
     ) -> Result<Self, LintContractError> {
         checks.sort_by(|left, right| left.check_id().cmp(right.check_id()));
@@ -87,7 +124,7 @@ impl LintReport {
         Ok(Self {
             report_schema_version: LINT_REPORT_SCHEMA_VERSION,
             check_catalog_version: LINT_CHECK_CATALOG_VERSION,
-            profile: LintProfile::Deterministic,
+            profile,
             scope,
             capability_context,
             snapshots,
@@ -100,6 +137,9 @@ impl LintReport {
     }
     pub const fn complete(&self) -> bool {
         self.complete
+    }
+    pub const fn profile(&self) -> LintProfile {
+        self.profile
     }
     pub const fn totals(&self) -> &LintTotals {
         &self.totals
@@ -135,10 +175,20 @@ impl<'de> Deserialize<'de> for LintReport {
         if wire.check_catalog_version != LINT_CHECK_CATALOG_VERSION {
             return Err(D::Error::custom(LintContractError::UnsupportedCheckCatalog));
         }
-        if wire.profile != LintProfile::Deterministic {
-            return Err(D::Error::custom(LintContractError::UnsupportedReportSchema));
+        let expected_checks = match wire.profile {
+            LintProfile::General => LINT_GENERAL_CHECK_COUNT,
+            LintProfile::Deep => LINT_DEEP_CHECK_COUNT,
+        };
+        let unique_ids = wire
+            .checks
+            .iter()
+            .map(LintCheckResult::check_id)
+            .collect::<BTreeSet<_>>();
+        if wire.checks.len() != expected_checks || unique_ids.len() != wire.checks.len() {
+            return Err(D::Error::custom(LintContractError::InvalidCatalogShape));
         }
-        let report = Self::try_new(
+        let report = Self::try_new_for_profile(
+            wire.profile,
             wire.scope,
             wire.capability_context,
             wire.snapshots,
@@ -159,7 +209,19 @@ impl<'de> Deserialize<'de> for LintReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LintQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<LintProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
+}
+
+impl LintQuery {
+    pub const fn new(profile: Option<LintProfile>, space: Option<String>) -> Self {
+        Self { profile, space }
+    }
+
+    pub fn applied_profile(&self) -> LintProfile {
+        self.profile.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

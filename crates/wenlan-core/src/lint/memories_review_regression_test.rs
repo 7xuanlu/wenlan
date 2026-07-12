@@ -13,7 +13,15 @@ async fn run_at(
 ) -> wenlan_types::lint::LintReport {
     LintRunner::new(LintClock::fixed_at(epoch_seconds), CancellationToken::new())
         .with_test_memory_features(features)
-        .run(db, &LintQuery { space: None }, None, false)
+        .run(
+            db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap()
 }
@@ -131,7 +139,15 @@ async fn canonical_episode_cowrite_between_samples_marks_memory_checks_incomplet
                 ..TestMemoryFeatures::default()
             })
             .with_test_synchronization(synchronization)
-            .run(&runner_db, &LintQuery { space: None }, None, false)
+            .run(
+                &runner_db,
+                &LintQuery {
+                    profile: None,
+                    space: None,
+                },
+                None,
+                false,
+            )
             .await
     });
     control.wait_until_reached().await;

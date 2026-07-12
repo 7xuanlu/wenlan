@@ -5,11 +5,11 @@ use wenlan_types::sources::{Source, SyncStatus};
 
 #[derive(Debug, Clone)]
 pub(crate) struct OperationsRunConfig {
-    pub(super) captured: bool,
+    pub(crate) captured: bool,
     pub(super) source_count: u64,
     pub(super) invalid_positions: Vec<usize>,
     pub(super) terminal_positions: Vec<usize>,
-    pub(super) configured_ids: BTreeSet<String>,
+    pub(crate) configured_ids: BTreeSet<String>,
     snapshot_identity: [u8; 32],
 }
 

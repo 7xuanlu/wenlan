@@ -34,7 +34,15 @@ async fn run_at(
 ) -> wenlan_types::lint::LintReport {
     LintRunner::new(LintClock::fixed_at(observed_at), CancellationToken::new())
         .with_sources(sources)
-        .run(db, &LintQuery { space: None }, None, false)
+        .run(
+            db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap()
 }

@@ -94,6 +94,15 @@ pub enum LintMetricCode {
     WorkingMemoryTelemetryRows,
     WorkingMemoryTelemetryUnavailable,
     WorkingMemoryNewestAgeSeconds,
+    DeepDuplicateRecords,
+    DeepConflictCandidates,
+    DeepVocabularyDriftRecords,
+    DeepLifecycleResidueRecords,
+    DeepRetrievalSubstrateMissingRecords,
+    DeepPageBodyMismatchRecords,
+    SemanticEligibleRecords,
+    SemanticModelCalls,
+    SemanticProviderOnDevice,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

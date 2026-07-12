@@ -10,7 +10,7 @@ use rmcp::{
     service::{NotificationContext, RequestContext, RoleServer},
     tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Deserialize an `Option<usize>` that also accepts stringified numbers (e.g. `"10"`).
 /// MCP clients like Claude Desktop sometimes send numeric params as strings.
@@ -179,6 +179,31 @@ pub struct ContextParams {
     #[schemars(
         description = "Scope context to a space (e.g. 'work', 'personal'). Auto-detected from conversation if omitted."
     )]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LintProfileParam {
+    General,
+    Deep,
+}
+
+impl From<LintProfileParam> for wenlan_types::lint::LintProfile {
+    fn from(value: LintProfileParam) -> Self {
+        match value {
+            LintProfileParam::General => Self::General,
+            LintProfileParam::Deep => Self::Deep,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LintParams {
+    #[schemars(description = "Diagnostic depth. Defaults to general.")]
+    pub profile: Option<LintProfileParam>,
+    #[schemars(description = "Optional registered space, or uncategorized.")]
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
 }
@@ -579,12 +604,15 @@ fn tool_error(e: WenlanError, verb: &str) -> CallToolResult {
              The {verb} was NOT completed.\n\n{}",
             daemon_setup_hint()
         ),
-        WenlanError::Api { status, body } => format!(
-            "Wenlan daemon returned HTTP {status}: {body}. The {verb} may not have completed."
+        WenlanError::Api { status } => {
+            format!("Wenlan daemon returned HTTP {status}. The {verb} may not have completed.")
+        }
+        WenlanError::Deserialize => String::from(
+            "Failed to parse daemon response. \
+             This may indicate a version mismatch between wenlan-mcp and the daemon.",
         ),
-        WenlanError::Deserialize(detail) => format!(
-            "Failed to parse daemon response: {detail}. \
-             This may indicate a version mismatch between wenlan-mcp and the daemon."
+        WenlanError::ResponseTooLarge => format!(
+            "The daemon response exceeded Wenlan MCP's size limit. The {verb} was not completed."
         ),
     };
     CallToolResult::error(vec![Content::text(msg)])
@@ -832,7 +860,7 @@ impl WenlanMcpServer {
     pub async fn doctor_impl(&self) -> Result<CallToolResult, McpError> {
         let status: serde_json::Value = match self.client.get("/api/setup/status").await {
             Ok(r) => r,
-            Err(WenlanError::Api { status: 404, .. }) => {
+            Err(WenlanError::Api { status: 404 }) => {
                 return Ok(CallToolResult::error(vec![Content::text(
                     "Wenlan daemon is running, but it does not expose /api/setup/status. \
                      Update Wenlan, then run `wenlan doctor`."
@@ -845,6 +873,18 @@ impl WenlanMcpServer {
         Ok(CallToolResult::success(vec![Content::text(
             format_doctor_message(&status),
         )]))
+    }
+
+    pub async fn lint_impl(&self, params: LintParams) -> Result<CallToolResult, McpError> {
+        let query = wenlan_types::lint::LintQuery::new(
+            params.profile.map(Into::into),
+            effective_space(&params.space),
+        );
+        let report: wenlan_types::lint::LintReport =
+            try_call!(self.client.get_with_query("/api/lint", &query), "lint");
+        let value = serde_json::to_value(report)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
     }
 
     pub async fn forget_impl(&self, memory_id: &str) -> Result<CallToolResult, McpError> {
@@ -1736,6 +1776,17 @@ impl WenlanMcpServer {
     )]
     async fn doctor(&self) -> Result<CallToolResult, McpError> {
         self.doctor_impl().await
+    }
+
+    #[tool(
+        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic and capability-gated semantic advisory checks. Results are the canonical typed report; incomplete takes precedence over findings.",
+        annotations(title = "Lint", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn lint(
+        &self,
+        Parameters(params): Parameters<LintParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.lint_impl(params).await
     }
 
     #[tool(

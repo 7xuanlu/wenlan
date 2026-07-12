@@ -3,27 +3,48 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wenlan_types::lint::{
-    LintContractError, LintCoverage, LintOpaqueId, LintScope, LintValidationMethod,
+    LintContractError, LintCoverage, LintOpaqueId, LintProfile, LintScope, LintValidationMethod,
     LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
 use super::pages::fs::PageScan;
 use super::snapshot::LintReadSnapshot;
 
+#[derive(Debug)]
+struct CancellationState {
+    canceled: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
 #[derive(Debug, Clone)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken(Arc<CancellationState>);
 
 impl CancellationToken {
     pub fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self(Arc::new(CancellationState {
+            canceled: AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        }))
     }
 
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.canceled.store(true, Ordering::Release);
+        self.0.notify.notify_waiters();
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.canceled.load(Ordering::Acquire)
+    }
+
+    async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        let notified = self.0.notify.notified();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
     }
 }
 
@@ -94,15 +115,43 @@ pub struct ExecutionGate {
 impl ExecutionGate {
     pub const RUN_BUDGET: Duration = Duration::from_secs(15);
     pub const PAGE_BUDGET: Duration = Duration::from_secs(5);
+    pub const DEEP_RUN_BUDGET: Duration = Duration::from_secs(120);
+    pub const DEEP_PAGE_BUDGET: Duration = Duration::from_secs(30);
 
     pub fn new(cancellation: CancellationToken) -> Self {
         Self { cancellation }
     }
 
+    pub(crate) async fn cancelled(&self) {
+        self.cancellation.cancelled().await;
+    }
+
+    pub(crate) const fn run_budget_for(profile: LintProfile) -> Duration {
+        match profile {
+            LintProfile::General => Self::RUN_BUDGET,
+            LintProfile::Deep => Self::DEEP_RUN_BUDGET,
+        }
+    }
+
+    pub(crate) const fn page_budget_for(profile: LintProfile) -> Duration {
+        match profile {
+            LintProfile::General => Self::PAGE_BUDGET,
+            LintProfile::Deep => Self::DEEP_PAGE_BUDGET,
+        }
+    }
+
     pub fn check(&self, page_elapsed: Duration) -> Result<(), ExecutionGateError> {
+        self.check_for(LintProfile::General, page_elapsed)
+    }
+
+    pub(crate) fn check_for(
+        &self,
+        profile: LintProfile,
+        page_elapsed: Duration,
+    ) -> Result<(), ExecutionGateError> {
         if self.cancellation.is_cancelled() {
             Err(ExecutionGateError::Canceled)
-        } else if page_elapsed > Self::PAGE_BUDGET {
+        } else if page_elapsed > Self::page_budget_for(profile) {
             Err(ExecutionGateError::BudgetExceeded)
         } else {
             Ok(())
@@ -110,9 +159,17 @@ impl ExecutionGate {
     }
 
     pub fn check_run(&self, elapsed: Duration) -> Result<(), ExecutionGateError> {
+        self.check_run_for(LintProfile::General, elapsed)
+    }
+
+    pub(crate) fn check_run_for(
+        &self,
+        profile: LintProfile,
+        elapsed: Duration,
+    ) -> Result<(), ExecutionGateError> {
         if self.cancellation.is_cancelled() {
             Err(ExecutionGateError::Canceled)
-        } else if elapsed > Self::RUN_BUDGET {
+        } else if elapsed > Self::run_budget_for(profile) {
             Err(ExecutionGateError::BudgetExceeded)
         } else {
             Ok(())
@@ -192,6 +249,7 @@ pub(crate) struct LintContext<'run, 'database> {
     page_scan: Option<&'run PageScan>,
     clock: &'run LintClock,
     gate: &'run ExecutionGate,
+    profile: LintProfile,
     populations: Mutex<BTreeMap<&'static str, PopulationReceipt>>,
 }
 
@@ -202,6 +260,7 @@ impl<'run, 'database> LintContext<'run, 'database> {
         page_scan: Option<&'run PageScan>,
         clock: &'run LintClock,
         gate: &'run ExecutionGate,
+        profile: LintProfile,
     ) -> Self {
         Self {
             snapshot,
@@ -209,6 +268,7 @@ impl<'run, 'database> LintContext<'run, 'database> {
             page_scan,
             clock,
             gate,
+            profile,
             populations: Mutex::new(BTreeMap::new()),
         }
     }
@@ -231,6 +291,10 @@ impl<'run, 'database> LintContext<'run, 'database> {
 
     pub(crate) fn gate(&self) -> &ExecutionGate {
         self.gate
+    }
+
+    pub(crate) const fn profile(&self) -> LintProfile {
+        self.profile
     }
 
     pub(crate) fn record_population(

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::{WenlanClient, DEFAULT_HOST};
 use anyhow::{bail, Context, Result};
-use wenlan_types::lint::{LintErrorResponse, LintQuery, LintReport};
+use wenlan_types::lint::{LintErrorResponse, LintProfile, LintQuery, LintReport};
 
 const MAX_LINT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -13,12 +13,16 @@ pub fn origin_host_from_env() -> String {
 }
 
 impl WenlanClient {
-    pub async fn lint(&self, space: Option<String>) -> Result<LintReport> {
+    pub async fn lint(
+        &self,
+        profile: Option<LintProfile>,
+        space: Option<String>,
+    ) -> Result<LintReport> {
         let url = format!("{}/api/lint", self.base_url);
         let response = self
             .http
             .get(&url)
-            .query(&LintQuery { space })
+            .query(&LintQuery { profile, space })
             .send()
             .await
             .with_context(|| format!("GET {url} failed"))?;

@@ -20,7 +20,14 @@ async fn totals_and_truncation_are_exact_at_zero_hundred_and_101() {
         let scope = AppliedScope::global();
         let clock = LintClock::fixed();
         let gate = ExecutionGate::new(CancellationToken::new());
-        let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+        let context = LintContext::new(
+            &snapshot,
+            &scope,
+            None,
+            &clock,
+            &gate,
+            wenlan_types::lint::LintProfile::General,
+        );
         let result = load_orphans(&context)
             .await
             .unwrap()
@@ -83,7 +90,14 @@ async fn scope_is_anchored_to_active_source_workspace() {
     );
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let result = load_orphans(&context)
         .await
         .unwrap()
@@ -103,6 +117,13 @@ async fn query_failure_propagates_without_a_mutating_fallback() {
     let scope = AppliedScope::global();
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     assert!(load_orphans(&context).await.is_err());
 }

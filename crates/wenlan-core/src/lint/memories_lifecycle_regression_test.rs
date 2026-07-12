@@ -38,7 +38,15 @@ async fn assert_mixed_lifecycle(
     drop(conn);
 
     let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
-        .run(&db, &LintQuery { space: None }, None, false)
+        .run(
+            &db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap();
     let lifecycle = report

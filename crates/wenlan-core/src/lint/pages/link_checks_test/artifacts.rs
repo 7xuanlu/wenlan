@@ -35,7 +35,14 @@ async fn optional_artifacts_are_neutral_but_deterministic_broken_targets_warn() 
     let scope = AppliedScope::global();
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, Some(&scan), &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        Some(&scan),
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let result = load_artifacts(&context)
         .await
         .unwrap()

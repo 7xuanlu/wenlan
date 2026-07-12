@@ -15,6 +15,20 @@ pub(super) struct EffectiveLintConfig {
     pub(super) operations: OperationsRunConfig,
     pub(super) serving: ServingRunConfig,
     pub(super) runtime: RuntimeRunConfig,
+    semantic_provider_ready: bool,
+    semantic_provider_on_device: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SemanticProviderConfig {
+    ready: bool,
+    on_device: bool,
+}
+
+impl SemanticProviderConfig {
+    pub(super) const fn new(ready: bool, on_device: bool) -> Self {
+        Self { ready, on_device }
+    }
 }
 
 impl EffectiveLintConfig {
@@ -25,6 +39,7 @@ impl EffectiveLintConfig {
         operations: OperationsRunConfig,
         serving: ServingRunConfig,
         runtime: RuntimeRunConfig,
+        semantic_provider: SemanticProviderConfig,
     ) -> Self {
         Self {
             page_projection_enabled,
@@ -33,6 +48,8 @@ impl EffectiveLintConfig {
             operations,
             serving,
             runtime,
+            semantic_provider_ready: semantic_provider.ready,
+            semantic_provider_on_device: semantic_provider.on_device,
         }
     }
 
@@ -72,6 +89,15 @@ impl EffectiveLintConfig {
                 LintConfigSetting::TemporalGroundingEnabled,
                 self.memory.temporal,
             ),
+            selection(
+                LintConfigSetting::SemanticProviderReady,
+                self.semantic_provider_ready,
+            ),
+            selection(
+                LintConfigSetting::SemanticProviderOnDevice,
+                self.semantic_provider_on_device,
+            ),
+            selection(LintConfigSetting::SemanticExternalEgressEnabled, false),
         ];
         selections.extend(self.kg.fingerprint_selections());
         selections.extend(self.operations.fingerprint_selections());

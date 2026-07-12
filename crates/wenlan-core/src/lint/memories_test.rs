@@ -208,6 +208,7 @@ async fn selected_scope_anchors_memory_denominators_and_page_off_is_group_local(
         .run(
             &db,
             &LintQuery {
+                profile: None,
                 space: Some("alpha".to_string()),
             },
             None,

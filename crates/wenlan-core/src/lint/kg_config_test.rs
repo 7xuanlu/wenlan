@@ -81,7 +81,15 @@ async fn production_run(
     );
     LintRunner::new(LintClock::fixed(), CancellationToken::new())
         .with_test_kg_config(config)
-        .run(db, &LintQuery { space: None }, None, false)
+        .run(
+            db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap()
 }

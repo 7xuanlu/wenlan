@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use tower::ServiceExt;
 use wenlan_core::lint::observation::LintRunEvent;
 use wenlan_types::lint::{
-    LintErrorResponse, LintMetricCode, LintMetricValue, LintOutcome, LintReport, LintScopeKind,
+    LintErrorResponse, LintMetricCode, LintMetricValue, LintOutcome, LintProfile, LintReport,
+    LintScopeKind,
 };
 use wenlan_types::sources::{Source, SourceType, SyncStatus};
 
@@ -37,10 +38,26 @@ async fn lint_global_complete_response_uses_shared_remote_safe_report() {
     let decoded = decoded.expect("shared LintReport");
     assert_eq!(status, StatusCode::OK);
     assert_eq!(decoded.scope().kind(), LintScopeKind::Global);
+    assert_eq!(decoded.profile(), LintProfile::General);
     assert!(decoded.complete());
     assert_eq!(decoded.totals().incomplete(), 0);
     assert!(!body.contains(fixture.root.path().to_string_lossy().as_ref()));
     assert!(!body.contains("knowledge_path"));
+}
+
+#[tokio::test]
+async fn lint_profile_is_typed_and_unknown_values_fail_before_runner_work() {
+    let fixture = Fixture::new(Vec::new(), None).await;
+
+    let (status, _, deep) = report(&fixture, "/api/lint?profile=deep").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(deep.expect("deep report").profile(), LintProfile::Deep);
+
+    let before_events = fixture.lint_events.events();
+    let (status, _, decoded) = report(&fixture, "/api/lint?profile=future").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(decoded.is_none());
+    assert_eq!(fixture.lint_events.events(), before_events);
 }
 
 #[tokio::test]

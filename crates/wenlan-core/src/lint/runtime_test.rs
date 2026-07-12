@@ -153,7 +153,15 @@ async fn run_at(
 ) -> wenlan_types::lint::LintReport {
     LintRunner::new(LintClock::fixed_at(epoch_seconds), CancellationToken::new())
         .with_test_runtime_config(config)
-        .run(db, &LintQuery { space: None }, None, false)
+        .run(
+            db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap()
 }

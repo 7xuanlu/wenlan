@@ -6,6 +6,7 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 pub struct LintCheckResult {
     check_id: String,
     pub(crate) outcome: LintOutcome,
+    gate_effect: LintGateEffect,
     severity: LintSeverity,
     applicability: LintApplicability,
     precondition: LintPrecondition,
@@ -30,8 +31,22 @@ pub struct LintCheckResultInput {
     pub evidence: Vec<LintEvidenceRef>,
     pub duration_ms: u64,
 }
+#[derive(Deserialize)]
+struct LintCheckResultWire {
+    #[serde(flatten)]
+    input: LintCheckResultInput,
+    #[serde(default)]
+    gate_effect: LintGateEffect,
+}
 impl LintCheckResult {
     pub fn try_new(input: LintCheckResultInput) -> Result<Self, LintContractError> {
+        Self::try_new_with_gate_effect(input, LintGateEffect::Actionable)
+    }
+
+    pub fn try_new_with_gate_effect(
+        input: LintCheckResultInput,
+        gate_effect: LintGateEffect,
+    ) -> Result<Self, LintContractError> {
         let LintCheckResultInput {
             check_id,
             outcome,
@@ -47,15 +62,24 @@ impl LintCheckResult {
         } = input;
         let legal_severity = match outcome {
             LintOutcome::Pass => severity == LintSeverity::Info,
-            LintOutcome::Finding => {
-                severity == LintSeverity::Warning || severity == LintSeverity::Error
-            }
+            LintOutcome::Finding => match gate_effect {
+                LintGateEffect::Actionable => {
+                    severity == LintSeverity::Warning || severity == LintSeverity::Error
+                }
+                LintGateEffect::Advisory => severity == LintSeverity::Warning,
+            },
             LintOutcome::NotRunPrerequisite
             | LintOutcome::InconsistentSnapshot
             | LintOutcome::FailedToRun => severity == LintSeverity::Error,
         };
         if !legal_severity {
-            return Err(LintContractError::InvalidOutcomeSeverity);
+            return Err(
+                if outcome == LintOutcome::Finding && gate_effect == LintGateEffect::Advisory {
+                    LintContractError::InvalidGateEffect
+                } else {
+                    LintContractError::InvalidOutcomeSeverity
+                },
+            );
         }
         let legal_context = match outcome {
             LintOutcome::Pass => match applicability {
@@ -102,6 +126,7 @@ impl LintCheckResult {
         Ok(Self {
             check_id,
             outcome,
+            gate_effect,
             severity,
             applicability,
             precondition,
@@ -118,6 +143,9 @@ impl LintCheckResult {
     }
     pub const fn outcome(&self) -> LintOutcome {
         self.outcome
+    }
+    pub const fn gate_effect(&self) -> LintGateEffect {
+        self.gate_effect
     }
     pub const fn severity(&self) -> LintSeverity {
         self.severity
@@ -152,6 +180,7 @@ impl<'de> Deserialize<'de> for LintCheckResult {
     where
         D: Deserializer<'de>,
     {
-        Self::try_new(LintCheckResultInput::deserialize(deserializer)?).map_err(D::Error::custom)
+        let wire = LintCheckResultWire::deserialize(deserializer)?;
+        Self::try_new_with_gate_effect(wire.input, wire.gate_effect).map_err(D::Error::custom)
     }
 }

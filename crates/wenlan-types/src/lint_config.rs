@@ -26,6 +26,9 @@ pub enum LintConfigSetting {
     RerankerPathsRequested,
     ModelConfigurationIdentity,
     RuntimeObservationCaptured,
+    SemanticProviderReady,
+    SemanticProviderOnDevice,
+    SemanticExternalEgressEnabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -85,6 +88,9 @@ impl LintConfigSelection {
             LintConfigSetting::RerankerPathsRequested => 20,
             LintConfigSetting::ModelConfigurationIdentity => 21,
             LintConfigSetting::RuntimeObservationCaptured => 22,
+            LintConfigSetting::SemanticProviderReady => 23,
+            LintConfigSetting::SemanticProviderOnDevice => 24,
+            LintConfigSetting::SemanticExternalEgressEnabled => 25,
         };
         let mut bytes = vec![setting];
         match self.value {

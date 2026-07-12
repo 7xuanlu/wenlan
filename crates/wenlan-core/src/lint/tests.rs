@@ -1,4 +1,6 @@
-use super::catalog::{catalog, catalog_entry, catalog_group, has_valid_owner, LintCheckGroup};
+use super::catalog::{
+    catalog, catalog_entry, catalog_for_profile, catalog_group, has_valid_owner, LintCheckGroup,
+};
 use super::context::{CancellationToken, ExecutionGate, LintClock, PopulationAccounting};
 use super::runner::{
     configured_off_results, validate_catalog_results, LintRunError, LintRunner, TestScenario,
@@ -86,14 +88,21 @@ fn catalog_is_static_ordered_unique_and_group_owned() {
         ids.len()
     );
     assert!(entries.iter().all(has_valid_owner));
+    assert_eq!(
+        catalog_for_profile(wenlan_types::lint::LintProfile::General).count(),
+        wenlan_types::lint::LINT_GENERAL_CHECK_COUNT
+    );
+    assert_eq!(
+        catalog_for_profile(wenlan_types::lint::LintProfile::Deep).count(),
+        wenlan_types::lint::LINT_DEEP_CHECK_COUNT
+    );
     let policies: BTreeSet<_> = entries.iter().map(|entry| entry.scope_policy).collect();
     assert_eq!(policies.len(), 4);
 }
 
 #[test]
 fn catalog_result_bijection_rejects_missing_duplicate_and_unknown_ids() {
-    let mut complete = catalog()
-        .iter()
+    let mut complete = catalog_for_profile(wenlan_types::lint::LintProfile::General)
         .map(|entry| result(entry.id, LintOutcome::Pass))
         .collect::<Vec<_>>();
     validate_catalog_results(&mut complete).unwrap();
@@ -116,6 +125,8 @@ fn catalog_result_bijection_rejects_missing_duplicate_and_unknown_ids() {
 fn fixed_budgets_and_cancellation_fail_closed() {
     assert_eq!(ExecutionGate::RUN_BUDGET, Duration::from_secs(15));
     assert_eq!(ExecutionGate::PAGE_BUDGET, Duration::from_secs(5));
+    assert_eq!(ExecutionGate::DEEP_RUN_BUDGET, Duration::from_secs(120));
+    assert_eq!(ExecutionGate::DEEP_PAGE_BUDGET, Duration::from_secs(30));
     let token = CancellationToken::new();
     let gate = ExecutionGate::new(token.clone());
     assert!(gate.check(Duration::from_secs(4)).is_ok());
@@ -167,6 +178,7 @@ fn configured_off_checks_are_expected_empty_passes() {
 async fn invalid_scope_fails_before_page_scan() {
     let (db, _dir) = test_db().await;
     let query = LintQuery {
+        profile: None,
         space: Some("does-not-exist".to_string()),
     };
     let error = LintRunner::new(LintClock::fixed(), CancellationToken::new())
@@ -185,7 +197,10 @@ async fn invalid_scope_fails_before_page_scan() {
 async fn fixed_clock_report_is_deterministic() {
     let (db, _dir) = test_db().await;
     let runner = LintRunner::new(LintClock::fixed(), CancellationToken::new());
-    let query = LintQuery { space: None };
+    let query = LintQuery {
+        profile: None,
+        space: None,
+    };
     let first = runner.run(&db, &query, None, false).await.unwrap();
     let second = runner.run(&db, &query, None, false).await.unwrap();
     let first: Value = serde_json::to_value(first).unwrap();
@@ -195,16 +210,72 @@ async fn fixed_clock_report_is_deterministic() {
 }
 
 #[tokio::test]
+async fn deep_profile_is_a_registered_superset_without_duplicate_general_checks() {
+    let (db, _dir) = test_db().await;
+    let runner = LintRunner::new(LintClock::fixed(), CancellationToken::new());
+    let general = runner
+        .run(
+            &db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let deep = runner
+        .run(
+            &db,
+            &LintQuery {
+                profile: Some(wenlan_types::lint::LintProfile::Deep),
+                space: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(general.profile(), wenlan_types::lint::LintProfile::General);
+    assert_eq!(deep.profile(), wenlan_types::lint::LintProfile::Deep);
+    let general_ids = general
+        .checks()
+        .iter()
+        .map(LintCheckResult::check_id)
+        .collect::<BTreeSet<_>>();
+    let deep_ids = deep
+        .checks()
+        .iter()
+        .map(LintCheckResult::check_id)
+        .collect::<BTreeSet<_>>();
+    assert!(general_ids.is_subset(&deep_ids));
+    assert!(deep_ids.len() > general_ids.len());
+    assert_eq!(deep_ids.len(), deep.checks().len());
+    assert!(!deep.complete());
+}
+
+#[tokio::test]
 async fn cancellation_returns_an_incomplete_report() {
     let (db, _dir) = test_db().await;
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     let report = LintRunner::new(LintClock::fixed(), cancellation)
-        .run(&db, &LintQuery { space: None }, None, false)
+        .run(
+            &db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap();
     assert!(!report.complete());
-    assert_eq!(report.totals().incomplete(), catalog().len() as u32);
+    let general_checks = catalog_for_profile(wenlan_types::lint::LintProfile::General).count();
+    assert_eq!(report.totals().incomplete(), general_checks as u32);
     assert!(report
         .checks()
         .iter()
@@ -212,17 +283,129 @@ async fn cancellation_returns_an_incomplete_report() {
 }
 
 #[tokio::test]
+async fn cancellation_interrupts_an_in_flight_group() {
+    let (db, _dir) = test_db().await;
+    let cancellation = CancellationToken::new();
+    let cancel = cancellation.clone();
+    let task = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cancel.cancel();
+    });
+    let runner = LintRunner::new(LintClock::capture(), cancellation)
+        .with_test_scenario(TestScenario::BlockedGroup);
+    let run = runner.run(
+        &db,
+        &LintQuery {
+            profile: None,
+            space: None,
+        },
+        None,
+        false,
+    );
+    let report = tokio::time::timeout(Duration::from_millis(500), run)
+        .await
+        .expect("in-flight cancellation must interrupt the active group")
+        .unwrap();
+    task.await.unwrap();
+    assert!(!report.complete());
+    assert!(report
+        .checks()
+        .iter()
+        .all(|check| check.outcome() == LintOutcome::FailedToRun));
+}
+
+#[tokio::test]
+async fn run_budget_interrupts_an_in_flight_group() {
+    let (db, _dir) = test_db().await;
+    let runner = LintRunner::new(LintClock::capture(), CancellationToken::new())
+        .with_test_scenario(TestScenario::BlockedGroup)
+        .with_test_run_timeout(Duration::from_millis(10));
+    let report = tokio::time::timeout(
+        Duration::from_millis(500),
+        runner.run(
+            &db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        ),
+    )
+    .await
+    .expect("run budget must interrupt the active group")
+    .unwrap();
+    assert!(!report.complete());
+    assert!(report
+        .checks()
+        .iter()
+        .all(|check| check.outcome() == LintOutcome::FailedToRun));
+}
+
+#[tokio::test]
+async fn deep_terminal_paths_preserve_advisory_catalog_gates() {
+    let (db, _dir) = test_db().await;
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let report = LintRunner::new(LintClock::fixed(), cancellation)
+        .run(
+            &db,
+            &LintQuery {
+                profile: Some(wenlan_types::lint::LintProfile::Deep),
+                space: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .expect("deep cancellation must return a typed incomplete report");
+    assert!(!report.complete());
+    assert_eq!(
+        report.checks().len(),
+        wenlan_types::lint::LINT_DEEP_CHECK_COUNT
+    );
+    assert!(report
+        .checks()
+        .iter()
+        .filter(|check| check.check_id().contains(".semantic."))
+        .all(|check| check.gate_effect() == wenlan_types::lint::LintGateEffect::Advisory));
+
+    let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .run(
+            &db,
+            &LintQuery {
+                profile: Some(wenlan_types::lint::LintProfile::Deep),
+                space: None,
+            },
+            Some(Path::new("/definitely/missing/page-root")),
+            true,
+        )
+        .await
+        .expect("deep Page scan failure must stay inside the report");
+    assert!(!report.complete());
+}
+
+#[tokio::test]
 async fn runner_mixes_warning_and_real_query_failure_without_leaking_error() {
     let (db, _dir) = test_db().await;
     let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
         .with_test_scenario(TestScenario::MixedQueryFailure)
-        .run(&db, &LintQuery { space: None }, None, false)
+        .run(
+            &db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap();
-    assert_eq!(report.totals().checks(), catalog().len() as u32);
+    let general_checks = catalog_for_profile(wenlan_types::lint::LintProfile::General).count();
+    assert_eq!(report.totals().checks(), general_checks as u32);
     assert_eq!(
         report.totals().passed(),
-        u32::try_from(catalog().len() - 2).unwrap()
+        u32::try_from(general_checks - 2).unwrap()
     );
     assert_eq!(report.totals().findings(), 1);
     assert_eq!(report.totals().incomplete(), 1);
@@ -236,7 +419,15 @@ async fn page_group_timeout_with_incomplete_enumeration_fails_the_report() {
     let (db, _dir) = test_db().await;
     let report = LintRunner::new(LintClock::fixed(), CancellationToken::new())
         .with_test_scenario(TestScenario::PageGroupTimeout)
-        .run(&db, &LintQuery { space: None }, None, false)
+        .run(
+            &db,
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
+            None,
+            false,
+        )
         .await
         .unwrap();
     assert!(!report.complete());
@@ -271,6 +462,7 @@ async fn selected_scope_enforces_scoped_and_global_denominators() {
         .run(
             &db,
             &LintQuery {
+                profile: None,
                 space: Some("alpha".to_string()),
             },
             None,

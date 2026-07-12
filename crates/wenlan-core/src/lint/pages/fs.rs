@@ -10,6 +10,9 @@ use std::fmt;
 use std::path::Path;
 
 pub(super) const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+pub(super) const STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const DEEP_PAGE_BODY_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const DEEP_PAGE_TREE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[cfg(test)]
 pub(crate) use super::frontmatter::{FrontmatterState, VersionValue};
@@ -33,6 +36,10 @@ pub enum PageFsError {
     ReadMetadata,
     #[error("page scanner could not read a structural prefix")]
     ReadPrefix,
+    #[error("page scanner body budget exceeded")]
+    BodyBudgetExceeded,
+    #[error("page scanner state budget exceeded")]
+    StateBudgetExceeded,
     #[error("page scanner found an unsupported filename encoding")]
     UnsupportedFilenameEncoding,
 }
@@ -62,6 +69,7 @@ pub struct PageEntry {
     pub(super) length: u64,
     pub(super) modified_ns: u128,
     pub(super) prefix_digest: [u8; 32],
+    pub(crate) body_digest: Option<[u8; 32]>,
 }
 
 impl fmt::Debug for PageEntry {
@@ -91,6 +99,7 @@ pub struct PageScan {
     pub(crate) path_issues: Vec<PathIssue>,
     before_tree: [u8; 32],
     before_state: Option<[u8; 32]>,
+    includes_body_digests: bool,
 }
 
 impl fmt::Debug for PageScan {
@@ -156,12 +165,13 @@ impl PageScan {
     }
 
     pub fn verify_unchanged(&self, root: &Path) -> Result<PageFsReceipt, PageFsError> {
-        let after = scan_page_root(root)?;
+        let after = scan_page_root_internal(root, self.includes_body_digests)?;
         Ok(PageFsReceipt {
             before_tree: self.before_tree,
             after_tree: after.before_tree,
             before_state: self.before_state,
             after_state: after.before_state,
+            after_normalized: after.normalized_bytes(),
         })
     }
 }
@@ -172,26 +182,45 @@ pub struct PageFsReceipt {
     after_tree: [u8; 32],
     before_state: Option<[u8; 32]>,
     after_state: Option<[u8; 32]>,
+    after_normalized: [u8; 32],
 }
 
 impl PageFsReceipt {
     pub fn is_consistent(self) -> bool {
         self.before_tree == self.after_tree && self.before_state == self.after_state
     }
+
+    pub(crate) fn after_normalized_bytes(self) -> [u8; 32] {
+        self.after_normalized
+    }
 }
 
 pub fn scan_page_root(root: &Path) -> Result<PageScan, PageFsError> {
+    scan_page_root_internal(root, false)
+}
+
+pub(crate) fn scan_page_root_deep(root: &Path) -> Result<PageScan, PageFsError> {
+    scan_page_root_internal(root, true)
+}
+
+fn scan_page_root_internal(
+    root: &Path,
+    include_body_digests: bool,
+) -> Result<PageScan, PageFsError> {
     let root = open_root(root)?;
     let mut entries = Vec::new();
     let mut state_bytes = None;
     let mut manifest_bytes = None;
     let mut manifest_too_large = false;
+    let mut body_bytes_remaining = DEEP_PAGE_TREE_MAX_BYTES;
     collect_entries(
         &root,
         &mut entries,
         &mut state_bytes,
         &mut manifest_bytes,
         &mut manifest_too_large,
+        include_body_digests,
+        &mut body_bytes_remaining,
     )?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let mut raw_state = parse_raw_state(state_bytes.as_deref());
@@ -208,6 +237,7 @@ pub fn scan_page_root(root: &Path) -> Result<PageScan, PageFsError> {
         path_issues,
         before_tree,
         before_state,
+        includes_body_digests: include_body_digests,
     })
 }
 
@@ -292,6 +322,7 @@ fn tree_digest(entries: &[PageEntry]) -> [u8; 32] {
         digest.update(entry.length.to_le_bytes());
         digest.update(entry.modified_ns.to_le_bytes());
         digest.update(entry.prefix_digest);
+        digest.update(entry.body_digest.unwrap_or([0; 32]));
     }
     digest.finalize().into()
 }

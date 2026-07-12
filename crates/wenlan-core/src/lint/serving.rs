@@ -92,7 +92,7 @@ pub(crate) async fn run(
         context,
         ROUTE_SCOPE_ID,
         bypasses,
-        true,
+        route_scope_finding(bypasses),
         false,
     )];
     for (id, enabled, count) in [
@@ -154,6 +154,10 @@ pub(crate) async fn run(
         ],
     ));
     results
+}
+
+const fn route_scope_finding(violations: u64) -> bool {
+    violations > 0
 }
 
 fn failed_results(context: &LintContext<'_, '_>) -> Vec<LintCheckResult> {

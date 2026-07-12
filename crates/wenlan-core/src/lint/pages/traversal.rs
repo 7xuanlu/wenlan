@@ -32,25 +32,30 @@ pub(super) fn collect_entries(
     state_bytes: &mut Option<Vec<u8>>,
     manifest_bytes: &mut Option<Vec<u8>>,
     manifest_too_large: &mut bool,
+    include_body_digests: bool,
+    body_bytes_remaining: &mut u64,
 ) -> Result<(), PageFsError> {
-    visit(
-        root,
-        "",
+    let mut traversal = Traversal {
         entries,
         state_bytes,
         manifest_bytes,
         manifest_too_large,
-    )
+        include_body_digests,
+        body_bytes_remaining,
+    };
+    visit(root, "", &mut traversal)
 }
 
-fn visit(
-    directory: &Dir,
-    prefix: &str,
-    entries: &mut Vec<PageEntry>,
-    state_bytes: &mut Option<Vec<u8>>,
-    manifest_bytes: &mut Option<Vec<u8>>,
-    manifest_too_large: &mut bool,
-) -> Result<(), PageFsError> {
+struct Traversal<'a> {
+    entries: &'a mut Vec<PageEntry>,
+    state_bytes: &'a mut Option<Vec<u8>>,
+    manifest_bytes: &'a mut Option<Vec<u8>>,
+    manifest_too_large: &'a mut bool,
+    include_body_digests: bool,
+    body_bytes_remaining: &'a mut u64,
+}
+
+fn visit(directory: &Dir, prefix: &str, traversal: &mut Traversal<'_>) -> Result<(), PageFsError> {
     let mut names = directory
         .entries()
         .map_err(|_| PageFsError::ReadDirectory)?
@@ -62,15 +67,7 @@ fn visit(
         .collect::<Result<Vec<_>, _>>()?;
     names.sort();
     for name in names {
-        visit_entry(
-            directory,
-            prefix,
-            &name,
-            entries,
-            state_bytes,
-            manifest_bytes,
-            manifest_too_large,
-        )?;
+        visit_entry(directory, prefix, &name, traversal)?;
     }
     Ok(())
 }
@@ -79,10 +76,7 @@ fn visit_entry(
     directory: &Dir,
     prefix: &str,
     name: &OsStr,
-    entries: &mut Vec<PageEntry>,
-    state_bytes: &mut Option<Vec<u8>>,
-    manifest_bytes: &mut Option<Vec<u8>>,
-    manifest_too_large: &mut bool,
+    traversal: &mut Traversal<'_>,
 ) -> Result<(), PageFsError> {
     let component = component_string(name)?;
     let path = if prefix.is_empty() {
@@ -103,20 +97,14 @@ fn visit_entry(
             let opened = child
                 .dir_metadata()
                 .map_err(|_| PageFsError::ReadMetadata)?;
-            entries.push(page_entry(
+            traversal.entries.push(page_entry(
                 &path,
                 EntryKind::Directory,
                 &opened,
                 Frontmatter::unparsed(),
+                None,
             )?);
-            visit(
-                &child,
-                &path,
-                entries,
-                state_bytes,
-                manifest_bytes,
-                manifest_too_large,
-            )
+            visit(&child, &path, traversal)
         }
         EntryKind::File => {
             let mut file = directory
@@ -126,9 +114,14 @@ fn visit_entry(
             let scope = scope_for(&path, EntryKind::File);
             if path == ".wenlan/state.json" {
                 let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes)
+                (&mut file)
+                    .take(super::fs::STATE_MAX_BYTES + 1)
+                    .read_to_end(&mut bytes)
                     .map_err(|_| PageFsError::ReadPrefix)?;
-                *state_bytes = Some(bytes);
+                if bytes.len() > usize::try_from(super::fs::STATE_MAX_BYTES).unwrap_or(usize::MAX) {
+                    return Err(PageFsError::StateBudgetExceeded);
+                }
+                *traversal.state_bytes = Some(bytes);
             } else if path == "_sources/.manifest.json" {
                 let mut bytes = Vec::new();
                 (&mut file)
@@ -138,21 +131,48 @@ fn visit_entry(
                 if bytes.len()
                     > usize::try_from(super::fs::MANIFEST_MAX_BYTES).unwrap_or(usize::MAX)
                 {
-                    *manifest_too_large = true;
+                    *traversal.manifest_too_large = true;
                 } else {
-                    *manifest_bytes = Some(bytes);
+                    *traversal.manifest_bytes = Some(bytes);
                 }
             }
-            let frontmatter = if scope == EntryScope::PageMarkdown {
-                read_frontmatter(file)?
+            let (frontmatter, body_digest) = if scope == EntryScope::PageMarkdown
+                && traversal.include_body_digests
+            {
+                if opened.len() > super::fs::DEEP_PAGE_BODY_MAX_BYTES
+                    || opened.len() > *traversal.body_bytes_remaining
+                {
+                    return Err(PageFsError::BodyBudgetExceeded);
+                }
+                *traversal.body_bytes_remaining =
+                    (*traversal.body_bytes_remaining).saturating_sub(opened.len());
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)
+                    .map_err(|_| PageFsError::ReadPrefix)?;
+                let frontmatter = super::frontmatter::parse_frontmatter(bytes.as_slice())?;
+                let content = std::str::from_utf8(&bytes).map_err(|_| PageFsError::ReadPrefix)?;
+                let (_, body) = crate::sources::obsidian::extract_frontmatter(content);
+                let canonical = crate::export::provenance::canonicalize_page_body(body);
+                (
+                    frontmatter,
+                    Some(Sha256::digest(canonical.as_bytes()).into()),
+                )
+            } else if scope == EntryScope::PageMarkdown {
+                (read_frontmatter(file)?, None)
             } else {
-                Frontmatter::unparsed()
+                (Frontmatter::unparsed(), None)
             };
-            entries.push(page_entry(&path, EntryKind::File, &opened, frontmatter)?);
+            traversal.entries.push(page_entry(
+                &path,
+                EntryKind::File,
+                &opened,
+                frontmatter,
+                body_digest,
+            )?);
             Ok(())
         }
         EntryKind::Symlink | EntryKind::Other => {
-            entries.push(special_entry(
+            traversal.entries.push(special_entry(
                 directory, name, &path, classified, &metadata,
             )?);
             Ok(())
@@ -191,6 +211,7 @@ fn special_entry(
         length: metadata.len(),
         modified_ns,
         prefix_digest,
+        body_digest: None,
     })
 }
 
@@ -213,12 +234,14 @@ fn page_entry(
     kind: EntryKind,
     metadata: &Metadata,
     frontmatter: Frontmatter,
+    body_digest: Option<[u8; 32]>,
 ) -> Result<PageEntry, PageFsError> {
     Ok(PageEntry {
         path: path.to_string(),
         kind,
         scope: scope_for(path, kind),
         prefix_digest: frontmatter.digest(),
+        body_digest,
         frontmatter,
         length: metadata.len(),
         modified_ns: modified_ns(metadata)?,

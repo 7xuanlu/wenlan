@@ -97,6 +97,7 @@ async fn selected_runner_keeps_global_errors_without_evidence() {
         .run(
             &db,
             &LintQuery {
+                profile: None,
                 space: Some("alpha".to_string()),
             },
             Some(root.path()),

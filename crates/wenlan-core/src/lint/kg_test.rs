@@ -142,6 +142,7 @@ async fn run(
         .run(
             db,
             &LintQuery {
+                profile: None,
                 space: space.map(str::to_string),
             },
             None,

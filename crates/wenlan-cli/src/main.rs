@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use output::OutputFormat;
 use std::process::ExitCode;
 use wenlan_cli::{client, commands, output};
+use wenlan_types::lint::LintProfile;
 
 #[derive(Parser)]
 #[command(
@@ -53,6 +54,8 @@ enum Commands {
     Doctor,
     /// Check memory, Pages, runtime, and operation health through the daemon.
     Lint {
+        #[arg(long)]
+        profile: Option<LintProfile>,
         /// Limit checks to one registered space, or `uncategorized`.
         #[arg(long)]
         space: Option<String>,
@@ -157,8 +160,8 @@ async fn main() -> anyhow::Result<ExitCode> {
         Commands::Background { command } => commands::service::run_background(command)?,
         Commands::Restart => commands::service::restart()?,
         Commands::Doctor => commands::setup::run_doctor().await?,
-        Commands::Lint { space } => {
-            return Ok(commands::lint::run(&client, format, cli.quiet, space).await)
+        Commands::Lint { profile, space } => {
+            return Ok(commands::lint::run(&client, format, cli.quiet, profile, space).await)
         }
         Commands::Models { command } => commands::setup::run_model(command).await?,
         Commands::Keys { command } => commands::setup::run_key(command).await?,

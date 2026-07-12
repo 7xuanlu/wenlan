@@ -2,7 +2,9 @@
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
-use wenlan_types::lint::{LintOutcome, LintRecommendationCode, LintReport, LintSummaryCode};
+use wenlan_types::lint::{
+    LintGateEffect, LintOutcome, LintProfile, LintRecommendationCode, LintReport, LintSummaryCode,
+};
 
 use crate::client::WenlanClient;
 use crate::output::{print_json, OutputFormat};
@@ -11,9 +13,10 @@ pub async fn run(
     client: &WenlanClient,
     format: OutputFormat,
     quiet: bool,
+    profile: Option<LintProfile>,
     space: Option<String>,
 ) -> ExitCode {
-    let report = match client.lint(space).await {
+    let report = match client.lint(profile, space).await {
         Ok(report) => report,
         Err(error) => {
             eprintln!("wenlan lint: {error:#}");
@@ -42,7 +45,7 @@ pub async fn run(
 pub const fn exit_code(report: &LintReport) -> u8 {
     if !report.complete() {
         2
-    } else if report.totals().findings() > 0 {
+    } else if report.totals().actionable_findings() > 0 {
         1
     } else {
         0
@@ -68,10 +71,12 @@ fn render_human(report: &LintReport) -> String {
         }
     }
     let mut output = format!(
-        "Lint: {} checks, {} passed, {} findings, {} incomplete\nGroups:\n",
+        "Lint: {} checks, {} passed, {} actionable findings, {} advisor{}, {} incomplete\nGroups:\n",
         totals.checks(),
         totals.passed(),
-        totals.findings(),
+        totals.actionable_findings(),
+        totals.advisory_findings(),
+        if totals.advisory_findings() == 1 { "y" } else { "ies" },
         totals.incomplete()
     );
     for (group, (checks, findings, incomplete)) in groups {
@@ -80,7 +85,8 @@ fn render_human(report: &LintReport) -> String {
             if checks == 1 { "" } else { "s" }
         ));
     }
-    append_checks(&mut output, "Findings", report, LintOutcome::Finding);
+    append_findings(&mut output, "Findings", report, LintGateEffect::Actionable);
+    append_findings(&mut output, "Advisories", report, LintGateEffect::Advisory);
     output.push_str("Incomplete");
     let incomplete: Vec<_> = report
         .checks()
@@ -91,12 +97,19 @@ fn render_human(report: &LintReport) -> String {
     output
 }
 
-fn append_checks(output: &mut String, label: &str, report: &LintReport, outcome: LintOutcome) {
+fn append_findings(
+    output: &mut String,
+    label: &str,
+    report: &LintReport,
+    gate_effect: LintGateEffect,
+) {
     output.push_str(label);
     let selected: Vec<_> = report
         .checks()
         .iter()
-        .filter(|check| check.outcome() == outcome)
+        .filter(|check| {
+            check.outcome() == LintOutcome::Finding && check.gate_effect() == gate_effect
+        })
         .collect();
     append_selected(output, &selected);
 }

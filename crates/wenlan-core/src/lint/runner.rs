@@ -1,8 +1,8 @@
-use super::catalog::{catalog, catalog_entry, catalog_group, LintCheckGroup};
+use super::catalog::{catalog_entry, catalog_for_profile, catalog_group, LintCheckGroup};
 use super::context::{CancellationToken, ExecutionGate, LintClock, LintContext, PopulationBasis};
 use super::observation::{LintRunEvent, LintRunObserver, NoopLintRunObserver};
-use super::pages::fs::{scan_page_root, PageFsError, PageScan};
-use super::run_config::EffectiveLintConfig;
+use super::pages::fs::{scan_page_root, scan_page_root_deep, PageFsError, PageFsReceipt, PageScan};
+use super::run_config::{EffectiveLintConfig, SemanticProviderConfig};
 use super::snapshot::{SnapshotError, SnapshotReceipt};
 use crate::db::MemoryDB;
 use std::collections::BTreeSet;
@@ -14,8 +14,9 @@ use wenlan_types::lint::{
     LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
     LintContractError, LintCoverage, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest,
     LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
-    LintProducerReceipt, LintQuery, LintRecommendationCode, LintReport, LintScope, LintSeverity,
-    LintSnapshotReceipts, LintSummaryCode, LintValidationMethod, LINT_MAX_EVIDENCE_PER_CHECK,
+    LintProducerReceipt, LintProfile, LintQuery, LintRecommendationCode, LintReport, LintScope,
+    LintSeverity, LintSnapshotReceipts, LintSummaryCode, LintValidationMethod,
+    LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
 mod configuration;
@@ -48,12 +49,16 @@ pub struct LintRunner {
     kg_config: Option<super::kg::KgRunConfig>,
     operations_config: super::operations::OperationsRunConfig,
     runtime_config: super::runtime::RuntimeRunConfig,
+    semantic_provider: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     observer: Arc<dyn LintRunObserver>,
+    #[cfg(test)]
+    run_timeout_override: Option<std::time::Duration>,
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TestScenario {
+    BlockedGroup,
     MixedQueryFailure,
     PageGroupTimeout,
     ScopedDenominators,
@@ -128,7 +133,10 @@ impl LintRunner {
             kg_config: None,
             operations_config: super::operations::OperationsRunConfig::unavailable(),
             runtime_config: super::runtime::RuntimeRunConfig::capture(),
+            semantic_provider: None,
             observer: Arc::new(NoopLintRunObserver),
+            #[cfg(test)]
+            run_timeout_override: None,
         }
     }
 
@@ -169,6 +177,7 @@ impl LintRunner {
         page_root: Option<&Path>,
         page_projection_enabled: bool,
     ) -> Result<LintReport, LintRunError> {
+        let profile = query.applied_profile();
         let memory_config = {
             #[cfg(test)]
             if let Some(features) = self.memory_features {
@@ -190,6 +199,14 @@ impl LintRunner {
             super::kg::KgRunConfig::capture()
         };
         let serving_config = super::serving::capture(memory_config, kg_config.serving_enabled);
+        let semantic_provider_ready = self
+            .semantic_provider
+            .as_deref()
+            .is_some_and(crate::llm_provider::LlmProvider::is_available);
+        let semantic_provider_on_device =
+            self.semantic_provider.as_deref().is_some_and(|provider| {
+                provider.backend() == crate::llm_provider::LlmBackend::OnDevice
+            });
         let effective_config = EffectiveLintConfig::new(
             page_projection_enabled,
             memory_config,
@@ -199,6 +216,7 @@ impl LintRunner {
             self.runtime_config
                 .clone()
                 .with_clock_epoch_seconds(self.clock.epoch_seconds()),
+            SemanticProviderConfig::new(semantic_provider_ready, semantic_provider_on_device),
         );
         let projection_tracker = database.page_projection_tracker();
         let tracker_before = projection_tracker.sample();
@@ -211,12 +229,19 @@ impl LintRunner {
             .await?;
         let scope = scope::validate(&snapshot, query, self.observer.as_ref()).await?;
         let snapshot = snapshot.pin_analysis().await?;
-        let mut execution_failed = self.gate.check_run(self.clock.elapsed()).is_err();
+        let mut execution_failed = self
+            .gate
+            .check_run_for(profile, self.clock.elapsed())
+            .is_err();
 
         let page_started = self.clock.elapsed();
         let page_scan = if page_projection_enabled && !execution_failed {
             self.observer.observe(LintRunEvent::PageScan);
-            match page_root.map(scan_page_root).transpose() {
+            let page_scan = match page_root {
+                Some(root) => self.scan_pages(root, profile).await.map(Some),
+                None => Ok(None),
+            };
+            match page_scan {
                 Ok(scan) => scan,
                 Err(_) => {
                     execution_failed = true;
@@ -232,29 +257,54 @@ impl LintRunner {
             page_scan.as_ref(),
             &self.clock,
             &self.gate,
+            profile,
         );
         let (mut checks, page_elapsed) = if execution_failed {
-            record_zero_populations(&context)?;
-            (failed_results(&self.clock), std::time::Duration::ZERO)
+            record_zero_populations(&context, profile)?;
+            (
+                failed_results_for_profile(&self.clock, profile),
+                std::time::Duration::ZERO,
+            )
         } else {
             self.observer.observe(LintRunEvent::AggregateChecks);
-            self.run_groups(&context, &effective_config, page_started)
-                .await?
+            let elapsed = self.clock.elapsed();
+            let remaining = ExecutionGate::run_budget_for(profile).saturating_sub(elapsed);
+            #[cfg(test)]
+            let remaining = self.run_timeout_override.unwrap_or(remaining);
+            let group_result = tokio::select! {
+                biased;
+                _ = self.gate.cancelled() => None,
+                result = tokio::time::timeout(
+                    remaining,
+                    self.run_groups(&context, &effective_config, page_started),
+                ) => result.ok(),
+            };
+            match group_result {
+                Some(result) => result?,
+                None => (
+                    failed_results_for_context(&context, profile)?,
+                    self.page_elapsed(page_started),
+                ),
+            }
         };
         if effective_config.memory.artifact_state_changed(database) {
             checks = inconsistent_selected_results(&self.clock, &checks, |check_id| {
                 catalog_entry(check_id).is_some_and(|entry| entry.group == LintCheckGroup::Memories)
             })?;
         }
-        if self.gate.check(page_elapsed).is_err() {
+        if self.gate.check_for(profile, page_elapsed).is_err() {
             checks = failed_selected_results(&self.clock, &checks, |check_id| {
                 catalog_entry(check_id).is_some_and(|entry| entry.group == LintCheckGroup::Pages)
             })?;
         }
-        if self.gate.check_run(self.clock.elapsed()).is_err() {
+        if self
+            .gate
+            .check_run_for(profile, self.clock.elapsed())
+            .is_err()
+        {
             checks = failed_results_from_checks(&self.clock, &checks)?;
         }
-        validate_catalog_results(&mut checks)?;
+        validate_profile_catalog_results(profile, &mut checks)?;
         validate_scope_policy(&context, &checks)?;
         drop(context);
         #[cfg(test)]
@@ -267,7 +317,10 @@ impl LintRunner {
             .map(PageScan::normalized_bytes)
             .unwrap_or([0; 32]);
         let page_after = match (page_root, page_scan.as_ref()) {
-            (Some(root), Some(_)) => scan_page_root(root)?.normalized_bytes(),
+            (Some(root), Some(scan)) => scan
+                .verify_unchanged(root)
+                .map(PageFsReceipt::after_normalized_bytes)
+                .unwrap_or([0; 32]),
             _ => page_before,
         };
         let page_changed = page_before != page_after;
@@ -287,9 +340,10 @@ impl LintRunner {
                 super::pages::uses_cross_store,
             )?;
         }
-        validate_catalog_results(&mut checks)?;
+        validate_profile_catalog_results(profile, &mut checks)?;
         self.observer.observe(LintRunEvent::ReportBuild);
         build_report(
+            profile,
             scope.into_report(),
             db_receipt,
             page_before,
@@ -297,6 +351,39 @@ impl LintRunner {
             effective_config,
             checks,
         )
+    }
+
+    pub fn with_semantic_provider(
+        mut self,
+        provider: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
+    ) -> Self {
+        self.semantic_provider = provider;
+        self
+    }
+
+    async fn scan_pages(&self, root: &Path, profile: LintProfile) -> Result<PageScan, PageFsError> {
+        let root = root.to_path_buf();
+        let task = tokio::task::spawn_blocking(move || match profile {
+            LintProfile::General => scan_page_root(&root),
+            LintProfile::Deep => scan_page_root_deep(&root),
+        });
+        let run_remaining =
+            ExecutionGate::run_budget_for(profile).saturating_sub(self.clock.elapsed());
+        let timeout = ExecutionGate::page_budget_for(profile).min(run_remaining);
+        tokio::select! {
+            biased;
+            _ = self.gate.cancelled() => Err(PageFsError::ReadDirectory),
+            result = tokio::time::timeout(timeout, task) => match result {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) | Err(_) => Err(PageFsError::ReadDirectory),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_run_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.run_timeout_override = Some(timeout);
+        self
     }
 
     async fn run_groups(
@@ -318,6 +405,10 @@ impl LintRunner {
         results.extend(super::operations::run(context, config.operations.clone()).await);
         results.extend(super::runtime::run(context, &config.runtime).await);
         results.extend(super::serving::run(context, config.serving).await);
+        if context.profile() == LintProfile::Deep {
+            results.extend(super::deep::run(context, &config.operations).await);
+            results.extend(super::semantic::run(context, self.semantic_provider.as_deref()).await);
+        }
         Ok((results, page_elapsed))
     }
 }
@@ -328,8 +419,9 @@ async fn run_test_scenario(
     scenario: TestScenario,
 ) -> Result<Vec<LintCheckResult>, LintRunError> {
     match scenario {
+        TestScenario::BlockedGroup => std::future::pending().await,
         TestScenario::MixedQueryFailure => {
-            record_zero_populations(context)?;
+            record_zero_populations(context, context.profile())?;
             let failed = match context
                 .snapshot()
                 .query(
@@ -344,8 +436,7 @@ async fn run_test_scenario(
             if !failed {
                 return Err(LintRunError::CatalogMismatch);
             }
-            catalog()
-                .iter()
+            catalog_for_profile(context.profile())
                 .enumerate()
                 .map(|(index, entry)| match index {
                     0 => make_result(
@@ -400,8 +491,7 @@ async fn run_test_scenario(
             if population.coverage().is_ok() {
                 return Err(LintRunError::CatalogMismatch);
             }
-            catalog()
-                .iter()
+            catalog_for_profile(context.profile())
                 .map(|entry| {
                     context
                         .record_population(entry.id, PopulationBasis::Global, 101)
@@ -432,8 +522,7 @@ fn scoped_denominator_results(
     if !context.scope().filter().is_selected() {
         return Err(LintRunError::CatalogMismatch);
     }
-    catalog()
-        .iter()
+    catalog_for_profile(context.profile())
         .map(|entry| {
             let selected_policy = matches!(
                 entry.scope_policy,
@@ -465,8 +554,7 @@ fn scoped_denominator_results(
 }
 
 pub fn configured_off_results(clock: LintClock) -> Vec<LintCheckResult> {
-    catalog()
-        .iter()
+    catalog_for_profile(LintProfile::General)
         .map(|entry| {
             make_result(
                 entry.id,
@@ -507,9 +595,10 @@ pub(crate) fn prerequisite_results_for_group(
     )
 }
 
-pub(crate) fn failed_results(clock: &LintClock) -> Vec<LintCheckResult> {
+fn failed_results_for_profile(clock: &LintClock, profile: LintProfile) -> Vec<LintCheckResult> {
     terminal_results(
         clock,
+        profile,
         LintOutcome::FailedToRun,
         LintPrecondition::Ready,
         LintSummaryCode::ExecutionFailed,
@@ -609,17 +698,17 @@ fn terminal_results_from_checks(
     summary: LintSummaryCode,
     recommendation: LintRecommendationCode,
 ) -> Result<Vec<LintCheckResult>, LintRunError> {
-    catalog()
+    checks
         .iter()
-        .map(|entry| {
+        .map(|check| {
             let denominator = checks
                 .iter()
-                .find(|check| check.check_id() == entry.id)
+                .find(|candidate| candidate.check_id() == check.check_id())
                 .ok_or(LintRunError::CatalogMismatch)?
                 .coverage()
                 .denominator();
             make_result_with_denominator(
-                entry.id,
+                check.check_id(),
                 outcome,
                 LintSeverity::Error,
                 LintApplicability::Applicable,
@@ -636,13 +725,13 @@ fn terminal_results_from_checks(
 
 fn terminal_results(
     clock: &LintClock,
+    profile: LintProfile,
     outcome: LintOutcome,
     precondition: LintPrecondition,
     summary: LintSummaryCode,
     recommendation: LintRecommendationCode,
 ) -> Vec<LintCheckResult> {
-    catalog()
-        .iter()
+    catalog_for_profile(profile)
         .map(|entry| {
             make_result(
                 entry.id,
@@ -725,7 +814,7 @@ fn make_result_with_denominator(
     duration_ms: u64,
     denominator: u64,
 ) -> Result<LintCheckResult, LintContractError> {
-    LintCheckResult::try_new(LintCheckResultInput {
+    let input = LintCheckResultInput {
         check_id: check_id.to_string(),
         outcome,
         severity,
@@ -744,18 +833,37 @@ fn make_result_with_denominator(
         recommendation_code,
         evidence: Vec::new(),
         duration_ms,
-    })
+    };
+    LintCheckResult::try_new_with_gate_effect(
+        input,
+        catalog_entry(check_id)
+            .map(|entry| entry.gate_effect)
+            .unwrap_or_default(),
+    )
 }
 
 pub fn validate_catalog_results(checks: &mut [LintCheckResult]) -> Result<(), LintRunError> {
+    validate_profile_catalog_results(LintProfile::General, checks)
+}
+
+fn validate_profile_catalog_results(
+    profile: LintProfile,
+    checks: &mut [LintCheckResult],
+) -> Result<(), LintRunError> {
     checks.sort_by(|left, right| left.check_id().cmp(right.check_id()));
-    let expected = catalog().iter().map(|entry| entry.id).collect::<Vec<_>>();
+    let expected = catalog_for_profile(profile)
+        .map(|entry| entry.id)
+        .collect::<Vec<_>>();
     let actual = checks
         .iter()
         .map(LintCheckResult::check_id)
         .collect::<Vec<_>>();
     let unique = actual.iter().copied().collect::<BTreeSet<_>>();
-    if actual != expected || unique.len() != actual.len() {
+    let gates_match = checks.iter().all(|check| {
+        catalog_entry(check.check_id())
+            .is_some_and(|entry| entry.gate_effect == check.gate_effect())
+    });
+    if actual != expected || unique.len() != actual.len() || !gates_match {
         return Err(LintRunError::CatalogMismatch);
     }
     Ok(())
@@ -798,9 +906,12 @@ fn validate_scope_policy(
     Ok(())
 }
 
-fn record_zero_populations(context: &LintContext<'_, '_>) -> Result<(), LintRunError> {
+fn record_zero_populations(
+    context: &LintContext<'_, '_>,
+    profile: LintProfile,
+) -> Result<(), LintRunError> {
     let selected = context.scope().filter().is_selected();
-    for entry in catalog() {
+    for entry in catalog_for_profile(profile) {
         let basis = if selected
             && matches!(
                 entry.scope_policy,
@@ -818,7 +929,56 @@ fn record_zero_populations(context: &LintContext<'_, '_>) -> Result<(), LintRunE
     Ok(())
 }
 
+fn failed_results_for_context(
+    context: &LintContext<'_, '_>,
+    profile: LintProfile,
+) -> Result<Vec<LintCheckResult>, LintRunError> {
+    let selected = context.scope().filter().is_selected();
+    catalog_for_profile(profile)
+        .map(|entry| {
+            let receipt = match context
+                .population(entry.id)
+                .map_err(|_| LintRunError::CatalogMismatch)?
+            {
+                Some(receipt) => receipt,
+                None => {
+                    let basis = if selected
+                        && matches!(
+                            entry.scope_policy,
+                            super::catalog::ScopePolicy::ScopedRows
+                                | super::catalog::ScopePolicy::DbAnchoredProjection
+                        ) {
+                        PopulationBasis::SelectedScope
+                    } else {
+                        PopulationBasis::Global
+                    };
+                    context
+                        .record_population(entry.id, basis, 0)
+                        .map_err(|_| LintRunError::CatalogMismatch)?;
+                    super::context::PopulationReceipt {
+                        basis,
+                        denominator: 0,
+                    }
+                }
+            };
+            make_result_with_denominator(
+                entry.id,
+                LintOutcome::FailedToRun,
+                LintSeverity::Error,
+                LintApplicability::Applicable,
+                LintPrecondition::Ready,
+                LintSummaryCode::ExecutionFailed,
+                Some(LintRecommendationCode::InspectRuntime),
+                context.clock().duration_ms(),
+                receipt.denominator,
+            )
+            .map_err(LintRunError::from)
+        })
+        .collect()
+}
+
 fn build_report(
+    profile: LintProfile,
     scope: LintScope,
     db_receipt: SnapshotReceipt,
     page_before: [u8; 32],
@@ -826,7 +986,8 @@ fn build_report(
     effective_config: EffectiveLintConfig,
     checks: Vec<LintCheckResult>,
 ) -> Result<LintReport, LintRunError> {
-    LintReport::try_new(
+    LintReport::try_new_for_profile(
+        profile,
         scope,
         LintCapabilityContext::daemon_operator_endpoint(),
         receipts(db_receipt, page_before, page_after),

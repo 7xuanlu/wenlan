@@ -21,6 +21,12 @@ fn enabled_channel_with_dead_eligible_substrate_is_a_finding() {
 }
 
 #[test]
+fn route_scope_finding_depends_on_the_violation_count() {
+    assert!(!super::route_scope_finding(0));
+    assert!(super::route_scope_finding(1));
+}
+
+#[test]
 fn disabled_channel_is_expected_empty() {
     let result = super::channel_result(
         &LintClock::fixed(),
@@ -120,6 +126,7 @@ async fn run_with_flags(
         LintRunner::new(LintClock::fixed(), CancellationToken::new()).run(
             db,
             &LintQuery {
+                profile: None,
                 space: space.map(str::to_string),
             },
             None,

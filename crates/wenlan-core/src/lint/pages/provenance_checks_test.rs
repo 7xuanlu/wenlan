@@ -202,7 +202,14 @@ async fn hundred_thousand_sql_rows_validate_all_and_cap_opaque_samples() {
     let scope = AppliedScope::global();
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let result = super::source::load_and_assess_sources(&context)
         .await
         .unwrap()
@@ -312,7 +319,14 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
     );
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let records = load_sources(&context).await.unwrap();
     assert_eq!(records.len(), 7);
     let lint = records
@@ -340,7 +354,14 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
     assert_eq!(selected_citations.coverage().denominator(), 1);
 
     let global_scope = AppliedScope::global();
-    let global_context = LintContext::new(&snapshot, &global_scope, None, &clock, &gate);
+    let global_context = LintContext::new(
+        &snapshot,
+        &global_scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let global_records = load_sources(&global_context).await.unwrap();
     assert_eq!(global_records.len(), 8);
     let global_result = assess_sources(&global_records, &[])

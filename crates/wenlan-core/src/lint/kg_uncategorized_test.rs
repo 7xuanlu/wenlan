@@ -21,6 +21,7 @@ async fn empty_uncategorized_scope_keeps_kg_checks_conclusive() {
         .run(
             &db,
             &LintQuery {
+                profile: None,
                 space: Some("uncategorized".to_string()),
             },
             None,

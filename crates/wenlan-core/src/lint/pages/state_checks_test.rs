@@ -485,6 +485,7 @@ async fn runner_uses_pages_workspace_and_keeps_other_workspace_out_of_output() {
         .run(
             &db,
             &wenlan_types::lint::LintQuery {
+                profile: None,
                 space: Some("alpha".to_string()),
             },
             Some(root.path()),

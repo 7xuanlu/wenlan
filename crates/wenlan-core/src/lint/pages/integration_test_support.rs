@@ -26,7 +26,10 @@ pub(super) async fn run_receipt_drift(kind: ReceiptDrift) -> wenlan_types::lint:
             .with_test_synchronization(synchronization)
             .run(
                 &runner_db,
-                &LintQuery { space: None },
+                &LintQuery {
+                    profile: None,
+                    space: None,
+                },
                 Some(&runner_root),
                 true,
             )

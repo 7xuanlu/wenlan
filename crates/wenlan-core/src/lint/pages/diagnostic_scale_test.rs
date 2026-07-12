@@ -179,7 +179,14 @@ async fn run_fixture(root: &Path) {
     let scope = AppliedScope::global();
     let clock = LintClock::capture();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, Some(&scan), &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        Some(&scan),
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let results = super::run(&context, true).await;
     assert!(
         results

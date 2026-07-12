@@ -18,6 +18,14 @@ fn check(
     outcome: LintOutcome,
     severity: LintSeverity,
 ) -> Result<LintCheckResult, LintContractError> {
+    check_with_id("catalog.open_check", outcome, severity)
+}
+
+fn check_with_id(
+    check_id: &str,
+    outcome: LintOutcome,
+    severity: LintSeverity,
+) -> Result<LintCheckResult, LintContractError> {
     let (applicability, precondition, summary_code, recommendation_code) = match outcome {
         LintOutcome::Pass => (
             LintApplicability::Applicable,
@@ -52,7 +60,7 @@ fn check(
     };
 
     LintCheckResult::try_new(LintCheckResultInput {
-        check_id: "catalog.open_check".to_string(),
+        check_id: check_id.to_string(),
         outcome,
         severity,
         applicability,
@@ -71,6 +79,22 @@ fn check(
         }],
         duration_ms: 4,
     })
+}
+
+fn wire_report(scope: LintScope) -> LintReport {
+    report(
+        scope,
+        (0..LINT_GENERAL_CHECK_COUNT)
+            .map(|index| {
+                check_with_id(
+                    &format!("catalog.open_check_{index:02}"),
+                    LintOutcome::Pass,
+                    LintSeverity::Info,
+                )
+                .unwrap()
+            })
+            .collect(),
+    )
 }
 
 fn snapshots() -> LintSnapshotReceipts {
@@ -115,10 +139,7 @@ fn report_roundtrips_v1_for_each_applied_scope_kind() {
     ];
 
     for scope in scopes {
-        let report = report(
-            scope,
-            vec![check(LintOutcome::Pass, LintSeverity::Info).unwrap()],
-        );
+        let report = wire_report(scope);
 
         let encoded = serde_json::to_value(&report).unwrap();
         let decoded: LintReport = serde_json::from_value(encoded.clone()).unwrap();
@@ -126,7 +147,7 @@ fn report_roundtrips_v1_for_each_applied_scope_kind() {
         assert!(decoded.complete());
         assert_eq!(encoded["report_schema_version"], json!(1));
         assert_eq!(encoded["check_catalog_version"], json!(1));
-        assert_eq!(encoded["profile"], json!("deterministic"));
+        assert_eq!(encoded["profile"], json!("general"));
         assert_eq!(
             encoded["capability_context"],
             json!("daemon_operator_endpoint_unauthenticated_unverified")
@@ -211,11 +232,22 @@ fn report_derives_completeness_and_totals_from_outcomes() {
 }
 
 #[test]
+fn report_separates_actionable_and_advisory_findings() {
+    let actionable = check(LintOutcome::Finding, LintSeverity::Error).unwrap();
+    let mut advisory_wire =
+        serde_json::to_value(check(LintOutcome::Finding, LintSeverity::Warning).unwrap()).unwrap();
+    advisory_wire["gate_effect"] = json!("advisory");
+    let advisory = serde_json::from_value(advisory_wire).unwrap();
+    let report = report(LintScope::global(), vec![actionable, advisory]);
+
+    assert_eq!(report.totals().findings(), 2);
+    assert_eq!(report.totals().actionable_findings(), 1);
+    assert_eq!(report.totals().advisory_findings(), 1);
+}
+
+#[test]
 fn rejects_unknown_enums_and_unsupported_schema_versions() {
-    let report = report(
-        LintScope::global(),
-        vec![check(LintOutcome::Pass, LintSeverity::Info).unwrap()],
-    );
+    let report = wire_report(LintScope::global());
 
     let mut unknown_enum = serde_json::to_value(&report).unwrap();
     unknown_enum["checks"][0]["outcome"] = json!("future_outcome");
@@ -228,15 +260,25 @@ fn rejects_unknown_enums_and_unsupported_schema_versions() {
 
 #[test]
 fn permits_additive_object_fields_but_rejects_schema_drift() {
-    let report = report(
-        LintScope::global(),
-        vec![check(LintOutcome::Pass, LintSeverity::Info).unwrap()],
-    );
+    let report = wire_report(LintScope::global());
     let mut additive = serde_json::to_value(&report).unwrap();
     additive["future_top_level"] = json!({ "added": true });
     additive["checks"][0]["future_check_field"] = json!(1);
 
     assert!(serde_json::from_value::<LintReport>(additive).is_ok());
+}
+
+#[test]
+fn deserialization_rejects_incomplete_or_duplicate_catalog_shapes() {
+    let report = wire_report(LintScope::global());
+    let mut missing = serde_json::to_value(&report).unwrap();
+    missing["checks"].as_array_mut().unwrap().pop();
+    missing["totals"]["checks"] = json!(LINT_GENERAL_CHECK_COUNT - 1);
+    assert!(serde_json::from_value::<LintReport>(missing).is_err());
+
+    let mut duplicate = serde_json::to_value(&report).unwrap();
+    duplicate["checks"][1] = duplicate["checks"][0].clone();
+    assert!(serde_json::from_value::<LintReport>(duplicate).is_err());
 }
 
 #[test]
@@ -324,9 +366,20 @@ fn fingerprints_are_deterministic_and_string_metrics_are_closed() {
 }
 
 #[test]
-fn query_exposes_only_the_optional_space_selector() {
+fn query_defaults_to_general_and_accepts_only_closed_profiles() {
     let query: LintQuery = serde_json::from_value(json!({ "space": "requested-space" })).unwrap();
     assert_eq!(query.space.as_deref(), Some("requested-space"));
+    assert_eq!(query.applied_profile(), LintProfile::General);
+
+    let deep: LintQuery = serde_json::from_value(json!({ "profile": "deep" })).unwrap();
+    assert_eq!(deep.applied_profile(), LintProfile::Deep);
+    assert!(serde_json::from_value::<LintQuery>(json!({ "profile": "future" })).is_err());
+
+    let general = report(
+        LintScope::global(),
+        vec![check(LintOutcome::Pass, LintSeverity::Info).unwrap()],
+    );
+    assert_eq!(general.profile(), LintProfile::General);
 }
 
 #[test]

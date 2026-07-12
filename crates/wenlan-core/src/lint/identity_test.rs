@@ -116,6 +116,7 @@ async fn run_lint(db: &crate::db::MemoryDB, space: Option<&str>) -> wenlan_types
         .run(
             db,
             &LintQuery {
+                profile: None,
                 space: space.map(str::to_string),
             },
             None,

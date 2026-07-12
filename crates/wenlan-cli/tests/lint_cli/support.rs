@@ -7,16 +7,37 @@ use std::thread;
 use wenlan_types::lint::{
     LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
     LintConfigFingerprint, LintCoverage, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest,
-    LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
+    LintGateEffect, LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
     LintProducerReceipt, LintRecommendationCode, LintReport, LintScope, LintSeverity,
-    LintSnapshotReceipts, LintSummaryCode, LintValidationMethod,
+    LintSnapshotReceipts, LintSummaryCode, LintValidationMethod, LINT_GENERAL_CHECK_COUNT,
 };
 
 pub fn report(checks: &[(&str, LintOutcome)]) -> LintReport {
     let checks = checks
         .iter()
-        .map(|(id, outcome)| check(id, *outcome))
+        .map(|(id, outcome)| check(id, *outcome, LintGateEffect::Actionable))
         .collect();
+    build_report(checks)
+}
+
+pub fn report_with_gates(checks: &[(&str, LintOutcome, LintGateEffect)]) -> LintReport {
+    build_report(
+        checks
+            .iter()
+            .map(|(id, outcome, gate_effect)| check(id, *outcome, *gate_effect))
+            .collect(),
+    )
+}
+
+fn build_report(mut checks: Vec<LintCheckResult>) -> LintReport {
+    let mut index = 0_usize;
+    while checks.len() < LINT_GENERAL_CHECK_COUNT {
+        let id = format!("fixture.padding_{index:02}");
+        if !checks.iter().any(|check| check.check_id() == id) {
+            checks.push(check(&id, LintOutcome::Pass, LintGateEffect::Actionable));
+        }
+        index += 1;
+    }
     LintReport::try_new(
         LintScope::global(),
         LintCapabilityContext::daemon_operator_endpoint(),
@@ -39,7 +60,7 @@ pub fn report(checks: &[(&str, LintOutcome)]) -> LintReport {
     .expect("valid typed lint report fixture")
 }
 
-fn check(id: &str, outcome: LintOutcome) -> LintCheckResult {
+fn check(id: &str, outcome: LintOutcome, gate_effect: LintGateEffect) -> LintCheckResult {
     let (severity, applicability, precondition, summary_code, recommendation_code) = match outcome {
         LintOutcome::Pass => (
             LintSeverity::Info,
@@ -77,20 +98,23 @@ fn check(id: &str, outcome: LintOutcome) -> LintCheckResult {
             Some(LintRecommendationCode::InspectRuntime),
         ),
     };
-    LintCheckResult::try_new(LintCheckResultInput {
-        check_id: id.to_string(),
-        outcome,
-        severity,
-        applicability,
-        precondition,
-        coverage: LintCoverage::new(LintValidationMethod::FullEnumeration, 0, 0, 100, false, 0)
-            .expect("valid fixture coverage"),
-        metrics: Vec::new(),
-        summary_code,
-        recommendation_code,
-        evidence: Vec::new(),
-        duration_ms: 1,
-    })
+    LintCheckResult::try_new_with_gate_effect(
+        LintCheckResultInput {
+            check_id: id.to_string(),
+            outcome,
+            severity,
+            applicability,
+            precondition,
+            coverage: LintCoverage::new(LintValidationMethod::FullEnumeration, 0, 0, 100, false, 0)
+                .expect("valid fixture coverage"),
+            metrics: Vec::new(),
+            summary_code,
+            recommendation_code,
+            evidence: Vec::new(),
+            duration_ms: 1,
+        },
+        gate_effect,
+    )
     .expect("valid typed lint check fixture")
 }
 

@@ -151,6 +151,7 @@ async fn run_with_projection_and_space(
         .run(
             db,
             &LintQuery {
+                profile: None,
                 space: space.map(str::to_string),
             },
             None,

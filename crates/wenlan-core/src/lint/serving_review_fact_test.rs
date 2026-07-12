@@ -87,7 +87,14 @@ async fn fact_probe_passes_three_times_parent_limit_to_ann_query() {
     );
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let context = LintContext::new(&snapshot, &scope, None, &clock, &gate);
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let ann = RecordingAnn::default();
 
     run_with_ann(&context, 7, &ann).await.expect("fact probe");

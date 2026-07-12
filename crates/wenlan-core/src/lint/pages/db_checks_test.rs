@@ -118,7 +118,14 @@ async fn workspace_scope_prevents_cross_workspace_duplicate_and_title_leak() {
         LintOpaqueId::from_sorted_position(0).unwrap(),
         "workspace-a".to_string(),
     );
-    let selected_context = LintContext::new(&snapshot, &selected_scope, None, &clock, &gate);
+    let selected_context = LintContext::new(
+        &snapshot,
+        &selected_scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let selected = load_rows(&selected_context).await.unwrap();
     assert_eq!(selected.len(), 2);
     let selected_result = assess_duplicates(&selected)
@@ -128,7 +135,14 @@ async fn workspace_scope_prevents_cross_workspace_duplicate_and_title_leak() {
     assert_eq!(selected_result.coverage().denominator(), 1);
 
     let global_scope = AppliedScope::global();
-    let global_context = LintContext::new(&snapshot, &global_scope, None, &clock, &gate);
+    let global_context = LintContext::new(
+        &snapshot,
+        &global_scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let global = load_rows(&global_context).await.unwrap();
     let global_result = assess_duplicates(&global)
         .result(DUPLICATE_TITLES_ID, 0)
@@ -140,8 +154,14 @@ async fn workspace_scope_prevents_cross_workspace_duplicate_and_title_leak() {
     assert!(!json.contains("private shared"));
 
     let uncategorized_scope = AppliedScope::uncategorized();
-    let uncategorized_context =
-        LintContext::new(&snapshot, &uncategorized_scope, None, &clock, &gate);
+    let uncategorized_context = LintContext::new(
+        &snapshot,
+        &uncategorized_scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
     let uncategorized = load_rows(&uncategorized_context).await.unwrap();
     assert_eq!(uncategorized.len(), 1);
     assert_eq!(uncategorized[0].title_key, "uncategorized");

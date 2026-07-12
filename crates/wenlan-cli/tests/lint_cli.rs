@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 use assert_cmd::Command;
 use serde_json::{json, Value};
-use wenlan_types::lint::LintOutcome;
+use wenlan_types::lint::{LintGateEffect, LintOutcome};
 
 #[path = "lint_cli/support.rs"]
 mod support;
-use support::{closed_host, report, spawn_error, spawn_oversized, spawn_report, spawn_value};
+use support::{
+    closed_host, report, report_with_gates, spawn_error, spawn_oversized, spawn_report, spawn_value,
+};
 
 fn cli() -> Command {
     Command::cargo_bin("wenlan").expect("wenlan binary built")
@@ -33,6 +35,24 @@ fn lint_json_accepts_global_flags_before_command_and_uses_remote_scope() {
     assert_eq!(
         request.recv().unwrap(),
         "GET /api/lint?space=work HTTP/1.1\r\n"
+    );
+}
+
+#[test]
+fn lint_deep_profile_is_forwarded_as_the_canonical_query() {
+    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let (base, request) = spawn_report(&expected);
+
+    cli()
+        .env("WENLAN_HOST", base)
+        .args(["--format", "json", "lint", "--profile", "deep"])
+        .assert()
+        .code(0)
+        .stderr("");
+
+    assert_eq!(
+        request.recv().unwrap(),
+        "GET /api/lint?profile=deep HTTP/1.1\r\n"
     );
 }
 
@@ -82,6 +102,27 @@ fn lint_human_finding_is_actionable_and_exits_one() {
         .stdout(predicates::str::contains(
             "pages.sample: finding_detected; recommendation: review_finding",
         ))
+        .stderr("");
+}
+
+#[test]
+fn lint_advisory_only_is_visible_and_exits_zero() {
+    let expected = report_with_gates(&[(
+        "semantic.contradiction",
+        LintOutcome::Finding,
+        LintGateEffect::Advisory,
+    )]);
+    let (base, _) = spawn_report(&expected);
+
+    cli()
+        .env("WENLAN_HOST", base)
+        .args(["lint", "--format", "table"])
+        .assert()
+        .code(0)
+        .stdout(predicates::str::contains(
+            "0 actionable findings, 1 advisory",
+        ))
+        .stdout(predicates::str::contains("Advisories (1):"))
         .stderr("");
 }
 

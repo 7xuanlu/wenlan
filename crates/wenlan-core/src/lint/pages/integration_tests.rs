@@ -27,7 +27,10 @@ async fn markdown_first_partial_write_is_incomplete_without_blocking() {
         Duration::from_secs(2),
         LintRunner::new(LintClock::fixed(), CancellationToken::new()).run(
             &db,
-            &LintQuery { space: None },
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
             Some(page_root.path()),
             true,
         ),
@@ -53,7 +56,10 @@ async fn db_first_partial_write_is_incomplete_without_blocking() {
         Duration::from_secs(2),
         LintRunner::new(LintClock::fixed(), CancellationToken::new()).run(
             &db,
-            &LintQuery { space: None },
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
             Some(page_root.path()),
             true,
         ),
@@ -79,7 +85,10 @@ async fn completed_real_writer_between_receipts_is_detected() {
             .with_test_synchronization(synchronization)
             .run(
                 &runner_db,
-                &LintQuery { space: None },
+                &LintQuery {
+                    profile: None,
+                    space: None,
+                },
                 Some(&runner_root),
                 true,
             )
@@ -130,7 +139,10 @@ async fn stable_repeated_run_is_byte_identical_and_keeps_all_checks_conclusive()
     let first = LintRunner::new(LintClock::fixed(), CancellationToken::new())
         .run(
             &db,
-            &LintQuery { space: None },
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
             Some(page_root.path()),
             true,
         )
@@ -139,7 +151,10 @@ async fn stable_repeated_run_is_byte_identical_and_keeps_all_checks_conclusive()
     let second = LintRunner::new(LintClock::fixed(), CancellationToken::new())
         .run(
             &db,
-            &LintQuery { space: None },
+            &LintQuery {
+                profile: None,
+                space: None,
+            },
             Some(page_root.path()),
             true,
         )
@@ -181,7 +196,10 @@ async fn full_page_group_does_not_mutate_database_or_projection_tree() {
         LintRunner::new(LintClock::fixed(), CancellationToken::new())
             .run(
                 &db,
-                &LintQuery { space: None },
+                &LintQuery {
+                    profile: None,
+                    space: None,
+                },
                 Some(page_root.path()),
                 true,
             )

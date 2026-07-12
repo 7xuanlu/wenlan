@@ -5,6 +5,8 @@ use std::{fmt, num::NonZeroU64};
 pub const LINT_REPORT_SCHEMA_VERSION: u16 = 1;
 pub const LINT_CHECK_CATALOG_VERSION: u16 = 1;
 pub const LINT_MAX_EVIDENCE_PER_CHECK: u16 = 100;
+pub const LINT_GENERAL_CHECK_COUNT: usize = 55;
+pub const LINT_DEEP_CHECK_COUNT: usize = 70;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintContractError {
@@ -12,6 +14,7 @@ pub enum LintContractError {
     InvalidCommit,
     InvalidScope,
     InvalidOutcomeSeverity,
+    InvalidGateEffect,
     InvalidApplicabilityPrecondition,
     InvalidCoverage,
     EvidenceLimitExceeded,
@@ -20,6 +23,7 @@ pub enum LintContractError {
     UnsupportedCheckCatalog,
     InvalidTotals,
     InvalidCompleteness,
+    InvalidCatalogShape,
     TooManyChecks,
 }
 
@@ -30,6 +34,7 @@ impl LintContractError {
             Self::InvalidCommit => "invalid_lint_commit",
             Self::InvalidScope => "invalid_lint_scope",
             Self::InvalidOutcomeSeverity => "invalid_lint_outcome_severity",
+            Self::InvalidGateEffect => "invalid_lint_gate_effect",
             Self::InvalidApplicabilityPrecondition => "invalid_lint_applicability_precondition",
             Self::InvalidCoverage => "invalid_lint_coverage",
             Self::EvidenceLimitExceeded => "lint_evidence_limit_exceeded",
@@ -38,6 +43,7 @@ impl LintContractError {
             Self::UnsupportedCheckCatalog => "unsupported_lint_check_catalog",
             Self::InvalidTotals => "invalid_lint_totals",
             Self::InvalidCompleteness => "invalid_lint_completeness",
+            Self::InvalidCatalogShape => "invalid_lint_catalog_shape",
             Self::TooManyChecks => "too_many_lint_checks",
         }
     }
@@ -107,10 +113,31 @@ impl<'de> Deserialize<'de> for LintCommitReceipt {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LintProfile {
-    Deterministic,
+    #[default]
+    General,
+    Deep,
+}
+impl fmt::Display for LintProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::General => "general",
+            Self::Deep => "deep",
+        })
+    }
+}
+impl std::str::FromStr for LintProfile {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "general" => Ok(Self::General),
+            "deep" => Ok(Self::Deep),
+            _ => Err("expected `general` or `deep`"),
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
