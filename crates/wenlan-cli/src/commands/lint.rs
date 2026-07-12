@@ -257,6 +257,14 @@ fn evidence_name(evidence: &LintEvidenceRef) -> String {
         LintEvidenceRef::SafeRootRelativePath {
             safe_root_relative_path,
         } => format!("path:{safe_root_relative_path:?}"),
+        LintEvidenceRef::SemanticFinding { finding } => format!(
+            "semantic:{}:{:?}:{:?}:{}:{:?}",
+            finding.candidate_id().ordinal(),
+            finding.proposed_action(),
+            finding.reason_code(),
+            finding.confidence_basis_points(),
+            finding.provider_route(),
+        ),
     }
 }
 
@@ -276,6 +284,12 @@ const fn reason_name(reason: LintReasonCode) -> &'static str {
         LintReasonCode::SemanticAgentAdjudicationRequired => "semantic_agent_adjudication_required",
         LintReasonCode::SemanticAgentWorkStale => "semantic_agent_work_stale",
         LintReasonCode::SemanticAgentSubmissionInvalid => "semantic_agent_submission_invalid",
+        LintReasonCode::SemanticCandidateGenerationFailure => {
+            "semantic_candidate_generation_failure"
+        }
+        LintReasonCode::SemanticPopulationIncomplete => "semantic_population_incomplete",
+        LintReasonCode::SemanticDisagreementUnresolved => "semantic_disagreement_unresolved",
+        LintReasonCode::SemanticSecondJudgeRequired => "semantic_second_judge_required",
     }
 }
 

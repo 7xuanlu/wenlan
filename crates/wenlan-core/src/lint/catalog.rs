@@ -58,6 +58,17 @@ const CATALOG: &[LintCatalogEntry] = &[
     identity_entry("identity.tag_integrity", ScopePolicy::GlobalOnly),
     entity_entry("kg.advisory_inventory", ScopePolicy::GlobalAggregateOnly),
     entity_entry("kg.aggregate_inventory", ScopePolicy::GlobalAggregateOnly),
+    deep_entry(
+        "kg.semantic.entity_relations",
+        ScopePolicy::ScopedRows,
+        ScopeAxis::EntitiesSpace,
+        LintGateEffect::Advisory,
+    ),
+    deep_memory_kg_entry(
+        "kg.semantic.memory_entity_links",
+        ScopePolicy::ScopedRows,
+        LintGateEffect::Advisory,
+    ),
     memory_kg_entry("kg.substrate_liveness", ScopePolicy::ScopedRows),
     memory_entry("memories.derived.episode", ScopePolicy::ScopedRows),
     memory_entry("memories.derived.fact", ScopePolicy::ScopedRows),
@@ -165,6 +176,12 @@ const CATALOG: &[LintCatalogEntry] = &[
     ),
     page_entry("pages.review_status_inventory", ScopePolicy::ScopedRows),
     deep_entry(
+        "pages.semantic.evidence_links",
+        ScopePolicy::ScopedRows,
+        ScopeAxis::PagesWorkspace,
+        LintGateEffect::Advisory,
+    ),
+    deep_entry(
         "pages.semantic.faithfulness",
         ScopePolicy::ScopedRows,
         ScopeAxis::PagesWorkspace,
@@ -251,6 +268,21 @@ const fn memory_kg_entry(id: &'static str, scope_policy: ScopePolicy) -> LintCat
         group: LintCheckGroup::KnowledgeGraph,
         profile: LintProfileMembership::General,
         gate_effect: LintGateEffect::Actionable,
+    }
+}
+
+const fn deep_memory_kg_entry(
+    id: &'static str,
+    scope_policy: ScopePolicy,
+    gate_effect: LintGateEffect,
+) -> LintCatalogEntry {
+    LintCatalogEntry {
+        id,
+        scope_policy,
+        scope_axis: ScopeAxis::MemoriesSpace,
+        group: LintCheckGroup::KnowledgeGraph,
+        profile: LintProfileMembership::DeepOnly,
+        gate_effect,
     }
 }
 

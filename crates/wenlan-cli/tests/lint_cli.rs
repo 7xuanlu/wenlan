@@ -4,7 +4,7 @@ use predicates::prelude::PredicateBooleanExt;
 use serde_json::{json, Value};
 use wenlan_types::lint::{
     LintAgentSubmission, LintAgentVerdict, LintDigest, LintGateEffect, LintOutcome,
-    LintSemanticCheckId,
+    LintSemanticDecision, LintSemanticReasonCode,
 };
 
 #[path = "lint_cli/support.rs"]
@@ -188,10 +188,15 @@ fn lint_rejects_oversized_agent_submission_before_transport() {
 }
 
 fn agent_submission() -> LintAgentSubmission {
-    let verdicts = LintSemanticCheckId::ALL
-        .into_iter()
-        .map(|check_id| LintAgentVerdict::try_new(check_id, vec![]).unwrap())
-        .collect();
+    let verdicts = vec![LintAgentVerdict::try_new(
+        1,
+        LintSemanticDecision::Pass,
+        None,
+        LintSemanticReasonCode::ClassificationMismatch,
+        9000,
+        Vec::new(),
+    )
+    .unwrap()];
     LintAgentSubmission::try_new(LintDigest::from_u64(1), verdicts).unwrap()
 }
 

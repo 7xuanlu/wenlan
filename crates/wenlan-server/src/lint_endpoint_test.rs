@@ -8,8 +8,9 @@ use tower::ServiceExt;
 use wenlan_core::lint::observation::LintRunEvent;
 use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 use wenlan_types::lint::{
-    LintAgentSubmission, LintAgentVerdict, LintErrorResponse, LintMetricCode, LintMetricValue,
-    LintOutcome, LintProfile, LintReasonCode, LintReport, LintScopeKind, LintSemanticCheckId,
+    LintAgentSubmission, LintAgentVerdict, LintAgentWork, LintErrorResponse, LintMetricCode,
+    LintMetricValue, LintOutcome, LintProfile, LintReasonCode, LintReport, LintScopeKind,
+    LintSemanticCheckId, LintSemanticDecision,
 };
 use wenlan_types::sources::{Source, SourceType, SyncStatus};
 
@@ -23,9 +24,24 @@ struct FakeApiProvider {
 
 #[async_trait]
 impl LlmProvider for FakeApiProvider {
-    async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+    async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(r#"{"verdicts":[{"check_id":"memories.semantic.classification","refs":[]},{"check_id":"memories.semantic.contradiction","refs":[]},{"check_id":"memories.semantic.staleness","refs":[]},{"check_id":"pages.semantic.faithfulness","refs":[]},{"check_id":"pages.semantic.provenance_adequacy","refs":[]},{"check_id":"serving.semantic.retrieval_quality","refs":[] }]}"#.to_string())
+        let packet: serde_json::Value = serde_json::from_str(&request.user_prompt).unwrap();
+        let verdicts = packet["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|candidate| {
+                serde_json::json!({
+                    "candidate_ref": candidate["reference"],
+                    "decision": "pass",
+                    "reason_code": candidate["reason_code"],
+                    "confidence_basis_points": 9000,
+                    "counterevidence_refs": [],
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({ "verdicts": verdicts }).to_string())
     }
 
     fn is_available(&self) -> bool {
@@ -185,7 +201,7 @@ async fn lint_calling_agent_prepare_and_submit_share_the_canonical_endpoint() {
                 )
             })
     }));
-    let submission = agent_submission(work.work_digest().clone());
+    let submission = agent_submission(work);
     let response = fixture
         .app
         .clone()
@@ -229,14 +245,8 @@ async fn lint_agent_assist_is_deep_only_and_read_only() {
     );
 
     let (_, _, prepared) = report(&fixture, "/api/lint?profile=deep&agent_assist=true").await;
-    let submission = agent_submission(
-        prepared
-            .unwrap()
-            .agent_work()
-            .expect("agent work")
-            .work_digest()
-            .clone(),
-    );
+    let prepared = prepared.unwrap();
+    let submission = agent_submission(prepared.agent_work().expect("agent work"));
     let response = fixture
         .app
         .clone()
@@ -251,22 +261,28 @@ async fn lint_agent_assist_is_deep_only_and_read_only() {
     assert_eq!(fixture.fingerprint().await, before);
 }
 
-fn agent_submission(work_digest: wenlan_types::lint::LintDigest) -> LintAgentSubmission {
-    let verdicts = LintSemanticCheckId::ALL
-        .into_iter()
-        .map(|check_id| {
+fn agent_submission(work: &LintAgentWork) -> LintAgentSubmission {
+    let verdicts = work
+        .candidates()
+        .iter()
+        .map(|candidate| {
+            let finding = candidate.check_id() == LintSemanticCheckId::MemoryClassification;
             LintAgentVerdict::try_new(
-                check_id,
-                if check_id == LintSemanticCheckId::MemoryClassification {
-                    vec![1]
+                candidate.reference(),
+                if finding {
+                    LintSemanticDecision::Finding
                 } else {
-                    vec![]
+                    LintSemanticDecision::Pass
                 },
+                None,
+                candidate.reason_code(),
+                9000,
+                Vec::new(),
             )
             .unwrap()
         })
         .collect();
-    LintAgentSubmission::try_new(work_digest, verdicts).unwrap()
+    LintAgentSubmission::try_new(work.work_digest().clone(), verdicts).unwrap()
 }
 
 #[tokio::test]

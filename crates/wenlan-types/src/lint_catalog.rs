@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+use super::agent::LintSemanticFinding;
 use super::contract::LintOpaqueId;
 use serde::{Deserialize, Serialize};
 
@@ -101,6 +102,10 @@ pub enum LintMetricCode {
     DeepRetrievalSubstrateMissingRecords,
     DeepPageBodyMismatchRecords,
     SemanticEligibleRecords,
+    SemanticCandidateRecords,
+    SemanticPacketCandidates,
+    SemanticJudgedRecords,
+    SemanticUnresolvedDisagreements,
     SemanticModelCalls,
     SemanticProviderOnDevice,
     SemanticAgentSubmissions,
@@ -172,6 +177,10 @@ pub enum LintReasonCode {
     SemanticAgentAdjudicationRequired,
     SemanticAgentWorkStale,
     SemanticAgentSubmissionInvalid,
+    SemanticCandidateGenerationFailure,
+    SemanticPopulationIncomplete,
+    SemanticDisagreementUnresolved,
+    SemanticSecondJudgeRequired,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LintSafeRootRelativePath {
@@ -196,11 +205,15 @@ pub enum LintEvidenceRef {
     SafeRootRelativePath {
         safe_root_relative_path: LintSafeRootRelativePath,
     },
+    SemanticFinding {
+        finding: LintSemanticFinding,
+    },
 }
 impl LintEvidenceRef {
     pub(crate) const fn opaque_id(&self) -> Option<LintOpaqueId> {
         match self {
             Self::OpaqueId { opaque_id } => Some(*opaque_id),
+            Self::SemanticFinding { finding } => Some(finding.candidate_id()),
             Self::ReasonCode { .. } | Self::SafeRootRelativePath { .. } => None,
         }
     }

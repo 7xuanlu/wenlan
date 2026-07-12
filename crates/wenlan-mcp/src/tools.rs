@@ -206,7 +206,9 @@ pub struct LintParams {
     #[schemars(description = "Optional registered space, or uncategorized.")]
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
-    #[schemars(description = "Prepare bounded semantic work for the calling agent. Deep only.")]
+    #[schemars(
+        description = "Prepare bounded high-recall semantic candidates for the calling agent. Deep only."
+    )]
     #[serde(default)]
     pub agent_assist: bool,
     #[schemars(description = "Typed verdicts over a prior agent-assist work packet. Deep only.")]
@@ -215,49 +217,73 @@ pub struct LintParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-pub enum LintSemanticCheckParam {
-    #[serde(rename = "memories.semantic.classification")]
-    MemoryClassification,
-    #[serde(rename = "memories.semantic.contradiction")]
-    MemoryContradiction,
-    #[serde(rename = "memories.semantic.staleness")]
-    MemoryStaleness,
-    #[serde(rename = "pages.semantic.faithfulness")]
-    PageFaithfulness,
-    #[serde(rename = "pages.semantic.provenance_adequacy")]
-    PageProvenanceAdequacy,
-    #[serde(rename = "serving.semantic.retrieval_quality")]
-    RetrievalQuality,
+#[serde(rename_all = "snake_case")]
+pub enum LintSemanticDecisionParam {
+    Pass,
+    Finding,
 }
 
-impl LintSemanticCheckParam {
-    pub const ALL: [Self; 6] = [
-        Self::MemoryClassification,
-        Self::MemoryContradiction,
-        Self::MemoryStaleness,
-        Self::PageFaithfulness,
-        Self::PageProvenanceAdequacy,
-        Self::RetrievalQuality,
-    ];
-}
-
-impl From<LintSemanticCheckParam> for wenlan_types::lint::LintSemanticCheckId {
-    fn from(value: LintSemanticCheckParam) -> Self {
+impl From<LintSemanticDecisionParam> for wenlan_types::lint::LintSemanticDecision {
+    fn from(value: LintSemanticDecisionParam) -> Self {
         match value {
-            LintSemanticCheckParam::MemoryClassification => Self::MemoryClassification,
-            LintSemanticCheckParam::MemoryContradiction => Self::MemoryContradiction,
-            LintSemanticCheckParam::MemoryStaleness => Self::MemoryStaleness,
-            LintSemanticCheckParam::PageFaithfulness => Self::PageFaithfulness,
-            LintSemanticCheckParam::PageProvenanceAdequacy => Self::PageProvenanceAdequacy,
-            LintSemanticCheckParam::RetrievalQuality => Self::RetrievalQuality,
+            LintSemanticDecisionParam::Pass => Self::Pass,
+            LintSemanticDecisionParam::Finding => Self::Finding,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LintSemanticReasonParam {
+    ClassificationMismatch,
+    PotentialContradiction,
+    PotentialStaleness,
+    MentionWithoutLink,
+    ExistingLinkMismatch,
+    SharedContextWithoutRelation,
+    ExistingRelationMismatch,
+    PotentialUnfaithfulClaim,
+    PotentialInadequateProvenance,
+    ClaimOverlapWithoutEvidence,
+    ExistingEvidenceMismatch,
+    PotentialRetrievalMiss,
+    DanglingOwner,
+    TemporalEvolution,
+    RelatedButNotEvidence,
+}
+
+impl From<LintSemanticReasonParam> for wenlan_types::lint::LintSemanticReasonCode {
+    fn from(value: LintSemanticReasonParam) -> Self {
+        use LintSemanticReasonParam as Param;
+        match value {
+            Param::ClassificationMismatch => Self::ClassificationMismatch,
+            Param::PotentialContradiction => Self::PotentialContradiction,
+            Param::PotentialStaleness => Self::PotentialStaleness,
+            Param::MentionWithoutLink => Self::MentionWithoutLink,
+            Param::ExistingLinkMismatch => Self::ExistingLinkMismatch,
+            Param::SharedContextWithoutRelation => Self::SharedContextWithoutRelation,
+            Param::ExistingRelationMismatch => Self::ExistingRelationMismatch,
+            Param::PotentialUnfaithfulClaim => Self::PotentialUnfaithfulClaim,
+            Param::PotentialInadequateProvenance => Self::PotentialInadequateProvenance,
+            Param::ClaimOverlapWithoutEvidence => Self::ClaimOverlapWithoutEvidence,
+            Param::ExistingEvidenceMismatch => Self::ExistingEvidenceMismatch,
+            Param::PotentialRetrievalMiss => Self::PotentialRetrievalMiss,
+            Param::DanglingOwner => Self::DanglingOwner,
+            Param::TemporalEvolution => Self::TemporalEvolution,
+            Param::RelatedButNotEvidence => Self::RelatedButNotEvidence,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct LintAgentVerdictParam {
-    pub check_id: LintSemanticCheckParam,
-    pub refs: Vec<u16>,
+    pub candidate_ref: u16,
+    pub decision: LintSemanticDecisionParam,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub second_decision: Option<LintSemanticDecisionParam>,
+    pub reason_code: LintSemanticReasonParam,
+    pub confidence_basis_points: u16,
+    pub counterevidence_refs: Vec<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -274,7 +300,14 @@ impl TryFrom<LintAgentSubmissionParam> for wenlan_types::lint::LintAgentSubmissi
             .verdicts
             .into_iter()
             .map(|verdict| {
-                wenlan_types::lint::LintAgentVerdict::try_new(verdict.check_id.into(), verdict.refs)
+                wenlan_types::lint::LintAgentVerdict::try_new(
+                    verdict.candidate_ref,
+                    verdict.decision.into(),
+                    verdict.second_decision.map(Into::into),
+                    verdict.reason_code.into(),
+                    verdict.confidence_basis_points,
+                    verdict.counterevidence_refs,
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         Self::try_new(
@@ -1873,7 +1906,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic checks and semantic advisory checks adjudicated either by the daemon's configured provider or, with explicit agent_assist consent, by the calling agent through a bounded typed prepare-and-submit protocol. Results are the canonical typed report; incomplete takes precedence over findings.",
+        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic checks plus full-store local semantic candidate generation; bounded candidate packets are adjudicated either by the daemon's configured provider or, with explicit agent_assist consent, by the calling agent through a typed prepare-and-submit protocol. Results are the canonical typed report; incomplete takes precedence over findings.",
         annotations(title = "Lint", read_only_hint = true, open_world_hint = false)
     )]
     async fn lint(

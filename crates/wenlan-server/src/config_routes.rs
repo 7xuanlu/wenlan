@@ -768,7 +768,10 @@ mod external_llm_lifecycle_tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
-    async fn put_config(app: &axum::Router, body: serde_json::Value) -> (StatusCode, Value) {
+    async fn put_config(
+        app: &crate::router::AppRouter,
+        body: serde_json::Value,
+    ) -> (StatusCode, Value) {
         let resp = app
             .clone()
             .oneshot(

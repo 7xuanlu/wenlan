@@ -2,11 +2,11 @@
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{fmt, num::NonZeroU64};
 
-pub const LINT_REPORT_SCHEMA_VERSION: u16 = 3;
-pub const LINT_CHECK_CATALOG_VERSION: u16 = 1;
+pub const LINT_REPORT_SCHEMA_VERSION: u16 = 4;
+pub const LINT_CHECK_CATALOG_VERSION: u16 = 2;
 pub const LINT_MAX_EVIDENCE_PER_CHECK: u16 = 100;
 pub const LINT_GENERAL_CHECK_COUNT: usize = 55;
-pub const LINT_DEEP_CHECK_COUNT: usize = 70;
+pub const LINT_DEEP_CHECK_COUNT: usize = 73;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintContractError {

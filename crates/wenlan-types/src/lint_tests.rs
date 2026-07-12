@@ -131,7 +131,7 @@ fn report(scope: LintScope, checks: Vec<LintCheckResult>) -> LintReport {
 }
 
 #[test]
-fn report_roundtrips_v3_for_each_applied_scope_kind() {
+fn report_roundtrips_current_schema_for_each_applied_scope_kind() {
     let scopes = [
         LintScope::global(),
         LintScope::registered(LintOpaqueId::from_sorted_position(0).unwrap()),
@@ -145,8 +145,14 @@ fn report_roundtrips_v3_for_each_applied_scope_kind() {
         let decoded: LintReport = serde_json::from_value(encoded.clone()).unwrap();
 
         assert!(decoded.complete());
-        assert_eq!(encoded["report_schema_version"], json!(3));
-        assert_eq!(encoded["check_catalog_version"], json!(1));
+        assert_eq!(
+            encoded["report_schema_version"],
+            json!(LINT_REPORT_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            encoded["check_catalog_version"],
+            json!(LINT_CHECK_CATALOG_VERSION)
+        );
         assert_eq!(encoded["profile"], json!("general"));
         assert_eq!(
             encoded["capability_context"],
@@ -254,7 +260,7 @@ fn rejects_unknown_enums_and_unsupported_schema_versions() {
     assert!(serde_json::from_value::<LintReport>(unknown_enum).is_err());
 
     let mut unsupported_schema = serde_json::to_value(&report).unwrap();
-    unsupported_schema["report_schema_version"] = json!(4);
+    unsupported_schema["report_schema_version"] = json!(LINT_REPORT_SCHEMA_VERSION + 1);
     assert!(serde_json::from_value::<LintReport>(unsupported_schema).is_err());
 }
 
@@ -405,11 +411,22 @@ fn query_defaults_to_general_and_accepts_only_closed_profiles() {
 
 #[test]
 fn agent_work_and_submission_are_bounded_typed_contracts() {
+    let populations = LintSemanticCheckId::ALL
+        .into_iter()
+        .map(|check_id| {
+            LintSemanticPopulation::try_new(
+                check_id,
+                1,
+                u64::from(check_id == LintSemanticCheckId::MemoryContradiction),
+                u64::from(check_id == LintSemanticCheckId::MemoryContradiction),
+                false,
+            )
+            .unwrap()
+        })
+        .collect();
     let work = LintAgentWork::try_new(
         LintDigest::from_u64(9),
-        2,
-        1,
-        1,
+        populations,
         vec![
             LintAgentRecord::try_new(
                 1,
@@ -430,24 +447,29 @@ fn agent_work_and_submission_are_bounded_typed_contracts() {
             )
             .unwrap(),
         ],
+        vec![LintAgentCandidate::try_new(
+            1,
+            LintSemanticCheckId::MemoryContradiction,
+            LintSemanticCandidateKind::PairReview,
+            vec![1, 2],
+            vec![],
+            LintSemanticAction::ReviewContradiction,
+            LintSemanticReasonCode::PotentialContradiction,
+        )
+        .unwrap()],
     )
     .unwrap();
     assert_eq!(work.records().len(), 2);
 
-    let verdicts = LintSemanticCheckId::ALL
-        .into_iter()
-        .map(|check_id| {
-            LintAgentVerdict::try_new(
-                check_id,
-                if check_id == LintSemanticCheckId::MemoryContradiction {
-                    vec![1]
-                } else {
-                    vec![]
-                },
-            )
-            .unwrap()
-        })
-        .collect();
+    let verdicts = vec![LintAgentVerdict::try_new(
+        1,
+        LintSemanticDecision::Finding,
+        None,
+        LintSemanticReasonCode::PotentialContradiction,
+        8_500,
+        vec![],
+    )
+    .unwrap()];
     let submission = LintAgentSubmission::try_new(work.work_digest().clone(), verdicts).unwrap();
     let encoded = serde_json::to_value(&submission).unwrap();
     let decoded: LintAgentSubmission = serde_json::from_value(encoded).unwrap();
@@ -509,9 +531,105 @@ fn agent_work_and_submission_are_bounded_typed_contracts() {
         None,
     )
     .is_err());
-    assert!(
-        LintAgentVerdict::try_new(LintSemanticCheckId::MemoryContradiction, vec![2, 1],).is_err()
-    );
+    assert!(LintAgentVerdict::try_new(
+        1,
+        LintSemanticDecision::Finding,
+        None,
+        LintSemanticReasonCode::PotentialContradiction,
+        8_500,
+        vec![2, 1],
+    )
+    .is_err());
+}
+
+#[test]
+fn candidate_semantic_contract_carries_population_action_and_disagreement() {
+    let records = vec![
+        LintAgentRecord::try_new(
+            1,
+            LintAgentRecordKind::Memory,
+            "Project Atlas moved to the work space".to_string(),
+            Some("fact".to_string()),
+            None,
+            None,
+        )
+        .unwrap(),
+        LintAgentRecord::try_new(
+            2,
+            LintAgentRecordKind::Entity,
+            "Project Atlas".to_string(),
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    ];
+    let populations = LintSemanticCheckId::ALL
+        .into_iter()
+        .map(|check_id| {
+            if check_id == LintSemanticCheckId::MemoryEntityLinks {
+                LintSemanticPopulation::try_new(check_id, 20, 3, 1, true)
+            } else {
+                LintSemanticPopulation::try_new(check_id, 0, 0, 0, false)
+            }
+            .unwrap()
+        })
+        .collect();
+    let candidate = LintAgentCandidate::try_new(
+        1,
+        LintSemanticCheckId::MemoryEntityLinks,
+        LintSemanticCandidateKind::MissingLink,
+        vec![1, 2],
+        vec![],
+        LintSemanticAction::AddMemoryEntityLink,
+        LintSemanticReasonCode::MentionWithoutLink,
+    )
+    .unwrap();
+    let work = LintAgentWork::try_new(
+        LintDigest::from_u64(10),
+        populations,
+        records,
+        vec![candidate],
+    )
+    .unwrap();
+    assert_eq!(work.candidates().len(), 1);
+    assert!(work
+        .populations()
+        .iter()
+        .find(|population| population.check_id() == LintSemanticCheckId::MemoryEntityLinks)
+        .unwrap()
+        .truncated());
+
+    let verdict = LintAgentVerdict::try_new(
+        1,
+        LintSemanticDecision::Finding,
+        Some(LintSemanticDecision::Pass),
+        LintSemanticReasonCode::MentionWithoutLink,
+        9_200,
+        vec![],
+    )
+    .unwrap();
+    assert!(verdict.has_unresolved_disagreement());
+    let submission =
+        LintAgentSubmission::try_new(work.work_digest().clone(), vec![verdict]).unwrap();
+    let decoded: LintAgentSubmission =
+        serde_json::from_value(serde_json::to_value(&submission).unwrap()).unwrap();
+    assert_eq!(decoded, submission);
+
+    let finding = LintSemanticFinding::try_new(
+        LintOpaqueId::from_sorted_position(1).unwrap(),
+        LintSemanticAction::AddMemoryEntityLink,
+        LintSemanticReasonCode::MentionWithoutLink,
+        9_200,
+        LintSemanticProviderRoute::CallingAgent,
+        vec![LintDigest::from_u64(1)],
+        vec![],
+    )
+    .unwrap();
+    let evidence = LintEvidenceRef::SemanticFinding { finding };
+    let round_trip: LintEvidenceRef =
+        serde_json::from_value(serde_json::to_value(&evidence).unwrap()).unwrap();
+    assert_eq!(round_trip, evidence);
 }
 
 #[test]

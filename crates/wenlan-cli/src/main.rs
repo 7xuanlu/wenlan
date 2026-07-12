@@ -63,7 +63,7 @@ enum Commands {
         /// Permit a deep semantic pass to use an already configured external provider.
         #[arg(long)]
         allow_external: bool,
-        /// Return bounded semantic work for the calling agent to adjudicate.
+        /// Return bounded high-recall semantic candidates for the calling agent.
         #[arg(long)]
         agent_assist: bool,
         /// Submit typed agent verdicts produced from a prior prepare report.

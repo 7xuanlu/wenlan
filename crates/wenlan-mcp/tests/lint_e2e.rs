@@ -1,7 +1,7 @@
 use wenlan_mcp::client::WenlanClient;
 use wenlan_mcp::tools::{
     LintAgentSubmissionParam, LintAgentVerdictParam, LintParams, LintProfileParam,
-    LintSemanticCheckParam, TransportMode, WenlanMcpServer,
+    LintSemanticDecisionParam, LintSemanticReasonParam, TransportMode, WenlanMcpServer,
 };
 use wenlan_types::lint::{
     LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
@@ -198,13 +198,14 @@ async fn mcp_lint_agent_prepare_and_submission_use_one_typed_tool_and_endpoint()
 
     let submission = LintAgentSubmissionParam {
         work_digest: "0000000000000001".to_string(),
-        verdicts: LintSemanticCheckParam::ALL
-            .into_iter()
-            .map(|check_id| LintAgentVerdictParam {
-                check_id,
-                refs: Vec::new(),
-            })
-            .collect(),
+        verdicts: vec![LintAgentVerdictParam {
+            candidate_ref: 1,
+            decision: LintSemanticDecisionParam::Pass,
+            second_decision: None,
+            reason_code: LintSemanticReasonParam::ClassificationMismatch,
+            confidence_basis_points: 9000,
+            counterevidence_refs: Vec::new(),
+        }],
     };
     let expected_body = serde_json::to_value(&submission).unwrap();
     let submit_mock = MockServer::start().await;
