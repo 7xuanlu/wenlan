@@ -102,9 +102,22 @@ def validate_report(report: Any) -> None:
         "checks": len(checks),
         "passed": outcomes.count("pass"),
         "findings": outcomes.count("finding"),
+        "actionable_findings": sum(
+            check.get("outcome") == "finding"
+            and check.get("gate_effect") == "actionable"
+            for check in checks
+        ),
+        "advisory_findings": sum(
+            check.get("outcome") == "finding"
+            and check.get("gate_effect") == "advisory"
+            for check in checks
+        ),
         "incomplete": sum(outcome in INCOMPLETE_OUTCOMES for outcome in outcomes),
     }
-    if report.get("totals") != expected:
+    totals = report.get("totals")
+    if not isinstance(totals, dict) or any(
+        totals.get(key) != value for key, value in expected.items()
+    ):
         raise SystemExit(f"report totals do not match outcomes: {expected}")
     if report.get("complete") is not (expected["incomplete"] == 0):
         raise SystemExit("report completeness does not match outcomes")
