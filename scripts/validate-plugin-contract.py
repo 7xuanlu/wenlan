@@ -19,7 +19,7 @@ from typing import Any
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_SKILL_STATUSES = {"shared_now", "claude_only_until_ported"}
 CODEX_SKILLS_WITHOUT_MCP_REFERENCE = {"help", "pages"}
-CODEX_SKILLS_USING_RESOLVER = {"brief", "capture", "distill", "handoff", "recall"}
+CODEX_SKILLS_USING_RESOLVER = {"brief", "capture", "distill", "handoff", "lint", "recall"}
 CODEX_REQUIRED_GUARDRAILS = {
     "forget": [
         "cannot be undone",
@@ -37,6 +37,12 @@ CODEX_REQUIRED_GUARDRAILS = {
         "Ambiguous replies do not mutate",
     ],
 }
+LINT_SHARED_GUARDRAILS = [
+    "exactly one lint MCP call",
+    "no CLI or HTTP fallback",
+    "global",
+    "uncategorized",
+]
 
 
 def fail(message: str) -> None:
@@ -313,6 +319,21 @@ def validate_skill_surface(
             fail(f"{rel(root, skill_path)} contains unexpected MCP tools: {wrong_tools}")
         if mcp_tools and not any(token.startswith(expected_prefix) for token in mcp_tools):
             fail(f"{rel(root, skill_path)} must use MCP prefix {expected_prefix!r}")
+        if name == "lint":
+            expected_tool = f"{expected_prefix}lint"
+            if expected_tool not in text:
+                fail(f"{rel(root, skill_path)} must call exactly {expected_tool!r}")
+            normalized_text = " ".join(text.split())
+            for needle in LINT_SHARED_GUARDRAILS:
+                if needle not in normalized_text:
+                    fail(f"{rel(root, skill_path)} must contain guardrail {needle!r}")
+            resolver = (
+                "$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh"
+                if surface == "claude"
+                else "plugin-codex/bin/resolve-space.sh"
+            )
+            if resolver not in text:
+                fail(f"{rel(root, skill_path)} must use {resolver}")
 
         if surface == "codex" and name in shared_now:
             require_equal(

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Wenlan Lint"
+  short_description: "Run read-only Wenlan system diagnostics"

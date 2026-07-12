@@ -69,3 +69,11 @@ assert_rejects "marketplace source drift" \
 assert_rejects "claude stdio default drift" \
     perl -0pi -e 's/"claude-code"/"codex"/' \
     "$TMPDIR_TEST/root/crates/wenlan-mcp/src/main.rs"
+
+assert_rejects "claude lint one-call drift" \
+    perl -0pi -e 's/exactly one lint MCP call/one lint MCP call/g' \
+    "$TMPDIR_TEST/root/plugin/skills/lint/SKILL.md"
+
+assert_rejects "claude lint fallback drift" \
+    perl -0pi -e 's/no CLI or HTTP\s+fallback/a CLI fallback/g' \
+    "$TMPDIR_TEST/root/plugin/skills/lint/SKILL.md"
