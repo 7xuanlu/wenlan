@@ -43,6 +43,10 @@ REQUIRED_SKILL_INTERFACE = {
         "display_name": "Wenlan Help",
         "short_description": "Show the Codex Wenlan command reference",
     },
+    "lint": {
+        "display_name": "Wenlan Lint",
+        "short_description": "Run read-only Wenlan system diagnostics",
+    },
     "pages": {
         "display_name": "Wenlan Pages",
         "short_description": "List or open distilled Wenlan pages from Codex",
@@ -57,7 +61,7 @@ REQUIRED_SKILL_INTERFACE = {
     },
 }
 SKILLS_WITHOUT_MCP_REFERENCE = {"help", "pages"}
-SKILLS_USING_RESOLVER = {"brief", "capture", "distill", "handoff", "recall"}
+SKILLS_USING_RESOLVER = {"brief", "capture", "distill", "handoff", "lint", "recall"}
 REQUIRED_GUARDRAILS = {
     "forget": [
         "cannot be undone",
