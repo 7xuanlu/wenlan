@@ -1,6 +1,6 @@
 {
   "name": "wenlan",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Local-first memory + knowledge layer for AI agents.",
   "keywords": [
     "ai-memory",
