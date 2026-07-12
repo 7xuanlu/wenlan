@@ -68,21 +68,28 @@ pub(super) async fn run(
     context: &LintContext<'_, '_>,
     provider: Option<&dyn LlmProvider>,
 ) -> Vec<LintCheckResult> {
-    let Some(provider) = provider.filter(|provider| provider.is_available()) else {
-        return terminal_results(context, LintOutcome::NotRunPrerequisite);
+    let Some(provider) = provider else {
+        return terminal_results(context, LintOutcome::NotRunPrerequisite, false);
     };
     let provider_on_device = provider.backend() == LlmBackend::OnDevice;
+    if !provider.is_available() {
+        return terminal_results(context, LintOutcome::NotRunPrerequisite, provider_on_device);
+    }
     if context
         .gate()
         .check_run_for(context.profile(), context.clock().elapsed())
         .is_err()
     {
-        return terminal_results(context, LintOutcome::FailedToRun);
+        return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
     }
     let candidates = match load_candidates(context).await {
         Ok(candidates) if !candidates.records.is_empty() => candidates,
-        Ok(_) => return terminal_results(context, LintOutcome::NotRunPrerequisite),
-        Err(()) => return terminal_results(context, LintOutcome::FailedToRun),
+        Ok(_) => {
+            return terminal_results(context, LintOutcome::NotRunPrerequisite, provider_on_device);
+        }
+        Err(()) => {
+            return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+        }
     };
     let request = LlmRequest {
         system_prompt: Some(system_prompt().to_string()),
@@ -94,18 +101,22 @@ pub(super) async fn run(
     };
     let raw = match tokio::time::timeout(MODEL_TIMEOUT, provider.generate(request)).await {
         Ok(Ok(raw)) => raw,
-        Ok(Err(_)) | Err(_) => return terminal_results(context, LintOutcome::FailedToRun),
+        Ok(Err(_)) | Err(_) => {
+            return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+        }
     };
     if context
         .gate()
         .check_run_for(context.profile(), context.clock().elapsed())
         .is_err()
     {
-        return terminal_results(context, LintOutcome::FailedToRun);
+        return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
     }
     let verdicts = match parse_response(&raw, &candidates) {
         Ok(verdicts) => verdicts,
-        Err(()) => return terminal_results(context, LintOutcome::FailedToRun),
+        Err(()) => {
+            return terminal_results(context, LintOutcome::FailedToRun, provider_on_device);
+        }
     };
     IDS.iter()
         .map(|id| {
@@ -284,7 +295,12 @@ fn semantic_result(
     provider_on_device: bool,
 ) -> LintCheckResult {
     let Some((eligible, sample)) = semantic_population(id, candidates) else {
-        return terminal_result(context, id, LintOutcome::NotRunPrerequisite);
+        return terminal_result(
+            context,
+            id,
+            LintOutcome::NotRunPrerequisite,
+            provider_on_device,
+        );
     };
     let evidence = refs
         .iter()
@@ -352,9 +368,13 @@ fn semantic_result(
     result
 }
 
-fn terminal_results(context: &LintContext<'_, '_>, outcome: LintOutcome) -> Vec<LintCheckResult> {
+fn terminal_results(
+    context: &LintContext<'_, '_>,
+    outcome: LintOutcome,
+    provider_on_device: bool,
+) -> Vec<LintCheckResult> {
     IDS.iter()
-        .map(|id| terminal_result(context, id, outcome))
+        .map(|id| terminal_result(context, id, outcome, provider_on_device))
         .collect()
 }
 
@@ -362,6 +382,7 @@ fn terminal_result(
     context: &LintContext<'_, '_>,
     id: &'static str,
     outcome: LintOutcome,
+    provider_on_device: bool,
 ) -> LintCheckResult {
     let prerequisite = outcome == LintOutcome::NotRunPrerequisite;
     let result = LintCheckResult::try_new_with_gate_effect(
@@ -390,7 +411,7 @@ fn terminal_result(
             .expect("empty semantic coverage is valid"),
             metrics: vec![boolean_metric(
                 LintMetricCode::SemanticProviderOnDevice,
-                false,
+                provider_on_device,
             )],
             summary_code: if prerequisite {
                 LintSummaryCode::PrerequisiteUnavailable

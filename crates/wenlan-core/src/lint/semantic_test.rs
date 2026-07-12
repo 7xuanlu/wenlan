@@ -168,6 +168,14 @@ async fn deep_semantic_advisories_use_one_bounded_local_call() {
         check(&report, CONTRADICTION).gate_effect(),
         LintGateEffect::Advisory
     );
+    assert_eq!(
+        check(&report, CONTRADICTION)
+            .metrics()
+            .iter()
+            .find(|metric| metric.code() == LintMetricCode::SemanticProviderOnDevice)
+            .map(|metric| metric.value()),
+        Some(&LintMetricValue::Boolean { value: true })
+    );
     assert_eq!(check(&report, CONTRADICTION).evidence().len(), 1);
     let serialized = serde_json::to_string(&report).unwrap();
     assert!(!serialized.contains("ignore previous instructions"));
@@ -216,6 +224,14 @@ async fn malformed_or_unauthorized_model_output_fails_closed() {
         assert_eq!(
             check(&report, CONTRADICTION).outcome(),
             LintOutcome::FailedToRun
+        );
+        assert_eq!(
+            check(&report, CONTRADICTION)
+                .metrics()
+                .iter()
+                .find(|metric| metric.code() == LintMetricCode::SemanticProviderOnDevice)
+                .map(|metric| metric.value()),
+            Some(&LintMetricValue::Boolean { value: true })
         );
         assert!(!report.complete());
     }
