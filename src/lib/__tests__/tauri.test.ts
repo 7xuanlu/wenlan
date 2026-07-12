@@ -88,7 +88,77 @@ describe("sources, page export, and knowledge wrappers", () => {
     expect(invoke).toHaveBeenCalledWith("test_external_llm", {
       endpoint: "http://localhost:11434/v1",
       model: "qwen3",
+      apiKey: null,
     });
+  });
+
+  it("testExternalLlm passes apiKey through when supplied", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { testExternalLlm } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+      response: "hello",
+    });
+
+    await testExternalLlm("http://localhost:11434/v1", "qwen3", "sk-secret");
+
+    expect(invoke).toHaveBeenCalledWith("test_external_llm", {
+      endpoint: "http://localhost:11434/v1",
+      model: "qwen3",
+      apiKey: "sk-secret",
+    });
+  });
+
+  it("setExternalLlm preserves the stored key when apiKey is omitted", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { setExternalLlm } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    await setExternalLlm("http://localhost:11434/v1", "qwen3");
+
+    expect(invoke).toHaveBeenCalledWith("set_external_llm", {
+      endpoint: "http://localhost:11434/v1",
+      model: "qwen3",
+      apiKey: null,
+    });
+  });
+
+  it("setExternalLlm clears the stored key with an empty string", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { setExternalLlm } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    await setExternalLlm(null, null, "");
+
+    expect(invoke).toHaveBeenCalledWith("set_external_llm", {
+      endpoint: null,
+      model: null,
+      apiKey: "",
+    });
+  });
+
+  it("setExternalLlm replaces the stored key when apiKey is supplied", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { setExternalLlm } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    await setExternalLlm(null, null, "sk-secret");
+
+    expect(invoke).toHaveBeenCalledWith("set_external_llm", {
+      endpoint: null,
+      model: null,
+      apiKey: "sk-secret",
+    });
+  });
+
+  it("getExternalLlmKeyConfigured calls get_external_llm_key_configured", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { getExternalLlmKeyConfigured } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const result = await getExternalLlmKeyConfigured();
+
+    expect(result).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("get_external_llm_key_configured");
   });
 
   it("getOnDeviceModel calls get_on_device_model and returns model state", async () => {

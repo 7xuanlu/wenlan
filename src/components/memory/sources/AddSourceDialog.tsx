@@ -1,16 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { readDir } from "@tauri-apps/plugin-fs";
 import { addSource, syncRegisteredSource } from "../../../lib/tauri";
-
-// Mirrors the daemon's directory-ingest filter (wenlan-core sources/directory.rs).
-const SUPPORTED_EXTENSIONS = [".md", ".txt", ".pdf"];
-
-interface Detection {
-  isVault: boolean;
-  docCount: number;
-}
+import { detectVault, type VaultDetection } from "../../../lib/vaultDetection";
 
 interface Props {
   onClose: () => void;
@@ -18,9 +11,10 @@ interface Props {
 }
 
 export default function AddSourceDialog({ onClose, onSuccess }: Props) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [path, setPath] = useState("");
-  const [detection, setDetection] = useState<Detection | null>(null);
+  const [detection, setDetection] = useState<VaultDetection | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,21 +48,8 @@ export default function AddSourceDialog({ onClose, onSuccess }: Props) {
       setError(null);
       setDetection(null);
 
-      try {
-        const entries = await readDir(selectedPath);
-        const isVault = entries.some(
-          (e) => e.name === ".obsidian" && e.isDirectory,
-        );
-        const docCount = entries.filter(
-          (e) =>
-            !e.isDirectory &&
-            SUPPORTED_EXTENSIONS.some((ext) => e.name?.toLowerCase().endsWith(ext)),
-        ).length;
-        setDetection({ isVault, docCount });
-      } catch {
-        // If readDir fails, still allow the path but show no detection
-        setDetection({ isVault: false, docCount: 0 });
-      }
+      const d = await detectVault(selectedPath);
+      setDetection(d);
       setDetecting(false);
     } catch {
       // Dialog cancelled
@@ -77,11 +58,8 @@ export default function AddSourceDialog({ onClose, onSuccess }: Props) {
 
   const handleSubmit = useCallback(() => {
     setError(null);
-    // .obsidian/ detection is cosmetic on the daemon side too — vaults go
-    // through the markdown-only path, everything else through multi-format
-    // directory ingest.
     addMutation.mutate({
-      sourceType: detection?.isVault ? "obsidian" : "directory",
+      sourceType: detection?.sourceType ?? "directory",
       sourcePath: path,
     });
   }, [addMutation, detection, path]);
@@ -94,11 +72,7 @@ export default function AddSourceDialog({ onClose, onSuccess }: Props) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
-  const canSubmit =
-    path.length > 0 &&
-    !detecting &&
-    !addMutation.isPending &&
-    (detection === null || detection.docCount > 0);
+  const canSubmit = path.length > 0 && !detecting && !addMutation.isPending;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -142,11 +116,13 @@ export default function AddSourceDialog({ onClose, onSuccess }: Props) {
               </span>
             ) : detection.docCount > 0 ? (
               <span className="text-[var(--mem-text-secondary)]">
-                {detection.docCount} supported {detection.docCount === 1 ? "file" : "files"} found
+                {detection.countCapped
+                  ? t("vaultConnect.filesFoundCapped")
+                  : t("vaultConnect.filesFound", { count: detection.docCount })}
               </span>
             ) : (
-              <span className="text-red-500">
-                No supported files (.md, .txt, .pdf) found in this folder
+              <span className="text-[var(--mem-accent-amber)]">
+                {t("vaultConnect.noneFound")}
               </span>
             )}
           </p>

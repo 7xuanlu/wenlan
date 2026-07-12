@@ -532,6 +532,9 @@ pub async fn detect_mcp_clients_cmd() -> Result<Vec<crate::mcp_config::McpClient
 pub async fn write_mcp_config(client_type: String) -> Result<(), String> {
     let config_path = crate::mcp_config::client_config_path(&client_type)
         .ok_or(format!("Unknown client type: {}", client_type))?;
+    if client_type == "codex_cli" {
+        return crate::mcp_config::write_wenlan_entry_toml(&config_path).map_err(|e| e.to_string());
+    }
     let is_claude_code = client_type == "claude_code";
     crate::mcp_config::write_wenlan_entry(&config_path, is_claude_code).map_err(|e| e.to_string())
 }
@@ -3768,13 +3771,14 @@ pub async fn set_external_llm(
     state: tauri::State<'_, State>,
     endpoint: Option<String>,
     model: Option<String>,
+    api_key: Option<String>,
 ) -> Result<(), String> {
     let client = {
         let s = state.read().await;
         s.client.clone()
     };
-    client.set_external_llm(endpoint, model).await?;
-    log::info!("[settings] External LLM config updated — restart daemon to apply");
+    client.set_external_llm(endpoint, model, api_key).await?;
+    log::info!("[settings] External LLM config updated");
     Ok(())
 }
 
@@ -3783,12 +3787,63 @@ pub async fn test_external_llm(
     state: tauri::State<'_, State>,
     endpoint: String,
     model: String,
+    api_key: Option<String>,
 ) -> Result<requests::TestLlmResponse, String> {
     let client = {
         let s = state.read().await;
         s.client.clone()
     };
-    client.test_llm(endpoint, model).await
+    client.test_llm(endpoint, model, api_key).await
+}
+
+#[tauri::command]
+pub async fn get_external_llm_key_configured(
+    state: tauri::State<'_, State>,
+) -> Result<bool, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.external_llm_key_configured().await
+}
+
+/// Parse an OpenAI-compatible `GET {endpoint}/models` body into model IDs.
+pub(crate) fn parse_models_response(body: &serde_json::Value) -> Vec<String> {
+    body.get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Model auto-discovery for the Any-provider card (spec §1, §6). Talks to the
+/// provider directly (not the daemon) so discovery works before saving.
+#[tauri::command]
+pub async fn list_external_models(
+    endpoint: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    let base = endpoint.trim_end_matches('/');
+    if !(base.starts_with("http://") || base.starts_with("https://")) {
+        return Err("Endpoint must start with http:// or https://".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let mut req = client.get(format!("{base}/models"));
+    if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("{} from {base}/models", resp.status()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parse_models_response(&body))
 }
 
 #[cfg(test)]
@@ -3798,11 +3853,16 @@ mod external_llm_command_type_tests {
     #[allow(dead_code)]
     async fn test_external_llm_uses_daemon_response_envelope(state: tauri::State<'_, State>) {
         let _: Result<requests::TestLlmResponse, String> =
-            test_external_llm(state, String::new(), String::new()).await;
+            test_external_llm(state, String::new(), String::new(), None).await;
     }
 
     #[test]
     fn test_external_llm_response_type_is_checked() {}
+
+    #[allow(dead_code)]
+    async fn get_external_llm_key_configured_uses_typed_response(state: tauri::State<'_, State>) {
+        let _: Result<bool, String> = get_external_llm_key_configured(state).await;
+    }
 }
 
 /// Proxy for `GET /api/on-device-model` — returns per-model cache/load state.
@@ -4275,5 +4335,34 @@ mod registered_source_tests {
         assert!(merged.iter().any(|s| s.id == "obsidian-daemon"));
         assert!(merged.iter().any(|s| s.id == "directory-local"));
         assert!(!merged.iter().any(|s| s.id == "obsidian-stale-local"));
+    }
+}
+
+#[cfg(test)]
+mod list_external_models_tests {
+    use super::*;
+
+    #[test]
+    fn parses_openai_models_shape() {
+        let body = serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "llama3.2:3b", "object": "model"},
+                {"id": "qwen2.5-coder", "object": "model"}
+            ]
+        });
+        assert_eq!(
+            parse_models_response(&body),
+            vec!["llama3.2:3b".to_string(), "qwen2.5-coder".to_string()]
+        );
+    }
+
+    #[test]
+    fn missing_or_malformed_data_yields_empty() {
+        assert!(parse_models_response(&serde_json::json!({})).is_empty());
+        assert!(parse_models_response(&serde_json::json!({"data": "nope"})).is_empty());
+        assert!(
+            parse_models_response(&serde_json::json!({"data": [{"name": "no-id"}]})).is_empty()
+        );
     }
 }

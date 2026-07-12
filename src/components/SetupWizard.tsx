@@ -9,8 +9,13 @@ import {
   type ImportResult,
 } from "../lib/tauri";
 import { ImportView } from "./memory/ImportView";
+import VaultConnectCard from "./memory/sources/VaultConnectCard";
 import { RemoteAccessPanel } from "./memory/RemoteAccessPanel";
+import WebPlatformCards from "./connect/WebPlatformCards";
+import CliPrimaryPath, { isCliPrimaryClient } from "./connect/CliPrimaryPath";
 import { ApiKeyCard, OnDeviceModelCard } from "./intelligence/IntelligenceSetup";
+import AnyProviderCard from "./intelligence/AnyProviderCard";
+import { PROVIDER_PRESETS, ANTHROPIC_VENDOR_NAME } from "./intelligence/providerPresets";
 
 export type WizardStep = "welcome" | "intelligence-choice" | "import" | "connect" | "verify" | "done";
 
@@ -157,7 +162,11 @@ function IntelligenceChoiceStep({
   onBack: () => void;
 }) {
   const { t } = useTranslation();
-  const [mode, setMode] = useState<"device" | "api">("device");
+  const [mode, setMode] = useState<"device" | "cloud" | "local">("device");
+  // Cloud vendor pills: Anthropic (native slot) first, then cloud presets
+  // (external slot) — spec §2.
+  const [cloudVendor, setCloudVendor] = useState<string>("anthropic");
+  const cloudPresets = PROVIDER_PRESETS.filter((p) => p.group === "cloud");
 
   const choiceButtonStyle = (active: boolean): React.CSSProperties => ({
     flex: 1,
@@ -171,6 +180,38 @@ function IntelligenceChoiceStep({
     fontWeight: 500,
     textAlign: "left",
   });
+
+  const pillStyle = (active: boolean): React.CSSProperties => ({
+    padding: "6px 12px",
+    borderRadius: "999px",
+    border: "1px solid var(--mem-border)",
+    backgroundColor: active ? "rgba(99, 102, 241, 0.12)" : "var(--mem-surface)",
+    color: active ? "var(--mem-accent-indigo)" : "var(--mem-text-secondary)",
+    fontFamily: "var(--mem-font-body)",
+    fontSize: "12px",
+    fontWeight: 500,
+  });
+
+  const note = (
+    key:
+      | "setup.intelligence.deviceNote"
+      | "setup.intelligence.cloudNote"
+      | "setup.intelligence.localNote",
+  ) => (
+    <div
+      className="rounded-xl px-4 py-3"
+      style={{
+        backgroundColor: "var(--mem-hover)",
+        border: "1px solid var(--mem-border)",
+        fontFamily: "var(--mem-font-body)",
+        fontSize: "12px",
+        color: "var(--mem-text-secondary)",
+        lineHeight: 1.6,
+      }}
+    >
+      {t(key)}
+    </div>
+  );
 
   return (
     <div
@@ -216,43 +257,54 @@ function IntelligenceChoiceStep({
       </div>
 
       <div className="flex gap-3">
-        <button onClick={() => setMode("device")} style={choiceButtonStyle(mode === "device")}>{t("setup.intelligence.deviceOption")}</button>
-        <button onClick={() => setMode("api")} style={choiceButtonStyle(mode === "api")}>{t("setup.intelligence.apiOption")}</button>
+        <button onClick={() => setMode("device")} style={choiceButtonStyle(mode === "device")}>
+          {t("setup.intelligence.deviceOption")}
+        </button>
+        <button onClick={() => setMode("cloud")} style={choiceButtonStyle(mode === "cloud")}>
+          {t("setup.intelligence.cloudOption")}
+        </button>
+        <button onClick={() => setMode("local")} style={choiceButtonStyle(mode === "local")}>
+          {t("setup.intelligence.localOption")}
+        </button>
       </div>
 
-      {mode === "device" ? (
+      {mode === "device" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           <OnDeviceModelCard />
-          <div
-            className="rounded-xl px-4 py-3"
-            style={{
-              backgroundColor: "var(--mem-hover)",
-              border: "1px solid var(--mem-border)",
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "12px",
-              color: "var(--mem-text-secondary)",
-              lineHeight: 1.6,
-            }}
-          >
-            {t("setup.intelligence.deviceNote")}
-          </div>
+          {note("setup.intelligence.deviceNote")}
         </div>
-      ) : (
+      )}
+
+      {mode === "cloud" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <ApiKeyCard showNoKeyGuidance={false} />
-          <div
-            className="rounded-xl px-4 py-3"
-            style={{
-              backgroundColor: "var(--mem-hover)",
-              border: "1px solid var(--mem-border)",
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "12px",
-              color: "var(--mem-text-secondary)",
-              lineHeight: 1.6,
-            }}
-          >
-            {t("setup.intelligence.apiNote")}
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setCloudVendor("anthropic")} style={pillStyle(cloudVendor === "anthropic")}>
+              {ANTHROPIC_VENDOR_NAME}
+            </button>
+            {cloudPresets.map((p) => (
+              <button key={p.id} onClick={() => setCloudVendor(p.id)} style={pillStyle(cloudVendor === p.id)}>
+                {p.name}
+              </button>
+            ))}
           </div>
+          {cloudVendor === "anthropic" ? (
+            <ApiKeyCard showNoKeyGuidance={false} />
+          ) : (
+            <AnyProviderCard
+              key={cloudVendor}
+              groups={["cloud"]}
+              initialPresetId={cloudVendor}
+              hidePresetPicker
+            />
+          )}
+          {note("setup.intelligence.cloudNote")}
+        </div>
+      )}
+
+      {mode === "local" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <AnyProviderCard groups={["local"]} />
+          {note("setup.intelligence.localNote")}
         </div>
       )}
 
@@ -285,6 +337,107 @@ function IntelligenceChoiceStep({
             backgroundColor: "var(--mem-accent-indigo)",
             color: "white",
           }}
+        >
+          {t("setup.continue")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Import Step (dual path: chat history | vault) ───────────────────────
+
+function ImportStep({
+  onBack,
+  onSkip,
+  onComplete,
+  onPhaseChange,
+  importHint,
+}: {
+  onBack: () => void;
+  onSkip: () => void;
+  onComplete: (source: string, result: ImportResult) => void;
+  onPhaseChange: (phase: string) => void;
+  importHint: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [pathChoice, setPathChoice] = useState<"none" | "chat">("none");
+
+  if (pathChoice === "chat") {
+    return (
+      <ImportView
+        onBack={() => setPathChoice("none")}
+        wizardMode
+        wizardHint={importHint}
+        onPhaseChange={onPhaseChange}
+        onSkip={onSkip}
+        onComplete={onComplete}
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col max-w-xl mx-auto" style={{ gap: "24px", paddingTop: "24px" }}>
+      <button
+        onClick={onBack}
+        className="flex items-center gap-1.5 self-start transition-colors duration-150"
+        style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-secondary)" }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M19 12H5M12 19l-7-7 7-7" />
+        </svg>
+        {t("setup.back")}
+      </button>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <h1 style={{ fontFamily: "var(--mem-font-heading)", fontSize: "20px", fontWeight: 500, color: "var(--mem-text)" }}>
+          {t("setup.import.title")}
+        </h1>
+        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-secondary)", lineHeight: "1.5" }}>
+          {t("setup.import.description")}
+        </p>
+      </div>
+
+      <div
+        className="rounded-xl p-4 flex items-center justify-between"
+        style={{ border: "1px solid var(--mem-border)", backgroundColor: "var(--mem-surface)", gap: "12px" }}
+      >
+        <div>
+          <h3 style={{ fontFamily: "var(--mem-font-heading)", fontSize: "15px", fontWeight: 500, color: "var(--mem-text)" }}>
+            {t("setup.import.chatPathTitle")}
+          </h3>
+          <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "var(--mem-text-secondary)", marginTop: "4px" }}>
+            {t("setup.import.chatPathDescription")}
+          </p>
+        </div>
+        <button
+          onClick={() => setPathChoice("chat")}
+          className="rounded-md px-4 py-2 text-sm font-medium shrink-0"
+          style={{ backgroundColor: "var(--mem-accent-indigo)", color: "white", fontFamily: "var(--mem-font-body)" }}
+        >
+          {t("setup.import.chatPathCta")}
+        </button>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <h3 style={{ fontFamily: "var(--mem-font-heading)", fontSize: "15px", fontWeight: 500, color: "var(--mem-text)" }}>
+          {t("setup.import.vaultPathTitle")}
+        </h3>
+        <VaultConnectCard variant="wizard" />
+      </div>
+
+      <div className="flex items-center" style={{ paddingTop: "16px", borderTop: "1px solid var(--mem-border)" }}>
+        <button
+          onClick={onSkip}
+          className="ml-auto transition-colors duration-150"
+          style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer" }}
+        >
+          {t("setup.skip")}
+        </button>
+        <button
+          onClick={onSkip}
+          className="px-5 py-2 rounded-lg text-sm font-medium transition-colors duration-150 ml-3"
+          style={{ fontFamily: "var(--mem-font-body)", backgroundColor: "var(--mem-accent-indigo)", color: "white" }}
         >
           {t("setup.continue")}
         </button>
@@ -343,7 +496,12 @@ function ConnectStep({
       const next = { ...prev };
       for (const client of clients) {
         if (next[client.client_type] === undefined) {
-          next[client.client_type] = client.detected && !client.already_configured;
+          // §9.3: CLI clients lead with the plugin path; the one-click batch
+          // write is opt-in for them, so their checkbox starts unchecked.
+          next[client.client_type] =
+            client.detected &&
+            !client.already_configured &&
+            !isCliPrimaryClient(client.client_type);
         }
       }
       return next;
@@ -445,6 +603,129 @@ function ConnectStep({
         const error = connectErrors[client.client_type];
         const isSelected = !!selectedClients[client.client_type];
 
+        // §9.3: detected, not-yet-connected CLI clients lead with the shared
+        // plugin path instead of the generic description.
+        const isCliPrimary =
+          client.detected && !isConnected && isCliPrimaryClient(client.client_type);
+        const descId = `client-desc-${client.client_type}`;
+
+        const nameBadges = (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span
+              style={{
+                fontFamily: "var(--mem-font-body)",
+                fontSize: "14px",
+                fontWeight: 500,
+                color: "var(--mem-text)",
+              }}
+            >
+              {client.name}
+            </span>
+            <span
+              className="px-2 py-0.5 rounded-full text-xs"
+              style={{
+                fontFamily: "var(--mem-font-body)",
+                backgroundColor: statusActive ? "rgba(99, 102, 241, 0.12)" : "var(--mem-hover)",
+                color: statusActive ? "var(--mem-accent-indigo)" : "var(--mem-text-tertiary)",
+              }}
+            >
+              {statusLabel}
+            </span>
+            {isConnected && (
+              <span
+                className="px-2 py-0.5 rounded-full text-xs"
+                style={{
+                  fontFamily: "var(--mem-font-body)",
+                  backgroundColor: "rgba(34,197,94,0.12)",
+                  color: "rgb(34,197,94)",
+                }}
+              >
+                {t("setup.connect.configured")}
+              </span>
+            )}
+          </div>
+        );
+
+        const checkbox = (
+          <input
+            type="checkbox"
+            aria-label={client.name}
+            aria-describedby={isCliPrimary ? descId : undefined}
+            checked={isSelected || isConnected}
+            disabled={!client.detected || isConnected || isConnectingAll}
+            onChange={(e) => setSelectedClients((prev) => ({ ...prev, [client.client_type]: e.target.checked }))}
+            style={{
+              width: "16px",
+              height: "16px",
+              accentColor: "var(--mem-accent-indigo)",
+              marginTop: "2px",
+            }}
+          />
+        );
+
+        // The CLI primary path renders a real <button> ("Copy setup
+        // prompt"). Nesting that inside the same <label> that toggles this
+        // row's checkbox risks the browser forwarding the click to the
+        // checkbox too, so hint/status content (commands, reload note,
+        // error) lives in a sibling node wired via aria-describedby instead
+        // of inside the <label> — the <label> only wraps the checkbox and
+        // its plain-text name/status badges.
+        //
+        // The row is stacked (flex-col), not side-by-side: the wizard's
+        // connect column is max-w-md, so a flex-row split left CliPrimaryPath
+        // with ~200px and its command line (a truncating <code>) unreadable.
+        // The description div gets left padding equal to checkbox width
+        // (16px) + the label's gap-3 (12px) so it aligns under the client
+        // name instead of under the checkbox.
+        if (isCliPrimary && isCliPrimaryClient(client.client_type)) {
+          return (
+            <div
+              key={client.client_type}
+              className="flex flex-col gap-2 rounded-xl px-4 py-3"
+              style={{
+                backgroundColor: "var(--mem-surface)",
+                border: `1px solid ${isSelected ? "rgba(99, 102, 241, 0.4)" : "var(--mem-border)"}`,
+              }}
+            >
+              <label className="flex items-start gap-3" style={{ cursor: "pointer" }}>
+                {checkbox}
+                {nameBadges}
+              </label>
+
+              <div
+                id={descId}
+                style={{ display: "flex", flexDirection: "column", gap: "6px", paddingLeft: "28px" }}
+              >
+                <CliPrimaryPath clientType={client.client_type} />
+                <p
+                  style={{
+                    fontFamily: "var(--mem-font-body)",
+                    fontSize: "11px",
+                    color: "var(--mem-text-tertiary)",
+                    lineHeight: 1.5,
+                    margin: 0,
+                  }}
+                >
+                  {t("connectMatrix.oneClickAdvanced")}
+                </p>
+
+                {error && (
+                  <p
+                    style={{
+                      fontFamily: "var(--mem-font-body)",
+                      fontSize: "11px",
+                      color: "#ef4444",
+                      margin: 0,
+                    }}
+                  >
+                    {error}
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        }
+
         return (
           <label
             key={client.client_type}
@@ -455,55 +736,10 @@ function ConnectStep({
               cursor: client.detected && !isConnected ? "pointer" : "default",
             }}
           >
-            <input
-              type="checkbox"
-              aria-label={client.name}
-              checked={isSelected || isConnected}
-              disabled={!client.detected || isConnected || isConnectingAll}
-              onChange={(e) => setSelectedClients((prev) => ({ ...prev, [client.client_type]: e.target.checked }))}
-              style={{
-                width: "16px",
-                height: "16px",
-                accentColor: "var(--mem-accent-indigo)",
-                marginTop: "2px",
-              }}
-            />
+            {checkbox}
 
             <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span
-                  style={{
-                    fontFamily: "var(--mem-font-body)",
-                    fontSize: "14px",
-                    fontWeight: 500,
-                    color: "var(--mem-text)",
-                  }}
-                >
-                  {client.name}
-                </span>
-                <span
-                  className="px-2 py-0.5 rounded-full text-xs"
-                  style={{
-                    fontFamily: "var(--mem-font-body)",
-                    backgroundColor: statusActive ? "rgba(99, 102, 241, 0.12)" : "var(--mem-hover)",
-                    color: statusActive ? "var(--mem-accent-indigo)" : "var(--mem-text-tertiary)",
-                  }}
-                >
-                  {statusLabel}
-                </span>
-                {isConnected && (
-                  <span
-                    className="px-2 py-0.5 rounded-full text-xs"
-                    style={{
-                      fontFamily: "var(--mem-font-body)",
-                      backgroundColor: "rgba(34,197,94,0.12)",
-                      color: "rgb(34,197,94)",
-                    }}
-                  >
-                    {t("setup.connect.configured")}
-                  </span>
-                )}
-              </div>
+              {nameBadges}
 
               <p
                 style={{
@@ -631,6 +867,7 @@ function ConnectStep({
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         <SectionLabel>{t("setup.connect.webTools")}</SectionLabel>
         <RemoteAccessPanel mode="compact" />
+        <WebPlatformCards />
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -1366,10 +1603,9 @@ export function SetupWizard({ onComplete, initialStep }: SetupWizardProps) {
         )}
 
         {step === "import" && (
-          <ImportView
+          <ImportStep
             onBack={() => setStep("intelligence-choice")}
-            wizardMode
-            wizardHint={(
+            importHint={(
               <Trans
                 i18nKey="setup.import.laterHint"
                 components={{ strong: <strong /> }}

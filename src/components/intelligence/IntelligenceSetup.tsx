@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import {
   downloadOnDeviceModel,
   getApiKey,
@@ -52,13 +53,24 @@ export function ApiKeyCard({
   const queryClient = useQueryClient();
   const { maskedKey, isConfigured } = useApiKeyStatus();
 
+  // A save/clear here changes what the daemon is actually serving (the
+  // Anthropic key is hot-loaded even on 0.12), so the strip's status
+  // queries must be invalidated alongside the key itself — otherwise
+  // ActiveIntelligenceStrip keeps showing stale state until remount.
+  const invalidateIntelligenceQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["apiKey"] });
+    queryClient.invalidateQueries({ queryKey: ["setup-status"] });
+    queryClient.invalidateQueries({ queryKey: ["external-llm"] });
+    queryClient.invalidateQueries({ queryKey: ["external-llm-key-configured"] });
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     try {
       await setApiKey(keyInput);
       setKeyInput("");
-      queryClient.invalidateQueries({ queryKey: ["apiKey"] });
+      invalidateIntelligenceQueries();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -70,7 +82,7 @@ export function ApiKeyCard({
     setSaving(true);
     try {
       await setApiKey("");
-      queryClient.invalidateQueries({ queryKey: ["apiKey"] });
+      invalidateIntelligenceQueries();
     } finally {
       setSaving(false);
     }
@@ -127,7 +139,7 @@ export function ApiKeyCard({
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && keyInput) handleSave(); }}
-              placeholder="sk-ant-..."
+              placeholder="sk-ant-api03-..."
               className="flex-1 px-3 py-1.5 rounded-md outline-none text-xs"
               style={{
                 fontFamily: "var(--mem-font-mono)",
@@ -148,6 +160,24 @@ export function ApiKeyCard({
               {saving ? "..." : t("intelligence.save")}
             </button>
           </div>
+        )}
+
+        {!isConfigured && (
+          <button
+            type="button"
+            onClick={() => shellOpen("https://console.anthropic.com/settings/keys")}
+            className="mt-2 text-xs"
+            style={{
+              fontFamily: "var(--mem-font-body)",
+              color: "var(--mem-accent-indigo)",
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+            }}
+          >
+            {t("externalProvider.getKeyLink")}
+          </button>
         )}
 
         {error && (

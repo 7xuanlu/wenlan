@@ -599,13 +599,16 @@ impl WenlanClient {
         &self,
         endpoint: String,
         model: String,
+        api_key: Option<String>,
     ) -> Result<wenlan_types::requests::TestLlmResponse, String> {
-        let req = wenlan_types::requests::TestLlmRequest {
-            endpoint,
-            model,
-            prompt: None,
-        };
-        self.post_json("/api/llm/test", &req).await
+        // Hand-built body: pinned wenlan-types 0.12 TestLlmRequest has no
+        // api_key field; the daemon (≥0.13) reads it, 0.12 never receives it
+        // because the UI omits the key below 0.13.
+        let mut body = serde_json::json!({ "endpoint": endpoint, "model": model });
+        if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+            body["api_key"] = serde_json::Value::String(key);
+        }
+        self.post_json("/api/llm/test", &body).await
     }
 
     pub async fn get_on_device_model(&self) -> Result<OnDeviceModelResponse, String> {
@@ -723,15 +726,33 @@ impl WenlanClient {
         Ok((cfg.external_llm_endpoint, cfg.external_llm_model))
     }
 
-    /// Patch daemon external LLM config. `None` preserves the existing daemon value.
+    /// Presence flag from daemon ≥ 0.13 (`external_llm_api_key_configured`,
+    /// spec §7.2). Reads raw JSON because pinned 0.12 ConfigResponse lacks
+    /// the field; absent ⇒ false.
+    pub async fn external_llm_key_configured(&self) -> Result<bool, String> {
+        let cfg: serde_json::Value = self.get_json("/api/config").await?;
+        Ok(cfg
+            .get("external_llm_api_key_configured")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false))
+    }
+
+    /// Patch daemon external LLM config. `None` endpoint/model preserves the
+    /// existing daemon value. `api_key`: `None` = omit (preserve stored key),
+    /// `Some("")` = clear, `Some(key)` = replace (spec §7.2 tri-state).
     pub async fn set_external_llm(
         &self,
         endpoint: Option<String>,
         model: Option<String>,
+        api_key: Option<String>,
     ) -> Result<(), String> {
-        self.update_config(empty_update().with_external_llm(endpoint, model))
-            .await
-            .map(|_| ())
+        let mut body = sparse_update_config(empty_update().with_external_llm(endpoint, model))?;
+        if let Some(key) = api_key {
+            body["external_llm_api_key"] = serde_json::Value::String(key);
+        }
+        let _resp: wenlan_types::responses::ConfigResponse =
+            self.put_json("/api/config", &body).await?;
+        Ok(())
     }
 
     pub async fn get_clipboard_enabled(&self) -> Result<bool, String> {
@@ -1185,6 +1206,163 @@ mod tests {
         assert_eq!(req.synthesis_model, None);
     }
 
+    #[tokio::test]
+    async fn test_llm_omits_api_key_field_when_none_or_empty() {
+        let (base_url, request) = serve_json_once(r#"{"response":"ok"}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .test_llm("http://localhost:11434/v1".into(), "qwen3".into(), None)
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({"endpoint": "http://localhost:11434/v1", "model": "qwen3"})
+        );
+
+        let (base_url, request) = serve_json_once(r#"{"response":"ok"}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .test_llm(
+                "http://localhost:11434/v1".into(),
+                "qwen3".into(),
+                Some(String::new()),
+            )
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({"endpoint": "http://localhost:11434/v1", "model": "qwen3"})
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_includes_api_key_field_when_supplied() {
+        let (base_url, request) = serve_json_once(r#"{"response":"ok"}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .test_llm(
+                "http://localhost:11434/v1".into(),
+                "qwen3".into(),
+                Some("sk-secret".into()),
+            )
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({
+                "endpoint": "http://localhost:11434/v1",
+                "model": "qwen3",
+                "api_key": "sk-secret"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn set_external_llm_omits_api_key_field_when_none() {
+        let config_body = r#"{"skip_apps":[],"skip_title_patterns":[],"private_browsing_detection":true,"setup_completed":true,"clipboard_enabled":true,"screen_capture_enabled":false,"remote_access_enabled":false}"#;
+        let (base_url, request) = serve_json_once(config_body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .set_external_llm(Some("http://localhost:11434/v1".into()), None, None)
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({"external_llm_endpoint": "http://localhost:11434/v1"})
+        );
+    }
+
+    #[tokio::test]
+    async fn set_external_llm_clears_key_with_empty_string() {
+        let config_body = r#"{"skip_apps":[],"skip_title_patterns":[],"private_browsing_detection":true,"setup_completed":true,"clipboard_enabled":true,"screen_capture_enabled":false,"remote_access_enabled":false}"#;
+        let (base_url, request) = serve_json_once(config_body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .set_external_llm(None, None, Some(String::new()))
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({"external_llm_api_key": ""})
+        );
+    }
+
+    #[tokio::test]
+    async fn set_external_llm_replaces_key_when_supplied() {
+        let config_body = r#"{"skip_apps":[],"skip_title_patterns":[],"private_browsing_detection":true,"setup_completed":true,"clipboard_enabled":true,"screen_capture_enabled":false,"remote_access_enabled":false}"#;
+        let (base_url, request) = serve_json_once(config_body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .set_external_llm(None, None, Some("sk-secret".into()))
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({"external_llm_api_key": "sk-secret"})
+        );
+    }
+
+    #[tokio::test]
+    async fn external_llm_key_configured_reads_presence_flag_from_raw_json() {
+        let config_body = r#"{"skip_apps":[],"skip_title_patterns":[],"private_browsing_detection":true,"setup_completed":true,"clipboard_enabled":true,"screen_capture_enabled":false,"remote_access_enabled":false,"external_llm_api_key_configured":true}"#;
+        let (base_url, _request) = serve_json_once(config_body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        assert!(client.external_llm_key_configured().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn external_llm_key_configured_defaults_false_when_field_absent() {
+        // 0.12 daemon shape: no `external_llm_api_key_configured` field at all.
+        let config_body = r#"{"skip_apps":[],"skip_title_patterns":[],"private_browsing_detection":true,"setup_completed":true,"clipboard_enabled":true,"screen_capture_enabled":false,"remote_access_enabled":false}"#;
+        let (base_url, _request) = serve_json_once(config_body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        assert!(!client.external_llm_key_configured().await.unwrap());
+    }
+
     #[test]
     fn setup_status_response_deserializes_daemon_payload() {
         let status: SetupStatusResponse = serde_json::from_value(serde_json::json!({
@@ -1591,12 +1769,13 @@ mod tests {
         let _set_model_choice = WenlanClient::set_model_choice;
         let _get_external_llm = WenlanClient::get_external_llm;
         let _set_external_llm = WenlanClient::set_external_llm;
+        let _external_llm_key_configured = WenlanClient::external_llm_key_configured;
     }
 
     #[allow(dead_code)]
     async fn test_llm_uses_daemon_response_envelope(client: WenlanClient) {
         let _: Result<wenlan_types::requests::TestLlmResponse, String> =
-            client.test_llm(String::new(), String::new()).await;
+            client.test_llm(String::new(), String::new(), None).await;
     }
 
     #[test]

@@ -395,12 +395,16 @@ export async function getExternalLlm(): Promise<[string | null, string | null]> 
   return invoke("get_external_llm");
 }
 
-// The daemon config endpoint is patch-based: null preserves the current value.
+// The daemon config endpoint is patch-based: null endpoint/model preserves the
+// current value. apiKey tri-state (spec §7.2): undefined/null = preserve stored
+// key, "" = clear, non-empty = replace. Only pass a key when
+// useDaemonVersion().supportsExternalKey — 0.12 daemons must never see it.
 export async function setExternalLlm(
   endpoint: string | null,
-  model: string | null
+  model: string | null,
+  apiKey?: string | null
 ): Promise<void> {
-  return invoke("set_external_llm", { endpoint, model });
+  return invoke("set_external_llm", { endpoint, model, apiKey: apiKey ?? null });
 }
 
 export interface TestLlmResponse {
@@ -409,9 +413,25 @@ export interface TestLlmResponse {
 
 export async function testExternalLlm(
   endpoint: string,
-  model: string
+  model: string,
+  apiKey?: string | null
 ): Promise<TestLlmResponse> {
-  return invoke("test_external_llm", { endpoint, model });
+  return invoke("test_external_llm", { endpoint, model, apiKey: apiKey ?? null });
+}
+
+/** True when the daemon (≥ 0.13) has a stored external-provider API key.
+ *  Always false on 0.12. The key value itself is never readable. */
+export async function getExternalLlmKeyConfigured(): Promise<boolean> {
+  return invoke("get_external_llm_key_configured");
+}
+
+/** Model auto-discovery: GET {endpoint}/models (OpenAI `{data:[{id}]}` shape),
+ *  Bearer auth when a key is given, 5s timeout. Spec §1. */
+export async function listExternalModels(
+  endpoint: string,
+  apiKey?: string | null
+): Promise<string[]> {
+  return invoke("list_external_models", { endpoint, apiKey: apiKey ?? null });
 }
 
 export interface OnDeviceModelEntry {
@@ -1944,6 +1964,8 @@ export interface SetupStatus {
   local_model_selected: string | null;
   local_model_loaded: string | null;
   local_model_cached: boolean;
+  /** Daemon ≥ 0.13 only (additive, spec §7.6); absent on 0.12. */
+  external_llm?: { configured: boolean; loaded: boolean } | null;
 }
 
 export async function getSetupStatus(): Promise<SetupStatus> {

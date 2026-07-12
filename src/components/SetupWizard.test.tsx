@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SetupWizard } from "./SetupWizard";
 import { i18n } from "../i18n";
@@ -47,6 +48,13 @@ vi.mock("../lib/tauri", () => ({
     arch: "arm64",
     recommended_builtin: "qwen3-4b-instruct-2507",
   }),
+  getDaemonVersion: vi.fn().mockResolvedValue("0.12.0"),
+  daemonMeetsFloor: vi.fn().mockReturnValue(false),
+  getExternalLlm: vi.fn().mockResolvedValue([null, null]),
+  setExternalLlm: vi.fn().mockResolvedValue(undefined),
+  testExternalLlm: vi.fn().mockResolvedValue({ response: "pong" }),
+  listExternalModels: vi.fn().mockResolvedValue([]),
+  getExternalLlmKeyConfigured: vi.fn().mockResolvedValue(false),
 }));
 
 import {
@@ -54,6 +62,7 @@ import {
   writeMcpConfig,
   listAgents,
   setApiKey,
+  clipboardWrite,
 } from "../lib/tauri";
 
 function renderWizard(
@@ -112,9 +121,9 @@ describe("SetupWizard", () => {
   it("lets users save an API key from the intelligence step", async () => {
     renderWizard();
     fireEvent.click(screen.getByText("Get started"));
-    fireEvent.click(screen.getByText("Use my API key"));
+    fireEvent.click(screen.getByText("Cloud API"));
 
-    fireEvent.change(screen.getByPlaceholderText("sk-ant-..."), {
+    fireEvent.change(screen.getByPlaceholderText("sk-ant-api03-..."), {
       target: { value: "sk-ant-test-key" },
     });
     fireEvent.click(screen.getByText("Save"));
@@ -124,10 +133,57 @@ describe("SetupWizard", () => {
     });
   });
 
-  it("shows chat-history guidance in the import step and routes directly to connect", async () => {
+  it("intelligence step offers device, cloud, and local server", async () => {
+    renderWizard();
+    fireEvent.click(screen.getByText("Get started"));
+
+    expect(screen.getByText("On this device")).toBeInTheDocument();
+    expect(screen.getByText("Cloud API")).toBeInTheDocument();
+    expect(screen.getByText("Local server")).toBeInTheDocument();
+  });
+
+  it("cloud pane lists Anthropic first and routes non-Anthropic vendors to the external card", async () => {
+    renderWizard();
+    fireEvent.click(screen.getByText("Get started"));
+    fireEvent.click(screen.getByText("Cloud API"));
+
+    // Anthropic pill renders the native key card by default.
+    expect(screen.getByText("Anthropic")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("sk-ant-api03-...")).toBeInTheDocument();
+
+    // pick OpenAI → AnyProviderCard appears (its title)
+    await userEvent.click(screen.getByText("OpenAI"));
+    expect(await screen.findByText("Any provider")).toBeInTheDocument();
+  });
+
+  it("local pane offers the external card scoped to local presets", async () => {
+    renderWizard();
+    fireEvent.click(screen.getByText("Get started"));
+    fireEvent.click(screen.getByText("Local server"));
+
+    expect(await screen.findByText("Any provider")).toBeInTheDocument();
+  });
+
+  it("import step offers chat history and vault side by side", async () => {
     renderWizard();
     fireEvent.click(screen.getByText("Get started"));
     fireEvent.click(screen.getByText("Continue"));
+
+    expect(screen.getByText("Bring what you already know")).toBeInTheDocument();
+    expect(screen.getByText("Chat history")).toBeInTheDocument();
+    expect(screen.getByText("Import chat history")).toBeInTheDocument();
+    // VaultConnectCard (Task 6), rendered inline as the second path, with its
+    // own side-by-side section label (spec §2) above the card.
+    expect(screen.getByText("Obsidian vault / notes folder")).toBeInTheDocument();
+    expect(screen.getByText("Connect a notes folder")).toBeInTheDocument();
+  });
+
+  it("shows chat-history guidance after choosing the chat path and routes directly to connect", async () => {
+    renderWizard();
+    fireEvent.click(screen.getByText("Get started"));
+    fireEvent.click(screen.getByText("Continue"));
+
+    fireEvent.click(screen.getByText("Import chat history"));
 
     expect(screen.getByText("Import Memories")).toBeInTheDocument();
     expect(screen.getByText(/Settings > Sources/i)).toBeInTheDocument();
@@ -169,6 +225,32 @@ describe("SetupWizard", () => {
     const [cursorCheckbox, claudeCheckbox] = screen.getAllByRole("checkbox");
     expect(cursorCheckbox).toBeEnabled();
     expect(claudeCheckbox).toBeDisabled();
+  });
+
+  it("undetected CLI clients render the disabled checkbox, not the plugin install path", async () => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Claude Code",
+        client_type: "claude_code",
+        config_path: "/path/to/claude.json",
+        detected: false,
+        already_configured: false,
+      },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    await waitFor(() => {
+      expect(screen.getByText("Claude Code")).toBeInTheDocument();
+    });
+
+    // An undetected CLI client can't run a plugin-install command against a
+    // binary that isn't there — it must fall through to the generic
+    // description, never the plugin path or its Copy button.
+    expect(screen.queryByText(/claude plugin marketplace add/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Copy setup prompt/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("connects selected detected tools on continue", async () => {
@@ -227,6 +309,62 @@ describe("SetupWizard", () => {
       expect(screen.queryByText("Waiting for your first agent...")).not.toBeInTheDocument();
       expect(screen.getByText(/setup failed/i)).toBeInTheDocument();
     });
+  });
+
+  it("connect step leads detected CLI clients with the plugin path and unchecks their one-click default", async () => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Claude Code",
+        client_type: "claude_code",
+        config_path: "/path/to/claude.json",
+        detected: true,
+        already_configured: false,
+      },
+      {
+        name: "Cursor",
+        client_type: "cursor",
+        config_path: "/path/to/cursor",
+        detected: true,
+        already_configured: false,
+      },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    // Primary path: the plugin commands render inside the wizard row.
+    expect(
+      await screen.findByText("claude plugin marketplace add 7xuanlu/wenlan"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("claude plugin install wenlan@7xuanlu-wenlan")).toBeInTheDocument();
+
+    // One-click demoted for CLI clients: checkbox defaults OFF; GUI stays ON.
+    const cursorCheckbox = screen.getByRole("checkbox", { name: "Cursor" });
+    await waitFor(() => expect(cursorCheckbox).toBeChecked());
+    expect(screen.getByRole("checkbox", { name: "Claude Code" })).not.toBeChecked();
+    expect(screen.getByText("Or write the config for me")).toBeInTheDocument();
+  });
+
+  it("connect step Copy setup prompt copies the Codex prompt with the real command", async () => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Codex CLI",
+        client_type: "codex_cli",
+        config_path: "/path/to/config.toml",
+        detected: true,
+        already_configured: false,
+      },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    expect(
+      await screen.findByText("codex mcp add wenlan -- npx -y wenlan-mcp"),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Copy setup prompt" }));
+    await waitFor(() => expect(clipboardWrite).toHaveBeenCalledTimes(1));
+    expect(
+      (clipboardWrite as ReturnType<typeof vi.fn>).mock.calls[0][0],
+    ).toContain("codex mcp add wenlan -- npx -y wenlan-mcp");
   });
 
   it("verify step skips waiting UX when agents already wrote in the past", async () => {

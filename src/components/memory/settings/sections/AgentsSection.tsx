@@ -11,6 +11,8 @@ import {
 import { describeTrustLevel, resolveAgentDisplayName, TRUST_LEVELS } from "../../../../lib/agents";
 import { RemoteAccessPanel } from "../../RemoteAccessPanel";
 import { SectionHeader, Toggle } from "../primitives";
+import WebPlatformCards from "../../../connect/WebPlatformCards";
+import ClientSetupList from "../../../connect/ClientSetupList";
 
 export default function AgentsSection({ onSetupAgent }: { onSetupAgent?: () => void }) {
   const { t } = useTranslation();
@@ -385,6 +387,32 @@ export default function AgentsSection({ onSetupAgent }: { onSetupAgent?: () => v
           label={t("settings.agents.remoteAccess")}
         />
         <RemoteAccessPanel mode="full" />
+      </section>
+
+      {/* ── Web — Claude.ai & ChatGPT ─────────────────────────────── */}
+      <section className="mem-fade-up" style={{ animationDelay: "45ms" }}>
+        <SectionHeader
+          icon={
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A11.953 11.953 0 0112 13.5c-2.998 0-5.74-1.1-7.843-2.918m0 0A8.959 8.959 0 003 12c0-.778.099-1.533.284-2.253" />
+            </svg>
+          }
+          label={t("connectMatrix.webTitle")}
+        />
+        <WebPlatformCards />
+      </section>
+
+      {/* ── Apps & CLIs ───────────────────────────────────────────── */}
+      <section className="mem-fade-up" style={{ animationDelay: "60ms" }}>
+        <SectionHeader
+          icon={
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9-9h13.5c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125H4.5A1.125 1.125 0 013.375 16.5v-9.75c0-.621.504-1.125 1.125-1.125z" />
+            </svg>
+          }
+          label={t("connectMatrix.appsTitle")}
+        />
+        <ClientSetupList />
       </section>
     </>
   );

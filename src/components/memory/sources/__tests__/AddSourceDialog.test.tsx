@@ -92,7 +92,7 @@ describe("AddSourceDialog", () => {
     });
   });
 
-  it("shows error when no supported files found", async () => {
+  it("warns but does not block submit when no supported files are found (council change e)", async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const { readDir } = await import("@tauri-apps/plugin-fs");
     (open as ReturnType<typeof vi.fn>).mockResolvedValue("/Users/test/empty");
@@ -107,9 +107,9 @@ describe("AddSourceDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /browse/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/no supported files/i)).toBeInTheDocument();
+      expect(screen.getByText(/No notes found/)).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /add source/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /add source/i })).toBeEnabled();
   });
 
   it("registers an obsidian vault as obsidian and a plain folder as directory", async () => {
