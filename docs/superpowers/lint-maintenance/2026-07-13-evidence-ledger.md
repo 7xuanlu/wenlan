@@ -171,12 +171,12 @@ counts. Never copy raw artifact contents into this ledger.
 | invariant | Terminal receipt implies required writes exist; retry is idempotent and resumes from a valid checkpoint. |
 | reproducer | `sync_receipt_failure_does_not_leave_same_hash_queue_terminal` aborts the receipt INSERT, removes the trigger, and re-enqueues the same hash. |
 | root_cause | Terminal queue state is committed before its required receipt, and receipt failure is swallowed. |
-| repair | Reproduced; receipt-before-terminal ordering specified in the Priority B addendum. |
+| repair | Source-sync receipt upsert and queue completion now commit in one DB transaction. Any receipt, queue update, or commit failure rolls back and explicitly pauses the row for retry; outcome reports `paused=true`. |
 | lint_coverage | Queue/runtime completeness checks first. |
 | cleanup_class | Missing receipt with done queue is `environment_or_config` or retryable state; data cleanup waits for live source ownership. |
-| verification | RED: `cargo test -p wenlan-core --lib sync_receipt_failure_does_not_leave_same_hash_queue_terminal -- --nocapture` observed `done` with no receipt and no same-hash recovery. |
-| follow_up_direction | Execute B4 after source Page retry is failure-safe. |
-| status | `reproduced` |
+| verification | RED: `cargo test -p wenlan-core --lib sync_receipt_failure_does_not_leave_same_hash_queue_terminal -- --nocapture` observed `done` with no receipt and no same-hash recovery. GREEN: receipt fault 1/1; no-provider and provider completion 2/2; folder-ingest terminal/rescan/delete lifecycle 1/1; core all-target Clippy clean. |
+| follow_up_direction | Inspect live queue/receipt mismatches read-only; historical rows remain cleanup candidates, not automatic repairs. |
+| status | `fixed`; live historical exposure remains unclassified. |
 
 ## B5: Source Page Replacement Failure
 

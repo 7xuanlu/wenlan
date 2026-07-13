@@ -30,7 +30,7 @@
 //! (`mark_paused` with backoff) instead of burning retries in-loop — the
 //! scheduler re-claims after the backoff and resumes from the checkpoint,
 //! upgrading the stub to the real digest. A file that parses to nothing is
-//! terminal (`mark_done`, no page).
+//! terminal (durable sync receipt + queue completion, no page).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -149,8 +149,9 @@ pub async fn run_document_enrichment(
                 // Still record sync_state so the next sync skips it instead of
                 // re-parsing it every tick.
                 log::warn!("[doc-enrich] {file_path}: not ingestable ({reason}); marking done");
-                let _ = db.mark_done(&source_id, &file_path).await;
-                record_sync_state(db, entry).await;
+                if !complete_with_sync_receipt(db, entry).await {
+                    return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+                }
                 return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
             }
             Err(join_err) => {
@@ -213,8 +214,9 @@ pub async fn run_document_enrichment(
 
     if chunks.is_empty() {
         log::warn!("[doc-enrich] {file_path}: no chunks after upsert; marking done");
-        let _ = db.mark_done(&source_id, &file_path).await;
-        record_sync_state(db, entry).await;
+        if !complete_with_sync_receipt(db, entry).await {
+            return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+        }
         return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
     }
     if let Some(stored_title) = chunks
@@ -312,8 +314,17 @@ pub async fn run_document_enrichment(
             };
         }
         // No LLM configured: terminal (a retry can't do better without a provider).
-        let _ = db.mark_done(&source_id, &file_path).await;
-        record_sync_state(db, entry).await;
+        if !complete_with_sync_receipt(db, entry).await {
+            return DocumentEnrichmentOutcome {
+                doc_source_id,
+                page_id,
+                chunk_ids,
+                summary: body,
+                entities: Vec::new(),
+                completed: false,
+                paused: true,
+            };
+        }
         return DocumentEnrichmentOutcome {
             doc_source_id,
             page_id,
@@ -374,8 +385,17 @@ pub async fn run_document_enrichment(
         };
     }
 
-    let _ = db.mark_done(&source_id, &file_path).await;
-    record_sync_state(db, entry).await;
+    if !complete_with_sync_receipt(db, entry).await {
+        return DocumentEnrichmentOutcome {
+            doc_source_id,
+            page_id,
+            chunk_ids,
+            summary: digest,
+            entities,
+            completed: false,
+            paused: true,
+        };
+    }
     DocumentEnrichmentOutcome {
         doc_source_id,
         page_id,
@@ -387,8 +407,8 @@ pub async fn run_document_enrichment(
     }
 }
 
-/// Record the file's tracked `source_sync_state` after TERMINAL processing
-/// (§4: the sync_state row is written on SUCCESSFUL processing, by the queue).
+/// Atomically record the file's tracked `source_sync_state` and transition the
+/// queue row to terminal. A failed receipt pauses the row for retry.
 /// The scan-side mtime+hash skip and the deletion diff both read this table:
 /// without the write, a directory file is re-enqueued on every sync and its
 /// chunks are never reaped after deletion.
@@ -399,7 +419,7 @@ pub async fn run_document_enrichment(
 /// the row is written with `mtime_ns = 0` and the ENQUEUE-time hash, so the
 /// next sync cannot mtime-skip it: it re-hashes, sees the drift, and re-enriches
 /// (or, for a vanished file, the deletion diff reaps the chunks just written).
-async fn record_sync_state(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) {
+async fn complete_with_sync_receipt(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) -> bool {
     let path = PathBuf::from(&entry.file_path);
     let stat = tokio::task::spawn_blocking(move || {
         let meta = std::fs::metadata(&path).ok()?;
@@ -428,14 +448,17 @@ async fn record_sync_state(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) {
         (None, eh) => (0, eh.unwrap_or_default().to_string()),
     };
     if let Err(e) = db
-        .upsert_sync_state(&entry.source_id, &entry.file_path, mtime_ns, &hash)
+        .complete_document_enrichment(&entry.source_id, &entry.file_path, mtime_ns, &hash)
         .await
     {
         log::warn!(
-            "[doc-enrich] {}: upsert_sync_state failed: {e}",
+            "[doc-enrich] {}: terminal receipt failed: {e}; pausing",
             entry.file_path
         );
+        pause(db, entry, "source sync receipt failed").await;
+        return false;
     }
+    true
 }
 
 /// Pause a document for retry with an exponential-ish backoff. `mark_paused`

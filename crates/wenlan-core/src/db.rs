@@ -25463,6 +25463,67 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Atomically publish the source-sync receipt and mark its enrichment row
+    /// done. A terminal queue row must never exist without the receipt used by
+    /// directory sync to skip unchanged files and reap deleted ones.
+    pub async fn complete_document_enrichment(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        mtime_ns: i64,
+        content_hash: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("complete enrichment begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "INSERT INTO source_sync_state
+                    (source_id, file_path, mtime_ns, content_hash, last_synced_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(source_id, file_path) DO UPDATE SET
+                    mtime_ns = excluded.mtime_ns,
+                    content_hash = excluded.content_hash,
+                    last_synced_at = excluded.last_synced_at",
+                libsql::params![source_id, file_path, mtime_ns, content_hash, now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("complete enrichment receipt: {e}")))?;
+
+            let affected = conn
+                .execute(
+                    "UPDATE document_enrichment_queue
+                     SET status = 'done', next_retry_at = NULL,
+                         error_detail = NULL, updated_at = ?3
+                     WHERE source_id = ?1 AND file_path = ?2
+                       AND status = 'in_progress'",
+                    libsql::params![source_id, file_path, now],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("complete enrichment queue: {e}")))?;
+            if affected != 1 {
+                return Err(WenlanError::Conflict(format!(
+                    "document enrichment row is not in progress: {source_id}:{file_path}"
+                )));
+            }
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "complete enrichment commit: {error}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Pause an interrupted / failed document enrichment, recording the reason
     /// and when it becomes eligible for retry. Increments the attempt counter.
     /// The checkpoint (`last_completed_chunk`) is left intact so the next claim
