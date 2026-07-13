@@ -22110,6 +22110,7 @@ impl MemoryDB {
             None,
             None,
             None,
+            None,
         )
         .await
         .map(|_| ())
@@ -22135,6 +22136,7 @@ impl MemoryDB {
             source_memory_ids,
             link_reason,
             true,
+            None,
             None,
             None,
             None,
@@ -22170,6 +22172,7 @@ impl MemoryDB {
             Some(changelog),
             citations_json,
             None,
+            None,
         )
         .await
     }
@@ -22196,6 +22199,33 @@ impl MemoryDB {
             Some(changelog),
             citations_json,
             Some(expected_version),
+            None,
+        )
+        .await
+    }
+
+    /// Apply a staged Page revision and consume its pending card in the same
+    /// transaction. `expected_version=None` preserves legacy card behavior;
+    /// versioned cards use CAS and return `false` on a stale Page.
+    pub(crate) async fn try_accept_page_revision(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        changelog: &str,
+        expected_version: Option<i64>,
+        revision_source_id: &str,
+    ) -> Result<bool, WenlanError> {
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            "revision_accept",
+            false,
+            Some(changelog),
+            None,
+            expected_version,
+            Some(revision_source_id),
         )
         .await
     }
@@ -22205,7 +22235,8 @@ impl MemoryDB {
     /// `citations_json` when `Some` is written atomically with the content;
     /// `None` always resets `citations` to `'[]'` on a content change (never
     /// leaves a stale marker-to-source map pointing at prose that no longer
-    /// carries those markers).
+    /// carries those markers). `consume_revision_id` makes pending-card
+    /// consumption part of the same transaction.
     #[allow(clippy::too_many_arguments)]
     async fn try_update_page_content(
         &self,
@@ -22217,6 +22248,7 @@ impl MemoryDB {
         changelog: Option<&str>,
         citations_json: Option<&str>,
         expected_version: Option<i64>,
+        consume_revision_id: Option<&str>,
     ) -> Result<bool, WenlanError> {
         let citations_bind: &str = citations_json.unwrap_or("[]");
         // Sanitize daemon-reserved Sources delimiters from client content so
@@ -22386,7 +22418,9 @@ impl MemoryDB {
                 }
             }
         };
-        if (require_stale || expected_version.is_some()) && affected == 0 {
+        if (require_stale || expected_version.is_some() || consume_revision_id.is_some())
+            && affected == 0
+        {
             // No rows matched the CAS condition (concurrent writer won or page
             // was already cleared). ROLLBACK closes the open transaction before
             // returning — an empty txn, but the connection must not be left in
@@ -22439,12 +22473,18 @@ impl MemoryDB {
             }
         }
         for sid in source_memory_ids {
-            let _ = conn
+            if let Err(e) = conn
                 .execute(
                     "INSERT OR IGNORE INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
                     libsql::params![id, sid, now_ts, link_reason],
                 )
-                .await;
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "update_page_content source insert: {e}"
+                )));
+            }
         }
 
         // Mirror the memory-source reconcile onto page_evidence. Only memory
@@ -22494,6 +22534,32 @@ impl MemoryDB {
             return Err(WenlanError::VectorDb(format!(
                 "update_page evidence insert: {e}"
             )));
+        }
+
+        if let Some(revision_id) = consume_revision_id {
+            let consumed = match conn
+                .execute(
+                    "UPDATE memories
+                     SET pending_revision = 0, confirmed = 0, stability = 'new'
+                     WHERE source_id = ?1 AND pending_revision = 1",
+                    libsql::params![revision_id],
+                )
+                .await
+            {
+                Ok(affected) => affected,
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(WenlanError::VectorDb(format!(
+                        "accept_page_revision_card consume: {e}"
+                    )));
+                }
+            };
+            if consumed == 0 {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::Conflict(format!(
+                    "pending page revision was already consumed: {revision_id}"
+                )));
+            }
         }
 
         conn.execute("COMMIT", ())

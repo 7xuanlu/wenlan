@@ -133,14 +133,14 @@ counts. Never copy raw artifact contents into this ledger.
 | observed_live_exposure | Pending the stable real-store probe. |
 | code_evidence | Page version-CAS update commits before a separate pending-card consumption UPDATE; projection follows both. |
 | invariant | CAS/version state and projection receipts converge or report incomplete; consumed work is not lost. |
-| reproducer | `accept_page_revision_consume_failure_keeps_page_retryable` aborts card consumption after the Page CAS. |
-| root_cause | Page mutation and work-item consumption have separate transaction boundaries. |
-| repair | Reproduced; combined Page/card transaction specified in the Priority B addendum. |
+| reproducer | `accept_page_revision_consume_failure_keeps_page_retryable` aborts card consumption after the Page CAS; `accept_page_revision_source_failure_keeps_page_retryable` aborts a required source attachment inside the same write. |
+| root_cause | Page mutation and work-item consumption had separate transaction boundaries, while required `page_sources` INSERT errors were swallowed. |
+| repair | Page content/version/changelog, exact source/evidence reconcile, and pending-card consumption now share the existing Page update transaction. Required source INSERT, card consume, and CAS failures roll back the whole acceptance; legacy unversioned cards use the same path. |
 | lint_coverage | Pages/projections state and non-atomic snapshot contracts first. |
 | cleanup_class | Existing Page/card mismatches need version/content comparison before any proposal; default `needs_semantic_review`. |
-| verification | RED: `cargo test -p wenlan-core --lib accept_page_revision_consume_failure_keeps_page_retryable -- --nocapture` committed proposed Page content while leaving the card pending. |
-| follow_up_direction | Execute B2 addendum after narrower DB repairs. |
-| status | `reproduced` |
+| verification | RED: consume failure committed proposed Page content while leaving the card pending; source attachment failure was swallowed and consumed the card. GREEN: both transaction-fault tests 2/2; accept/retry/conflict/legacy/not-found group 9/9; core all-target Clippy clean. |
+| follow_up_direction | Probe historical Page/card/projection mismatches read-only; archive and watcher boundaries remain evidence-gated rather than assumed fixed. |
+| status | `fixed` for Page revision acceptance; remaining B2 boundary exposure is unclassified. |
 
 ## B3: Delete, Episode, and Source-ID Rebinding
 

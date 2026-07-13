@@ -1493,32 +1493,16 @@ async fn accept_page_revision_card(
     let projection = knowledge_path.map(|path| {
         crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
     });
-    let wrote = match card.page_version {
-        Some(expected_version) => {
-            db.try_update_page_content_with_changelog_at_version(
-                &card.page_id,
-                &card.content,
-                &source_refs,
-                "revision_accept",
-                &new_changelog,
-                None,
-                expected_version,
-            )
-            .await?
-        }
-        None => {
-            db.try_update_page_content_with_changelog(
-                &card.page_id,
-                &card.content,
-                &source_refs,
-                "revision_accept",
-                false,
-                &new_changelog,
-                None,
-            )
-            .await?
-        }
-    };
+    let wrote = db
+        .try_accept_page_revision(
+            &card.page_id,
+            &card.content,
+            &source_refs,
+            &new_changelog,
+            card.page_version,
+            &card.revision_id,
+        )
+        .await?;
 
     if !wrote {
         let current_version = db
@@ -1537,17 +1521,6 @@ async fn accept_page_revision_card(
             card.revision_id, card.page_id, staged_version, current_version
         )));
     }
-
-    let conn = db.conn.lock().await;
-    conn.execute(
-        "UPDATE memories \
-         SET pending_revision = 0, confirmed = 0, stability = 'new' \
-         WHERE source_id = ?1 AND pending_revision = 1",
-        libsql::params![card.revision_id.clone()],
-    )
-    .await
-    .map_err(|e| WenlanError::VectorDb(format!("accept_page_revision_card consume: {e}")))?;
-    drop(conn);
 
     if let Some(ref projection) = projection {
         if let Ok(Some(updated_page)) = db.get_page(&card.page_id).await {
@@ -3521,6 +3494,71 @@ mod tests {
             retry.is_ok(),
             "retry after the fault is removed must converge"
         );
+        assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn accept_page_revision_source_failure_keeps_page_retryable() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_source_abort_original";
+        let new_mem_id = "mem_page_source_abort_new";
+        let original_content = "original page content before source attachment failure";
+        let proposed_content = "proposed page content must commit with exact sources";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card.revision_card_id.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER abort_page_revision_source
+                 BEFORE INSERT ON page_sources
+                 WHEN NEW.memory_source_id = '{}'
+                 BEGIN SELECT RAISE(ABORT, 'blocked revision source attachment'); END;",
+                new_mem_id.replace('\'', "''")
+            ))
+            .await
+            .unwrap();
+        }
+
+        let err = accept_pending_revision(&db, &card_id, "test-agent")
+            .await
+            .expect_err("source attachment fault must fail the acceptance");
+        assert!(err
+            .to_string()
+            .contains("blocked revision source attachment"));
+        let after_failure = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(after_failure.content, before.content);
+        assert_eq!(after_failure.version, before.version);
+        assert_eq!(after_failure.source_memory_ids, before.source_memory_ids);
+        assert!(db
+            .list_pending_revisions(10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|revision| revision.revision_source_id == card_id));
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_page_revision_source", ())
+                .await
+                .unwrap();
+        }
+        accept_pending_revision(&db, &card_id, "test-agent")
+            .await
+            .expect("retry after the source fault must converge");
         assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
     }
 
