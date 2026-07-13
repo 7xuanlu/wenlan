@@ -7,13 +7,13 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, path::Path, str::FromStr};
 use wenlan_types::{
     requests::{
         AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
         UpdatePageRequest,
     },
-    RawDocument,
+    MemoryType, RawDocument,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -27,6 +27,36 @@ pub struct WriteResult {
     pub revision_card_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub gated: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryUpdate<'a> {
+    pub content: Option<&'a str>,
+    pub space: Option<Option<&'a str>>,
+    pub confirm: bool,
+    pub memory_type: Option<&'a str>,
+}
+
+pub async fn update_memory(
+    db: &MemoryDB,
+    source_id: &str,
+    update: MemoryUpdate<'_>,
+) -> Result<(), WenlanError> {
+    let parsed_memory_type = update
+        .memory_type
+        .map(MemoryType::from_str)
+        .transpose()
+        .map_err(WenlanError::Validation)?;
+    let normalized_memory_type = parsed_memory_type.map(|memory_type| memory_type.to_string());
+
+    db.apply_memory_update(
+        source_id,
+        update.content,
+        update.space,
+        update.confirm,
+        normalized_memory_type.as_deref(),
+    )
+    .await
 }
 
 fn is_false(value: &bool) -> bool {

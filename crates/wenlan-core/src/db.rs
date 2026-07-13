@@ -668,6 +668,36 @@ pub(crate) fn derive_episode(
     })
 }
 
+fn derive_memory_child_fields(
+    content: &str,
+    structured_fields: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut fields = Vec::new();
+    let content = redact_pii(content);
+    if !content.trim().is_empty() {
+        fields.push(("narrative".to_string(), content));
+    }
+    if let Some(structured_fields) = structured_fields {
+        for child in crate::schema::split_structured_fields_to_facts(structured_fields) {
+            let field = child
+                .split_once(": ")
+                .map(|(key, _)| key.to_string())
+                .unwrap_or_else(|| "field".to_string());
+            fields.push((field, child));
+        }
+    }
+    fields
+}
+
+fn child_vector_id(parent_id: &str, field: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(parent_id.as_bytes());
+    hasher.update(b"|");
+    hasher.update(field.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    hash[..16].to_string()
+}
+
 /// True iff `WENLAN_ENABLE_SALIENCE_PRIOR` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T8 salience prior is OPT-IN:
 /// when unset or falsey, the ranking formula forces `salience_mult` to `1.0`,
@@ -12564,22 +12594,385 @@ impl MemoryDB {
 
     /// Update a single memory's content (and re-embed).
     pub async fn update_memory(&self, id: &str, new_content: &str) -> Result<(), WenlanError> {
-        let embedding = self.get_or_compute_embedding(new_content)?;
-        let vec_str = Self::vec_to_sql(&embedding);
+        self.apply_memory_update(id, Some(new_content), None, false, None)
+            .await
+    }
+
+    pub(crate) async fn apply_memory_update(
+        &self,
+        source_id: &str,
+        new_content: Option<&str>,
+        requested_space: Option<Option<&str>>,
+        confirm: bool,
+        requested_memory_type: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        if new_content.is_none()
+            && requested_space.is_none()
+            && !confirm
+            && requested_memory_type.is_none()
+        {
+            return Ok(());
+        }
+
+        struct HeadMetadata {
+            source: String,
+            title: String,
+            structured_fields: Option<String>,
+            source_text: Option<String>,
+            memory_type: Option<String>,
+            space: Option<String>,
+            source_agent: Option<String>,
+            confidence: Option<f64>,
+            confirmed: Option<i64>,
+            stability: String,
+            pending_revision: i64,
+            last_modified: i64,
+            supersede_mode: String,
+            created_at: i64,
+        }
+
+        let head = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source, title, structured_fields, source_text, memory_type,
+                            space, source_agent, confidence, confirmed, stability,
+                            pending_revision, last_modified, supersede_mode,
+                            COALESCE(created_at, last_modified)
+                     FROM memories
+                     WHERE source_id = ?1 AND source != 'episode' AND chunk_index = 0
+                     LIMIT 1",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory read: {e}")))?;
+            let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory row: {e}")))?
+            else {
+                return Ok(());
+            };
+            HeadMetadata {
+                source: row.get(0).unwrap_or_else(|_| "memory".to_string()),
+                title: row.get(1).unwrap_or_default(),
+                structured_fields: row.get::<Option<String>>(2).unwrap_or(None),
+                source_text: row.get::<Option<String>>(3).unwrap_or(None),
+                memory_type: row.get::<Option<String>>(4).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
+                source_agent: row.get::<Option<String>>(6).unwrap_or(None),
+                confidence: row.get::<Option<f64>>(7).unwrap_or(None),
+                confirmed: row.get::<Option<i64>>(8).unwrap_or(None),
+                stability: row
+                    .get::<Option<String>>(9)
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "new".to_string()),
+                pending_revision: row.get::<Option<i64>>(10).unwrap_or(None).unwrap_or(0),
+                last_modified: row.get(11).unwrap_or(0),
+                supersede_mode: row
+                    .get::<Option<String>>(12)
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "hide".to_string()),
+                created_at: row.get(13).unwrap_or(0),
+            }
+        };
+
+        let content_embedding = new_content
+            .map(|content| {
+                self.get_or_compute_embedding(content)
+                    .map(|v| Self::vec_to_sql(&v))
+            })
+            .transpose()?;
+
+        struct PreparedChild {
+            id: String,
+            field: String,
+            content: String,
+            embedding: String,
+        }
+
+        let fact_enabled = crate::retrieval::fact_channel::fact_channel_enabled();
+        let prepared_children = if head.source == "memory" && new_content.is_some() && fact_enabled
+        {
+            let fields = derive_memory_child_fields(
+                new_content.unwrap_or_default(),
+                head.structured_fields.as_deref(),
+            );
+            let texts: Vec<String> = fields.iter().map(|(_, text)| text.clone()).collect();
+            let embeddings = if texts.is_empty() {
+                Vec::new()
+            } else {
+                self.generate_embeddings(&texts)?
+            };
+            if embeddings.len() != fields.len() {
+                return Err(WenlanError::Embedding(format!(
+                    "Expected {} child embeddings, got {}",
+                    fields.len(),
+                    embeddings.len()
+                )));
+            }
+            fields
+                .into_iter()
+                .zip(embeddings.iter())
+                .map(|((field, content), embedding)| PreparedChild {
+                    id: child_vector_id(source_id, &field),
+                    field,
+                    content,
+                    embedding: Self::vec_to_sql(embedding),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        enum EpisodeMutation {
+            Preserve,
+            Delete,
+            Replace {
+                derivation: EpisodeDerivation,
+                embedding: String,
+            },
+        }
+
+        let episode_mutation = if head.source != "memory"
+            || new_content.is_none()
+            || head.source_text.is_some()
+        {
+            EpisodeMutation::Preserve
+        } else if episode_channel_enabled() {
+            match derive_episode(
+                source_id,
+                None,
+                new_content.unwrap_or_default(),
+                episode_word_gate(),
+            ) {
+                Some(derivation) => {
+                    let embeddings =
+                        self.generate_embeddings(std::slice::from_ref(&derivation.verbatim))?;
+                    let embedding = embeddings.first().ok_or_else(|| {
+                        WenlanError::Embedding("Expected one episode embedding, got zero".into())
+                    })?;
+                    EpisodeMutation::Replace {
+                        derivation,
+                        embedding: Self::vec_to_sql(embedding),
+                    }
+                }
+                None => EpisodeMutation::Delete,
+            }
+        } else {
+            EpisodeMutation::Delete
+        };
+
+        let requested_space =
+            requested_space.map(|space| space.map(std::string::ToString::to_string));
+        let requested_memory_type = requested_memory_type.map(str::to_string);
+        let effective_space = requested_space
+            .clone()
+            .unwrap_or_else(|| head.space.clone());
+        let effective_memory_type = requested_memory_type
+            .clone()
+            .or_else(|| head.memory_type.clone());
+        let effective_confidence = if confirm { Some(1.0) } else { head.confidence };
+        let effective_confirmed = if confirm { Some(1) } else { head.confirmed };
+        let effective_stability = if confirm {
+            "confirmed".to_string()
+        } else {
+            head.stability.clone()
+        };
+
+        let _fact_activity = (head.source == "memory" && new_content.is_some()).then(|| {
+            self.begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Fact)
+        });
+        let _episode_activity = (head.source == "memory" && new_content.is_some()).then(|| {
+            self.begin_derived_artifact_write(
+                crate::derived_artifact_state::DerivedArtifact::Episode,
+            )
+        });
 
         let conn = self.conn.lock().await;
-        // Match on source_id (the external identifier passed from API routes)
-        // and chunk_index = 0 (primary chunk holds the canonical content).
-        conn.execute(
-            "UPDATE memories SET content = ?1, embedding = vector32(?2) WHERE source_id = ?3 AND chunk_index = 0 AND source != 'episode'",
-            libsql::params![new_content.to_string(), vec_str, id.to_string()],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("update_memory: {}", e)))?;
-        drop(conn);
-        // T15a: keep child vectors in sync with the edited content (no-op when
-        // the fact channel is off).
-        self.rebuild_child_vectors_for(id).await?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_memory begin: {e}")))?;
+
+        let mutation_result: Result<(), WenlanError> = async {
+            if let (Some(content), Some(embedding)) = (new_content, content_embedding.as_deref()) {
+                let affected = conn
+                    .execute(
+                        "UPDATE memories
+                         SET content = ?1, embedding = vector32(?2), word_count = ?3
+                         WHERE source_id = ?4 AND chunk_index = 0 AND source != 'episode'",
+                        libsql::params![
+                            content,
+                            embedding,
+                            content.split_whitespace().count() as i64,
+                            source_id
+                        ],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("update_memory head: {e}")))?;
+                if affected == 0 {
+                    return Err(WenlanError::Conflict(format!(
+                        "memory {source_id} changed before update"
+                    )));
+                }
+
+                conn.execute(
+                    "DELETE FROM memories
+                     WHERE source_id = ?1 AND source != 'episode' AND chunk_index > 0",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory stale chunks: {e}")))?;
+
+                if head.source == "memory" {
+                    conn.execute(
+                        "DELETE FROM child_vectors
+                         WHERE parent_kind = 'memory' AND parent_id = ?1",
+                        libsql::params![source_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("update_memory child delete: {e}"))
+                    })?;
+                    for child in prepared_children {
+                        conn.execute(
+                            "INSERT OR REPLACE INTO child_vectors
+                             (id, parent_kind, parent_id, field, content, embedding)
+                             VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
+                            libsql::params![
+                                child.id,
+                                source_id,
+                                child.field,
+                                child.content,
+                                child.embedding
+                            ],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("update_memory child insert: {e}"))
+                        })?;
+                    }
+
+                    match episode_mutation {
+                        EpisodeMutation::Preserve => {}
+                        EpisodeMutation::Delete => {
+                            conn.execute(
+                                "DELETE FROM memories
+                                 WHERE source = 'episode' AND source_id = ?1",
+                                libsql::params![source_id],
+                            )
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("update_memory episode delete: {e}"))
+                            })?;
+                        }
+                        EpisodeMutation::Replace {
+                            derivation,
+                            embedding,
+                        } => {
+                            conn.execute(
+                                "DELETE FROM memories
+                                 WHERE source = 'episode' AND source_id = ?1",
+                                libsql::params![source_id],
+                            )
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("update_memory episode delete: {e}"))
+                            })?;
+                            conn.execute(
+                                "INSERT INTO memories (id, content, source, source_id, title,
+                                    summary, url, chunk_index, last_modified, chunk_type,
+                                    language, byte_start, byte_end, semantic_unit, memory_type,
+                                    space, source_agent, confidence, confirmed, stability,
+                                    supersedes, pending_revision, word_count, entity_id,
+                                    enrichment_status, quality, is_recap, supersede_mode,
+                                    structured_fields, retrieval_cue, source_text, embedding,
+                                    created_at, importance, episode_of)
+                                 VALUES (?1, ?2, 'episode', ?3, ?4,
+                                    NULL, NULL, 0, ?5, 'text',
+                                    NULL, NULL, NULL, NULL, ?6,
+                                    ?7, ?8, ?9, ?10, ?11,
+                                    NULL, ?12, ?13, NULL,
+                                    'legacy', NULL, 0, ?14,
+                                    NULL, NULL, NULL, vector32(?15),
+                                    ?16, NULL, ?17)",
+                                libsql::params![
+                                    derivation.episode_id,
+                                    derivation.verbatim,
+                                    source_id,
+                                    head.title,
+                                    head.last_modified,
+                                    effective_memory_type,
+                                    effective_space,
+                                    head.source_agent,
+                                    effective_confidence,
+                                    effective_confirmed,
+                                    effective_stability,
+                                    head.pending_revision,
+                                    derivation.word_count,
+                                    head.supersede_mode,
+                                    embedding,
+                                    head.created_at,
+                                    source_id
+                                ],
+                            )
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("update_memory episode insert: {e}"))
+                            })?;
+                        }
+                    }
+                }
+            }
+
+            if let Some(space) = requested_space {
+                conn.execute(
+                    "UPDATE memories SET space = ?1 WHERE source_id = ?2",
+                    libsql::params![space, source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory space: {e}")))?;
+            }
+            if let Some(memory_type) = requested_memory_type {
+                conn.execute(
+                    "UPDATE memories SET memory_type = ?1 WHERE source_id = ?2",
+                    libsql::params![memory_type, source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory type: {e}")))?;
+            }
+            if confirm {
+                conn.execute(
+                    "UPDATE memories
+                     SET stability = 'confirmed', confirmed = 1, confidence = 1.0
+                     WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory confirm: {e}")))?;
+            }
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = mutation_result {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "{error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "update_memory commit: {error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(WenlanError::VectorDb(format!(
+                "update_memory commit: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -12620,20 +13013,7 @@ impl MemoryDB {
         };
 
         // Build (field, text) children: narrative + per structured field.
-        let mut fields: Vec<(String, String)> = Vec::new();
-        let content = redact_pii(&content);
-        if !content.trim().is_empty() {
-            fields.push(("narrative".to_string(), content));
-        }
-        if let Some(ref sf) = structured_fields {
-            for child in crate::schema::split_structured_fields_to_facts(sf) {
-                let field = child
-                    .split_once(": ")
-                    .map(|(k, _)| k.to_string())
-                    .unwrap_or_else(|| "field".to_string());
-                fields.push((field, child));
-            }
-        }
+        let fields = derive_memory_child_fields(&content, structured_fields.as_deref());
 
         let texts: Vec<String> = fields.iter().map(|(_, t)| t.clone()).collect();
         let embeddings = if texts.is_empty() {
@@ -12653,12 +13033,7 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("rebuild_child delete: {e}")))?;
         for ((field, text), embedding) in fields.into_iter().zip(embeddings.iter()) {
-            let mut hasher = Sha256::new();
-            hasher.update(parent_id.as_bytes());
-            hasher.update(b"|");
-            hasher.update(field.as_bytes());
-            let hash = format!("{:x}", hasher.finalize());
-            let child_id = hash[..16].to_string();
+            let child_id = child_vector_id(parent_id, &field);
             let vec_str = Self::vec_to_sql(embedding);
             conn.execute(
                 "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
@@ -29381,6 +29756,92 @@ pub(crate) mod tests {
 
     // ==================== update_memory ====================
 
+    #[derive(Debug, PartialEq)]
+    struct PreservedMemoryMetadata {
+        id: String,
+        source_id: String,
+        source: String,
+        title: String,
+        summary: Option<String>,
+        url: Option<String>,
+        source_agent: Option<String>,
+        structured_fields: Option<String>,
+        retrieval_cue: Option<String>,
+        source_text: Option<String>,
+        confidence: Option<f64>,
+        importance: Option<i64>,
+        event_date: Option<i64>,
+        event_end: Option<i64>,
+        version: i64,
+        changelog: String,
+        created_at: Option<i64>,
+        last_modified: i64,
+        access_count: i64,
+        last_accessed: Option<i64>,
+        supersedes: Option<String>,
+        pending_revision: i64,
+        content_hash: Option<String>,
+        enrichment_status: String,
+    }
+
+    async fn preserved_memory_metadata(db: &MemoryDB, source_id: &str) -> PreservedMemoryMetadata {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, source_id, source, title, summary, url, source_agent,
+                        structured_fields, retrieval_cue, source_text, confidence,
+                        importance, event_date, event_end, COALESCE(version, 1),
+                        COALESCE(changelog, '[]'), created_at, last_modified,
+                        access_count, last_accessed, supersedes, pending_revision,
+                        content_hash, enrichment_status
+                 FROM memories
+                 WHERE source = 'memory' AND source_id = ?1 AND chunk_index = 0",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        PreservedMemoryMetadata {
+            id: row.get(0).unwrap(),
+            source_id: row.get(1).unwrap(),
+            source: row.get(2).unwrap(),
+            title: row.get(3).unwrap(),
+            summary: row.get::<Option<String>>(4).unwrap_or(None),
+            url: row.get::<Option<String>>(5).unwrap_or(None),
+            source_agent: row.get::<Option<String>>(6).unwrap_or(None),
+            structured_fields: row.get::<Option<String>>(7).unwrap_or(None),
+            retrieval_cue: row.get::<Option<String>>(8).unwrap_or(None),
+            source_text: row.get::<Option<String>>(9).unwrap_or(None),
+            confidence: row.get::<Option<f64>>(10).unwrap_or(None),
+            importance: row.get::<Option<i64>>(11).unwrap_or(None),
+            event_date: row.get::<Option<i64>>(12).unwrap_or(None),
+            event_end: row.get::<Option<i64>>(13).unwrap_or(None),
+            version: row.get(14).unwrap(),
+            changelog: row.get(15).unwrap(),
+            created_at: row.get::<Option<i64>>(16).unwrap_or(None),
+            last_modified: row.get(17).unwrap(),
+            access_count: row.get(18).unwrap(),
+            last_accessed: row.get::<Option<i64>>(19).unwrap_or(None),
+            supersedes: row.get::<Option<String>>(20).unwrap_or(None),
+            pending_revision: row.get(21).unwrap(),
+            content_hash: row.get::<Option<String>>(22).unwrap_or(None),
+            enrichment_status: row.get(23).unwrap(),
+        }
+    }
+
+    async fn episode_content_for(db: &MemoryDB, source_id: &str) -> Option<String> {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content FROM memories
+                 WHERE source = 'episode' AND source_id = ?1",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().map(|row| row.get(0).unwrap())
+    }
+
     #[tokio::test]
     async fn test_update_memory() {
         let (db, _dir) = test_db().await;
@@ -29416,6 +29877,311 @@ pub(crate) mod tests {
             updated_memories[0].content,
             "New updated memory content about machine learning."
         );
+    }
+
+    #[tokio::test]
+    async fn update_memory_replaces_multichunk_content_and_child_vectors() {
+        let (db, _dir) = test_db().await;
+        let original =
+            "Original multi chunk memory content stays internally consistent. ".repeat(200);
+        db.upsert_documents_with_derived_channels_for_test(
+            vec![memory_doc_with_fields(
+                "edit-multichunk",
+                &original,
+                "{\"status\":\"original\"}",
+            )],
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(
+            db.get_memories_by_source_id("memory", "edit-multichunk")
+                .await
+                .unwrap()
+                .len()
+                >= 3,
+            "fixture must include at least three chunks"
+        );
+
+        let edited = "Edited canonical content is stored once and derived rows follow it.";
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.update_memory("edit-multichunk", edited).await.unwrap();
+        })
+        .await;
+
+        let chunks = db
+            .get_memories_by_source_id("memory", "edit-multichunk")
+            .await
+            .unwrap();
+        assert_eq!(chunks.len(), 1, "no stale secondary chunk may survive");
+        assert_eq!(chunks[0].chunk_index, 0);
+        assert_eq!(chunks[0].content, edited);
+
+        let children = child_vector_inventory_for(&db, "edit-multichunk").await;
+        assert!(
+            children
+                .iter()
+                .any(|(_, field, content)| field == "narrative" && content == edited),
+            "narrative child must track edited content"
+        );
+        assert!(
+            children
+                .iter()
+                .any(|(_, field, content)| field == "status" && content == "status: original"),
+            "structured-field children must survive content edits"
+        );
+        assert!(
+            children
+                .iter()
+                .all(|(_, _, content)| !content.contains("Original multi chunk")),
+            "old narrative child content must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_memory_preserves_metadata_and_synchronizes_episode_and_fts() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars(
+            [
+                ("WENLAN_ENABLE_FACT_CHANNEL", Some("1")),
+                ("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1")),
+            ],
+            async {
+                let original =
+                    "olduniquetoken original memory has enough words for a content backed episode "
+                        .repeat(100);
+                db.upsert_documents_with_derived_channels_for_test(
+                    vec![memory_doc_with_fields(
+                        "edit-preserve",
+                        &original,
+                        "{\"status\":\"durable\"}",
+                    )],
+                    true,
+                    true,
+                )
+                .await
+                .unwrap();
+                {
+                    let conn = db.conn.lock().await;
+                    conn.execute(
+                        "UPDATE memories SET
+                            summary = 'preserved summary', url = 'https://example.test/source',
+                            retrieval_cue = 'preserved cue', importance = 9,
+                            event_date = 1779602400, event_end = 1779688800,
+                            version = 7, changelog = '[{\"version\":7}]',
+                            created_at = 1700000000, last_modified = 1700000100,
+                            access_count = 4, last_accessed = 1700000200,
+                            supersedes = 'older-memory', content_hash = 'preserved-hash',
+                            enrichment_status = 'legacy-preserved'
+                         WHERE source = 'memory' AND source_id = 'edit-preserve'",
+                        (),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let before = preserved_memory_metadata(&db, "edit-preserve").await;
+
+                let edited = "newuniquetoken edited canonical content has enough words to remain a useful episode";
+                crate::post_write::update_memory(
+                    &db,
+                    "edit-preserve",
+                    crate::post_write::MemoryUpdate {
+                        content: Some(edited),
+                        space: None,
+                        confirm: false,
+                        memory_type: None,
+                    },
+                )
+                .await
+                .unwrap();
+
+                assert_eq!(
+                    preserved_memory_metadata(&db, "edit-preserve").await,
+                    before,
+                    "content edit must preserve all untouched head metadata"
+                );
+                let chunks = db
+                    .get_memories_by_source_id("memory", "edit-preserve")
+                    .await
+                    .unwrap();
+                assert_eq!(chunks.len(), 1);
+                assert_eq!(chunks[0].content, edited);
+                assert_eq!(
+                    episode_content_for(&db, "edit-preserve").await.as_deref(),
+                    Some(edited),
+                    "content-backed episode must follow the canonical edit"
+                );
+
+                let conn = db.conn.lock().await;
+                let mut new_rows = conn
+                    .query(
+                        "SELECT c.id FROM memories_fts fts
+                         JOIN memories c ON c.rowid = fts.rowid
+                         WHERE c.source_id = 'edit-preserve'
+                           AND c.source = 'memory'
+                           AND memories_fts MATCH 'newuniquetoken'",
+                        (),
+                    )
+                    .await
+                    .unwrap();
+                assert!(new_rows.next().await.unwrap().is_some());
+                let mut old_rows = conn
+                    .query(
+                        "SELECT c.id FROM memories_fts fts
+                         JOIN memories c ON c.rowid = fts.rowid
+                         WHERE c.source_id = 'edit-preserve'
+                           AND c.source = 'memory'
+                           AND memories_fts MATCH 'olduniquetoken'",
+                        (),
+                    )
+                    .await
+                    .unwrap();
+                assert!(old_rows.next().await.unwrap().is_none());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_memory_removes_disabled_or_below_gate_derived_rows() {
+        let (db, _dir) = test_db().await;
+        let original = "original content has enough words to create a content backed episode row";
+        db.upsert_documents_with_derived_channels_for_test(
+            vec![memory_doc_with_fields(
+                "edit-derived-delete",
+                original,
+                "{\"status\":\"old\"}",
+            )],
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(count_child_vectors_for(&db, "edit-derived-delete").await > 0);
+        assert!(episode_content_for(&db, "edit-derived-delete")
+            .await
+            .is_some());
+
+        temp_env::async_with_vars(
+            [
+                ("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>),
+                ("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1")),
+            ],
+            async {
+                db.update_memory("edit-derived-delete", "too short")
+                    .await
+                    .unwrap();
+            },
+        )
+        .await;
+
+        assert_eq!(
+            count_child_vectors_for(&db, "edit-derived-delete").await,
+            0,
+            "disabled fact channel must not retain stale child rows"
+        );
+        assert_eq!(
+            episode_content_for(&db, "edit-derived-delete").await,
+            None,
+            "below-gate edited content must remove the stale content-backed episode"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_memory_rolls_back_all_fields_and_reuses_connection() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            let original = "Original atomic update content spans several chunks. ".repeat(150);
+            db.upsert_documents_with_derived_channels_for_test(
+                vec![memory_doc_with_fields(
+                    "edit-rollback",
+                    &original,
+                    "{\"status\":\"original\"}",
+                )],
+                false,
+                true,
+            )
+            .await
+            .unwrap();
+            let old_chunks = db
+                .get_memories_by_source_id("memory", "edit-rollback")
+                .await
+                .unwrap();
+            let old_children = child_vector_inventory_for(&db, "edit-rollback").await;
+            let old_detail = db
+                .get_memory_detail("edit-rollback")
+                .await
+                .unwrap()
+                .unwrap();
+            {
+                let conn = db.conn.lock().await;
+                conn.execute(
+                    "CREATE TRIGGER fail_atomic_memory_edit
+                     BEFORE DELETE ON child_vectors
+                     WHEN OLD.parent_id = 'edit-rollback'
+                     BEGIN SELECT RAISE(ABORT, 'blocked child replacement'); END",
+                    (),
+                )
+                .await
+                .unwrap();
+            }
+
+            let update = crate::post_write::MemoryUpdate {
+                content: Some("Replacement content must be fully atomic across every field."),
+                space: Some(Some("new-space")),
+                confirm: true,
+                memory_type: Some("preference"),
+            };
+            let error = crate::post_write::update_memory(&db, "edit-rollback", update)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("blocked child replacement"));
+
+            let after_failure = db
+                .get_memory_detail("edit-rollback")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(after_failure.content, old_detail.content);
+            assert_eq!(after_failure.space, old_detail.space);
+            assert_eq!(after_failure.memory_type, old_detail.memory_type);
+            assert_eq!(after_failure.confirmed, old_detail.confirmed);
+            assert_eq!(
+                db.get_memories_by_source_id("memory", "edit-rollback")
+                    .await
+                    .unwrap()
+                    .len(),
+                old_chunks.len()
+            );
+            assert_eq!(
+                child_vector_inventory_for(&db, "edit-rollback").await,
+                old_children
+            );
+
+            {
+                let conn = db.conn.lock().await;
+                conn.execute("DROP TRIGGER fail_atomic_memory_edit", ())
+                    .await
+                    .unwrap();
+            }
+            crate::post_write::update_memory(&db, "edit-rollback", update)
+                .await
+                .expect("same connection must accept a later complete update");
+            let after_retry = db
+                .get_memory_detail("edit-rollback")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                after_retry.content,
+                "Replacement content must be fully atomic across every field."
+            );
+            assert_eq!(after_retry.space.as_deref(), Some("new-space"));
+            assert_eq!(after_retry.memory_type.as_deref(), Some("preference"));
+            assert!(after_retry.confirmed);
+        })
+        .await;
     }
 
     // ==================== update_timestamp_by_source_id ====================

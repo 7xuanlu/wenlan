@@ -77,16 +77,16 @@ counts. Never copy raw artifact contents into this ledger.
 | issue_id | `A4` |
 | scenario | One update request changes content and metadata for a logical memory that has secondary chunks, child vectors, or an episode. |
 | observed_live_exposure | Pending a stable real-store probe; multi-chunk population is measured by the harness. |
-| code_evidence | `crates/wenlan-server/src/memory_routes.rs`, `handle_update_memory`, sequences mutations; `crates/wenlan-core/src/db.rs`, `update_memory`, edits only chunk zero and rebuilds children later. |
+| code_evidence | RED observed a content edit leave 7 chunks under one logical memory, and an HTTP request combining content/confirm with an invalid taxonomy returned 200 after sequential mutation. |
 | invariant | One validated request updates primary content/metadata, removes stale secondary chunks, replaces derived children, and synchronizes episodes in one transaction while preserving untouched metadata. |
-| reproducer | Multi-field validation, abort-trigger rollback, stale secondary chunk, child-vector, and episode fixtures. |
-| root_cause | Candidate: server-owned mutation sequence plus split core transactions. |
-| repair | Pending RED confirmation. |
+| reproducer | Invalid multi-field HTTP request; 7-chunk edit; exact head-metadata snapshot; FTS sentinel; content-backed and source-text-backed episodes; feature-off/word-gate deletion; child-delete abort trigger followed by same-connection retry. |
+| root_cause | Confirmed: the server owned a sequence of independent mutations, while core content editing updated only chunk zero and rebuilt child vectors in a later transaction. Taxonomy was not validated at the update boundary. |
+| repair | The route now validates `MemoryType`, resolves registered-space fallback, and calls one `post_write::update_memory` capability. One DB primitive prepares embeddings before `BEGIN`, updates the head in place, deletes stale chunks, replaces/deletes children, synchronizes episodes, applies requested metadata/confirmation, and rolls back every mutation on failure. |
 | lint_coverage | Lifecycle integrity may detect stable stale-row shapes; transaction atomicity remains test-only. |
 | cleanup_class | Unclassified until stale live owners are measured. |
-| verification | Not run. |
-| follow_up_direction | Task 5 `post_write` capability plus one DB transaction primitive. |
-| status | `candidate` |
+| verification | RED: stale chunk population was 7 instead of 1; invalid multi-field request returned 200. GREEN: core update group 6/6, source-text episode 1/1, derived deletion 1/1, server update group 2/2, unknown-space fallback 1/1, core/server all-target Clippy clean. |
+| follow_up_direction | Use the read-only real-store probe to classify any historical stale secondary chunks; do not infer cleanup ownership from the transaction test alone. |
+| status | `fixed`; live historical exposure remains unclassified. |
 
 ## A5: Scope-Safe Page Growth and Wikilinks
 
