@@ -1,6 +1,6 @@
 {
   "name": "wenlan",
-  "version": "0.13.0+codex",
+  "version": "0.13.1+codex",
   "description": "Codex-native workflow layer for Wenlan, the local-first personal memory layer for AI agents.",
   "author": {
     "name": "Qi-Xuan Lu",
