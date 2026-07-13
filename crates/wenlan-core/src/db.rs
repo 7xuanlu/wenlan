@@ -23670,7 +23670,13 @@ impl MemoryDB {
 
         let rows_affected = match conn
             .execute(
-                "DELETE FROM page_sources WHERE memory_source_id NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
+                "DELETE FROM page_sources
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM memories m
+                     WHERE m.source != 'episode'
+                       AND (m.source_id = page_sources.memory_source_id
+                            OR m.id = page_sources.memory_source_id)
+                 )",
                 (),
             )
             .await
@@ -23686,7 +23692,14 @@ impl MemoryDB {
 
         if let Err(e) = conn
             .execute(
-                "DELETE FROM page_evidence WHERE source_kind = 'memory' AND locator NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
+                "DELETE FROM page_evidence
+                 WHERE source_kind = 'memory'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM memories m
+                       WHERE m.source != 'episode'
+                         AND (m.source_id = page_evidence.locator
+                              OR m.id = page_evidence.locator)
+                   )",
                 (),
             )
             .await
@@ -39208,6 +39221,83 @@ pub(crate) mod tests {
 
         let sources = db.get_page_sources("c_keep").await.unwrap();
         assert_eq!(sources.len(), 1, "valid row should be intact");
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphaned_page_sources_accepts_logical_and_row_ids() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_locator_forms",
+            "Locator forms",
+            None,
+            "content",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.upsert_documents(vec![make_memory_doc(
+            "logical_locator",
+            "Memory with two valid locator forms",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+
+        let row_id = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM memories
+                     WHERE source_id = 'logical_locator' AND chunk_index = 0",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap()
+        };
+
+        for locator in ["logical_locator", row_id.as_str(), "missing_locator"] {
+            db.link_page_source("page_locator_forms", locator, "test")
+                .await
+                .unwrap();
+        }
+
+        let removed = db.cleanup_orphaned_page_sources().await.unwrap();
+        assert_eq!(removed, 1, "only the missing owner should be removed");
+
+        let source_locators: std::collections::HashSet<_> = db
+            .get_page_sources("page_locator_forms")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+        assert_eq!(
+            source_locators,
+            std::collections::HashSet::from(["logical_locator".to_string(), row_id.clone()])
+        );
+
+        let evidence_locators: std::collections::HashSet<_> = db
+            .get_page_evidence("page_locator_forms")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|evidence| evidence.source_kind == "memory")
+            .filter_map(|evidence| evidence.locator)
+            .collect();
+        assert_eq!(evidence_locators, source_locators);
     }
 
     // ---- upsert_memory_in_place ----

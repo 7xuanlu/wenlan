@@ -26,13 +26,13 @@ counts. Never copy raw artifact contents into this ledger.
 | code_evidence | `crates/wenlan-core/src/db.rs`, `cleanup_orphaned_page_sources` currently validates only `memories.source_id`. |
 | invariant | Either authorized memory identity preserves `page_sources` and memory `page_evidence`; only a missing owner is removable. |
 | reproducer | Focused cleanup fixture for logical id, row id, and missing owner. |
-| root_cause | Candidate: cleanup ownership predicate recognizes one of two canonical locator forms. |
-| repair | Pending RED confirmation. |
+| root_cause | Confirmed: both cleanup predicates recognized only logical `memories.source_id`, so a valid internal row-id locator was deleted. |
+| repair | Both dual-write cleanup predicates now use correlated `NOT EXISTS` and preserve a non-episode memory matching either `source_id` or `id` in the existing transaction. |
 | lint_coverage | Existing `pages.provenance.source_evidence_coverage` is the preferred check group. |
 | cleanup_class | Unclassified until live exposure is measured. |
-| verification | Not run. |
-| follow_up_direction | Task 2 RED/GREEN repair, then Task 8 missing-owner lint coverage. |
-| status | `candidate` |
+| verification | RED removed 2 rows instead of 1. GREEN: focused locator fixture 1/1, orphan-cleanup group 3/3, Page provenance adjacency 6/6. |
+| follow_up_direction | Task 8 missing-owner lint coverage; Task 9 measures live residue without mutation. |
+| status | `fixed` |
 
 ## A2: Entity Merge and Delete References
 
