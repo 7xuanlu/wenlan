@@ -112,17 +112,17 @@ counts. Never copy raw artifact contents into this ledger.
 |---|---|
 | issue_id | `B1` |
 | scenario | Relation/observation or dual-pool resolution fails between owned writes. |
-| observed_live_exposure | Pending probe and reproducer. |
-| code_evidence | Pending Task 7 bounded path read. |
+| observed_live_exposure | Pending the stable real-store probe; no live row is classified from the synthetic fault. |
+| code_evidence | `resolve_supersede_existing` writes `incoming.supersedes` and suppresses the existing memory in separate statements; the refinement caller logs a helper error and continues. |
 | invariant | Retry converges without duplicate, missing, or half-applied graph/lifecycle state. |
-| reproducer | One abort-trigger fault point selected in Task 7. |
-| root_cause | Unknown. |
-| repair | Discovery only; reproduced defects require a reviewed addendum. |
+| reproducer | `supersede_existing_rolls_back_link_when_suppression_fails` aborts the second statement and asserts the first linkage rolls back. |
+| root_cause | No transaction spans linkage and suppression. |
+| repair | Reproduced; atomic transaction specified in `2026-07-13-evidence-driven-lint-repair-priority-b-addendum.md`. |
 | lint_coverage | Existing KG/source/lifecycle groups first. |
-| cleanup_class | Unclassified. |
-| verification | Not run. |
-| follow_up_direction | Task 7 disposition. |
-| status | `candidate` |
+| cleanup_class | Existing half-linked rows require live evidence and semantic review; do not auto-suppress from shape alone. |
+| verification | RED: `cargo test -p wenlan-core --lib supersede_existing_rolls_back_link_when_suppression_fails -- --nocapture` left `incoming.supersedes` committed after suppression abort. |
+| follow_up_direction | Execute B1 addendum and rerun dual-pool tests. |
+| status | `reproduced` |
 
 ## B2: Page Revision, Archive, Watcher, and Proposal Boundaries
 
@@ -130,17 +130,17 @@ counts. Never copy raw artifact contents into this ledger.
 |---|---|
 | issue_id | `B2` |
 | scenario | Page revision acceptance, archive, watcher replay, or proposal consumption fails between DB and projection writes. |
-| observed_live_exposure | Pending probe and reproducer. |
-| code_evidence | Pending Task 7 bounded path read. |
+| observed_live_exposure | Pending the stable real-store probe. |
+| code_evidence | Page version-CAS update commits before a separate pending-card consumption UPDATE; projection follows both. |
 | invariant | CAS/version state and projection receipts converge or report incomplete; consumed work is not lost. |
-| reproducer | One deterministic failure boundary selected in Task 7. |
-| root_cause | Unknown. |
-| repair | Discovery only; reproduced defects require a reviewed addendum. |
+| reproducer | `accept_page_revision_consume_failure_keeps_page_retryable` aborts card consumption after the Page CAS. |
+| root_cause | Page mutation and work-item consumption have separate transaction boundaries. |
+| repair | Reproduced; combined Page/card transaction specified in the Priority B addendum. |
 | lint_coverage | Pages/projections state and non-atomic snapshot contracts first. |
-| cleanup_class | Unclassified. |
-| verification | Not run. |
-| follow_up_direction | Task 7 disposition. |
-| status | `candidate` |
+| cleanup_class | Existing Page/card mismatches need version/content comparison before any proposal; default `needs_semantic_review`. |
+| verification | RED: `cargo test -p wenlan-core --lib accept_page_revision_consume_failure_keeps_page_retryable -- --nocapture` committed proposed Page content while leaving the card pending. |
+| follow_up_direction | Execute B2 addendum after narrower DB repairs. |
+| status | `reproduced` |
 
 ## B3: Delete, Episode, and Source-ID Rebinding
 
@@ -148,17 +148,17 @@ counts. Never copy raw artifact contents into this ledger.
 |---|---|
 | issue_id | `B3` |
 | scenario | Ordinary/time-range delete or logical source-id rebinding leaves owned children, episodes, or provenance. |
-| observed_live_exposure | Pending probe and reproducer. |
-| code_evidence | Pending Task 7 bounded path read. |
+| observed_live_exposure | Pending the stable real-store probe. |
+| code_evidence | `rebind_source_id` updates primary memories first, then swallows enrichment checkpoint update errors; logical child keys have no update cascade. |
 | invariant | Declared owners cascade/rebind; telemetry retention remains explicit and is not mislabeled orphan data. |
-| reproducer | One delete or rebind fixture selected in Task 7. |
-| root_cause | Unknown. |
-| repair | Discovery only; reproduced defects require a reviewed addendum. |
+| reproducer | `rebind_source_id_rolls_back_when_checkpoint_rebind_fails` aborts checkpoint rebinding and inventories old/new owners. |
+| root_cause | Rebinding is multi-statement, non-transactional, and treats an owned checkpoint write as best-effort. |
+| repair | Reproduced; transaction and declared-child rebinding specified in the Priority B addendum. |
 | lint_coverage | Owner-integrity checks only where retention contract is deterministic. |
-| cleanup_class | Unclassified. |
-| verification | Not run. |
-| follow_up_direction | Task 7 disposition. |
-| status | `candidate` |
+| cleanup_class | Stable old/new rename receipts may permit `deterministic_safe`; otherwise unclassified until live evidence. |
+| verification | RED: `cargo test -p wenlan-core --lib rebind_source_id_rolls_back_when_checkpoint_rebind_fails -- --nocapture` returned success with memories on new and checkpoints on old. |
+| follow_up_direction | Execute B3 addendum and add success-path child ownership assertions. |
+| status | `reproduced` |
 
 ## B4: Checkpoint Ordering and Retry Convergence
 
@@ -166,17 +166,17 @@ counts. Never copy raw artifact contents into this ledger.
 |---|---|
 | issue_id | `B4` |
 | scenario | Enrichment or source-sync checkpoint reaches terminal state before its owned artifacts are durable. |
-| observed_live_exposure | Pending probe and reproducer. |
-| code_evidence | Pending Task 7 bounded path read. |
+| observed_live_exposure | Pending the stable real-store probe. |
+| code_evidence | Document enrichment calls `mark_done` before best-effort `record_sync_state`; same-hash enqueue does not reopen a done item. |
 | invariant | Terminal receipt implies required writes exist; retry is idempotent and resumes from a valid checkpoint. |
-| reproducer | One queue/checkpoint abort fixture selected in Task 7. |
-| root_cause | Unknown. |
-| repair | Discovery only; reproduced defects require a reviewed addendum. |
+| reproducer | `sync_receipt_failure_does_not_leave_same_hash_queue_terminal` aborts the receipt INSERT, removes the trigger, and re-enqueues the same hash. |
+| root_cause | Terminal queue state is committed before its required receipt, and receipt failure is swallowed. |
+| repair | Reproduced; receipt-before-terminal ordering specified in the Priority B addendum. |
 | lint_coverage | Queue/runtime completeness checks first. |
-| cleanup_class | Unclassified. |
-| verification | Not run. |
-| follow_up_direction | Task 7 disposition. |
-| status | `candidate` |
+| cleanup_class | Missing receipt with done queue is `environment_or_config` or retryable state; data cleanup waits for live source ownership. |
+| verification | RED: `cargo test -p wenlan-core --lib sync_receipt_failure_does_not_leave_same_hash_queue_terminal -- --nocapture` observed `done` with no receipt and no same-hash recovery. |
+| follow_up_direction | Execute B4 after source Page retry is failure-safe. |
+| status | `reproduced` |
 
 ## B5: Source Page Replacement Failure
 
@@ -184,17 +184,17 @@ counts. Never copy raw artifact contents into this ledger.
 |---|---|
 | issue_id | `B5` |
 | scenario | Source Page replacement deletes the old projection before the new projection is durable. |
-| observed_live_exposure | Pending probe and reproducer. |
-| code_evidence | Pending Task 7 bounded path read. |
+| observed_live_exposure | Pending the stable real-store probe. |
+| code_evidence | `write_source_page` deletes the deterministic Page before a separate PageWrite create; Page source/evidence rows cascade on delete. |
 | invariant | A failed replacement preserves the last valid Page and provenance or reports an incomplete projection. |
-| reproducer | One projection-write fault selected in Task 7. |
-| root_cause | Unknown. |
-| repair | Discovery only; reproduced defects require a reviewed addendum. |
+| reproducer | `source_page_replacement_failure_preserves_last_valid_page_and_provenance` aborts replacement Page insertion after an existing source Page is valid. |
+| root_cause | Delete-then-create spans two commits; failed create has no last-known-good row to restore. |
+| repair | Reproduced; atomic in-place source Page replacement specified in the Priority B addendum. |
 | lint_coverage | Page DB/filesystem/state receipt agreement first. |
-| cleanup_class | Unclassified. |
-| verification | Not run. |
-| follow_up_direction | Task 7 disposition. |
-| status | `candidate` |
+| cleanup_class | Lost historical Page prose/provenance is not reconstructable from shape alone; default `needs_semantic_review` or external-source replay. |
+| verification | RED: `cargo test -p wenlan-core --lib source_page_replacement_failure_preserves_last_valid_page_and_provenance -- --nocapture` left the Page absent after insertion abort. |
+| follow_up_direction | Execute B5 before queue retry ordering. |
+| status | `reproduced` |
 
 ## B6: Concurrent Projection and Capture Writes
 
@@ -202,17 +202,17 @@ counts. Never copy raw artifact contents into this ledger.
 |---|---|
 | issue_id | `B6` |
 | scenario | Concurrent Page projection writes or identical captures race around version/dedup ownership. |
-| observed_live_exposure | Pending probe and reproducer. |
-| code_evidence | Pending Task 7 bounded path read. |
+| observed_live_exposure | Pending the stable real-store probe. |
+| code_evidence | Capture dedup is a read before independent ID allocation; there is no unique content key. Projection-manifest last-writer behavior is explicitly regenerable expected state. |
 | invariant | CAS/dedup selects one deterministic survivor and no valid write is silently lost. |
-| reproducer | Tokio barrier fixture selected in Task 7; sleeps are forbidden. |
-| root_cause | Unknown. |
-| repair | Discovery only; reproduced defects require a reviewed addendum. |
+| reproducer | Not executed: the real handler needs a deterministic barrier immediately after its dedup read; no existing seam can stop both requests there without production/test-hook work. |
+| root_cause | Unproven concurrency window; static ordering alone is insufficient. |
+| repair | None until the barrier fixture is separately approved and executed. |
 | lint_coverage | Stable duplicate/version drift only; concurrency property remains test-owned. |
-| cleanup_class | Unclassified. |
-| verification | Not run. |
-| follow_up_direction | Task 7 disposition. |
-| status | `candidate` |
+| cleanup_class | Duplicate captures would need semantic review; regenerable projection-manifest races are `expected_state`. |
+| verification | Bounded code/test read only; existing batcher concurrency test uses a mock processor and cannot prove DB dedup. |
+| follow_up_direction | Entry criterion: add a test-only post-dedup barrier and assert one durable head, one duplicate response, then connection reuse. |
+| status | `deferred` |
 
 ## B7: Legacy Provenance and Deleted Link Targets
 
@@ -220,14 +220,14 @@ counts. Never copy raw artifact contents into this ledger.
 |---|---|
 | issue_id | `B7` |
 | scenario | Legacy Page provenance or a deleted wikilink target leaves stale locators/resolution state. |
-| observed_live_exposure | Pending probe and reproducer. |
-| code_evidence | Pending Task 7 bounded path read. |
+| observed_live_exposure | Pending the stable real-store probe. |
+| code_evidence | `page_links.target_page_id` intentionally has no FK; `delete_page` deletes only the target row and orphan repair scans only NULL targets. |
 | invariant | Deleted targets become explicit unresolved links; valid provenance locator kinds remain distinguishable. |
-| reproducer | Legacy provenance and target-delete fixture selected in Task 7. |
-| root_cause | Unknown. |
-| repair | Discovery only; reproduced defects require a reviewed addendum. |
+| reproducer | `page_links_target_delete_becomes_orphan_and_reresolves` deletes a resolved target, recreates its title under a new ID, and runs orphan repair. |
+| root_cause | Target deletion does not null inbound link targets, so stale non-NULL IDs never re-enter orphan resolution. |
+| repair | Reproduced; transactional target-null plus Page delete specified in the Priority B addendum. |
 | lint_coverage | Existing Pages/provenance and broken-link checks first. |
-| cleanup_class | Unclassified. |
-| verification | Not run. |
-| follow_up_direction | Task 7 disposition. |
-| status | `candidate` |
+| cleanup_class | A target ID absent from Pages can be proposed as `deterministic_safe` orphaning; semantic rebinding remains separate. |
+| verification | RED: `cargo test -p wenlan-core --lib page_links_target_delete_becomes_orphan_and_reresolves -- --nocapture` retained the deleted target ID. |
+| follow_up_direction | Execute B7 addendum and keep same-scope ambiguity tests green. |
+| status | `reproduced` |

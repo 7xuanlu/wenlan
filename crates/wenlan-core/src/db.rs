@@ -28973,6 +28973,136 @@ pub(crate) mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn rebind_source_id_rolls_back_when_checkpoint_rebind_fails() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+                 VALUES ('row-rebind','body','memory','source-old','rebind',0,1,'text');
+                 INSERT INTO enrichment_steps
+                     (source_id,step_name,status,attempts,updated_at)
+                 VALUES ('source-old','extract','ok',1,1);
+                 CREATE TRIGGER abort_enrichment_step_rebind
+                 BEFORE UPDATE OF source_id ON enrichment_steps
+                 WHEN OLD.source_id = 'source-old'
+                 BEGIN SELECT RAISE(ABORT, 'blocked checkpoint rebind'); END;",
+            )
+            .await
+            .unwrap();
+        }
+
+        let result = db
+            .rebind_source_id("memory", "source-old", "source-new")
+            .await;
+        let (old_memories, new_memories, old_steps, new_steps) = {
+            let conn = db.conn.lock().await;
+            let mut counts = Vec::new();
+            for sql in [
+                "SELECT COUNT(*) FROM memories WHERE source_id='source-old'",
+                "SELECT COUNT(*) FROM memories WHERE source_id='source-new'",
+                "SELECT COUNT(*) FROM enrichment_steps WHERE source_id='source-old'",
+                "SELECT COUNT(*) FROM enrichment_steps WHERE source_id='source-new'",
+            ] {
+                let count = conn
+                    .query(sql, ())
+                    .await
+                    .unwrap()
+                    .next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .get::<i64>(0)
+                    .unwrap();
+                counts.push(count);
+            }
+            conn.execute("DROP TRIGGER abort_enrichment_step_rebind", ())
+                .await
+                .unwrap();
+            (counts[0], counts[1], counts[2], counts[3])
+        };
+        db.record_enrichment_step("unrelated", "extract", "ok", None)
+            .await
+            .expect("connection must remain reusable after abort trigger");
+
+        assert!(
+            result.is_err(),
+            "a checkpoint rebind failure must fail the whole source-id rebind"
+        );
+        assert_eq!((old_memories, new_memories), (1, 0));
+        assert_eq!((old_steps, new_steps), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn supersede_existing_rolls_back_link_when_suppression_fails() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,confirmed)
+                 VALUES
+                     ('row-supersede-incoming','new','memory','supersede-incoming','new',0,2,'text',1),
+                     ('row-supersede-existing','old','memory','supersede-existing','old',0,1,'text',1);
+                 CREATE TRIGGER abort_existing_suppression
+                 BEFORE UPDATE OF confirmed ON memories
+                 WHEN OLD.source_id = 'supersede-existing'
+                 BEGIN SELECT RAISE(ABORT, 'blocked existing suppression'); END;",
+            )
+            .await
+            .unwrap();
+        }
+
+        let result = db
+            .resolve_supersede_existing("supersede-incoming", "supersede-existing")
+            .await;
+        let (incoming_supersedes, existing_confirmed) = {
+            let conn = db.conn.lock().await;
+            let incoming_supersedes = conn
+                .query(
+                    "SELECT supersedes FROM memories WHERE source_id='supersede-incoming'",
+                    (),
+                )
+                .await
+                .unwrap()
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<Option<String>>(0)
+                .unwrap();
+            let existing_confirmed = conn
+                .query(
+                    "SELECT confirmed FROM memories WHERE source_id='supersede-existing'",
+                    (),
+                )
+                .await
+                .unwrap()
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap();
+            conn.execute("DROP TRIGGER abort_existing_suppression", ())
+                .await
+                .unwrap();
+            (incoming_supersedes, existing_confirmed)
+        };
+        db.record_enrichment_step("unrelated-supersede", "extract", "ok", None)
+            .await
+            .expect("connection must remain reusable after suppression abort");
+
+        assert!(result.is_err());
+        assert_eq!(
+            incoming_supersedes, None,
+            "failed suppression must roll back the incoming revision linkage"
+        );
+        assert_eq!(existing_confirmed, 1);
+    }
+
     // ==================== delete_bulk ====================
 
     #[tokio::test]
@@ -38111,6 +38241,78 @@ pub(crate) mod tests {
             db.get_page_inbound_links("page_tgt").await.unwrap().len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn page_links_target_delete_becomes_orphan_and_reresolves() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_target_old",
+            "Replaceable Target",
+            None,
+            "old target",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_source_keep",
+            "Source Keep",
+            None,
+            "see [[Replaceable Target]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db.get_page_outbound_links("page_source_keep")
+                .await
+                .unwrap()[0]
+                .target_page_id
+                .as_deref(),
+            Some("page_target_old")
+        );
+
+        db.delete_page("page_target_old").await.unwrap();
+        let target_after_delete = db
+            .get_page_outbound_links("page_source_keep")
+            .await
+            .unwrap()[0]
+            .target_page_id
+            .clone();
+
+        db.insert_page(
+            "page_target_new",
+            "Replaceable Target",
+            None,
+            "new target",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        let resolved = db.resolve_orphan_page_links().await.unwrap();
+        let target_after_repair = db
+            .get_page_outbound_links("page_source_keep")
+            .await
+            .unwrap()[0]
+            .target_page_id
+            .clone();
+        assert_eq!(
+            target_after_delete, None,
+            "deleting a target must expose existing references as unresolved"
+        );
+        assert_eq!(resolved, 1);
+        assert_eq!(target_after_repair.as_deref(), Some("page_target_new"));
     }
 
     #[tokio::test]

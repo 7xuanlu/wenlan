@@ -1025,6 +1025,129 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn source_page_replacement_failure_preserves_last_valid_page_and_provenance() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+        let outcome =
+            run_document_enrichment(&db, &entry, None, None, &PromptRegistry::default()).await;
+        let before = db.get_page(&outcome.page_id).await.unwrap().unwrap();
+        let evidence_before = db.get_page_evidence(&outcome.page_id).await.unwrap();
+        assert!(!evidence_before.is_empty());
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER abort_source_page_replacement
+                 BEFORE INSERT ON pages
+                 WHEN NEW.id = '{}'
+                 BEGIN SELECT RAISE(ABORT, 'blocked source page replacement'); END;",
+                outcome.page_id.replace('\'', "''")
+            ))
+            .await
+            .unwrap();
+        }
+        let err = write_source_page(
+            &db,
+            &outcome.page_id,
+            &before.title,
+            before.summary.as_deref(),
+            "replacement body",
+            &outcome.chunk_ids,
+        )
+        .await
+        .expect_err("replacement insert fault must be returned");
+        assert!(err.to_string().contains("blocked source page replacement"));
+        let after_failure = db.get_page(&outcome.page_id).await.unwrap();
+        let evidence_after_failure = db.get_page_evidence(&outcome.page_id).await.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_source_page_replacement", ())
+                .await
+                .unwrap();
+        }
+        write_source_page(
+            &db,
+            &outcome.page_id,
+            &before.title,
+            before.summary.as_deref(),
+            "replacement body",
+            &outcome.chunk_ids,
+        )
+        .await
+        .expect("connection and replacement path must remain reusable");
+
+        assert!(
+            after_failure.is_some(),
+            "failed replacement must preserve the last valid source Page"
+        );
+        assert_eq!(after_failure.unwrap().content, before.content);
+        assert_eq!(
+            evidence_after_failure.len(),
+            evidence_before.len(),
+            "failed replacement must preserve Page provenance"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_receipt_failure_does_not_leave_same_hash_queue_terminal() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "CREATE TRIGGER abort_source_sync_receipt
+                 BEFORE INSERT ON source_sync_state
+                 BEGIN SELECT RAISE(ABORT, 'blocked source sync receipt'); END;",
+            )
+            .await
+            .unwrap();
+        }
+
+        run_document_enrichment(&db, &entry, None, None, &PromptRegistry::default()).await;
+        let queue_after_failure = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        let receipt_after_failure = db.get_sync_state("folder-notes", &file_path).await.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_source_sync_receipt", ())
+                .await
+                .unwrap();
+        }
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .expect("connection and queue must remain reusable");
+        let queue_after_reenqueue = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            receipt_after_failure.is_some() || queue_after_failure.status != "done",
+            "terminal queue state must imply a durable source-sync receipt"
+        );
+        assert_ne!(
+            queue_after_reenqueue.status, "done",
+            "same-hash re-enqueue must recover a missing sync receipt"
+        );
+    }
+
     // ── self-healing loop: LLM failure pauses with backoff, then re-claims ────
 
     #[tokio::test]

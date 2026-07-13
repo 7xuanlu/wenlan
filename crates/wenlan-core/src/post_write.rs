@@ -3381,6 +3381,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accept_page_revision_consume_failure_keeps_page_retryable() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_accept_abort_original";
+        let new_mem_id = "mem_page_accept_abort_new";
+        let original_content = "original page content before failed revision acceptance";
+        let proposed_content = "proposed page content must commit with card consumption";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card.revision_card_id.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER abort_page_revision_consume
+                 BEFORE UPDATE OF pending_revision ON memories
+                 WHEN OLD.source_id = '{}' AND OLD.pending_revision = 1
+                 BEGIN SELECT RAISE(ABORT, 'blocked revision consume'); END;",
+                card_id.replace('\'', "''")
+            ))
+            .await
+            .unwrap();
+        }
+
+        let err = accept_pending_revision(&db, &card_id, "test-agent")
+            .await
+            .expect_err("consume fault must fail the acceptance");
+        assert!(err.to_string().contains("blocked revision consume"));
+        let after_failure = db.get_page(&page_id).await.unwrap().unwrap();
+        let pending = db.list_pending_revisions(10).await.unwrap();
+        assert!(pending
+            .iter()
+            .any(|revision| revision.revision_source_id == card_id));
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_page_revision_consume", ())
+                .await
+                .unwrap();
+        }
+        let retry = accept_pending_revision(&db, &card_id, "test-agent").await;
+        assert_eq!(
+            after_failure.content, before.content,
+            "failed card consumption must not commit Page content first"
+        );
+        assert_eq!(
+            after_failure.version, before.version,
+            "failed card consumption must leave the Page version retryable"
+        );
+        assert!(
+            retry.is_ok(),
+            "retry after the fault is removed must converge"
+        );
+        assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn accept_pending_revision_page_write_card_conflicts_when_page_version_changed() {
         let (db, _dir) = test_db().await;
         let mem_id = "mem_page_accept_conflict_original";
