@@ -21765,6 +21765,143 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Atomically replace an existing machine-owned source Page and its exact
+    /// chunk provenance without deleting the last valid Page first. Returns
+    /// `false` when ownership changed before the guarded UPDATE.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn replace_source_page(
+        &self,
+        id: &str,
+        title: &str,
+        summary: Option<&str>,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+    ) -> Result<bool, WenlanError> {
+        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
+        let source_ids_json = serde_json::to_string(source_memory_ids)
+            .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
+        let embed_text = crate::pages::page_embedding_text(title, summary, &sanitized_content);
+        let embedding_sql = match self.generate_embeddings(&[embed_text]) {
+            Ok(mut vectors) if !vectors.is_empty() => {
+                vectors.pop().map(|embedding| Self::vec_to_sql(&embedding))
+            }
+            Ok(_) => {
+                log::warn!("replace_source_page: empty embedding result for {id}");
+                None
+            }
+            Err(error) => {
+                log::warn!("replace_source_page: embedding failed for {id}: {error}");
+                None
+            }
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page begin: {e}")))?;
+        let result = async {
+            let affected = match embedding_sql.as_deref() {
+                Some(embedding) => {
+                    conn.execute(
+                        "UPDATE pages SET title=?1, summary=?2, content=?3,
+                             source_memory_ids=?4, version=version+1,
+                             last_compiled=?5, last_modified=?5,
+                             embedding=vector32(?6), citations='[]'
+                         WHERE id=?7 AND status='active'
+                           AND creation_kind='source' AND COALESCE(user_edited,0)=0",
+                        libsql::params![
+                            title,
+                            summary,
+                            sanitized_content.as_str(),
+                            source_ids_json.as_str(),
+                            now.as_str(),
+                            embedding,
+                            id
+                        ],
+                    )
+                    .await
+                }
+                None => {
+                    conn.execute(
+                        "UPDATE pages SET title=?1, summary=?2, content=?3,
+                             source_memory_ids=?4, version=version+1,
+                             last_compiled=?5, last_modified=?5, citations='[]'
+                         WHERE id=?6 AND status='active'
+                           AND creation_kind='source' AND COALESCE(user_edited,0)=0",
+                        libsql::params![
+                            title,
+                            summary,
+                            sanitized_content.as_str(),
+                            source_ids_json.as_str(),
+                            now.as_str(),
+                            id
+                        ],
+                    )
+                    .await
+                }
+            }
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page row: {e}")))?;
+            if affected == 0 {
+                return Ok(false);
+            }
+            conn.execute(
+                "DELETE FROM page_sources WHERE page_id=?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page sources: {e}")))?;
+            conn.execute(
+                "DELETE FROM page_evidence WHERE page_id=?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page evidence: {e}")))?;
+            for source_id in source_memory_ids {
+                conn.execute(
+                    "INSERT INTO page_sources
+                         (page_id,memory_source_id,linked_at,link_reason)
+                     VALUES (?1,?2,?3,?4)",
+                    libsql::params![id, *source_id, now_ts, link_reason],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("replace_source_page source insert: {e}"))
+                })?;
+            }
+            Self::insert_resolved_page_evidence(&conn, id, source_memory_ids, now_ts, link_reason)
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("replace_source_page evidence insert: {e}"))
+                })?;
+            Ok::<bool, WenlanError>(true)
+        }
+        .await;
+        let replaced = match result {
+            Ok(replaced) => replaced,
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        };
+        if !replaced {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Ok(false);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "replace_source_page commit: {error}"
+            )));
+        }
+        drop(conn);
+        if let Err(error) = self.refresh_page_wikilinks(id, &sanitized_content).await {
+            log::warn!("[page-links] source Page refresh failed for {id}: {error}");
+        }
+        Ok(true)
+    }
+
     /// Retrieve a page by id. Returns None if not found.
     pub async fn get_page(&self, id: &str) -> Result<Option<Page>, WenlanError> {
         let conn = self.conn.lock().await;

@@ -189,12 +189,12 @@ counts. Never copy raw artifact contents into this ledger.
 | invariant | A failed replacement preserves the last valid Page and provenance or reports an incomplete projection. |
 | reproducer | `source_page_replacement_failure_preserves_last_valid_page_and_provenance` aborts replacement Page insertion after an existing source Page is valid. |
 | root_cause | Delete-then-create spans two commits; failed create has no last-known-good row to restore. |
-| repair | Reproduced; atomic in-place source Page replacement specified in the Priority B addendum. |
+| repair | Existing machine-owned source Pages now use a canonical PageWrite replacement variant backed by one in-place DB transaction for Page metadata, source ids, and typed evidence; creation remains the existing create path. |
 | lint_coverage | Page DB/filesystem/state receipt agreement first. |
 | cleanup_class | Lost historical Page prose/provenance is not reconstructable from shape alone; default `needs_semantic_review` or external-source replay. |
-| verification | RED: `cargo test -p wenlan-core --lib source_page_replacement_failure_preserves_last_valid_page_and_provenance -- --nocapture` left the Page absent after insertion abort. |
-| follow_up_direction | Execute B5 before queue retry ordering. |
-| status | `reproduced` |
+| verification | RED: `cargo test -p wenlan-core --lib source_page_replacement_failure_preserves_last_valid_page_and_provenance -- --nocapture` left the Page absent after insertion abort. GREEN: failure-preservation 1/1; source-Page creation and multi-chunk enrichment 2/2; folder-ingest replacement lifecycle 1/1; core all-target Clippy clean. |
+| follow_up_direction | Use external-source replay only for live Pages already lost before this fix; do not fabricate provenance. |
+| status | `fixed`; live historical exposure remains unclassified. |
 
 ## B6: Concurrent Projection and Capture Writes
 

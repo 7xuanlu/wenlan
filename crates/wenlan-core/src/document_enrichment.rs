@@ -451,8 +451,8 @@ async fn pause(db: &MemoryDB, entry: &DocEnrichmentQueueEntry, reason: &str) {
 }
 
 /// Write (idempotently) the single `creation_kind='source'` page for a document,
-/// citing its chunks. Deletes any existing page with the deterministic id first
-/// so a retry (stub → real digest) reuses the same id without an INSERT conflict.
+/// citing its chunks. Existing machine-owned source Pages update in place so a
+/// failed retry cannot delete the last valid Page or its provenance.
 async fn write_source_page(
     db: &MemoryDB,
     page_id: &str,
@@ -461,7 +461,21 @@ async fn write_source_page(
     content: &str,
     chunk_ids: &[String],
 ) -> Result<(), WenlanError> {
-    let _ = db.delete_page(page_id).await;
+    if db.get_page(page_id).await?.is_some() {
+        return page_write(
+            db,
+            PageWrite::ReplaceSource {
+                page_id,
+                title,
+                summary,
+                content,
+                source_memory_ids: chunk_ids,
+                agent: "doc-enrich",
+            },
+        )
+        .await
+        .map(|_| ());
+    }
     let req = CreateConceptRequest {
         title: title.to_string(),
         content: content.to_string(),
@@ -1044,8 +1058,8 @@ mod tests {
             let conn = db.conn.lock().await;
             conn.execute_batch(&format!(
                 "CREATE TRIGGER abort_source_page_replacement
-                 BEFORE INSERT ON pages
-                 WHEN NEW.id = '{}'
+                 BEFORE UPDATE OF content ON pages
+                 WHEN OLD.id = '{}'
                  BEGIN SELECT RAISE(ABORT, 'blocked source page replacement'); END;",
                 outcome.page_id.replace('\'', "''")
             ))

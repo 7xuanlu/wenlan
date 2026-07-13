@@ -91,6 +91,14 @@ pub enum PageWrite<'a> {
         knowledge_path: Option<&'a Path>,
         citations: Option<(String, String)>,
     },
+    ReplaceSource {
+        page_id: &'a str,
+        title: &'a str,
+        summary: Option<&'a str>,
+        content: &'a str,
+        source_memory_ids: &'a [String],
+        agent: &'a str,
+    },
 }
 
 pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResult, WenlanError> {
@@ -143,7 +151,76 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             )
             .await
         }
+        PageWrite::ReplaceSource {
+            page_id,
+            title,
+            summary,
+            content,
+            source_memory_ids,
+            agent,
+        } => {
+            replace_source_page_impl(
+                db,
+                page_id,
+                title,
+                summary,
+                content,
+                source_memory_ids,
+                agent,
+            )
+            .await
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn replace_source_page_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    title: &str,
+    summary: Option<&str>,
+    content: &str,
+    source_memory_ids: &[String],
+    agent: &str,
+) -> Result<WriteResult, WenlanError> {
+    if title.trim().is_empty() || content.trim().is_empty() || source_memory_ids.is_empty() {
+        return Err(WenlanError::Validation(
+            "source Page replacement requires title, content, and source ids".into(),
+        ));
+    }
+    let current = db
+        .get_page(page_id)
+        .await?
+        .ok_or_else(|| WenlanError::NotFound(format!("Page not found: {page_id}")))?;
+    if current.creation_kind != "source" || current.user_edited {
+        return Err(WenlanError::Conflict(format!(
+            "source Page {page_id} is not machine-owned"
+        )));
+    }
+    let source_refs: Vec<&str> = source_memory_ids.iter().map(String::as_str).collect();
+    if !db
+        .replace_source_page(page_id, title, summary, content, &source_refs, agent)
+        .await?
+    {
+        return Err(WenlanError::Conflict(format!(
+            "source Page {page_id} changed ownership before replacement"
+        )));
+    }
+    let detail = format!("title={title}, sources={}", source_memory_ids.len());
+    if let Err(error) = db
+        .log_agent_activity(agent, "page_update", source_memory_ids, None, &detail)
+        .await
+    {
+        log::warn!("[replace_source_page] activity log failed: {error}");
+    }
+    Ok(WriteResult {
+        id: page_id.to_string(),
+        attached_to: None,
+        warnings: Vec::new(),
+        wrote: true,
+        revision_card_id: None,
+        gated: false,
+    })
 }
 
 async fn attach_page_sources_impl(
