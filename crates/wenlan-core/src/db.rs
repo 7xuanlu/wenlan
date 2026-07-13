@@ -24432,18 +24432,37 @@ impl MemoryDB {
         existing_id: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE memories SET supersedes = ?1 WHERE source_id = ?2 AND source = 'memory'",
-            libsql::params![existing_id, incoming_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing link: {e}")))?;
-        conn.execute(
-            "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
-            libsql::params![existing_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing suppress: {e}")))?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "UPDATE memories SET supersedes = ?1 WHERE source_id = ?2 AND source = 'memory'",
+                libsql::params![existing_id, incoming_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing link: {e}")))?;
+            conn.execute(
+                "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params![existing_id],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("resolve_supersede_existing suppress: {e}"))
+            })?;
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "resolve_supersede_existing commit: {error}"
+            )));
+        }
         Ok(())
     }
 

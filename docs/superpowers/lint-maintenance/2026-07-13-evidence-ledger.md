@@ -117,12 +117,12 @@ counts. Never copy raw artifact contents into this ledger.
 | invariant | Retry converges without duplicate, missing, or half-applied graph/lifecycle state. |
 | reproducer | `supersede_existing_rolls_back_link_when_suppression_fails` aborts the second statement and asserts the first linkage rolls back. |
 | root_cause | No transaction spans linkage and suppression. |
-| repair | Reproduced; atomic transaction specified in `2026-07-13-evidence-driven-lint-repair-priority-b-addendum.md`. |
+| repair | Linkage and suppression now share one explicit transaction with rollback on either statement or COMMIT failure. |
 | lint_coverage | Existing KG/source/lifecycle groups first. |
 | cleanup_class | Existing half-linked rows require live evidence and semantic review; do not auto-suppress from shape alone. |
-| verification | RED: `cargo test -p wenlan-core --lib supersede_existing_rolls_back_link_when_suppression_fails -- --nocapture` left `incoming.supersedes` committed after suppression abort. |
-| follow_up_direction | Execute B1 addendum and rerun dual-pool tests. |
-| status | `reproduced` |
+| verification | RED: `cargo test -p wenlan-core --lib supersede_existing_rolls_back_link_when_suppression_fails -- --nocapture` left `incoming.supersedes` committed after suppression abort. GREEN: the same test 1/1 and `test_apply_invalidate_existing_soft_suppressed` 1/1. |
+| follow_up_direction | Use the real-store probe to inventory half-linked historical rows without auto-suppressing them. |
+| status | `fixed`; live historical exposure remains unclassified. |
 
 ## B2: Page Revision, Archive, Watcher, and Proposal Boundaries
 
