@@ -279,6 +279,7 @@ pub async fn run_periodic_steep(
     tuning: &crate::tuning::RefineryConfig,
     _confidence_cfg: &crate::tuning::ConfidenceConfig,
     distillation: &crate::tuning::DistillationConfig,
+    knowledge_path: Option<&std::path::Path>,
 ) -> Result<SteepResult, WenlanError> {
     // Forward to implementation with no API/synthesis LLM and full Backstop
     // trigger (preserves pre-PR-A behavior for callers that don't care about
@@ -293,6 +294,7 @@ pub async fn run_periodic_steep(
         tuning,
         _confidence_cfg,
         distillation,
+        knowledge_path,
         TriggerKind::Backstop,
     )
     .await
@@ -313,6 +315,7 @@ pub async fn run_periodic_steep_with_api(
     tuning: &crate::tuning::RefineryConfig,
     _confidence_cfg: &crate::tuning::ConfidenceConfig,
     distillation: &crate::tuning::DistillationConfig,
+    knowledge_path: Option<&std::path::Path>,
     trigger: TriggerKind,
 ) -> Result<SteepResult, WenlanError> {
     let steep_start = std::time::Instant::now();
@@ -534,11 +537,7 @@ pub async fn run_periodic_steep_with_api(
     // Phase 6: Normal distill — create new concepts from clusters
     // Prefer synthesis LLM, API LLM, external/BYOK API, then on-device.
     let compile_llm = synthesis_llm.or(api_llm).or(external_llm).or(llm);
-    let knowledge_path = {
-        let config = crate::config::load_config();
-        Some(config.knowledge_path_or_default())
-    };
-    let kp_ref = knowledge_path.as_deref();
+    let kp_ref = knowledge_path;
     if trigger.runs_phase(Phase::Emergence) {
         let phase = run_phase(Phase::Emergence, || async {
             let cloud_compile_llm = [synthesis_llm, api_llm, external_llm, llm]
@@ -1533,6 +1532,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Backstop,
         )
         .await
@@ -1564,6 +1564,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::BurstEnd,
         )
         .await
@@ -1613,6 +1614,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Backstop,
         )
         .await
@@ -1635,6 +1637,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::BurstEnd,
         )
         .await
@@ -1678,6 +1681,7 @@ mod tests {
                 &crate::tuning::RefineryConfig::default(),
                 &crate::tuning::ConfidenceConfig::default(),
                 &crate::tuning::DistillationConfig::default(),
+                None,
                 TriggerKind::Backstop,
             )
             .await
@@ -1709,6 +1713,7 @@ mod tests {
                 &crate::tuning::RefineryConfig::default(),
                 &crate::tuning::ConfidenceConfig::default(),
                 &crate::tuning::DistillationConfig::default(),
+                None,
                 TriggerKind::Backstop,
             )
             .await
@@ -1740,6 +1745,7 @@ mod tests {
                 &crate::tuning::RefineryConfig::default(),
                 &crate::tuning::ConfidenceConfig::default(),
                 &crate::tuning::DistillationConfig::default(),
+                None,
                 TriggerKind::BurstEnd,
             )
             .await
@@ -1777,6 +1783,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Idle,
         )
         .await
@@ -1854,6 +1861,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Daily,
         )
         .await
@@ -1924,6 +1932,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Backstop,
         )
         .await
@@ -1998,6 +2007,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2057,6 +2067,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2170,6 +2181,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2363,6 +2375,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Idle,
         )
         .await
@@ -2440,6 +2453,7 @@ mod tests {
                 &crate::tuning::RefineryConfig::default(),
                 &crate::tuning::ConfidenceConfig::default(),
                 &crate::tuning::DistillationConfig::default(),
+                None,
                 TriggerKind::Idle,
             ),
         )
@@ -2529,6 +2543,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Idle,
         )
         .await
@@ -2614,6 +2629,7 @@ mod tests {
                     &crate::tuning::RefineryConfig::default(),
                     &crate::tuning::ConfidenceConfig::default(),
                     &crate::tuning::DistillationConfig::default(),
+                    None,
                     TriggerKind::Idle,
                 )
                 .await
@@ -2695,6 +2711,7 @@ mod tests {
                     &crate::tuning::RefineryConfig::default(),
                     &crate::tuning::ConfidenceConfig::default(),
                     &crate::tuning::DistillationConfig::default(),
+                    None,
                     TriggerKind::Daily,
                 )
                 .await
@@ -3028,6 +3045,7 @@ mod tests {
             &crate::tuning::RefineryConfig::default(),
             &crate::tuning::ConfidenceConfig::default(),
             &crate::tuning::DistillationConfig::default(),
+            None,
             TriggerKind::Backstop,
         )
         .await
