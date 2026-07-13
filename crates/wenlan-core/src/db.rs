@@ -23257,8 +23257,9 @@ impl MemoryDB {
     }
 
     /// Walk the orphan rows and re-resolve them against current page titles.
-    /// Returns the number of rows that flipped from NULL to a real target —
-    /// the refinery uses this for the log line. Snapshots the label list
+    /// Returns the number of distinct labels that flipped at least one row
+    /// from NULL to a real target — the refinery uses this for the log line.
+    /// Snapshots the orphan rows
     /// under a brief lock, then drops the connection before the per-label
     /// lookups so other writers aren't starved while the resolver scans.
     /// Resolution is per source Page and scope; existing non-NULL targets are
@@ -23292,7 +23293,7 @@ impl MemoryDB {
             orphan_rows
         };
 
-        let mut resolved = 0usize;
+        let mut resolved_labels = std::collections::BTreeSet::new();
         for (source_page_id, label_key, scope) in orphan_rows {
             let trimmed = label_key.trim();
             if trimmed.is_empty() {
@@ -23310,13 +23311,15 @@ impl MemoryDB {
                     "UPDATE page_links SET target_page_id = ?1
                      WHERE source_page_id = ?2 AND label_key = ?3
                        AND target_page_id IS NULL",
-                    libsql::params![target, source_page_id, label_key],
+                    libsql::params![target, source_page_id, label_key.as_str()],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("resolve_orphan_links update: {e}")))?;
-            resolved += changed as usize;
+            if changed > 0 {
+                resolved_labels.insert(label_key);
+            }
         }
-        Ok(resolved)
+        Ok(resolved_labels.len())
     }
 
     /// Search pages via vector similarity + FTS5 with RRF fusion.
