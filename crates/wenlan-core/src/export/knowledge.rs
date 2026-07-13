@@ -10,11 +10,20 @@ use std::path::PathBuf;
 
 const KNOWLEDGE_STATE_SCHEMA_V2: u32 = 2;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct KnowledgeState {
     #[serde(default = "default_schema_v2")]
     schema_version: u32,
     pages: HashMap<String, PageFileState>,
+}
+
+impl Default for KnowledgeState {
+    fn default() -> Self {
+        Self {
+            schema_version: KNOWLEDGE_STATE_SCHEMA_V2,
+            pages: HashMap::new(),
+        }
+    }
 }
 
 fn default_schema_v2() -> u32 {
@@ -252,7 +261,11 @@ impl KnowledgeWriter {
             };
         }
 
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut state: KnowledgeState = serde_json::from_str(&data).unwrap_or_default();
+        if state.schema_version == 0 {
+            state.schema_version = KNOWLEDGE_STATE_SCHEMA_V2;
+        }
+        state
     }
 
     fn save_state(&self, state: &KnowledgeState) -> Result<(), WenlanError> {
@@ -422,6 +435,7 @@ mod tests {
         writer.write_page_for_test(&test_concept()).unwrap();
 
         let state = writer.load_state();
+        assert_eq!(state.schema_version, KNOWLEDGE_STATE_SCHEMA_V2);
         assert!(state.pages.contains_key("concept_test123"));
         assert_eq!(state.pages["concept_test123"].file, "rust-ownership.md");
         assert_eq!(state.pages["concept_test123"].version, 2);
@@ -531,6 +545,23 @@ mod tests {
         assert!(written.contains("\"pages\""));
         assert!(!written.contains("\"concepts\""));
         assert!(written.contains("\"schema_version\""));
+    }
+
+    #[test]
+    fn test_load_state_upgrades_writer_default_v0() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join(".wenlan")).unwrap();
+        std::fs::write(
+            dir.path().join(".wenlan/state.json"),
+            r#"{"schema_version":0,"pages":{}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            writer.load_state().schema_version,
+            KNOWLEDGE_STATE_SCHEMA_V2
+        );
     }
 
     #[test]

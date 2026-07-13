@@ -111,12 +111,12 @@ SELECT invalid FROM (
 ) ORDER BY key";
 
 const MEMORY_SQL: &str = "
-SELECT CASE WHEN COALESCE(m.confirmed,-1) NOT IN (0,1) OR COALESCE(m.pinned,-1) NOT IN (0,1)
+SELECT CASE WHEN (m.confirmed IS NOT NULL AND m.confirmed NOT IN (0,1)) OR COALESCE(m.pinned,-1) NOT IN (0,1)
  OR COALESCE(m.pending_revision,-1) NOT IN (0,1) OR (m.pinned=1 AND COALESCE(m.confirmed,0)!=1)
  OR m.stability NOT IN ('new','learned','confirmed') OR m.supersedes=m.source_id
  OR (m.pending_revision=1 AND (m.supersedes IS NULL OR NOT EXISTS(SELECT 1 FROM memories prior WHERE prior.source='memory' AND prior.source_id=m.supersedes)))
  OR (m.space IS NOT NULL AND NOT EXISTS(SELECT 1 FROM spaces s WHERE s.name=m.space))
- OR (m.source_agent IS NOT NULL AND NOT EXISTS(SELECT 1 FROM agent_connections a WHERE a.name=m.source_agent))
+ OR (m.source_agent IS NOT NULL AND TRIM(m.source_agent)='')
  THEN 1 ELSE 0 END
 FROM memories m WHERE m.source='memory' AND m.chunk_index=0{scope} ORDER BY m.source_id";
 

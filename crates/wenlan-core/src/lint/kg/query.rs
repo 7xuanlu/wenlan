@@ -105,7 +105,7 @@ async fn link_integrity(context: &LintContext<'_, '_>) -> Result<RowCheck, ()> {
             "SELECT CASE WHEN m.source_id IS NULL OR e.id IS NULL THEN 1 ELSE 0 END
                FROM memory_entities me
                LEFT JOIN (SELECT source_id, MAX(id) AS id, MAX(space) AS space FROM memories
-                           WHERE source='memory' GROUP BY source_id) m
+                           GROUP BY source_id) m
                  ON m.source_id=me.memory_id
                LEFT JOIN entities e ON e.id=me.entity_id
                {clause} ORDER BY me.memory_id, me.entity_id"

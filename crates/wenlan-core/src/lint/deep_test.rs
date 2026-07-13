@@ -94,6 +94,40 @@ async fn deep_profile_detects_structural_and_advisory_counterexamples() {
 }
 
 #[tokio::test]
+async fn duplicate_inventory_compares_memory_heads_not_shared_later_chunks() {
+    let (db, _dir) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  memory_type,pending_revision,is_recap,supersede_mode)
+             VALUES
+                 ('row_a0','session alpha','memory','mem_a','a',0,0,'text',
+                  'fact',0,0,'hide'),
+                 ('row_a1','## Notes','memory','mem_a','a',1,0,'text',
+                  'fact',0,0,'hide'),
+                 ('row_b0','session beta','memory','mem_b','b',0,0,'text',
+                  'fact',0,0,'hide'),
+                 ('row_b1','## Notes','memory','mem_b','b',1,0,'text',
+                  'fact',0,0,'hide');",
+        )
+        .await
+        .unwrap();
+
+    let report = deep_report(&db, None).await;
+    assert_eq!(
+        check(&report, MEMORY_DUPLICATES).outcome(),
+        LintOutcome::Pass
+    );
+    assert_eq!(
+        check(&report, MEMORY_DUPLICATES).coverage().denominator(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn deep_page_body_alignment_uses_state_mapping_and_canonical_body() {
     let (db, _dir) = test_db().await;
     db.conn
