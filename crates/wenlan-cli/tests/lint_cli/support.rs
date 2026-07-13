@@ -5,34 +5,55 @@ use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use wenlan_types::lint::{
-    LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
-    LintConfigFingerprint, LintCoverage, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest,
-    LintEvidenceRef, LintGateEffect, LintMetric, LintMetricCode, LintMetricValue, LintOpaqueId,
-    LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
-    LintProducerReceipt, LintReasonCode, LintRecommendationCode, LintReport, LintScope,
-    LintSeverity, LintSnapshotReceipts, LintSummaryCode, LintValidationMethod,
-    LINT_GENERAL_CHECK_COUNT,
+    canonical_check_ids, canonical_gate_effect, LintApplicability, LintCapabilityContext,
+    LintCheckResult, LintCheckResultInput, LintConfigFingerprint, LintCoverage, LintDbSnapshotMode,
+    LintDbSnapshotReceipt, LintDigest, LintEvidenceRef, LintGateEffect, LintMetric, LintMetricCode,
+    LintMetricValue, LintOpaqueId, LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt,
+    LintPrecondition, LintProducerReceipt, LintProfile, LintReasonCode, LintRecommendationCode,
+    LintReport, LintScope, LintSeverity, LintSnapshotReceipts, LintSummaryCode,
+    LintValidationMethod,
 };
 
 pub fn report(checks: &[(&str, LintOutcome)]) -> LintReport {
     let checks = checks
         .iter()
-        .map(|(id, outcome)| check(id, *outcome, LintGateEffect::Actionable))
+        .map(|(id, outcome)| {
+            check(
+                id,
+                *outcome,
+                canonical_gate_effect(LintProfile::General, id).expect("general catalog check"),
+            )
+        })
         .collect();
-    build_report(checks)
+    build_report(LintProfile::General, checks)
 }
 
 pub fn report_with_gates(checks: &[(&str, LintOutcome, LintGateEffect)]) -> LintReport {
+    let profile = if checks
+        .iter()
+        .any(|(id, _, _)| canonical_gate_effect(LintProfile::General, id).is_none())
+    {
+        LintProfile::Deep
+    } else {
+        LintProfile::General
+    };
     build_report(
+        profile,
         checks
             .iter()
-            .map(|(id, outcome, gate_effect)| check(id, *outcome, *gate_effect))
+            .map(|(id, outcome, gate_effect)| {
+                assert_eq!(canonical_gate_effect(profile, id), Some(*gate_effect));
+                check(id, *outcome, *gate_effect)
+            })
             .collect(),
     )
 }
 
 pub fn report_with_evidence_count(check_id: &str, evidence_count: usize) -> LintReport {
-    build_report(vec![check_with_evidence_count(check_id, evidence_count)])
+    build_report(
+        LintProfile::General,
+        vec![check_with_evidence_count(check_id, evidence_count)],
+    )
 }
 
 fn check_with_evidence_count(id: &str, evidence_count: usize) -> LintCheckResult {
@@ -70,16 +91,18 @@ fn check_with_evidence_count(id: &str, evidence_count: usize) -> LintCheckResult
     .expect("valid evidence fixture")
 }
 
-fn build_report(mut checks: Vec<LintCheckResult>) -> LintReport {
-    let mut index = 0_usize;
-    while checks.len() < LINT_GENERAL_CHECK_COUNT {
-        let id = format!("fixture.padding_{index:02}");
+fn build_report(profile: LintProfile, mut checks: Vec<LintCheckResult>) -> LintReport {
+    for id in canonical_check_ids(profile) {
         if !checks.iter().any(|check| check.check_id() == id) {
-            checks.push(check(&id, LintOutcome::Pass, LintGateEffect::Actionable));
+            checks.push(check(
+                id,
+                LintOutcome::Pass,
+                canonical_gate_effect(profile, id).expect("canonical gate effect"),
+            ));
         }
-        index += 1;
     }
-    LintReport::try_new(
+    LintReport::try_new_for_profile(
+        profile,
         LintScope::global(),
         LintCapabilityContext::daemon_operator_endpoint(),
         LintSnapshotReceipts::new(

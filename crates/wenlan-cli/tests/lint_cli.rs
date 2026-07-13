@@ -20,7 +20,7 @@ fn cli() -> Command {
 
 #[test]
 fn lint_json_accepts_global_flags_before_command_and_uses_remote_scope() {
-    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let expected = report(&[("memories.lifecycle_integrity", LintOutcome::Pass)]);
     let (base, request) = spawn_report(&expected);
 
     let output = cli()
@@ -45,7 +45,7 @@ fn lint_json_accepts_global_flags_before_command_and_uses_remote_scope() {
 
 #[test]
 fn lint_deep_profile_is_forwarded_as_the_canonical_query() {
-    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let expected = report(&[("memories.lifecycle_integrity", LintOutcome::Pass)]);
     let (base, request) = spawn_report(&expected);
 
     cli()
@@ -63,7 +63,7 @@ fn lint_deep_profile_is_forwarded_as_the_canonical_query() {
 
 #[test]
 fn lint_deep_external_egress_consent_is_forwarded_without_selecting_a_provider_slot() {
-    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let expected = report(&[("memories.lifecycle_integrity", LintOutcome::Pass)]);
     let (base, request) = spawn_report(&expected);
 
     cli()
@@ -107,7 +107,7 @@ fn lint_agent_assist_is_deep_only_and_coexists_with_external_consent() {
         .stdout("")
         .stderr("wenlan lint: --agent-assist requires --profile deep\n");
 
-    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let expected = report(&[("memories.lifecycle_integrity", LintOutcome::Pass)]);
     let (base, request) = spawn_report(&expected);
     cli()
         .env("WENLAN_HOST", base)
@@ -131,7 +131,7 @@ fn lint_agent_assist_is_deep_only_and_coexists_with_external_consent() {
 
 #[test]
 fn lint_agent_submission_posts_typed_json_to_the_same_endpoint() {
-    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let expected = report(&[("memories.lifecycle_integrity", LintOutcome::Pass)]);
     let submission = agent_submission();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("submission.json");
@@ -202,7 +202,7 @@ fn agent_submission() -> LintAgentSubmission {
 
 #[test]
 fn lint_quiet_json_suppresses_output_without_changing_exit() {
-    let expected = report(&[("pages.sample", LintOutcome::Finding)]);
+    let expected = report(&[("pages.projection.identity", LintOutcome::Finding)]);
     let (base, _) = spawn_report(&expected);
 
     cli()
@@ -216,7 +216,7 @@ fn lint_quiet_json_suppresses_output_without_changing_exit() {
 
 #[test]
 fn lint_human_clean_report_summarizes_groups_and_exits_zero() {
-    let expected = report(&[("memories.sample", LintOutcome::Pass)]);
+    let expected = report(&[("memories.lifecycle_integrity", LintOutcome::Pass)]);
     let (base, _) = spawn_report(&expected);
 
     cli()
@@ -225,7 +225,7 @@ fn lint_human_clean_report_summarizes_groups_and_exits_zero() {
         .assert()
         .code(0)
         .stdout(predicates::str::contains(
-            "memories: 1 check, 0 findings, 0 incomplete",
+            "memories: 10 checks, 0 findings, 0 incomplete",
         ))
         .stdout(predicates::str::contains("Findings: none"))
         .stdout(predicates::str::contains("Incomplete: none"))
@@ -234,7 +234,7 @@ fn lint_human_clean_report_summarizes_groups_and_exits_zero() {
 
 #[test]
 fn lint_human_finding_is_actionable_and_exits_one() {
-    let expected = report(&[("pages.sample", LintOutcome::Finding)]);
+    let expected = report(&[("pages.projection.identity", LintOutcome::Finding)]);
     let (base, _) = spawn_report(&expected);
 
     cli()
@@ -244,7 +244,7 @@ fn lint_human_finding_is_actionable_and_exits_one() {
         .code(1)
         .stdout(predicates::str::contains("Findings (1):"))
         .stdout(predicates::str::contains(
-            "pages.sample: finding_detected; recommendation: review_finding",
+            "pages.projection.identity: finding_detected; recommendation: review_finding",
         ))
         .stdout(predicates::str::contains(
             "affected=1; evaluated=3/3; evidence=opaque:1,reason:invalid_catalog_state; truncated=false",
@@ -255,9 +255,9 @@ fn lint_human_finding_is_actionable_and_exits_one() {
 #[test]
 fn lint_human_uses_the_seven_canonical_catalog_groups() {
     let expected = report(&[
-        ("entities.sample", LintOutcome::Finding),
-        ("memory_entities.sample", LintOutcome::Finding),
-        ("relations.sample", LintOutcome::Finding),
+        ("entities.structural_integrity", LintOutcome::Finding),
+        ("memory_entities.integrity", LintOutcome::Finding),
+        ("relations.integrity", LintOutcome::Finding),
     ]);
     let (base, _) = spawn_report(&expected);
 
@@ -271,7 +271,7 @@ fn lint_human_uses_the_seven_canonical_catalog_groups() {
         .clone();
     let output = String::from_utf8(output).unwrap();
 
-    assert!(output.contains("knowledge_graph: 3 checks, 3 findings, 0 incomplete"));
+    assert!(output.contains("knowledge_graph: 8 checks, 3 findings, 0 incomplete"));
     assert!(!output.contains("\n  entities:"));
     assert!(!output.contains("\n  memory_entities:"));
     assert!(!output.contains("\n  relations:"));
@@ -279,7 +279,7 @@ fn lint_human_uses_the_seven_canonical_catalog_groups() {
 
 #[test]
 fn lint_human_caps_evidence_without_hiding_the_population() {
-    let expected = report_with_evidence_count("pages.sample", 12);
+    let expected = report_with_evidence_count("pages.projection.identity", 12);
     let (base, _) = spawn_report(&expected);
 
     cli()
@@ -297,7 +297,7 @@ fn lint_human_caps_evidence_without_hiding_the_population() {
 #[test]
 fn lint_advisory_only_is_visible_and_exits_zero() {
     let expected = report_with_gates(&[(
-        "semantic.contradiction",
+        "memories.semantic.contradiction",
         LintOutcome::Finding,
         LintGateEffect::Advisory,
     )]);
@@ -318,10 +318,13 @@ fn lint_advisory_only_is_visible_and_exits_zero() {
 #[test]
 fn lint_incomplete_precedes_findings_and_exits_two() {
     let expected = report(&[
-        ("pages.sample", LintOutcome::Finding),
-        ("runtime.prerequisite", LintOutcome::NotRunPrerequisite),
-        ("runtime.snapshot", LintOutcome::InconsistentSnapshot),
-        ("runtime.execution", LintOutcome::FailedToRun),
+        ("pages.projection.identity", LintOutcome::Finding),
+        (
+            "runtime.provider_inventory",
+            LintOutcome::NotRunPrerequisite,
+        ),
+        ("runtime.schema_contract", LintOutcome::InconsistentSnapshot),
+        ("runtime.status_parity", LintOutcome::FailedToRun),
     ]);
     let (base, _) = spawn_report(&expected);
 
@@ -333,20 +336,20 @@ fn lint_incomplete_precedes_findings_and_exits_two() {
         .stdout(predicates::str::contains("Findings (1):"))
         .stdout(predicates::str::contains("Incomplete (3):"))
         .stdout(predicates::str::contains(
-            "runtime.prerequisite: prerequisite_unavailable; recommendation: restore_prerequisite",
+            "runtime.provider_inventory: prerequisite_unavailable; recommendation: restore_prerequisite",
         ))
         .stdout(predicates::str::contains(
-            "runtime.snapshot: snapshot_inconsistent; recommendation: rerun_after_snapshot_stabilizes",
+            "runtime.schema_contract: snapshot_inconsistent; recommendation: rerun_after_snapshot_stabilizes",
         ))
         .stdout(predicates::str::contains(
-            "runtime.execution: execution_failed; recommendation: inspect_runtime",
+            "runtime.status_parity: execution_failed; recommendation: inspect_runtime",
         ))
         .stderr("");
 }
 
 #[test]
 fn lint_quiet_suppresses_human_output_without_changing_exit() {
-    let expected = report(&[("pages.sample", LintOutcome::Finding)]);
+    let expected = report(&[("pages.projection.identity", LintOutcome::Finding)]);
     let (base, _) = spawn_report(&expected);
 
     cli()
@@ -371,8 +374,11 @@ fn lint_transport_and_schema_failures_exit_two_on_stderr_only() {
             "GET {host}/api/lint failed"
         )));
 
-    let mut unsupported = serde_json::to_value(report(&[("memories.sample", LintOutcome::Pass)]))
-        .expect("serialize canonical report");
+    let mut unsupported = serde_json::to_value(report(&[(
+        "memories.lifecycle_integrity",
+        LintOutcome::Pass,
+    )]))
+    .expect("serialize canonical report");
     unsupported["report_schema_version"] = json!(999);
     let (base, _) = spawn_value(&unsupported);
     cli()
