@@ -1,7 +1,9 @@
 use super::catalog::{catalog_entry, catalog_for_profile, catalog_group, LintCheckGroup};
 use super::context::{CancellationToken, ExecutionGate, LintClock, LintContext, PopulationBasis};
 use super::observation::{LintRunEvent, LintRunObserver, NoopLintRunObserver};
-use super::pages::fs::{scan_page_root, scan_page_root_deep, PageFsError, PageFsReceipt, PageScan};
+use super::pages::fs::{
+    scan_page_root_controlled, PageFsError, PageFsReceipt, PageScan, PageScanControl,
+};
 use super::run_config::{EffectiveLintConfig, SemanticProviderConfig};
 use super::snapshot::{SnapshotError, SnapshotReceipt};
 use crate::db::MemoryDB;
@@ -55,6 +57,8 @@ pub struct LintRunner {
     observer: Arc<dyn LintRunObserver>,
     #[cfg(test)]
     run_timeout_override: Option<std::time::Duration>,
+    #[cfg(test)]
+    page_timeout_override: Option<std::time::Duration>,
 }
 
 #[cfg(test)]
@@ -141,6 +145,8 @@ impl LintRunner {
             observer: Arc::new(NoopLintRunObserver),
             #[cfg(test)]
             run_timeout_override: None,
+            #[cfg(test)]
+            page_timeout_override: None,
         }
     }
 
@@ -242,10 +248,7 @@ impl LintRunner {
             .await?;
         let scope = scope::validate(&snapshot, query, self.observer.as_ref()).await?;
         let snapshot = snapshot.pin_analysis().await?;
-        let mut execution_failed = self
-            .gate
-            .check_run_for(profile, self.clock.elapsed())
-            .is_err();
+        let mut execution_failed = self.run_budget_exceeded(profile);
 
         let page_started = self.clock.elapsed();
         let page_scan = if page_projection_enabled && !execution_failed {
@@ -282,9 +285,7 @@ impl LintRunner {
         } else {
             self.observer.observe(LintRunEvent::AggregateChecks);
             let elapsed = self.clock.elapsed();
-            let remaining = ExecutionGate::run_budget_for(profile).saturating_sub(elapsed);
-            #[cfg(test)]
-            let remaining = self.run_timeout_override.unwrap_or(remaining);
+            let remaining = self.run_budget(profile).saturating_sub(elapsed);
             let group_result = tokio::select! {
                 biased;
                 _ = self.gate.cancelled() => None,
@@ -307,16 +308,12 @@ impl LintRunner {
                 catalog_entry(check_id).is_some_and(|entry| entry.group == LintCheckGroup::Memories)
             })?;
         }
-        if self.gate.check_for(profile, page_elapsed).is_err() {
+        if self.page_budget_exceeded(profile, page_elapsed) {
             checks = failed_selected_results(&self.clock, &checks, |check_id| {
                 catalog_entry(check_id).is_some_and(|entry| entry.group == LintCheckGroup::Pages)
             })?;
         }
-        if self
-            .gate
-            .check_run_for(profile, self.clock.elapsed())
-            .is_err()
-        {
+        if self.run_budget_exceeded(profile) {
             checks = failed_results_from_checks(&self.clock, &checks)?;
         }
         validate_profile_catalog_results(profile, &mut checks)?;
@@ -331,12 +328,14 @@ impl LintRunner {
             .as_ref()
             .map(PageScan::normalized_bytes)
             .unwrap_or([0; 32]);
-        let page_after = match (page_root, page_scan.as_ref()) {
-            (Some(root), Some(scan)) => scan
-                .verify_unchanged(root)
-                .map(PageFsReceipt::after_normalized_bytes)
-                .unwrap_or([0; 32]),
-            _ => page_before,
+        let (page_after, page_receipt_failed) = match (page_root, page_scan.as_ref()) {
+            (Some(root), Some(scan)) => {
+                match self.verify_pages(root, scan, profile, page_elapsed).await {
+                    Ok(after) => (after, false),
+                    Err(_) => (page_before, true),
+                }
+            }
+            _ => (page_before, false),
         };
         let page_changed = page_before != page_after;
         let db_receipt = snapshot.finish().await?;
@@ -348,12 +347,20 @@ impl LintRunner {
             checks =
                 inconsistent_selected_results(&self.clock, &checks, super::pages::uses_filesystem)?;
         }
-        if page_projection_enabled && (!db_receipt.is_consistent() || tracker_unstable) {
+        if page_receipt_failed {
+            checks = failed_selected_results(&self.clock, &checks, super::pages::uses_filesystem)?;
+        }
+        if !db_receipt.is_consistent() {
+            checks = inconsistent_selected_results(&self.clock, &checks, |_| true)?;
+        } else if page_projection_enabled && tracker_unstable {
             checks = inconsistent_selected_results(
                 &self.clock,
                 &checks,
                 super::pages::uses_cross_store,
             )?;
+        }
+        if self.run_budget_exceeded(profile) {
+            checks = failed_results_from_checks(&self.clock, &checks)?;
         }
         validate_profile_catalog_results(profile, &mut checks)?;
         self.observer.observe(LintRunEvent::ReportBuild);
@@ -394,19 +401,69 @@ impl LintRunner {
 
     async fn scan_pages(&self, root: &Path, profile: LintProfile) -> Result<PageScan, PageFsError> {
         let root = root.to_path_buf();
-        let task = tokio::task::spawn_blocking(move || match profile {
-            LintProfile::General => scan_page_root(&root),
-            LintProfile::Deep => scan_page_root_deep(&root),
+        let run_remaining = self
+            .run_budget(profile)
+            .saturating_sub(self.clock.elapsed());
+        let timeout = self.page_budget(profile).min(run_remaining);
+        let control = PageScanControl::with_timeout(timeout);
+        let worker_control = control.clone();
+        let mut task = tokio::task::spawn_blocking(move || {
+            scan_page_root_controlled(&root, profile == LintProfile::Deep, &worker_control)
         });
-        let run_remaining =
-            ExecutionGate::run_budget_for(profile).saturating_sub(self.clock.elapsed());
-        let timeout = ExecutionGate::page_budget_for(profile).min(run_remaining);
         tokio::select! {
             biased;
-            _ = self.gate.cancelled() => Err(PageFsError::ReadDirectory),
-            result = tokio::time::timeout(timeout, task) => match result {
+            _ = self.gate.cancelled() => {
+                control.cancel();
+                let _ = task.await;
+                Err(PageFsError::Canceled)
+            },
+            result = tokio::time::timeout(timeout, &mut task) => match result {
                 Ok(Ok(result)) => result,
-                Ok(Err(_)) | Err(_) => Err(PageFsError::ReadDirectory),
+                Ok(Err(_)) => Err(PageFsError::ReadDirectory),
+                Err(_) => {
+                    control.cancel();
+                    let _ = task.await;
+                    Err(PageFsError::DeadlineExceeded)
+                },
+            },
+        }
+    }
+
+    async fn verify_pages(
+        &self,
+        root: &Path,
+        scan: &PageScan,
+        profile: LintProfile,
+        page_elapsed: std::time::Duration,
+    ) -> Result<[u8; 32], PageFsError> {
+        let page_remaining = self.page_budget(profile).saturating_sub(page_elapsed);
+        let run_remaining = self
+            .run_budget(profile)
+            .saturating_sub(self.clock.elapsed());
+        let timeout = page_remaining.min(run_remaining);
+        let root = root.to_path_buf();
+        let scan = scan.clone();
+        let control = PageScanControl::with_timeout(timeout);
+        let worker_control = control.clone();
+        let mut task = tokio::task::spawn_blocking(move || {
+            scan.verify_unchanged_with_control(&root, &worker_control)
+                .map(PageFsReceipt::after_normalized_bytes)
+        });
+        tokio::select! {
+            biased;
+            _ = self.gate.cancelled() => {
+                control.cancel();
+                let _ = task.await;
+                Err(PageFsError::Canceled)
+            },
+            result = tokio::time::timeout(timeout, &mut task) => match result {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err(PageFsError::ReadDirectory),
+                Err(_) => {
+                    control.cancel();
+                    let _ = task.await;
+                    Err(PageFsError::DeadlineExceeded)
+                },
             },
         }
     }
@@ -415,6 +472,37 @@ impl LintRunner {
     pub(super) fn with_test_run_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.run_timeout_override = Some(timeout);
         self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_page_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.page_timeout_override = Some(timeout);
+        self
+    }
+
+    fn run_budget(&self, profile: LintProfile) -> std::time::Duration {
+        #[cfg(test)]
+        if let Some(timeout) = self.run_timeout_override {
+            return timeout;
+        }
+        ExecutionGate::run_budget_for(profile)
+    }
+
+    fn page_budget(&self, profile: LintProfile) -> std::time::Duration {
+        #[cfg(test)]
+        if let Some(timeout) = self.page_timeout_override {
+            return timeout;
+        }
+        ExecutionGate::page_budget_for(profile)
+    }
+
+    fn page_budget_exceeded(&self, profile: LintProfile, elapsed: std::time::Duration) -> bool {
+        self.gate.check_for(profile, elapsed).is_err() || elapsed > self.page_budget(profile)
+    }
+
+    fn run_budget_exceeded(&self, profile: LintProfile) -> bool {
+        let elapsed = self.clock.elapsed();
+        self.gate.check_run_for(profile, elapsed).is_err() || elapsed > self.run_budget(profile)
     }
 
     async fn run_groups(
@@ -1054,8 +1142,8 @@ fn receipts(
     LintSnapshotReceipts::new(
         LintDbSnapshotReceipt::new(
             LintDbSnapshotMode::TransactionalReadOnly,
-            digest(db.analysis_digest().as_bytes()),
-            Some(digest(db.post_run_digest().as_bytes())),
+            digest(db.analysis_receipt_digest().as_bytes()),
+            Some(digest(db.post_run_receipt_digest().as_bytes())),
         ),
         LintPageSnapshotReceipt::new(
             LintPageSnapshotMode::BestEffort,

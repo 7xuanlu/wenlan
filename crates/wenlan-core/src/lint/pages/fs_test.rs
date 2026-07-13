@@ -1,7 +1,7 @@
 use super::{
-    scan_page_root, scan_page_root_deep, EntryScope, FrontmatterState, PageFsError, RawStateIssue,
-    RawStateKind, StateEntryIssue, StateEntryStatus, VersionValue, DEEP_PAGE_BODY_MAX_BYTES,
-    STATE_MAX_BYTES,
+    scan_page_root, scan_page_root_controlled, scan_page_root_deep, EntryScope, FrontmatterState,
+    PageFsError, PageScanControl, RawStateIssue, RawStateKind, StateEntryIssue, StateEntryStatus,
+    VersionValue, DEEP_PAGE_BODY_MAX_BYTES, STATE_MAX_BYTES,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -279,6 +279,25 @@ fn scanner_receipt_detects_mutation_and_stays_deterministic() {
         .verify_unchanged(dir.path())
         .expect("changed receipt")
         .is_consistent());
+}
+
+#[test]
+fn scanner_honors_cancellation_and_deadline_before_traversal() {
+    let dir = root();
+    write(dir.path(), "page.md", b"# page\n");
+
+    let canceled = PageScanControl::with_timeout(std::time::Duration::from_secs(1));
+    canceled.cancel();
+    assert!(matches!(
+        scan_page_root_controlled(dir.path(), false, &canceled),
+        Err(PageFsError::Canceled)
+    ));
+
+    let expired = PageScanControl::with_timeout(std::time::Duration::ZERO);
+    assert!(matches!(
+        scan_page_root_controlled(dir.path(), false, &expired),
+        Err(PageFsError::DeadlineExceeded)
+    ));
 }
 
 #[test]

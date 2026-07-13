@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub(super) const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 pub(super) const STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -42,6 +45,49 @@ pub enum PageFsError {
     StateBudgetExceeded,
     #[error("page scanner found an unsupported filename encoding")]
     UnsupportedFilenameEncoding,
+    #[error("page scanner canceled")]
+    Canceled,
+    #[error("page scanner deadline exceeded")]
+    DeadlineExceeded,
+}
+
+#[derive(Clone)]
+pub(crate) struct PageScanControl {
+    canceled: Arc<AtomicBool>,
+    deadline: Option<Instant>,
+}
+
+impl PageScanControl {
+    fn unbounded() -> Self {
+        Self {
+            canceled: Arc::new(AtomicBool::new(false)),
+            deadline: None,
+        }
+    }
+
+    pub(crate) fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            canceled: Arc::new(AtomicBool::new(false)),
+            deadline: Instant::now().checked_add(timeout),
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.canceled.store(true, Ordering::Release);
+    }
+
+    pub(super) fn check(&self) -> Result<(), PageFsError> {
+        if self.canceled.load(Ordering::Acquire) {
+            Err(PageFsError::Canceled)
+        } else if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            Err(PageFsError::DeadlineExceeded)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,7 +211,15 @@ impl PageScan {
     }
 
     pub fn verify_unchanged(&self, root: &Path) -> Result<PageFsReceipt, PageFsError> {
-        let after = scan_page_root_internal(root, self.includes_body_digests)?;
+        self.verify_unchanged_with_control(root, &PageScanControl::unbounded())
+    }
+
+    pub(crate) fn verify_unchanged_with_control(
+        &self,
+        root: &Path,
+        control: &PageScanControl,
+    ) -> Result<PageFsReceipt, PageFsError> {
+        let after = scan_page_root_internal(root, self.includes_body_digests, control)?;
         Ok(PageFsReceipt {
             before_tree: self.before_tree,
             after_tree: after.before_tree,
@@ -196,17 +250,28 @@ impl PageFsReceipt {
 }
 
 pub fn scan_page_root(root: &Path) -> Result<PageScan, PageFsError> {
-    scan_page_root_internal(root, false)
+    scan_page_root_internal(root, false, &PageScanControl::unbounded())
 }
 
+#[cfg(test)]
 pub(crate) fn scan_page_root_deep(root: &Path) -> Result<PageScan, PageFsError> {
-    scan_page_root_internal(root, true)
+    scan_page_root_internal(root, true, &PageScanControl::unbounded())
+}
+
+pub(crate) fn scan_page_root_controlled(
+    root: &Path,
+    include_body_digests: bool,
+    control: &PageScanControl,
+) -> Result<PageScan, PageFsError> {
+    scan_page_root_internal(root, include_body_digests, control)
 }
 
 fn scan_page_root_internal(
     root: &Path,
     include_body_digests: bool,
+    control: &PageScanControl,
 ) -> Result<PageScan, PageFsError> {
+    control.check()?;
     let root = open_root(root)?;
     let mut entries = Vec::new();
     let mut state_bytes = None;
@@ -221,7 +286,9 @@ fn scan_page_root_internal(
         &mut manifest_too_large,
         include_body_digests,
         &mut body_bytes_remaining,
+        control,
     )?;
+    control.check()?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let mut raw_state = parse_raw_state(state_bytes.as_deref());
     let manifest = parse_manifest(manifest_bytes.as_deref(), manifest_too_large);

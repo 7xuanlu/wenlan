@@ -1,5 +1,5 @@
 use super::frontmatter::{read_frontmatter, Frontmatter};
-use super::fs::{EntryKind, EntryScope, PageEntry, PageFsError};
+use super::fs::{EntryKind, EntryScope, PageEntry, PageFsError, PageScanControl};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, Metadata, OpenOptions};
 use sha2::{Digest, Sha256};
@@ -26,6 +26,7 @@ pub(super) fn open_root(root: &Path) -> Result<Dir, PageFsError> {
         .map_err(|_| PageFsError::ReadDirectory)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn collect_entries(
     root: &Dir,
     entries: &mut Vec<PageEntry>,
@@ -34,6 +35,7 @@ pub(super) fn collect_entries(
     manifest_too_large: &mut bool,
     include_body_digests: bool,
     body_bytes_remaining: &mut u64,
+    control: &PageScanControl,
 ) -> Result<(), PageFsError> {
     let mut traversal = Traversal {
         entries,
@@ -42,6 +44,7 @@ pub(super) fn collect_entries(
         manifest_too_large,
         include_body_digests,
         body_bytes_remaining,
+        control,
     };
     visit(root, "", &mut traversal)
 }
@@ -53,9 +56,11 @@ struct Traversal<'a> {
     manifest_too_large: &'a mut bool,
     include_body_digests: bool,
     body_bytes_remaining: &'a mut u64,
+    control: &'a PageScanControl,
 }
 
 fn visit(directory: &Dir, prefix: &str, traversal: &mut Traversal<'_>) -> Result<(), PageFsError> {
+    traversal.control.check()?;
     let mut names = directory
         .entries()
         .map_err(|_| PageFsError::ReadDirectory)?
@@ -67,6 +72,7 @@ fn visit(directory: &Dir, prefix: &str, traversal: &mut Traversal<'_>) -> Result
         .collect::<Result<Vec<_>, _>>()?;
     names.sort();
     for name in names {
+        traversal.control.check()?;
         visit_entry(directory, prefix, &name, traversal)?;
     }
     Ok(())
@@ -78,6 +84,7 @@ fn visit_entry(
     name: &OsStr,
     traversal: &mut Traversal<'_>,
 ) -> Result<(), PageFsError> {
+    traversal.control.check()?;
     let component = component_string(name)?;
     let path = if prefix.is_empty() {
         component
@@ -114,20 +121,22 @@ fn visit_entry(
             let scope = scope_for(&path, EntryKind::File);
             if path == ".wenlan/state.json" {
                 let mut bytes = Vec::new();
-                (&mut file)
-                    .take(super::fs::STATE_MAX_BYTES + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|_| PageFsError::ReadPrefix)?;
+                read_to_end_controlled(
+                    &mut (&mut file).take(super::fs::STATE_MAX_BYTES + 1),
+                    &mut bytes,
+                    traversal.control,
+                )?;
                 if bytes.len() > usize::try_from(super::fs::STATE_MAX_BYTES).unwrap_or(usize::MAX) {
                     return Err(PageFsError::StateBudgetExceeded);
                 }
                 *traversal.state_bytes = Some(bytes);
             } else if path == "_sources/.manifest.json" {
                 let mut bytes = Vec::new();
-                (&mut file)
-                    .take(super::fs::MANIFEST_MAX_BYTES + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|_| PageFsError::ReadPrefix)?;
+                read_to_end_controlled(
+                    &mut (&mut file).take(super::fs::MANIFEST_MAX_BYTES + 1),
+                    &mut bytes,
+                    traversal.control,
+                )?;
                 if bytes.len()
                     > usize::try_from(super::fs::MANIFEST_MAX_BYTES).unwrap_or(usize::MAX)
                 {
@@ -147,8 +156,7 @@ fn visit_entry(
                 *traversal.body_bytes_remaining =
                     (*traversal.body_bytes_remaining).saturating_sub(opened.len());
                 let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes)
-                    .map_err(|_| PageFsError::ReadPrefix)?;
+                read_to_end_controlled(&mut file, &mut bytes, traversal.control)?;
                 let frontmatter = super::frontmatter::parse_frontmatter(bytes.as_slice())?;
                 let content = std::str::from_utf8(&bytes).map_err(|_| PageFsError::ReadPrefix)?;
                 let (_, body) = crate::sources::obsidian::extract_frontmatter(content);
@@ -158,7 +166,9 @@ fn visit_entry(
                     Some(Sha256::digest(canonical.as_bytes()).into()),
                 )
             } else if scope == EntryScope::PageMarkdown {
-                (read_frontmatter(file)?, None)
+                let frontmatter = read_frontmatter(file)?;
+                traversal.control.check()?;
+                (frontmatter, None)
             } else {
                 (Frontmatter::unparsed(), None)
             };
@@ -177,6 +187,24 @@ fn visit_entry(
             )?);
             Ok(())
         }
+    }
+}
+
+fn read_to_end_controlled(
+    reader: &mut impl Read,
+    output: &mut Vec<u8>,
+    control: &PageScanControl,
+) -> Result<(), PageFsError> {
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        control.check()?;
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|_| PageFsError::ReadPrefix)?;
+        if read == 0 {
+            return Ok(());
+        }
+        output.extend_from_slice(&chunk[..read]);
     }
 }
 

@@ -84,15 +84,10 @@ fn check_with_id(
 fn wire_report(scope: LintScope) -> LintReport {
     report(
         scope,
-        (0..LINT_GENERAL_CHECK_COUNT)
-            .map(|index| {
-                check_with_id(
-                    &format!("catalog.open_check_{index:02}"),
-                    LintOutcome::Pass,
-                    LintSeverity::Info,
-                )
-                .unwrap()
-            })
+        LINT_CANONICAL_CHECK_IDS
+            .iter()
+            .filter(|check_id| canonical_gate_effect(LintProfile::General, check_id).is_some())
+            .map(|check_id| check_with_id(check_id, LintOutcome::Pass, LintSeverity::Info).unwrap())
             .collect(),
     )
 }
@@ -285,6 +280,19 @@ fn deserialization_rejects_incomplete_or_duplicate_catalog_shapes() {
     let mut duplicate = serde_json::to_value(&report).unwrap();
     duplicate["checks"][1] = duplicate["checks"][0].clone();
     assert!(serde_json::from_value::<LintReport>(duplicate).is_err());
+}
+
+#[test]
+fn deserialization_rejects_replaced_check_ids_and_gate_downgrades() {
+    let report = wire_report(LintScope::global());
+
+    let mut replaced = serde_json::to_value(&report).unwrap();
+    replaced["checks"][0]["check_id"] = json!("entities.future_replacement");
+    assert!(serde_json::from_value::<LintReport>(replaced).is_err());
+
+    let mut downgraded = serde_json::to_value(&report).unwrap();
+    downgraded["checks"][0]["gate_effect"] = json!("advisory");
+    assert!(serde_json::from_value::<LintReport>(downgraded).is_err());
 }
 
 #[test]
@@ -482,14 +490,16 @@ fn agent_work_and_submission_are_bounded_typed_contracts() {
         snapshots(),
         LintConfigFingerprint::from_effective_config(&[]),
         LintProducerReceipt::new(None),
-        (0..LINT_DEEP_CHECK_COUNT)
-            .map(|index| {
-                check_with_id(
-                    &format!("catalog.open_deep_check_{index:02}"),
-                    LintOutcome::Pass,
-                    LintSeverity::Info,
+        LINT_CANONICAL_CHECK_IDS
+            .iter()
+            .map(|check_id| {
+                let check = check_with_id(check_id, LintOutcome::Pass, LintSeverity::Info).unwrap();
+                let mut wire = serde_json::to_value(check).unwrap();
+                wire["gate_effect"] = serde_json::to_value(
+                    canonical_gate_effect(LintProfile::Deep, check_id).unwrap(),
                 )
-                .unwrap()
+                .unwrap();
+                serde_json::from_value(wire).unwrap()
             })
             .collect(),
         Some(work.clone()),

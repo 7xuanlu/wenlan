@@ -110,7 +110,121 @@ async fn page_only_and_db_only_drift_have_distinct_suppression_sets() {
     assert_selective_inconsistency(&page_report, uses_filesystem);
 
     let db_report = run_receipt_drift(ReceiptDrift::Database).await;
-    assert_selective_inconsistency(&db_report, uses_cross_store);
+    assert_selective_inconsistency(&db_report, |_| true);
+    assert_ne!(
+        db_report.snapshots().db().analysis_digest(),
+        db_report.snapshots().db().post_run_digest().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn database_drift_is_incomplete_when_page_projection_is_disabled() {
+    let (db, _tmp) = test_db().await;
+    let db = Arc::new(db);
+    insert_page(&db, "same-count-update").await;
+    let (synchronization, control) = TestSynchronization::new(TestSyncPoint::BeforeReceipts);
+    let runner_db = Arc::clone(&db);
+    let task = tokio::spawn(async move {
+        LintRunner::new(LintClock::fixed(), CancellationToken::new())
+            .with_test_synchronization(synchronization)
+            .run(
+                &runner_db,
+                &LintQuery {
+                    profile: None,
+                    space: None,
+                },
+                None,
+                false,
+            )
+            .await
+    });
+    control.wait_until_reached().await;
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE pages SET title='changed' WHERE id='same-count-update'",
+            (),
+        )
+        .await
+        .unwrap();
+    control.resume().await;
+
+    let report = task.await.unwrap().unwrap();
+    assert_selective_inconsistency(&report, |_| true);
+    assert_ne!(
+        report.snapshots().db().analysis_digest(),
+        report.snapshots().db().post_run_digest().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn whole_run_budget_includes_after_scan_receipts() {
+    let (db, _tmp) = test_db().await;
+    let db = Arc::new(db);
+    let page_root = tempfile::tempdir().unwrap();
+    let root = page_root.path().to_path_buf();
+    let (synchronization, control) = TestSynchronization::new(TestSyncPoint::BeforeReceipts);
+    let runner_db = Arc::clone(&db);
+    let task = tokio::spawn(async move {
+        LintRunner::new(LintClock::capture(), CancellationToken::new())
+            .with_test_run_timeout(Duration::from_millis(50))
+            .with_test_synchronization(synchronization)
+            .run(
+                &runner_db,
+                &LintQuery {
+                    profile: None,
+                    space: None,
+                },
+                Some(&root),
+                true,
+            )
+            .await
+    });
+    control.wait_until_reached().await;
+    tokio::time::sleep(Duration::from_millis(75)).await;
+    control.resume().await;
+
+    let report = task.await.unwrap().unwrap();
+    assert!(!report.complete());
+    assert!(report
+        .checks()
+        .iter()
+        .all(|check| check.outcome() == LintOutcome::FailedToRun));
+}
+
+#[tokio::test]
+async fn non_page_work_before_receipts_does_not_consume_page_budget() {
+    let (db, _tmp) = test_db().await;
+    let db = Arc::new(db);
+    let page_root = tempfile::tempdir().unwrap();
+    let root = page_root.path().to_path_buf();
+    let (synchronization, control) = TestSynchronization::new(TestSyncPoint::BeforeReceipts);
+    let runner_db = Arc::clone(&db);
+    let task = tokio::spawn(async move {
+        LintRunner::new(LintClock::capture(), CancellationToken::new())
+            .with_test_run_timeout(Duration::from_secs(2))
+            .with_test_page_timeout(Duration::from_millis(100))
+            .with_test_synchronization(synchronization)
+            .run(
+                &runner_db,
+                &LintQuery {
+                    profile: None,
+                    space: None,
+                },
+                Some(&root),
+                true,
+            )
+            .await
+    });
+    control.wait_until_reached().await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    control.resume().await;
+
+    let report = task.await.unwrap().unwrap();
+    assert!(report.checks().iter().all(|check| {
+        !uses_filesystem(check.check_id()) || check.outcome() != LintOutcome::FailedToRun
+    }));
 }
 
 #[tokio::test]

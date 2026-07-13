@@ -96,6 +96,14 @@ fn catalog_is_static_ordered_unique_and_group_owned() {
         catalog_for_profile(wenlan_types::lint::LintProfile::Deep).count(),
         wenlan_types::lint::LINT_DEEP_CHECK_COUNT
     );
+    for profile in [
+        wenlan_types::lint::LintProfile::General,
+        wenlan_types::lint::LintProfile::Deep,
+    ] {
+        assert!(catalog_for_profile(profile).all(|entry| {
+            wenlan_types::lint::canonical_gate_effect(profile, entry.id) == Some(entry.gate_effect)
+        }));
+    }
     let policies: BTreeSet<_> = entries.iter().map(|entry| entry.scope_policy).collect();
     assert_eq!(policies.len(), 4);
 }

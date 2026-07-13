@@ -221,6 +221,11 @@ impl<'de> Deserialize<'de> for LintReport {
         if wire.checks.len() != expected_checks || unique_ids.len() != wire.checks.len() {
             return Err(D::Error::custom(LintContractError::InvalidCatalogShape));
         }
+        if wire.checks.iter().any(|check| {
+            canonical_gate_effect(wire.profile, check.check_id()) != Some(check.gate_effect())
+        }) {
+            return Err(D::Error::custom(LintContractError::InvalidCatalogShape));
+        }
         let report = Self::try_new_for_profile_with_agent_work(
             wire.profile,
             wire.scope,

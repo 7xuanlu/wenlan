@@ -289,6 +289,48 @@ async fn candidate_generation_distinguishes_missing_wrong_and_cross_space_links(
 }
 
 #[tokio::test]
+async fn scoped_candidates_hydrate_cross_space_existing_link_endpoints() {
+    let (db, _dir) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "INSERT INTO spaces (id,name,created_at,updated_at)
+             VALUES ('work','work',1,1),('personal','personal',1,1);
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  pending_revision,is_recap,supersede_mode,space,memory_type)
+             VALUES ('mem-work-row','Work Entity launch note','memory','mem-work','work',0,100,
+                     'text',0,0,'hide','work','fact');
+             INSERT INTO entities
+                 (id,name,entity_type,space,confirmed,created_at,updated_at)
+             VALUES ('entity-work','Work Entity','concept','work',1,1,1),
+                    ('entity-personal','Personal Entity','concept','personal',1,1,1);
+             INSERT INTO memory_entities (memory_id,entity_id)
+             VALUES ('mem-work','entity-personal');
+             INSERT INTO relations (id,from_entity,to_entity,relation_type,created_at)
+             VALUES ('relation-cross','entity-work','entity-personal','related',1);",
+        )
+        .await
+        .unwrap();
+
+    let report = prepare(&db, Some("work")).await;
+    let work = report.agent_work().unwrap();
+    assert!(candidates_for(work, LintSemanticCheckId::MemoryEntityLinks)
+        .iter()
+        .any(|candidate| {
+            candidate.kind() == LintSemanticCandidateKind::ExistingLink
+                && candidate.proposed_action() == LintSemanticAction::RemoveMemoryEntityLink
+        }));
+    assert!(candidates_for(work, LintSemanticCheckId::EntityRelations)
+        .iter()
+        .any(|candidate| {
+            candidate.kind() == LintSemanticCandidateKind::ExistingLink
+                && candidate.proposed_action() == LintSemanticAction::RemoveEntityRelation
+        }));
+}
+
+#[tokio::test]
 async fn approved_link_repair_removes_candidate_on_rerun() {
     let (db, _dir) = test_db().await;
     db.conn
@@ -610,13 +652,14 @@ async fn work_digest_binds_scope_and_records_outside_the_packet() {
     db.conn
         .lock()
         .await
-        .execute(
+        .execute_batch(
             "INSERT INTO memories
                  (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
                   pending_revision,is_recap,supersede_mode,memory_type)
              VALUES ('zz-hidden-row','outside packet alpha','memory','zz-hidden','hidden',0,
-                     2000000000,'text',0,0,'hide','fact')",
-            libsql::params::Params::None,
+                     2000000000,'text',0,0,'hide','fact'),
+                    ('zz-hidden-row-1','zzzz hidden chunk alpha','memory','zz-hidden','hidden',1,
+                     2000000000,'text',0,0,'hide','fact');",
         )
         .await
         .unwrap();
@@ -632,6 +675,25 @@ async fn work_digest_binds_scope_and_records_outside_the_packet() {
         .await
         .execute(
             "UPDATE memories SET content='outside packet bravo' WHERE source_id='zz-hidden'",
+            libsql::params::Params::None,
+        )
+        .await
+        .unwrap();
+    let report = submit(&db, submission, None).await;
+    assert_reason(
+        &report,
+        LintSemanticCheckId::MemoryContradiction,
+        LintOutcome::InconsistentSnapshot,
+        LintReasonCode::SemanticAgentWorkStale,
+    );
+
+    let prepared = prepare(&db, None).await;
+    let submission = submission_for(prepared.agent_work().unwrap(), None, false);
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE memories SET content='zzzz hidden chunk bravo' WHERE id='zz-hidden-row-1'",
             libsql::params::Params::None,
         )
         .await

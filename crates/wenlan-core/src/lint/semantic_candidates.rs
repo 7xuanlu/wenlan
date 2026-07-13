@@ -39,6 +39,7 @@ struct Entity {
     id: String,
     name: String,
     space: Option<String>,
+    selected: bool,
 }
 
 #[derive(Clone)]
@@ -83,15 +84,20 @@ impl CandidateSet {
 }
 
 pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, ()> {
-    let memories = load_memories(context).await?;
-    let entities = load_entities(context).await?;
+    let LoadedMemories {
+        memories,
+        population_digest: memory_population_digest,
+    } = load_memories(context).await?;
     let links = load_memory_entity_links(context).await?;
     let relations = load_relations(context).await?;
+    let entities = load_entities(context).await?;
     let pages = load_pages(context).await?;
     let page_evidence = load_page_evidence(context).await?;
     let mut builder = Builder::new(context, &memories, &entities, &pages);
+    let mut work_units = 0_usize;
 
     for memory in &memories {
+        candidate_checkpoint(context, &mut work_units).await?;
         if memory.memory_type.as_deref().is_none_or(str::is_empty) {
             builder.add(
                 LintSemanticCheckId::MemoryClassification,
@@ -144,6 +150,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
     let mut mentioned_by_memory = BTreeMap::<String, Vec<usize>>::new();
     let mut missing_memory_entity_links = Vec::<(usize, usize)>::new();
     for (memory_index, memory) in memories.iter().enumerate() {
+        candidate_checkpoint(context, &mut work_units).await?;
         let mentioned = mentioned_entity_indexes(memory, &entity_matchers);
         for entity_index in &mentioned {
             let entity = &entities[*entity_index];
@@ -158,6 +165,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         mentioned_by_memory.insert(memory.id.clone(), mentioned);
     }
     for (memory_id, entity_id) in &links {
+        candidate_checkpoint(context, &mut work_units).await?;
         let (Some(memory), Some(entity)) = (
             memory_by_id.get(memory_id.as_str()),
             entity_by_id.get(entity_id.as_str()),
@@ -182,6 +190,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         }
     }
     for (memory_index, entity_index) in missing_memory_entity_links {
+        candidate_checkpoint(context, &mut work_units).await?;
         builder.add(
             LintSemanticCheckId::MemoryEntityLinks,
             LintSemanticCandidateKind::MissingLink,
@@ -196,11 +205,13 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
     }
 
     for memory_ids in associated.values() {
+        candidate_checkpoint(context, &mut work_units).await?;
         let ordered = memory_ids
             .iter()
             .filter_map(|id| memory_by_id.get(id.as_str()).copied())
             .collect::<Vec<_>>();
         for pair in ordered.windows(2) {
+            candidate_checkpoint(context, &mut work_units).await?;
             builder.add(
                 LintSemanticCheckId::MemoryContradiction,
                 LintSemanticCandidateKind::PairReview,
@@ -214,6 +225,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
 
     let relation_pairs = relations.into_iter().collect::<BTreeSet<_>>();
     for (from, to) in &relation_pairs {
+        candidate_checkpoint(context, &mut work_units).await?;
         let (Some(left), Some(right)) = (
             entity_by_id.get(from.as_str()),
             entity_by_id.get(to.as_str()),
@@ -233,6 +245,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         );
     }
     for memory in &memories {
+        candidate_checkpoint(context, &mut work_units).await?;
         let mentioned = mentioned_by_memory
             .get(&memory.id)
             .into_iter()
@@ -240,6 +253,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
             .map(|index| &entities[*index])
             .collect::<Vec<_>>();
         for pair in mentioned.windows(2) {
+            candidate_checkpoint(context, &mut work_units).await?;
             if !relation_pairs.contains(&(pair[0].id.clone(), pair[1].id.clone()))
                 && !relation_pairs.contains(&(pair[1].id.clone(), pair[0].id.clone()))
             {
@@ -266,6 +280,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         .collect::<BTreeSet<_>>();
     let mut missing_page_evidence = Vec::<(u16, usize, usize)>::new();
     for (page_index, page) in pages.iter().enumerate() {
+        candidate_checkpoint(context, &mut work_units).await?;
         let linked = page_evidence
             .iter()
             .filter(|evidence| evidence.page_id == page.id && evidence.source_kind == "memory")
@@ -331,6 +346,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
             .then_with(|| memories[left.2].id.cmp(&memories[right.2].id))
     });
     for (_, page_index, memory_index) in missing_page_evidence {
+        candidate_checkpoint(context, &mut work_units).await?;
         builder.add(
             LintSemanticCheckId::PageEvidenceLinks,
             LintSemanticCandidateKind::MissingLink,
@@ -345,7 +361,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
     }
 
     let population_digest = source_population_digest(
-        &memories,
+        memory_population_digest,
         &entities,
         &links,
         &relation_pairs,
@@ -353,6 +369,25 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         &page_evidence,
     );
     builder.finish(context, population_digest)
+}
+
+async fn candidate_checkpoint(
+    context: &LintContext<'_, '_>,
+    work_units: &mut usize,
+) -> Result<(), ()> {
+    context
+        .gate()
+        .check_run_for(context.profile(), context.clock().elapsed())
+        .map_err(|_| ())?;
+    *work_units = work_units.saturating_add(1);
+    if !work_units.is_multiple_of(128) {
+        return Ok(());
+    }
+    tokio::task::yield_now().await;
+    context
+        .gate()
+        .check_run_for(context.profile(), context.clock().elapsed())
+        .map_err(|_| ())
 }
 
 struct Builder {
@@ -395,7 +430,10 @@ impl Builder {
         ] {
             eligible.insert(id, memories.len() as u64);
         }
-        eligible.insert(LintSemanticCheckId::EntityRelations, entities.len() as u64);
+        eligible.insert(
+            LintSemanticCheckId::EntityRelations,
+            entities.iter().filter(|entity| entity.selected).count() as u64,
+        );
         for id in [
             LintSemanticCheckId::PageFaithfulness,
             LintSemanticCheckId::PageProvenanceAdequacy,
@@ -637,42 +675,116 @@ fn candidate_risk(action: LintSemanticAction, evidence: &[Record]) -> (u16, usiz
     (action_priority, shared_tokens)
 }
 
-async fn load_memories(context: &LintContext<'_, '_>) -> Result<Vec<Memory>, ()> {
+struct LoadedMemories {
+    memories: Vec<Memory>,
+    population_digest: [u8; 32],
+}
+
+async fn load_memories(context: &LintContext<'_, '_>) -> Result<LoadedMemories, ()> {
     let (scope, params) = scope_clause(context.scope().filter(), "m.space");
     let mut rows = context.snapshot().query(
-        &format!("SELECT m.source_id, MIN(m.content), MAX(m.memory_type), MAX(m.space), MAX(m.last_modified) FROM memories m WHERE m.source='memory' AND m.pending_revision=0 AND COALESCE(m.is_recap,0)=0 AND m.supersede_mode!='evicted'{scope} GROUP BY m.source_id ORDER BY m.source_id"),
+        &format!("SELECT m.id,m.source_id,m.chunk_index,m.content,m.memory_type,m.space,m.last_modified FROM memories m WHERE m.source='memory' AND m.pending_revision=0 AND COALESCE(m.is_recap,0)=0 AND m.supersede_mode!='evicted'{scope} ORDER BY m.source_id,m.chunk_index,m.id"),
         params,
     ).await.map_err(|_| ())?;
     let mut output = Vec::new();
+    let mut digest = Sha256::new();
+    digest.update(b"wenlan-lint-semantic-memory-population-v2");
     while let Some(row) = rows.next().await.map_err(|_| ())? {
-        let content: String = row.get(1).map_err(|_| ())?;
-        output.push(Memory {
-            id: row.get(0).map_err(|_| ())?,
-            content_tokens: content_tokens(&content),
-            content,
-            memory_type: row.get(2).map_err(|_| ())?,
-            space: row.get(3).map_err(|_| ())?,
-            last_modified: row.get(4).map_err(|_| ())?,
-        });
+        let row_id: String = row.get(0).map_err(|_| ())?;
+        let source_id: String = row.get(1).map_err(|_| ())?;
+        let chunk_index: i64 = row.get(2).map_err(|_| ())?;
+        let content: String = row.get(3).map_err(|_| ())?;
+        let memory_type: Option<String> = row.get(4).map_err(|_| ())?;
+        let space: Option<String> = row.get(5).map_err(|_| ())?;
+        let last_modified: i64 = row.get(6).map_err(|_| ())?;
+        digest_value(&mut digest, row_id.as_bytes());
+        digest_value(&mut digest, source_id.as_bytes());
+        digest.update(chunk_index.to_le_bytes());
+        digest_value(&mut digest, content.as_bytes());
+        digest_optional(&mut digest, memory_type.as_deref());
+        digest_optional(&mut digest, space.as_deref());
+        digest.update(last_modified.to_le_bytes());
+        if chunk_index == 0 {
+            output.push(Memory {
+                id: source_id,
+                content_tokens: content_tokens(&content),
+                content,
+                memory_type,
+                space,
+                last_modified,
+            });
+        }
     }
-    Ok(output)
+    Ok(LoadedMemories {
+        memories: output,
+        population_digest: digest.finalize().into(),
+    })
 }
 
 async fn load_entities(context: &LintContext<'_, '_>) -> Result<Vec<Entity>, ()> {
-    let (scope, params) = scope_clause(context.scope().filter(), "e.space");
+    let (scope, params) = entity_scope_clause(context.scope().filter());
     let mut rows = context.snapshot().query(
         &format!("SELECT e.id,e.name,e.space FROM entities e WHERE TRIM(e.name)!=''{scope} ORDER BY e.id"),
         params,
     ).await.map_err(|_| ())?;
     let mut output = Vec::new();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
+        let space: Option<String> = row.get(2).map_err(|_| ())?;
         output.push(Entity {
             id: row.get(0).map_err(|_| ())?,
             name: row.get(1).map_err(|_| ())?,
-            space: row.get(2).map_err(|_| ())?,
+            selected: scope_matches(context.scope().filter(), space.as_deref()),
+            space,
         });
     }
     Ok(output)
+}
+
+fn entity_scope_clause(scope: &ScopeFilter) -> (String, libsql::params::Params) {
+    let memory_filter = "m.source='memory' AND m.pending_revision=0 AND COALESCE(m.is_recap,0)=0 AND m.supersede_mode!='evicted'";
+    match scope {
+        ScopeFilter::Global => (String::new(), libsql::params::Params::None),
+        ScopeFilter::Registered(value) => (
+            format!(
+                " AND (e.space=?1
+                    OR e.id IN (
+                        SELECT me.entity_id FROM memory_entities me
+                        JOIN memories m ON m.source_id=me.memory_id
+                        WHERE {memory_filter} AND m.space=?1
+                    )
+                    OR e.id IN (
+                        SELECT r.to_entity FROM relations r
+                        JOIN entities source ON source.id=r.from_entity
+                        WHERE source.space=?1
+                    ))"
+            ),
+            libsql::params::Params::Positional(vec![libsql::Value::Text(value.clone())]),
+        ),
+        ScopeFilter::Uncategorized => (
+            format!(
+                " AND (e.space IS NULL
+                    OR e.id IN (
+                        SELECT me.entity_id FROM memory_entities me
+                        JOIN memories m ON m.source_id=me.memory_id
+                        WHERE {memory_filter} AND m.space IS NULL
+                    )
+                    OR e.id IN (
+                        SELECT r.to_entity FROM relations r
+                        JOIN entities source ON source.id=r.from_entity
+                        WHERE source.space IS NULL
+                    ))"
+            ),
+            libsql::params::Params::None,
+        ),
+    }
+}
+
+fn scope_matches(scope: &ScopeFilter, value: Option<&str>) -> bool {
+    match scope {
+        ScopeFilter::Global => true,
+        ScopeFilter::Registered(selected) => value == Some(selected.as_str()),
+        ScopeFilter::Uncategorized => value.is_none(),
+    }
 }
 
 async fn load_memory_entity_links(
@@ -961,7 +1073,7 @@ fn token_overlap_count(left: &BTreeSet<String>, right: &BTreeSet<String>) -> usi
 }
 
 fn source_population_digest(
-    memories: &[Memory],
+    memory_population_digest: [u8; 32],
     entities: &[Entity],
     links: &BTreeSet<(String, String)>,
     relations: &BTreeSet<(String, String)>,
@@ -969,15 +1081,8 @@ fn source_population_digest(
     page_evidence: &[PageEvidence],
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"wenlan-lint-semantic-source-population-v1");
-    for memory in memories {
-        digest.update(b"memory");
-        digest_value(&mut digest, memory.id.as_bytes());
-        digest_value(&mut digest, memory.content.as_bytes());
-        digest_optional(&mut digest, memory.memory_type.as_deref());
-        digest_optional(&mut digest, memory.space.as_deref());
-        digest.update(memory.last_modified.to_le_bytes());
-    }
+    digest.update(b"wenlan-lint-semantic-source-population-v2");
+    digest.update(memory_population_digest);
     for entity in entities {
         digest.update(b"entity");
         digest_value(&mut digest, entity.id.as_bytes());

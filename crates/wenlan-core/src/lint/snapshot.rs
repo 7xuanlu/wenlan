@@ -43,10 +43,26 @@ impl SnapshotReceipt {
         self.post_run_digest
     }
 
+    pub fn analysis_receipt_digest(self) -> StructuralDigest {
+        receipt_digest(self.analysis_digest, self.analysis_data_version)
+    }
+
+    pub fn post_run_receipt_digest(self) -> StructuralDigest {
+        receipt_digest(self.post_run_digest, self.post_run_data_version)
+    }
+
     pub fn is_consistent(self) -> bool {
         self.analysis_digest == self.post_run_digest
             && self.analysis_data_version == self.post_run_data_version
     }
+}
+
+fn receipt_digest(structural: StructuralDigest, data_version: i64) -> StructuralDigest {
+    let mut digest = Sha256::new();
+    digest.update(b"wenlan-lint-db-receipt-v2");
+    digest.update(structural.as_bytes());
+    digest.update(data_version.to_le_bytes());
+    StructuralDigest(digest.finalize().into())
 }
 
 /// Rows remain borrowed from their snapshot until they are dropped.

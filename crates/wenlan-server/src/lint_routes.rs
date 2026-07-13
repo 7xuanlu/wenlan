@@ -45,6 +45,11 @@ async fn run_lint(
             "external_egress_requires_deep".to_string(),
         ));
     }
+    if request.external_egress() && !external_egress_allowed_for_bind() {
+        return Err(ServerError::AgentDisabled(
+            "external_egress_requires_loopback_bind".to_string(),
+        ));
+    }
     if request.agent_assist() && !deep {
         return Err(ServerError::ValidationError(
             "agent_assist_requires_deep".to_string(),
@@ -78,6 +83,20 @@ async fn run_lint(
         .await
         .map_err(map_lint_error)?;
     Ok(report)
+}
+
+fn external_egress_allowed_for_bind() -> bool {
+    external_egress_allowed_for_bind_value(wenlan_core::env_compat::var_compat("WENLAN_BIND_ADDR"))
+}
+
+fn external_egress_allowed_for_bind_value(bind: Option<std::ffi::OsString>) -> bool {
+    let Some(bind) = bind else {
+        return true;
+    };
+    bind.into_string()
+        .ok()
+        .and_then(|bind| bind.parse::<std::net::SocketAddr>().ok())
+        .is_some_and(|address| address.ip().is_loopback())
 }
 
 fn select_semantic_provider(
@@ -115,5 +134,28 @@ fn map_lint_error(error: LintRunError) -> ServerError {
         | LintRunError::Snapshot(_)
         | LintRunError::PageScan(_)
         | LintRunError::Contract(_) => ServerError::Internal(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::external_egress_allowed_for_bind_value;
+
+    #[test]
+    fn external_egress_bind_policy_is_fail_closed() {
+        for (bind, allowed) in [
+            (None, true),
+            (Some("127.0.0.1:7878"), true),
+            (Some("[::1]:7878"), true),
+            (Some("0.0.0.0:7878"), false),
+            (Some("192.168.1.5:7878"), false),
+            (Some("not-a-socket"), false),
+        ] {
+            assert_eq!(
+                external_egress_allowed_for_bind_value(bind.map(Into::into)),
+                allowed,
+                "bind={bind:?}"
+            );
+        }
     }
 }

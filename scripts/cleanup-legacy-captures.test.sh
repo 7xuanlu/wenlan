@@ -29,6 +29,10 @@ CREATE TABLE derived_artifact_sweeps (source_id TEXT);
 CREATE TABLE pages (source_memory_ids TEXT);
 CREATE TABLE page_evidence (source_kind TEXT, locator TEXT);
 CREATE TABLE refinement_queue (source_ids TEXT);
+CREATE VIRTUAL TABLE chunks_fts USING fts4(
+    content,
+    content='chunks'
+);
 CREATE TRIGGER memories_vector_delete AFTER DELETE ON memories
 BEGIN
     SELECT vector('[1]');
@@ -46,8 +50,9 @@ INSERT INTO activities VALUES ('activity-old');
 INSERT INTO activities VALUES ('activity-keep');
 INSERT INTO access_log VALUES ('legacy-a');
 INSERT INTO access_log VALUES ('keep-a');
-INSERT INTO agent_activity VALUES (1,'["legacy-a"]');
-INSERT INTO agent_activity VALUES (2,'["keep-a"]');
+INSERT INTO agent_activity VALUES (1,'legacy-a');
+INSERT INTO agent_activity VALUES (2,'keep-a');
+INSERT INTO agent_activity VALUES (3,'legacy-a-extra');
 INSERT INTO memory_entities VALUES ('legacy-a','entity-old');
 INSERT INTO memory_entities VALUES ('keep-a','entity-keep');
 SQL
@@ -65,6 +70,15 @@ if $script --db "$db" --apply --expect deadbeef --backup-dir "$backup_dir"; then
 fi
 test "$(sqlite3 "$db" "SELECT COUNT(*) FROM memories WHERE source='hotkey_capture';")" = 2
 
+sqlite3 "$db" "UPDATE document_tags SET tag='changed-after-preview' WHERE source='memory';"
+if $script --db "$db" --apply --expect "$token" --backup-dir "$backup_dir"; then
+    echo "stale plan token unexpectedly applied after a same-count data change" >&2
+    exit 1
+fi
+test "$(sqlite3 "$db" "SELECT COUNT(*) FROM memories WHERE source='hotkey_capture';")" = 2
+
+preview=$($script --db "$db")
+token=$(printf '%s\n' "$preview" | sed -n 's/^plan_token=//p')
 applied=$($script --db "$db" --apply --expect "$token" --backup-dir "$backup_dir")
 printf '%s\n' "$applied" | grep -q '^mode=applied$'
 backup=$(printf '%s\n' "$applied" | sed -n 's/^backup=//p')
@@ -81,6 +95,7 @@ test "$(sqlite3 "$db" "SELECT COUNT(*) FROM memories WHERE source_id='keep-a';")
 test "$(sqlite3 "$db" "SELECT COUNT(*) FROM document_tags WHERE source_id='keep-a';")" = 1
 test "$(sqlite3 "$db" "SELECT COUNT(*) FROM access_log WHERE source_id='keep-a';")" = 1
 test "$(sqlite3 "$db" "SELECT COUNT(*) FROM agent_activity WHERE id=2;")" = 1
+test "$(sqlite3 "$db" "SELECT COUNT(*) FROM agent_activity WHERE id=3;")" = 1
 test "$(sqlite3 "$db" "SELECT COUNT(*) FROM memory_entities WHERE memory_id='keep-a';")" = 1
 test "$(sqlite3 "$db" "SELECT COUNT(*) FROM activities WHERE id='activity-keep';")" = 1
 

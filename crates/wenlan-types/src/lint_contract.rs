@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+use super::LintGateEffect;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{fmt, num::NonZeroU64};
 
@@ -7,6 +8,136 @@ pub const LINT_CHECK_CATALOG_VERSION: u16 = 2;
 pub const LINT_MAX_EVIDENCE_PER_CHECK: u16 = 100;
 pub const LINT_GENERAL_CHECK_COUNT: usize = 55;
 pub const LINT_DEEP_CHECK_COUNT: usize = 73;
+
+pub(crate) const LINT_CANONICAL_CHECK_IDS: [&str; LINT_DEEP_CHECK_COUNT] = [
+    "entities.alias_integrity",
+    "entities.partition_inventory",
+    "entities.structural_integrity",
+    "identity.cache_inventory",
+    "identity.memory_state_integrity",
+    "identity.registry_integrity",
+    "identity.session_structure",
+    "identity.tag_integrity",
+    "kg.advisory_inventory",
+    "kg.aggregate_inventory",
+    "kg.semantic.entity_relations",
+    "kg.semantic.memory_entity_links",
+    "kg.substrate_liveness",
+    "memories.derived.episode",
+    "memories.derived.fact",
+    "memories.derived.page_links",
+    "memories.derived.summary",
+    "memories.derived.temporal",
+    "memories.duplicate_inventory",
+    "memories.embedding_integrity",
+    "memories.enrichment_failures",
+    "memories.lifecycle_integrity",
+    "memories.partition_inventory",
+    "memories.retrieval_substrate_inventory",
+    "memories.semantic.classification",
+    "memories.semantic.contradiction",
+    "memories.semantic.staleness",
+    "memories.structured_conflict_inventory",
+    "memories.supersession_integrity",
+    "memory_entities.integrity",
+    "observations.duplicate_inventory",
+    "observations.integrity",
+    "operations.document_queue",
+    "operations.import_checkpoints",
+    "operations.maintenance_backlogs",
+    "operations.refinement_inventory",
+    "operations.rejection_inventory",
+    "operations.source_configuration",
+    "operations.source_lifecycle_residue",
+    "pages.archive_inventory",
+    "pages.citations.partitions",
+    "pages.db.partitions",
+    "pages.duplicate_active_titles",
+    "pages.duplicate_body_inventory",
+    "pages.links.orphan_labels",
+    "pages.project.artifact_inventory",
+    "pages.projection.body_alignment",
+    "pages.projection.identity",
+    "pages.projection.manifest_inventory",
+    "pages.projection.state_contract",
+    "pages.projection.version_alignment",
+    "pages.provenance.source_evidence_coverage",
+    "pages.review_status_inventory",
+    "pages.semantic.evidence_links",
+    "pages.semantic.faithfulness",
+    "pages.semantic.provenance_adequacy",
+    "relations.integrity",
+    "relations.vocabulary_integrity",
+    "runtime.ingest_worker_liveness",
+    "runtime.provider_inventory",
+    "runtime.schema_contract",
+    "runtime.search_index_contract",
+    "runtime.status_parity",
+    "serving.channel.episode",
+    "serving.channel.fact",
+    "serving.channel.graph",
+    "serving.channel.page",
+    "serving.channel.summary",
+    "serving.fact_scope_starvation",
+    "serving.observability_inventory",
+    "serving.reranker_fallback_inventory",
+    "serving.route_scope_contracts",
+    "serving.semantic.retrieval_quality",
+];
+
+const LINT_DEEP_ONLY_CHECK_IDS: [&str; LINT_DEEP_CHECK_COUNT - LINT_GENERAL_CHECK_COUNT] = [
+    "entities.alias_integrity",
+    "kg.semantic.entity_relations",
+    "kg.semantic.memory_entity_links",
+    "memories.duplicate_inventory",
+    "memories.retrieval_substrate_inventory",
+    "memories.semantic.classification",
+    "memories.semantic.contradiction",
+    "memories.semantic.staleness",
+    "memories.structured_conflict_inventory",
+    "observations.duplicate_inventory",
+    "operations.source_lifecycle_residue",
+    "pages.duplicate_body_inventory",
+    "pages.projection.body_alignment",
+    "pages.semantic.evidence_links",
+    "pages.semantic.faithfulness",
+    "pages.semantic.provenance_adequacy",
+    "relations.vocabulary_integrity",
+    "serving.semantic.retrieval_quality",
+];
+
+const LINT_ADVISORY_CHECK_IDS: [&str; 14] = [
+    "kg.semantic.entity_relations",
+    "kg.semantic.memory_entity_links",
+    "memories.duplicate_inventory",
+    "memories.retrieval_substrate_inventory",
+    "memories.semantic.classification",
+    "memories.semantic.contradiction",
+    "memories.semantic.staleness",
+    "memories.structured_conflict_inventory",
+    "observations.duplicate_inventory",
+    "pages.duplicate_body_inventory",
+    "pages.semantic.evidence_links",
+    "pages.semantic.faithfulness",
+    "pages.semantic.provenance_adequacy",
+    "serving.semantic.retrieval_quality",
+];
+
+#[doc(hidden)]
+pub fn canonical_gate_effect(profile: LintProfile, check_id: &str) -> Option<LintGateEffect> {
+    LINT_CANONICAL_CHECK_IDS.binary_search(&check_id).ok()?;
+    if profile == LintProfile::General && LINT_DEEP_ONLY_CHECK_IDS.binary_search(&check_id).is_ok()
+    {
+        return None;
+    }
+    Some(
+        if LINT_ADVISORY_CHECK_IDS.binary_search(&check_id).is_ok() {
+            LintGateEffect::Advisory
+        } else {
+            LintGateEffect::Actionable
+        },
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintContractError {

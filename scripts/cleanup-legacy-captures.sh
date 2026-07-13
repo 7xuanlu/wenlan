@@ -72,32 +72,18 @@ legacy_memory_heads=$(query "SELECT COUNT(DISTINCT source_id) FROM memories WHER
 legacy_document_tags=$(query "SELECT COUNT(*) FROM document_tags WHERE source IN ('focus_capture','ambient','hotkey_capture');")
 legacy_capture_refs=$(query "SELECT COUNT(*) FROM capture_refs WHERE source='hotkey';")
 legacy_access_rows=$(query "$target_cte SELECT COUNT(*) FROM access_log WHERE source_id IN target;")
-legacy_activity_rows=$(query "$target_cte SELECT COUNT(*) FROM agent_activity a WHERE EXISTS (SELECT 1 FROM target t WHERE instr(COALESCE(a.memory_ids,''),t.source_id)>0);")
+legacy_activity_rows=$(query "$target_cte SELECT COUNT(*) FROM agent_activity a WHERE EXISTS (SELECT 1 FROM target t WHERE instr(',' || COALESCE(a.memory_ids,'') || ',', ',' || t.source_id || ',')>0);")
 legacy_memory_entity_links=$(query "$target_cte SELECT COUNT(*) FROM memory_entities WHERE memory_id IN target;")
 page_evidence_blockers=$(query "$target_cte SELECT COUNT(*) FROM page_evidence WHERE source_kind='memory' AND locator IN target;")
 page_source_blockers=$(query "$target_cte SELECT COUNT(*) FROM page_sources WHERE memory_source_id IN target;")
-page_json_blockers=$(query "$target_cte SELECT COUNT(*) FROM pages p WHERE EXISTS (SELECT 1 FROM target t WHERE instr(COALESCE(p.source_memory_ids,''),t.source_id)>0);")
-refinement_blockers=$(query "$target_cte SELECT COUNT(*) FROM refinement_queue q WHERE EXISTS (SELECT 1 FROM target t WHERE instr(COALESCE(q.source_ids,''),t.source_id)>0);")
+page_json_blockers=$(query "$target_cte SELECT COUNT(*) FROM pages p WHERE NOT json_valid(COALESCE(p.source_memory_ids,'[]')) OR EXISTS (SELECT 1 FROM json_each(p.source_memory_ids) j JOIN target t ON j.value=t.source_id);")
+refinement_blockers=$(query "$target_cte SELECT COUNT(*) FROM refinement_queue q WHERE NOT json_valid(COALESCE(q.source_ids,'[]')) OR EXISTS (SELECT 1 FROM json_each(q.source_ids) j JOIN target t ON j.value=t.source_id);")
 
-plan_material=$(
-    printf '%s\n' \
-        "memory_chunks=$legacy_memory_chunks" \
-        "memory_heads=$legacy_memory_heads" \
-        "document_tags=$legacy_document_tags" \
-        "capture_refs=$legacy_capture_refs" \
-        "access_rows=$legacy_access_rows" \
-        "activity_rows=$legacy_activity_rows" \
-        "memory_entity_links=$legacy_memory_entity_links" \
-        "page_evidence_blockers=$page_evidence_blockers" \
-        "page_source_blockers=$page_source_blockers" \
-        "page_json_blockers=$page_json_blockers" \
-        "refinement_blockers=$refinement_blockers"
-    query "$target_cte SELECT source_id FROM target ORDER BY source_id;"
-)
-if command -v shasum >/dev/null 2>&1; then
-    plan_token=$(printf '%s' "$plan_material" | shasum -a 256 | awk '{print $1}')
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+if ((!apply)); then
+    plan_token=$(cd "$repo_root" && cargo run --quiet -p wenlan-core --example cleanup-legacy-captures -- "$db")
 else
-    plan_token=$(printf '%s' "$plan_material" | sha256sum | awk '{print $1}')
+    plan_token=$expect
 fi
 
 print_plan() {
@@ -159,8 +145,7 @@ if [[ "$backup_population" != "$expected_backup_population|"* ]] || [[ ! -s "$ba
     exit 3
 fi
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-(cd "$repo_root" && cargo run --quiet -p wenlan-core --example cleanup-legacy-captures -- "$db")
+(cd "$repo_root" && cargo run --quiet -p wenlan-core --example cleanup-legacy-captures -- "$db" --expect "$expect")
 
 remaining=$(query "SELECT (SELECT COUNT(*) FROM memories WHERE source='hotkey_capture') + (SELECT COUNT(*) FROM document_tags WHERE source IN ('focus_capture','ambient','hotkey_capture')) + (SELECT COUNT(*) FROM capture_refs WHERE source='hotkey');")
 if [[ "$remaining" != "0" ]]; then
