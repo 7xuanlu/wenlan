@@ -124,6 +124,16 @@ const LINT_ADVISORY_CHECK_IDS: [&str; 14] = [
 ];
 
 #[doc(hidden)]
+pub fn canonical_check_ids(profile: LintProfile) -> impl Iterator<Item = &'static str> {
+    LINT_CANONICAL_CHECK_IDS
+        .into_iter()
+        .filter(move |check_id| {
+            profile == LintProfile::Deep
+                || LINT_DEEP_ONLY_CHECK_IDS.binary_search(check_id).is_err()
+        })
+}
+
+#[doc(hidden)]
 pub fn canonical_gate_effect(profile: LintProfile, check_id: &str) -> Option<LintGateEffect> {
     LINT_CANONICAL_CHECK_IDS.binary_search(&check_id).ok()?;
     if profile == LintProfile::General && LINT_DEEP_ONLY_CHECK_IDS.binary_search(&check_id).is_ok()

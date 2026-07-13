@@ -4,11 +4,11 @@ use wenlan_mcp::tools::{
     LintSemanticDecisionParam, LintSemanticReasonParam, TransportMode, WenlanMcpServer,
 };
 use wenlan_types::lint::{
-    LintApplicability, LintCapabilityContext, LintCheckResult, LintCheckResultInput,
-    LintConfigFingerprint, LintCoverage, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest,
-    LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
-    LintProducerReceipt, LintProfile, LintReport, LintScope, LintSeverity, LintSnapshotReceipts,
-    LintSummaryCode, LintValidationMethod, LINT_DEEP_CHECK_COUNT, LINT_MAX_EVIDENCE_PER_CHECK,
+    canonical_check_ids, canonical_gate_effect, LintApplicability, LintCapabilityContext,
+    LintCheckResult, LintCheckResultInput, LintConfigFingerprint, LintCoverage, LintDbSnapshotMode,
+    LintDbSnapshotReceipt, LintDigest, LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt,
+    LintPrecondition, LintProducerReceipt, LintProfile, LintReport, LintScope, LintSeverity,
+    LintSnapshotReceipts, LintSummaryCode, LintValidationMethod, LINT_MAX_EVIDENCE_PER_CHECK,
 };
 use wiremock::matchers::{body_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -33,29 +33,32 @@ fn fixture() -> LintReport {
         ),
         LintConfigFingerprint::from_effective_config(&[]),
         LintProducerReceipt::new(None),
-        (0..LINT_DEEP_CHECK_COUNT)
-            .map(|index| {
-                LintCheckResult::try_new(LintCheckResultInput {
-                    check_id: format!("test.open_{index:02}"),
-                    outcome: LintOutcome::Pass,
-                    severity: LintSeverity::Info,
-                    applicability: LintApplicability::Inventory,
-                    precondition: LintPrecondition::Ready,
-                    coverage: LintCoverage::new(
-                        LintValidationMethod::FullEnumeration,
-                        0,
-                        0,
-                        LINT_MAX_EVIDENCE_PER_CHECK,
-                        false,
-                        0,
-                    )
-                    .unwrap(),
-                    metrics: Vec::new(),
-                    summary_code: LintSummaryCode::CheckPassed,
-                    recommendation_code: None,
-                    evidence: Vec::new(),
-                    duration_ms: 0,
-                })
+        canonical_check_ids(LintProfile::Deep)
+            .map(|check_id| {
+                LintCheckResult::try_new_with_gate_effect(
+                    LintCheckResultInput {
+                        check_id: check_id.to_string(),
+                        outcome: LintOutcome::Pass,
+                        severity: LintSeverity::Info,
+                        applicability: LintApplicability::Inventory,
+                        precondition: LintPrecondition::Ready,
+                        coverage: LintCoverage::new(
+                            LintValidationMethod::FullEnumeration,
+                            0,
+                            0,
+                            LINT_MAX_EVIDENCE_PER_CHECK,
+                            false,
+                            0,
+                        )
+                        .unwrap(),
+                        metrics: Vec::new(),
+                        summary_code: LintSummaryCode::CheckPassed,
+                        recommendation_code: None,
+                        evidence: Vec::new(),
+                        duration_ms: 0,
+                    },
+                    canonical_gate_effect(LintProfile::Deep, check_id).unwrap(),
+                )
                 .unwrap()
             })
             .collect(),

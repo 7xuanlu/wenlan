@@ -84,9 +84,7 @@ fn check_with_id(
 fn wire_report(scope: LintScope) -> LintReport {
     report(
         scope,
-        LINT_CANONICAL_CHECK_IDS
-            .iter()
-            .filter(|check_id| canonical_gate_effect(LintProfile::General, check_id).is_some())
+        canonical_check_ids(LintProfile::General)
             .map(|check_id| check_with_id(check_id, LintOutcome::Pass, LintSeverity::Info).unwrap())
             .collect(),
     )
