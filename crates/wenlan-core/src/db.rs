@@ -12166,28 +12166,56 @@ impl MemoryDB {
         source_id: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
-            libsql::params![source.to_string(), source_id.to_string()],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_by_source_id: {}", e)))?;
-        // Clean up orphaned enrichment_steps (no FK cascade)
-        conn.execute(
-            "DELETE FROM enrichment_steps WHERE source_id = ?1",
-            libsql::params![source_id.to_string()],
-        )
-        .await
-        .ok();
-        // T15a: clean up orphaned child_vectors for memory parents (no FK cascade;
-        // parent_id is source_id not rowid). Scoped to memory deletes.
-        if source == "memory" {
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_by_source_id BEGIN: {e}")))?;
+        let result: Result<(), WenlanError> = async {
             conn.execute(
-                "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
+                libsql::params![source.to_string(), source_id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_by_source_id: {e}")))?;
+            // Clean up orphaned enrichment_steps (no FK cascade).
+            conn.execute(
+                "DELETE FROM enrichment_steps WHERE source_id = ?1",
                 libsql::params![source_id.to_string()],
             )
             .await
-            .ok();
+            .map_err(|e| WenlanError::VectorDb(format!("delete enrichment steps: {e}")))?;
+            // T15a: clean up derived memory state whose parent key is source_id.
+            if source == "memory" {
+                conn.execute(
+                    "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                    libsql::params![source_id.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete child vectors: {e}")))?;
+                conn.execute(
+                    "DELETE FROM memory_entities WHERE memory_id = ?1",
+                    libsql::params![source_id.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete memory entity links: {e}")))?;
+                conn.execute(
+                    "DELETE FROM document_tags WHERE source = 'memory' AND source_id = ?1",
+                    libsql::params![source_id.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete memory tags: {e}")))?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "delete_by_source_id COMMIT: {error}"
+            )));
         }
         Ok(())
     }
@@ -28209,6 +28237,92 @@ pub(crate) mod tests {
         // Should not error on missing source_id
         let result = db.delete_by_source_id("local_files", "nonexistent").await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_memory_cleans_derived_links_and_tags() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "INSERT INTO entities
+                 (id,name,entity_type,confirmed,created_at,updated_at)
+             VALUES ('entity-delete','Delete Target','concept',0,1,1);
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+             VALUES ('row-delete','Delete Target','memory','mem-delete','delete',0,1,'text');
+             INSERT INTO memory_entities (memory_id,entity_id)
+             VALUES ('mem-delete','entity-delete');
+             INSERT INTO document_tags (source,source_id,tag)
+             VALUES ('memory','mem-delete','derived');",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        db.delete_by_source_id("memory", "mem-delete")
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        for (table, sql) in [
+            (
+                "memory_entities",
+                "SELECT COUNT(*) FROM memory_entities WHERE memory_id='mem-delete'",
+            ),
+            (
+                "document_tags",
+                "SELECT COUNT(*) FROM document_tags WHERE source='memory' AND source_id='mem-delete'",
+            ),
+        ] {
+            let count: i64 = conn
+                .query(sql, ())
+                .await
+                .unwrap()
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get(0)
+                .unwrap();
+            assert_eq!(count, 0, "{table} must not retain deleted memory state");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_memory_rolls_back_when_derived_cleanup_fails() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "INSERT INTO entities
+                 (id,name,entity_type,confirmed,created_at,updated_at)
+             VALUES ('entity-rollback','Rollback Target','concept',0,1,1);
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+             VALUES ('row-rollback','Rollback Target','memory','mem-rollback','rollback',0,1,'text');
+             INSERT INTO memory_entities (memory_id,entity_id)
+             VALUES ('mem-rollback','entity-rollback');
+             CREATE TRIGGER reject_memory_entity_cleanup
+             BEFORE DELETE ON memory_entities
+             BEGIN SELECT RAISE(ABORT, 'forced cleanup failure'); END;",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        assert!(db
+            .delete_by_source_id("memory", "mem-rollback")
+            .await
+            .is_err());
+
+        let rows = db
+            .get_memories_by_source_id("memory", "mem-rollback")
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "failed cleanup must roll back primary delete"
+        );
     }
 
     // ==================== delete_bulk ====================

@@ -42,11 +42,19 @@ struct Entity {
     selected: bool,
 }
 
+struct Relation {
+    from_entity: String,
+    to_entity: String,
+    relation_type: String,
+}
+
 #[derive(Clone)]
 struct Page {
     id: String,
     content: String,
     workspace: Option<String>,
+    creation_kind: String,
+    review_status: String,
     content_tokens: BTreeSet<String>,
 }
 
@@ -223,12 +231,15 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         }
     }
 
-    let relation_pairs = relations.into_iter().collect::<BTreeSet<_>>();
-    for (from, to) in &relation_pairs {
+    let relation_pairs = relations
+        .iter()
+        .map(|relation| (relation.from_entity.clone(), relation.to_entity.clone()))
+        .collect::<BTreeSet<_>>();
+    for relation in &relations {
         candidate_checkpoint(context, &mut work_units).await?;
         let (Some(left), Some(right)) = (
-            entity_by_id.get(from.as_str()),
-            entity_by_id.get(to.as_str()),
+            entity_by_id.get(relation.from_entity.as_str()),
+            entity_by_id.get(relation.to_entity.as_str()),
         ) else {
             continue;
         };
@@ -238,7 +249,10 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<CandidateSet, 
         builder.add(
             LintSemanticCheckId::EntityRelations,
             LintSemanticCandidateKind::ExistingLink,
-            vec![entity_record(left), entity_record(right)],
+            vec![
+                relation_entity_record(left, &relation.relation_type, "from"),
+                relation_entity_record(right, &relation.relation_type, "to"),
+            ],
             Vec::new(),
             LintSemanticAction::RemoveEntityRelation,
             LintSemanticReasonCode::ExistingRelationMismatch,
@@ -802,15 +816,19 @@ async fn load_memory_entity_links(
     Ok(output)
 }
 
-async fn load_relations(context: &LintContext<'_, '_>) -> Result<Vec<(String, String)>, ()> {
+async fn load_relations(context: &LintContext<'_, '_>) -> Result<Vec<Relation>, ()> {
     let (scope, params) = scope_clause(context.scope().filter(), "source.space");
     let mut rows = context.snapshot().query(
-        &format!("SELECT r.from_entity,r.to_entity FROM relations r JOIN entities source ON source.id=r.from_entity WHERE 1=1{scope} ORDER BY r.from_entity,r.to_entity,r.id"),
+        &format!("SELECT r.from_entity,r.to_entity,r.relation_type FROM relations r JOIN entities source ON source.id=r.from_entity WHERE 1=1{scope} ORDER BY r.from_entity,r.to_entity,r.id"),
         params,
     ).await.map_err(|_| ())?;
     let mut output = Vec::new();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
-        output.push((row.get(0).map_err(|_| ())?, row.get(1).map_err(|_| ())?));
+        output.push(Relation {
+            from_entity: row.get(0).map_err(|_| ())?,
+            to_entity: row.get(1).map_err(|_| ())?,
+            relation_type: row.get(2).map_err(|_| ())?,
+        });
     }
     Ok(output)
 }
@@ -818,7 +836,7 @@ async fn load_relations(context: &LintContext<'_, '_>) -> Result<Vec<(String, St
 async fn load_pages(context: &LintContext<'_, '_>) -> Result<Vec<Page>, ()> {
     let (scope, params) = scope_clause(context.scope().filter(), "p.workspace");
     let mut rows = context.snapshot().query(
-        &format!("SELECT p.id,p.content,p.workspace FROM pages p WHERE p.status='active'{scope} ORDER BY p.id"),
+        &format!("SELECT p.id,p.content,p.workspace,p.creation_kind,p.review_status FROM pages p WHERE p.status='active'{scope} ORDER BY p.id"),
         params,
     ).await.map_err(|_| ())?;
     let mut output = Vec::new();
@@ -829,6 +847,8 @@ async fn load_pages(context: &LintContext<'_, '_>) -> Result<Vec<Page>, ()> {
             content_tokens: content_tokens(&content),
             content,
             workspace: row.get(2).map_err(|_| ())?,
+            creation_kind: row.get(3).map_err(|_| ())?,
+            review_status: row.get(4).map_err(|_| ())?,
         });
     }
     Ok(output)
@@ -869,7 +889,7 @@ fn memory_record(memory: &Memory) -> Record {
     Record {
         key: format!("memory:{}", memory.id),
         kind: LintAgentRecordKind::Memory,
-        excerpt: bounded(&memory.content),
+        excerpt: contextual_excerpt(memory.space.as_deref(), &memory.content),
         memory_type: memory.memory_type.clone(),
         evidence_count: None,
         source_excerpt: None,
@@ -880,7 +900,26 @@ fn entity_record(entity: &Entity) -> Record {
     Record {
         key: format!("entity:{}", entity.id),
         kind: LintAgentRecordKind::Entity,
-        excerpt: bounded(&entity.name),
+        excerpt: contextual_excerpt(entity.space.as_deref(), &entity.name),
+        memory_type: None,
+        evidence_count: None,
+        source_excerpt: None,
+    }
+}
+
+fn relation_entity_record(entity: &Entity, relation_type: &str, endpoint: &str) -> Record {
+    let scope = entity.space.as_deref().unwrap_or("uncategorized");
+    Record {
+        key: format!("relation-entity:{}:{relation_type}:{endpoint}", entity.id),
+        kind: LintAgentRecordKind::Entity,
+        excerpt: contextual_excerpt_with(
+            &[
+                ("scope", scope),
+                ("relation_type", relation_type),
+                ("endpoint", endpoint),
+            ],
+            &entity.name,
+        ),
         memory_type: None,
         evidence_count: None,
         source_excerpt: None,
@@ -888,14 +927,56 @@ fn entity_record(entity: &Entity) -> Record {
 }
 
 fn page_record(page: &Page, evidence_count: u64, source: Option<&str>) -> Record {
+    let scope = page.workspace.as_deref().unwrap_or("uncategorized");
     Record {
         key: format!("page:{}", page.id),
         kind: LintAgentRecordKind::Page,
-        excerpt: bounded(&page.content),
+        excerpt: contextual_excerpt_with(
+            &[
+                ("scope", scope),
+                ("creation_kind", &page.creation_kind),
+                ("review_status", &page.review_status),
+            ],
+            &page.content,
+        ),
         memory_type: None,
         evidence_count: Some(evidence_count),
         source_excerpt: source.map(bounded),
     }
+}
+
+fn contextual_excerpt(scope: Option<&str>, value: &str) -> String {
+    contextual_excerpt_with(&[("scope", scope.unwrap_or("uncategorized"))], value)
+}
+
+fn contextual_excerpt_with(fields: &[(&str, &str)], value: &str) -> String {
+    let metadata = fields
+        .iter()
+        .map(|(key, value)| format!("{key}={}", context_value(value)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let prefix = format!("[lint_context {metadata}]\n");
+    let content = redact_excerpt(value);
+    prefix
+        .chars()
+        .chain(content.chars())
+        .take(LINT_AGENT_EXCERPT_CHAR_CAP)
+        .collect()
+}
+
+fn context_value(value: &str) -> String {
+    let redacted = redact_excerpt(value);
+    redacted
+        .trim_matches(['[', ']'])
+        .chars()
+        .map(|character| {
+            if character.is_whitespace() || matches!(character, '[' | ']') {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn bounded(value: &str) -> String {
@@ -1134,4 +1215,17 @@ fn digest_id(key: &str) -> LintDigest {
     LintDigest::from_u64(u64::from_le_bytes(
         digest[..8].try_into().expect("digest prefix"),
     ))
+}
+
+#[cfg(test)]
+mod excerpt_tests {
+    use super::contextual_excerpt;
+
+    #[test]
+    fn redacted_scope_keeps_context_marker_well_formed() {
+        let excerpt = contextual_excerpt(Some("/Users/alice/private"), "visible evidence");
+
+        assert_eq!(excerpt, "[lint_context scope=redacted]\nvisible evidence");
+        assert!(!excerpt.contains("/Users/alice"));
+    }
 }

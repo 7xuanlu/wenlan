@@ -50,6 +50,29 @@ async fn structural_orphans_and_invalid_rows_are_errors_without_mutation() {
 }
 
 #[tokio::test]
+async fn imported_document_entity_links_have_a_valid_memory_owner() {
+    let (db, _tmp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "INSERT INTO entities
+                 (id,name,entity_type,confirmed,created_at,updated_at)
+             VALUES ('entity-doc','Imported Topic','concept',0,1,1);
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+             VALUES ('row-doc','Imported Topic','local_files','/tmp/doc.md','doc',0,1,'text');
+             INSERT INTO memory_entities (memory_id,entity_id)
+             VALUES ('/tmp/doc.md','entity-doc');",
+        )
+        .await
+        .unwrap();
+
+    let report = run(&db, None, test_config(true)).await;
+    assert_eq!(check(&report, LINKS).outcome(), LintOutcome::Pass);
+}
+
+#[tokio::test]
 async fn scoped_rows_follow_memory_or_entity_ownership_but_aggregates_stay_global() {
     let (db, _tmp) = test_db().await;
     seed_valid_scoped_graph(&db).await;

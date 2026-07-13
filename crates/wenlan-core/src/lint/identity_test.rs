@@ -70,6 +70,27 @@ async fn impossible_registry_session_cache_and_tag_rows_are_findings() {
 }
 
 #[tokio::test]
+async fn importer_unknown_confirmation_and_provenance_agent_are_valid() {
+    let (db, _temp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  confirmed,pinned,pending_revision,stability,supersede_mode,source_agent)
+             VALUES ('import-row','imported','memory','import-source','imported',0,1,'text',
+                     NULL,0,0,'new','hide','folder')",
+            (),
+        )
+        .await
+        .unwrap();
+
+    let report = run_lint(&db, None).await;
+    assert_eq!(check(&report, MEMORY).outcome(), LintOutcome::Pass);
+}
+
+#[tokio::test]
 async fn cross_owner_and_out_of_window_session_rows_are_findings() {
     let (db, _temp) = test_db().await;
     db.conn
