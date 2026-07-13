@@ -13,7 +13,7 @@ struct ListPagesResponse {
 }
 
 /// GET `/api/pages` with an optional space query param.
-async fn list_pages(router: &axum::Router, space: Option<&str>) -> ListPagesResponse {
+async fn list_pages(router: &common::AppRouter, space: Option<&str>) -> ListPagesResponse {
     let uri = match space {
         Some(s) => format!("/api/pages?space={}", s),
         None => "/api/pages".to_string(),

@@ -102,6 +102,8 @@ pub struct IngestBatcher {
     tx: mpsc::Sender<CoalescedRequest>,
 }
 
+mod handle;
+
 impl IngestBatcher {
     /// Spawn the coalescer worker. The returned handle is clonable and
     /// safe to share across all route handlers; the worker shuts down
@@ -111,34 +113,6 @@ impl IngestBatcher {
         let (tx, rx) = mpsc::channel(config.channel_capacity);
         tokio::spawn(run_coalescer(rx, process, config));
         Self { tx }
-    }
-
-    /// Submit a document for coalesced processing. Returns the per-doc
-    /// outcome — [`StoreOutcome::Stored`] on success, `GateRejected` /
-    /// `UpsertFailed` for the specific failure modes. `Err(String)` only
-    /// when the batcher itself is unreachable (worker panicked, channel
-    /// closed).
-    pub async fn submit(
-        &self,
-        doc: RawDocument,
-        chunks_predicted: usize,
-    ) -> Result<StoreOutcome, String> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        if self
-            .tx
-            .send(CoalescedRequest {
-                doc,
-                chunks_predicted,
-                response: resp_tx,
-            })
-            .await
-            .is_err()
-        {
-            return Err("ingest batcher is shut down".to_string());
-        }
-        resp_rx
-            .await
-            .map_err(|_| "ingest batcher dropped response channel".to_string())
     }
 }
 
@@ -513,3 +487,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ingest_batcher_worker_state_test.rs"]
+mod worker_state_tests;

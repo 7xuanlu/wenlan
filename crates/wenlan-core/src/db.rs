@@ -16,6 +16,8 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+mod count;
+
 #[derive(Clone, serde::Serialize)]
 pub struct MigrationProgress {
     pub current: usize,
@@ -35,7 +37,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 68;
+pub const SCHEMA_VERSION: u32 = 69;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -618,7 +620,7 @@ pub fn entity_minhash_enabled() -> bool {
 /// already cover, so they're skipped to keep the corpus-doubling cost bounded.
 /// Override with `WENLAN_EPISODE_WORD_GATE` (default 8). Mirrors the
 /// env-override pattern used by the page/session limits.
-fn episode_word_gate() -> usize {
+pub(crate) fn episode_word_gate() -> usize {
     std::env::var("WENLAN_EPISODE_WORD_GATE")
         .ok()
         .and_then(|s| s.trim().parse().ok())
@@ -1809,8 +1811,10 @@ END;
 // ===== MemoryDB =====
 
 pub struct MemoryDB {
-    _db: libsql::Database,
+    pub(crate) _db: libsql::Database,
     pub(crate) conn: tokio::sync::Mutex<libsql::Connection>,
+    page_projection_tracker: Arc<crate::page_projection_tracker::PageProjectionTracker>,
+    pub(crate) derived_artifact_state: Arc<crate::derived_artifact_state::DerivedArtifactState>,
     embedder: Arc<std::sync::Mutex<TextEmbedding>>,
     chunker: ChunkingEngine,
     embedding_cache: std::sync::Mutex<EmbeddingCache>,
@@ -1845,6 +1849,18 @@ fn title_looks_garbage(title: &str) -> bool {
 }
 
 impl MemoryDB {
+    pub fn page_projection_tracker(
+        &self,
+    ) -> Arc<crate::page_projection_tracker::PageProjectionTracker> {
+        Arc::clone(&self.page_projection_tracker)
+    }
+
+    pub fn begin_page_projection_write(
+        &self,
+    ) -> crate::page_projection_tracker::PageProjectionWriteGuard {
+        self.page_projection_tracker.begin_write()
+    }
+
     /// Convert a multi-word query into FTS5 OR query.
     /// "vector embedding model" → "vector OR embedding OR model"
     fn fts_or_query(query: &str) -> String {
@@ -2043,6 +2059,8 @@ impl MemoryDB {
         let instance = Self {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
             embedder: Arc::new(std::sync::Mutex::new(embedder)),
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
@@ -2114,6 +2132,8 @@ impl MemoryDB {
         let instance = Self {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
             embedder,
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
@@ -6381,6 +6401,28 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("m68 bump: {e}")))?;
                 log::info!("[migration] Migration 68 applied: pages.citations column");
             }
+
+            if version < 69 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS derived_artifact_sweeps (
+                        feature TEXT NOT NULL CHECK(feature IN ('episode','fact','summary')),
+                        source_id TEXT NOT NULL,
+                        first_missing_at INTEGER NOT NULL,
+                        last_sweep_at INTEGER NOT NULL,
+                        completed_sweeps INTEGER NOT NULL DEFAULT 0 CHECK(completed_sweeps >= 0),
+                        PRIMARY KEY(feature, source_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_derived_artifact_sweeps_source
+                        ON derived_artifact_sweeps(source_id);",
+                )
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("m69 create receipts: {error}")))?;
+                conn.execute("PRAGMA user_version = 69", ())
+                    .await
+                    .map_err(|error| WenlanError::VectorDb(format!("m69 bump: {error}")))?;
+                log::info!("[migration] Migration 69 applied: derived artifact sweep receipts");
+            }
         }
 
         Ok(())
@@ -7726,6 +7768,47 @@ impl MemoryDB {
         if docs.is_empty() {
             return Ok(0);
         }
+        let has_memory_docs = docs.iter().any(|doc| doc.source == "memory");
+        let episode_enabled = has_memory_docs && episode_channel_enabled();
+        let fact_enabled =
+            has_memory_docs && crate::retrieval::fact_channel::fact_channel_enabled();
+        self.upsert_documents_with_derived_channels(docs, episode_enabled, fact_enabled)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn upsert_documents_with_derived_channels_for_test(
+        &self,
+        docs: Vec<RawDocument>,
+        episode_enabled: bool,
+        fact_enabled: bool,
+    ) -> Result<usize, WenlanError> {
+        let has_memory_docs = docs.iter().any(|doc| doc.source == "memory");
+        self.upsert_documents_with_derived_channels(
+            docs,
+            has_memory_docs && episode_enabled,
+            has_memory_docs && fact_enabled,
+        )
+        .await
+    }
+
+    async fn upsert_documents_with_derived_channels(
+        &self,
+        docs: Vec<RawDocument>,
+        episode_enabled: bool,
+        fact_enabled: bool,
+    ) -> Result<usize, WenlanError> {
+        if docs.is_empty() {
+            return Ok(0);
+        }
+        let _episode_activity = episode_enabled.then(|| {
+            self.begin_derived_artifact_write(
+                crate::derived_artifact_state::DerivedArtifact::Episode,
+            )
+        });
+        let _fact_activity = fact_enabled.then(|| {
+            self.begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Fact)
+        });
 
         // Collect all memory rows across all documents
         struct MemoryRow {
@@ -7893,7 +7976,7 @@ impl MemoryDB {
         // verbatim unit, chunk_index=0) and the server-side quality gate by
         // construction (this is core, shared by eval + prod). Never recurses: an
         // incoming `source='episode'` doc is skipped.
-        if episode_channel_enabled() {
+        if episode_enabled {
             let word_gate = episode_word_gate();
             let mut episode_rows: Vec<MemoryRow> = Vec::new();
             let mut episode_texts: Vec<String> = Vec::new();
@@ -7978,7 +8061,7 @@ impl MemoryDB {
         }
         let mut child_rows: Vec<ChildRow> = Vec::new();
         let mut child_texts: Vec<String> = Vec::new();
-        if crate::retrieval::fact_channel::fact_channel_enabled() {
+        if fact_enabled {
             for doc in &docs {
                 if doc.source != "memory" {
                     continue;
@@ -12240,25 +12323,6 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Total number of memories.
-    pub async fn count(&self) -> Result<u64, WenlanError> {
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(*) FROM memories WHERE source != 'episode'",
-                (),
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("count: {}", e)))?;
-
-        if let Ok(Some(row)) = rows.next().await {
-            let count: i64 = row.get(0).unwrap_or(0);
-            Ok(count as u64)
-        } else {
-            Ok(0)
-        }
-    }
-
     /// List all indexed files (grouped by source_id).
     pub async fn list_indexed_files(&self) -> Result<Vec<IndexedFileInfo>, WenlanError> {
         let conn = self.conn.lock().await;
@@ -12564,6 +12628,8 @@ impl MemoryDB {
         if !crate::retrieval::fact_channel::fact_channel_enabled() {
             return Ok(0);
         }
+        let _activity =
+            self.begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Fact);
         // Find primary-chunk memory parents with no child_vectors rows yet.
         let missing: Vec<String> = {
             let conn = self.conn.lock().await;
@@ -19173,6 +19239,8 @@ impl MemoryDB {
     /// follow-up. Returns the number of episode rows written. Idempotent:
     /// re-running yields the same set (paired delete + deterministic ids).
     pub async fn backfill_episodes(&self) -> Result<usize, WenlanError> {
+        let _activity = self
+            .begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Episode);
         struct EpisodeParent {
             source_id: String,
             source_text: Option<String>,
@@ -26172,6 +26240,8 @@ pub(crate) mod tests {
         let memory_db = MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
             embedder: shared_embedder(),
             // Token-aware chunker matching production; falls back to char-based
             // when the BGE tokenizer isn't in the resolved cache.
@@ -45796,9 +45866,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        // test_db() runs the full migration ladder, so the terminal version is
-        // the current SCHEMA_VERSION (68 after the pages.citations column).
-        assert_eq!(uv, 68);
+        assert_eq!(uv, 69);
     }
 
     #[tokio::test]
@@ -45815,7 +45883,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 68,
+            uv, 69,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -45849,7 +45917,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 68);
+        assert_eq!(uv, 69);
     }
 
     #[tokio::test]
@@ -45866,7 +45934,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 68,
+            uv, 69,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -45915,8 +45983,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 68,
-            "terminal version is 68 after the pages.citations column"
+            uv, 69,
+            "terminal version is 69 after derived sweep receipts"
         );
     }
 
@@ -45934,7 +46002,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 68,
+            uv, 69,
             "user_version restored to current terminal version after idempotent re-run"
         );
 

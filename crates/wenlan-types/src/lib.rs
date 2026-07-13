@@ -10,6 +10,7 @@ pub mod briefing;
 pub mod entities;
 pub mod events;
 pub mod import;
+pub mod lint;
 pub mod memory;
 pub mod memory_type;
 pub mod narrative;
@@ -27,6 +28,7 @@ pub use entities::{
     Entity, EntityDetail, EntitySearchResult, EntitySuggestion, Observation, RecentRelation,
     Relation, RelationWithEntity,
 };
+pub use lint::{LintCheckResult, LintQuery, LintReport};
 pub use memory::{
     ActivityBadge, ActivityKind, AgentActivityRow, AgentConnection, DomainInfo,
     EnrichmentStatusResponse, EnrichmentStepStatus, HomeStats, IndexedFileInfo, MemoryItem,

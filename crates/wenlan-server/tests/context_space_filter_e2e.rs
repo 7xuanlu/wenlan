@@ -50,7 +50,7 @@ async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Resp
 }
 
 /// Call `/api/context` as TEST_AGENT (registered as full-trust) with a space filter.
-async fn chat_context(router: &axum::Router, query: &str, space: &str) -> ChatContextResponse {
+async fn chat_context(router: &common::AppRouter, query: &str, space: &str) -> ChatContextResponse {
     let body = serde_json::json!({
         "query": query,
         "space": space,

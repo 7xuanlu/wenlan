@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 use clap::{Parser, Subcommand};
 use output::OutputFormat;
+use std::path::PathBuf;
+use std::process::ExitCode;
 use wenlan_cli::{client, commands, output};
+use wenlan_types::lint::LintProfile;
 
 #[derive(Parser)]
 #[command(
@@ -50,6 +53,23 @@ enum Commands {
     Restart,
     /// Diagnose runtime, model, and API key setup.
     Doctor,
+    /// Check memory, Pages, runtime, and operation health through the daemon.
+    Lint {
+        #[arg(long)]
+        profile: Option<LintProfile>,
+        /// Limit checks to one registered space, or `uncategorized`.
+        #[arg(long)]
+        space: Option<String>,
+        /// Permit a deep semantic pass to use an already configured external provider.
+        #[arg(long)]
+        allow_external: bool,
+        /// Return bounded high-recall semantic candidates for the calling agent.
+        #[arg(long)]
+        agent_assist: bool,
+        /// Submit typed agent verdicts produced from a prior prepare report.
+        #[arg(long, value_name = "JSON_FILE")]
+        agent_submission: Option<PathBuf>,
+    },
     /// Manage local models.
     Models {
         #[command(subcommand)]
@@ -126,7 +146,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     let client = client::WenlanClient::from_env();
     // Resolve Auto once based on stdout TTY state. Subcommands receive Json or Table only.
@@ -150,6 +170,25 @@ async fn main() -> anyhow::Result<()> {
         Commands::Background { command } => commands::service::run_background(command)?,
         Commands::Restart => commands::service::restart()?,
         Commands::Doctor => commands::setup::run_doctor().await?,
+        Commands::Lint {
+            profile,
+            space,
+            allow_external,
+            agent_assist,
+            agent_submission,
+        } => {
+            return Ok(commands::lint::run(
+                &client,
+                format,
+                cli.quiet,
+                profile,
+                space,
+                allow_external,
+                agent_assist,
+                agent_submission,
+            )
+            .await)
+        }
         Commands::Models { command } => commands::setup::run_model(command).await?,
         Commands::Keys { command } => commands::setup::run_key(command).await?,
         Commands::Connect(args) => commands::mcp::run_connect(args, cli.quiet)?,
@@ -177,5 +216,5 @@ async fn main() -> anyhow::Result<()> {
         Commands::Agents { cmd } => commands::agents::run(&client, format, cli.quiet, cmd).await?,
         Commands::Spaces { cmd } => commands::space::run(&client, format, cli.quiet, cmd).await?,
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }

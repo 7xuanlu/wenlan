@@ -25,11 +25,33 @@ const BACKSTOP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// Initial delay — lets on-device model warm up before first backstop.
 const INITIAL_DELAY: Duration = Duration::from_secs(60);
+const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// Bounded per-poll drain of the document-enrichment queue. Serial (one doc at a
 /// time); caps how many queued documents a single poll processes so a large
 /// backlog can't monopolize the poll loop (steeps, page-watcher). Per-chunk
 /// checkpointing means the remainder is simply picked up on the next poll.
 const MAX_DOC_ENRICH_PER_POLL: usize = 4;
+
+fn derived_receipt_sweep_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.duration_since(last) >= DERIVED_RECEIPT_SWEEP_INTERVAL)
+}
+
+async fn run_derived_receipt_sweep_if_due<F, Fut, E>(
+    last: &mut Option<Instant>,
+    now: Instant,
+    sweep: F,
+) -> Result<bool, E>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    if !derived_receipt_sweep_due(*last, now) {
+        return Ok(false);
+    }
+    let result = sweep().await;
+    *last = Some(now);
+    result.map(|()| true)
+}
 
 /// Lightweight write-event tracker shared between store handlers and the scheduler.
 ///
@@ -150,6 +172,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_citation_sweep = Instant::now()
             .checked_sub(CITATION_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
+        let mut last_derived_receipt_sweep = None;
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -394,6 +417,15 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 )
                 .await;
                 last_backstop = now;
+            }
+
+            if let Err(error) =
+                run_derived_receipt_sweep_if_due(&mut last_derived_receipt_sweep, now, || {
+                    db.record_derived_artifact_sweep()
+                })
+                .await
+            {
+                tracing::warn!("[scheduler] derived receipt sweep error: {error}");
             }
 
             // --- 5. Enrichment sweep: back-fill entity linkage for memories
@@ -733,6 +765,46 @@ mod tests {
     #[test]
     fn test_adaptive_gap_empty_returns_ceiling() {
         assert_eq!(adaptive_gap(&[]), BURST_GAP_CEILING);
+    }
+
+    #[tokio::test]
+    async fn derived_receipt_sweep_dispatches_initially_then_every_thirty_minutes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let now = Instant::now();
+        let mut last = None;
+        let calls = AtomicUsize::new(0);
+        assert!(run_derived_receipt_sweep_if_due(&mut last, now, || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok::<(), ()>(())
+        })
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert!(!run_derived_receipt_sweep_if_due(
+            &mut last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL - Duration::from_secs(1),
+            || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), ()>(())
+            },
+        )
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert!(run_derived_receipt_sweep_if_due(
+            &mut last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL,
+            || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), ()>(())
+            },
+        )
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]

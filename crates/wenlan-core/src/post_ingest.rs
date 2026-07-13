@@ -348,6 +348,9 @@ pub async fn run_post_ingest_enrichment(
     }
 
     // 7. Concept growth — update matching page with new memory
+    let projection = knowledge_path.map(|path| {
+        crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
+    });
     match grow_page(
         db,
         source_id,
@@ -364,8 +367,8 @@ pub async fn run_post_ingest_enrichment(
             db.record_enrichment_step(source_id, "page_growth", "ok", None)
                 .await
                 .ok();
-            if let Some(kp) = knowledge_path {
-                write_grown_page(db, source_id, kp).await;
+            if let Some(ref projection) = projection {
+                write_grown_page(db, source_id, projection).await;
             }
         }
         Ok(false) => {
@@ -387,6 +390,7 @@ pub async fn run_post_ingest_enrichment(
                 .ok();
         }
     }
+    drop(projection);
 
     // 7b. KG quality verification — check entity self-retrieval after all linking/extraction
     let final_entity_id = db
@@ -737,16 +741,16 @@ pub(crate) async fn grow_page(
     Ok(true)
 }
 
-async fn write_grown_page(db: &MemoryDB, source_id: &str, knowledge_path: &std::path::Path) {
+async fn write_grown_page(
+    db: &MemoryDB,
+    source_id: &str,
+    projection: &crate::export::knowledge::KnowledgeProjectionWrite,
+) {
     match db.find_page_by_source_memory(source_id).await {
-        Ok(Some(page)) => {
-            let writer =
-                crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf());
-            match writer.write_page(&page) {
-                Ok(path) => log::info!("[post_ingest] wrote page to {path}"),
-                Err(e) => log::warn!("[post_ingest] knowledge write failed: {e}"),
-            }
-        }
+        Ok(Some(page)) => match projection.write_page(&page) {
+            Ok(path) => log::info!("[post_ingest] wrote page to {path}"),
+            Err(e) => log::warn!("[post_ingest] knowledge write failed: {e}"),
+        },
         Ok(None) => {}
         Err(e) => log::warn!("[post_ingest] page lookup for knowledge write failed: {e}"),
     }

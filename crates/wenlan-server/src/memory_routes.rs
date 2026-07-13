@@ -1982,13 +1982,14 @@ pub async fn handle_delete_page(
             .ok_or(ServerError::DbNotInitialized)?
     };
 
+    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+    let projection =
+        wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(knowledge_path, &db);
     db.delete_page(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
-    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path);
-    if let Err(e) = writer.remove_page(&id) {
+    if let Err(e) = projection.remove_page(&id) {
         tracing::warn!(
             "[page] DB row deleted but md projection cleanup failed for {}: {}",
             id,
@@ -3356,7 +3357,7 @@ pub async fn handle_refresh_page(
     }
 
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone());
+    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone(), &db);
 
     // Snapshot the current md content for rollback. If the file is missing
     // we tolerate it — the page may have been created before the projection
@@ -3365,6 +3366,7 @@ pub async fn handle_refresh_page(
     let existing_md_content = existing_state_file
         .as_ref()
         .and_then(|f| std::fs::read_to_string(knowledge_path.join(f)).ok());
+    let projection = writer.begin_projection_write();
 
     // Build the refreshed Page for md rendering. Bump version + last_modified
     // mirror what `update_page_content` writes to the DB row.
@@ -3415,7 +3417,7 @@ pub async fn handle_refresh_page(
     };
 
     // 1. md-first
-    writer
+    projection
         .write_page(&refreshed_page)
         .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
 
@@ -3449,7 +3451,7 @@ pub async fn handle_refresh_page(
             (Some(filename), Some(prev)) => {
                 std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
             }
-            _ => writer.remove_page(&id).map_err(|err| err.to_string()),
+            _ => projection.remove_page(&id).map_err(|err| err.to_string()),
         };
         if let Err(rb) = rollback {
             tracing::warn!(
@@ -4041,7 +4043,7 @@ mod search_agent_attribution_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
 
     async fn build_state_with_db() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("failed to create tempdir");
@@ -4057,7 +4059,7 @@ mod search_agent_attribution_tests {
         (Arc::new(RwLock::new(server_state)), tmp)
     }
 
-    async fn fetch_activities(app: axum::Router) -> Vec<wenlan_types::AgentActivityRow> {
+    async fn fetch_activities(app: AppRouter) -> Vec<wenlan_types::AgentActivityRow> {
         let resp = app
             .oneshot(
                 Request::builder()
@@ -4175,7 +4177,7 @@ mod search_rerank_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
     use wenlan_core::reranker::{NoopReranker, Reranker};
 
     async fn build_state(with_reranker: bool) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
@@ -4199,7 +4201,7 @@ mod search_rerank_tests {
     }
 
     async fn search_response(
-        app: axum::Router,
+        app: AppRouter,
         body: &'static str,
     ) -> wenlan_types::responses::SearchMemoryResponse {
         let resp = app
@@ -4373,7 +4375,7 @@ mod search_quick_path_page_tests {
     use tower::ServiceExt;
     use wenlan_types::requests::CreateConceptRequest;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
 
     async fn seed_confirmed_distilled_page(
         db: &wenlan_core::db::MemoryDB,
@@ -4495,7 +4497,7 @@ mod search_quick_path_page_tests {
     }
 
     async fn search(
-        app: axum::Router,
+        app: AppRouter,
         agent: Option<&str>,
     ) -> wenlan_types::responses::SearchMemoryResponse {
         let mut builder = Request::builder()

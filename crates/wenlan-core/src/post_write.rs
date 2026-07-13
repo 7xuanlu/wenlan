@@ -802,10 +802,11 @@ async fn create_page_impl(
     };
 
     // md-first write (only if a knowledge_path was provided)
-    let writer_opt =
-        knowledge_path.map(|p| crate::export::knowledge::KnowledgeWriter::new(p.to_path_buf()));
-    if let Some(ref writer) = writer_opt {
-        writer
+    let projection = knowledge_path.map(|path| {
+        crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
+    });
+    if let Some(ref projection) = projection {
+        projection
             .write_page(&page)
             .map_err(|e| WenlanError::VectorDb(format!("write_page: {e}")))?;
     }
@@ -830,8 +831,8 @@ async fn create_page_impl(
         .await
     {
         // Rollback md if it was written
-        if let Some(ref writer) = writer_opt {
-            if let Err(rb) = writer.remove_page(&id) {
+        if let Some(ref projection) = projection {
+            if let Err(rb) = projection.remove_page(&id) {
                 log::warn!(
                     "[create_page] DB insert failed and md rollback also failed for {id}: db_err={e}, rollback_err={rb}"
                 );
@@ -839,6 +840,7 @@ async fn create_page_impl(
         }
         return Err(WenlanError::VectorDb(e.to_string()));
     }
+    drop(projection);
 
     // Post-write enrichment
     let mut warnings: Vec<String> = Vec::new();
@@ -1193,6 +1195,9 @@ async fn update_page_impl(
         crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
 
     // ── Apply DB update ─────────────────────────────────────────────────────
+    let projection = knowledge_path.map(|path| {
+        crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
+    });
     // citations: None -> resets `citations` to '[]' (no fresh citation source
     // for this write; a stale claim-map must not survive a content change).
     let wrote = db
@@ -1220,14 +1225,14 @@ async fn update_page_impl(
     }
 
     // ── md re-write ─────────────────────────────────────────────────────────
-    if let Some(kp) = knowledge_path {
+    if let Some(ref projection) = projection {
         if let Ok(Some(updated_page)) = db.get_page(page_id).await {
-            let writer = crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf());
-            if let Err(e) = writer.write_page(&updated_page) {
+            if let Err(e) = projection.write_page(&updated_page) {
                 log::warn!("[update_page] md re-write failed for {page_id}: {e}");
             }
         }
     }
+    drop(projection);
 
     // ── Build warnings ──────────────────────────────────────────────────────
     let warnings = match delta_summary {
@@ -1378,6 +1383,9 @@ async fn accept_page_revision_card(
     let new_changelog =
         crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
 
+    let projection = knowledge_path.map(|path| {
+        crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
+    });
     let wrote = match card.page_version {
         Some(expected_version) => {
             db.try_update_page_content_with_changelog_at_version(
@@ -1434,10 +1442,9 @@ async fn accept_page_revision_card(
     .map_err(|e| WenlanError::VectorDb(format!("accept_page_revision_card consume: {e}")))?;
     drop(conn);
 
-    if let Some(kp) = knowledge_path {
+    if let Some(ref projection) = projection {
         if let Ok(Some(updated_page)) = db.get_page(&card.page_id).await {
-            let writer = crate::export::knowledge::KnowledgeWriter::new(kp.to_path_buf());
-            if let Err(e) = writer.write_page(&updated_page) {
+            if let Err(e) = projection.write_page(&updated_page) {
                 log::warn!(
                     "[accept_page_revision_card] md re-write failed for {}: {e}",
                     card.page_id
@@ -1445,6 +1452,7 @@ async fn accept_page_revision_card(
             }
         }
     }
+    drop(projection);
 
     Ok(wenlan_types::RevisionAcceptResponse {
         target_source_id: card.page_id,
@@ -3327,7 +3335,7 @@ mod tests {
         );
 
         let writer =
-            crate::export::knowledge::KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
+            crate::export::knowledge::KnowledgeWriter::new(knowledge_dir.path().to_path_buf(), &db);
         let filename = writer
             .page_filename(&page_id)
             .expect("accepted page-write card must refresh the markdown projection");

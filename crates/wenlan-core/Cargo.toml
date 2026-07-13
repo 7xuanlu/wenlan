@@ -62,6 +62,8 @@ rusqlite = { version = "0.31", default-features = false }
 # the dev-dependency usage by other modules.
 tempfile = { workspace = true }
 fs2 = { workspace = true }
+cap-std = { workspace = true }
+cap-fs-ext = { workspace = true }
 
 # Benchmark binaries (model_benchmark, deep_distill, etc.)
 env_logger = "0.11"

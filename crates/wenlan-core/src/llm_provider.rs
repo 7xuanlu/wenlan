@@ -49,6 +49,11 @@ pub fn mark_llm_ready() {
     }
 }
 
+/// Whether a configured provider has successfully completed warmup or served traffic.
+pub fn llm_provider_ready() -> bool {
+    LLM_READINESS_FIRED.get().is_some()
+}
+
 /// A single inference request.
 #[derive(Debug, Clone)]
 pub struct LlmRequest {

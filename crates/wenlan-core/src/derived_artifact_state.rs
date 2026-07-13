@@ -1,0 +1,195 @@
+use crate::db::MemoryDB;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+
+mod sweep;
+
+pub(crate) fn summary_eligible_predicate(alias: &str) -> String {
+    let minimum = crate::refinery::summary::min_bucket_members();
+    format!(
+        "{alias}.is_recap=0
+         AND {alias}.supersede_mode<>'archive'
+         AND {alias}.source_id NOT LIKE 'merged_%'
+         AND {alias}.source_id NOT LIKE 'recap_%'
+         AND {alias}.embedding IS NOT NULL
+         AND {alias}.entity_id IN (
+             SELECT owner.id FROM entities owner
+             JOIN (
+                 SELECT peer_entity.community_id
+                   FROM memories peer
+                   JOIN entities peer_entity ON peer.entity_id=peer_entity.id
+                  WHERE peer.source='memory' AND peer.chunk_index=0
+                    AND peer.is_recap=0 AND peer.supersede_mode<>'archive'
+                    AND peer.source_id NOT LIKE 'merged_%'
+                    AND peer.source_id NOT LIKE 'recap_%'
+                    AND peer.embedding IS NOT NULL
+                    AND peer_entity.community_id IS NOT NULL
+                  GROUP BY peer_entity.community_id
+                 HAVING COUNT(*) >= {minimum}
+             ) eligible ON eligible.community_id=owner.community_id
+         )"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DerivedArtifact {
+    Episode,
+    Fact,
+    Summary,
+}
+
+impl DerivedArtifact {
+    const fn index(self) -> usize {
+        match self {
+            Self::Episode => 0,
+            Self::Fact => 1,
+            Self::Summary => 2,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct DerivedArtifactState {
+    active: [AtomicU32; 3],
+    generation: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DerivedArtifactSample {
+    active: [u32; 3],
+    generation: u64,
+}
+
+impl DerivedArtifactState {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub(crate) fn begin(self: &Arc<Self>, artifact: DerivedArtifact) -> DerivedArtifactGuard {
+        self.active[artifact.index()].fetch_add(1, Ordering::AcqRel);
+        DerivedArtifactGuard {
+            state: Arc::clone(self),
+            artifact,
+        }
+    }
+
+    pub(crate) fn sample(&self) -> DerivedArtifactSample {
+        DerivedArtifactSample {
+            active: std::array::from_fn(|index| self.active[index].load(Ordering::Acquire)),
+            generation: self.generation.load(Ordering::Acquire),
+        }
+    }
+}
+
+impl DerivedArtifactSample {
+    pub(crate) const fn is_active(self, artifact: DerivedArtifact) -> bool {
+        self.active[artifact.index()] > 0
+    }
+}
+
+pub(crate) struct DerivedArtifactGuard {
+    state: Arc<DerivedArtifactState>,
+    artifact: DerivedArtifact,
+}
+
+impl Drop for DerivedArtifactGuard {
+    fn drop(&mut self) {
+        self.state.active[self.artifact.index()].fetch_sub(1, Ordering::AcqRel);
+        self.state.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl MemoryDB {
+    pub(crate) fn begin_derived_artifact_write(
+        &self,
+        artifact: DerivedArtifact,
+    ) -> DerivedArtifactGuard {
+        self.derived_artifact_state.begin(artifact)
+    }
+
+    pub(crate) fn derived_artifact_sample(&self) -> DerivedArtifactSample {
+        self.derived_artifact_state.sample()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summary_eligible_predicate;
+    use crate::db::tests::test_db;
+    use std::collections::BTreeSet;
+
+    #[tokio::test]
+    async fn summary_eligibility_query_plan_is_not_correlated() {
+        let (db, _tmp) = test_db().await;
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT m.source_id FROM memories m
+              WHERE m.source='memory' AND ({})",
+            summary_eligible_predicate("m")
+        );
+        let conn = db.conn.lock().await;
+        let mut rows = conn.query(&sql, ()).await.unwrap();
+        let mut details = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            details.push(row.get::<String>(3).unwrap());
+        }
+        assert!(
+            details.iter().all(|detail| !detail.contains("CORRELATED")),
+            "summary eligibility must be computed once, query plan: {details:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn summary_eligibility_requires_a_qualifying_community_and_candidate() {
+        let (db, _tmp) = test_db().await;
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "INSERT INTO entities
+               (id,name,entity_type,confirmed,created_at,updated_at,community_id)
+             VALUES
+               ('large-a','large-a','concept',0,1,1,1),
+               ('large-b','large-b','concept',0,1,1,1),
+               ('large-c','large-c','concept',0,1,1,1),
+               ('small-a','small-a','concept',0,1,1,2),
+               ('small-b','small-b','concept',0,1,1,2);",
+        )
+        .await
+        .unwrap();
+        let vector = format!(
+            "[{}]",
+            std::iter::repeat_n("0", 768).collect::<Vec<_>>().join(",")
+        );
+        conn.execute(
+            "INSERT INTO memories
+               (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                stability,supersede_mode,embedding,entity_id,is_recap)
+             VALUES
+               ('large-a','a','memory','large-a','a',0,1,'text','new','hide',vector32(?1),'large-a',0),
+               ('large-b','b','memory','large-b','b',0,1,'text','new','hide',vector32(?1),'large-b',0),
+               ('large-c','c','memory','large-c','c',0,1,'text','new','hide',vector32(?1),'large-c',0),
+               ('small-a','a','memory','small-a','a',0,1,'text','new','hide',vector32(?1),'small-a',0),
+               ('small-b','b','memory','small-b','b',0,1,'text','new','hide',vector32(?1),'small-b',0),
+               ('recap-large','r','memory','recap-large','r',0,1,'text','new','hide',vector32(?1),'large-a',1);",
+            libsql::params![vector],
+        )
+        .await
+        .unwrap();
+        let sql = format!(
+            "SELECT m.source_id FROM memories m
+              WHERE m.source='memory' AND ({}) ORDER BY m.source_id",
+            summary_eligible_predicate("m")
+        );
+        let mut rows = conn.query(&sql, ()).await.unwrap();
+        let mut eligible = BTreeSet::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            eligible.insert(row.get::<String>(0).unwrap());
+        }
+        assert_eq!(
+            eligible,
+            BTreeSet::from([
+                "large-a".to_string(),
+                "large-b".to_string(),
+                "large-c".to_string(),
+            ])
+        );
+    }
+}

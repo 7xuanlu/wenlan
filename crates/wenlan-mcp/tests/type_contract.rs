@@ -1065,9 +1065,11 @@ async fn list_entity_suggestions_envelope_guard() {
         .unwrap();
     let text = text_of(&result);
     assert!(
-        text.to_lowercase().contains("error") || text.contains("invalid"),
-        "expected error signal, got: {text}"
+        result.is_error.unwrap_or(false),
+        "wrong response shape must surface as a tool error; got: {text}"
     );
+    assert!(text.contains("Failed to parse"), "got: {text}");
+    assert!(!text.contains("suggestions"), "daemon body leaked: {text}");
 }
 
 #[tokio::test]
@@ -1159,9 +1161,11 @@ async fn list_pending_imports_envelope_guard() {
         .unwrap();
     let text = text_of(&result);
     assert!(
-        text.to_lowercase().contains("error") || text.contains("invalid"),
-        "expected error signal, got: {text}"
+        result.is_error.unwrap_or(false),
+        "wrong response shape must surface as a tool error; got: {text}"
     );
+    assert!(text.contains("Failed to parse"), "got: {text}");
+    assert!(!text.contains("items"), "daemon body leaked: {text}");
 }
 
 #[tokio::test]
@@ -1398,7 +1402,7 @@ async fn list_pending_revisions_happy_path() {
 async fn list_pending_revisions_envelope_guard() {
     // Daemon must return target_source_id, not target.
     // Wrong key: "target" instead of "target_source_id". Typed deserialization
-    // must fail loud, surfacing the missing field. This is the C1 regression guard.
+    // must fail loud without echoing daemon response details. This is the C1 regression guard.
     let wrong = serde_json::json!([
         {
             "target": "mem_t",
@@ -1540,9 +1544,10 @@ async fn list_orphan_links_envelope_guard() {
         "wrong key 'labels' instead of 'orphan_labels' must surface as tool error; got: {text}"
     );
     assert!(
-        text.to_lowercase().contains("error") || text.contains("missing"),
+        text.contains("Failed to parse"),
         "error message must describe parse failure; got: {text}"
     );
+    assert!(!text.contains("labels"), "daemon body leaked: {text}");
 }
 
 #[tokio::test]

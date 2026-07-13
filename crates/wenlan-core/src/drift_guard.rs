@@ -194,6 +194,7 @@ const FLAG_ALLOWLIST: &[&str] = &[
     "WENLAN_GIT_SHA",         // build stamp
     "WENLAN_MCP_CACHE_DIR",   // path
     "WENLAN_MIGRATIONS_HASH", // build stamp
+    "WENLAN_TEST_LINT_EPOCH", // process-only lint test clock
     "WENLAN_BATCH_LOG",       // debug logging
     "WENLAN_CHATGPT_ZIP",     // import path
 ];

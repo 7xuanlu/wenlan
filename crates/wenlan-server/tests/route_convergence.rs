@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
-use wenlan_server::router::build_router;
+use wenlan_server::router::{build_router, AppRouter};
 use wenlan_server::state::ServerState;
 use wenlan_types::requests::CreateConceptRequest;
 use wenlan_types::RawDocument;
@@ -62,7 +62,7 @@ impl Drop for WritableKnowledgeConfig {
     }
 }
 
-async fn test_app() -> (axum::Router, tempfile::TempDir) {
+async fn test_app() -> (AppRouter, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
         .await
@@ -76,7 +76,7 @@ async fn test_app() -> (axum::Router, tempfile::TempDir) {
 }
 
 async fn json_post(
-    app: &axum::Router,
+    app: &AppRouter,
     path: &str,
     agent: Option<&str>,
     body: serde_json::Value,
@@ -244,7 +244,7 @@ async fn add_observation_short_content_returns_422() {
 
 // ── Revision history endpoints ───────────────────────────────────────────────
 
-async fn test_app_with_db() -> (axum::Router, Arc<MemoryDB>, tempfile::TempDir) {
+async fn test_app_with_db() -> (AppRouter, Arc<MemoryDB>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(
         MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
@@ -305,7 +305,7 @@ async fn create_authored_page_fixture(db: &MemoryDB, title: &str, content: &str)
     result.id
 }
 
-async fn json_get(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
+async fn json_get(app: &AppRouter, path: &str) -> (StatusCode, serde_json::Value) {
     let req = Request::builder()
         .method(Method::GET)
         .uri(path)
@@ -325,7 +325,7 @@ async fn json_get(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Va
 }
 
 async fn json_put(
-    app: &axum::Router,
+    app: &AppRouter,
     path: &str,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {

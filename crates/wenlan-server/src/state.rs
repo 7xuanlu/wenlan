@@ -9,12 +9,61 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use wenlan_core::access_tracker::AccessTracker;
 use wenlan_core::db::MemoryDB;
+use wenlan_core::lint::observation::{LintRunObserver, NoopLintRunObserver};
 use wenlan_core::llm_provider::LlmProvider;
 use wenlan_core::prompts::PromptRegistry;
 use wenlan_core::quality_gate::QualityGate;
 use wenlan_core::reranker::Reranker;
 use wenlan_core::tuning::TuningConfig;
 use wenlan_types::responses::RerankerStatus;
+use wenlan_types::sources::Source;
+
+#[derive(Clone, Default)]
+pub struct LintServerConfig {
+    sources: Vec<Source>,
+    page_root: Option<PathBuf>,
+    clock_epoch_seconds: Option<i64>,
+}
+
+impl LintServerConfig {
+    pub(crate) const fn new(sources: Vec<Source>, page_root: Option<PathBuf>) -> Self {
+        Self {
+            sources,
+            page_root,
+            clock_epoch_seconds: None,
+        }
+    }
+
+    fn capture() -> Self {
+        let config = wenlan_core::config::load_config();
+        let page_root = config.knowledge_path_or_default();
+        Self::new(config.sources, Some(page_root)).with_clock_epoch_seconds(
+            std::env::var("WENLAN_TEST_LINT_EPOCH")
+                .ok()
+                .and_then(|value| value.parse().ok()),
+        )
+    }
+
+    pub(crate) const fn with_clock_epoch_seconds(mut self, value: Option<i64>) -> Self {
+        self.clock_epoch_seconds = value;
+        self
+    }
+
+    pub(crate) fn clock(&self) -> wenlan_core::lint::context::LintClock {
+        self.clock_epoch_seconds.map_or_else(
+            wenlan_core::lint::context::LintClock::capture,
+            wenlan_core::lint::context::LintClock::fixed_at,
+        )
+    }
+
+    pub(crate) fn sources(&self) -> &[Source] {
+        &self.sources
+    }
+
+    pub(crate) fn page_root(&self) -> Option<&std::path::Path> {
+        self.page_root.as_deref()
+    }
+}
 
 /// Shared state for the HTTP daemon.
 ///
@@ -76,6 +125,8 @@ pub struct ServerState {
     /// independent ones. `None` when the DB is not initialized — handlers
     /// fall back to the direct per-request upsert path in that case.
     pub ingest_batcher: Option<IngestBatcher>,
+    pub lint_config: LintServerConfig,
+    pub lint_observer: Arc<dyn LintRunObserver>,
 }
 
 impl Default for ServerState {
@@ -100,13 +151,18 @@ impl Default for ServerState {
             write_signal: WriteSignal::new(),
             reflection_debouncer: ReflectionDebouncer::new(),
             ingest_batcher: None,
+            lint_config: LintServerConfig::default(),
+            lint_observer: Arc::new(NoopLintRunObserver),
         }
     }
 }
 
 impl ServerState {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            lint_config: LintServerConfig::capture(),
+            ..Self::default()
+        }
     }
 }
 

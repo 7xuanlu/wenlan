@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 
 const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Single source of truth for the space-lock header name.
 /// Mirrors the daemon's `X-Wenlan-Space` constant (daemon dual-reads the legacy x-origin-space).
@@ -80,27 +81,29 @@ impl WenlanClient {
 
     /// Parse a successful response body as JSON.
     fn parse_response<R: DeserializeOwned>(bytes: &[u8]) -> Result<R, WenlanError> {
-        serde_json::from_slice::<R>(bytes).map_err(|e| {
-            let preview = std::str::from_utf8(bytes)
-                .unwrap_or("<non-utf8>")
-                .chars()
-                .take(512)
-                .collect::<String>();
-            WenlanError::Deserialize(format!("{e} (body preview: {preview})"))
-        })
+        serde_json::from_slice::<R>(bytes).map_err(|_| WenlanError::Deserialize)
     }
 
     /// Read response body, checking status first.
-    async fn read_body(resp: reqwest::Response) -> Result<Vec<u8>, WenlanError> {
+    async fn read_body(mut resp: reqwest::Response) -> Result<Vec<u8>, WenlanError> {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(WenlanError::Api { status, body });
+            return Err(WenlanError::Api { status });
         }
-        resp.bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| WenlanError::Deserialize(format!("failed to read response body: {e:#}")))
+        if resp
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(WenlanError::ResponseTooLarge);
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(|_| WenlanError::Deserialize)? {
+            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(WenlanError::ResponseTooLarge);
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
     }
 
     /// Attach per-request headers common to all daemon calls:
@@ -132,6 +135,23 @@ impl WenlanClient {
         Self::parse_response(&bytes)
     }
 
+    pub async fn get_with_query<Q: Serialize, R: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &Q,
+    ) -> Result<R, WenlanError> {
+        let url = format!("{}{}", self.base_url, path);
+        let agent = self.agent_name.clone();
+        let resp = self
+            .send_with_retry(|| {
+                let req = self.client.get(&url).query(query);
+                Self::attach_common_headers(req, agent.as_deref())
+            })
+            .await?;
+        let bytes = Self::read_body(resp).await?;
+        Self::parse_response(&bytes)
+    }
+
     /// POST request with JSON body, deserialize JSON response.
     pub async fn post<B: Serialize, R: DeserializeOwned>(
         &self,
@@ -143,6 +163,24 @@ impl WenlanClient {
         let resp = self
             .send_with_retry(|| {
                 let req = self.client.post(&url).json(body);
+                Self::attach_common_headers(req, agent.as_deref())
+            })
+            .await?;
+        let bytes = Self::read_body(resp).await?;
+        Self::parse_response(&bytes)
+    }
+
+    pub async fn post_with_query<Q: Serialize, B: Serialize, R: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &Q,
+        body: &B,
+    ) -> Result<R, WenlanError> {
+        let url = format!("{}{}", self.base_url, path);
+        let agent = self.agent_name.clone();
+        let resp = self
+            .send_with_retry(|| {
+                let req = self.client.post(&url).query(query).json(body);
                 Self::attach_common_headers(req, agent.as_deref())
             })
             .await?;
@@ -238,11 +276,14 @@ pub enum WenlanError {
     #[error("Wenlan is not reachable: {0}")]
     Unreachable(String),
 
-    #[error("Wenlan API error (HTTP {status}): {body}")]
-    Api { status: u16, body: String },
+    #[error("Wenlan API error (HTTP {status})")]
+    Api { status: u16 },
 
-    #[error("Failed to parse Wenlan response: {0}")]
-    Deserialize(String),
+    #[error("Failed to parse Wenlan response")]
+    Deserialize,
+
+    #[error("Wenlan response exceeds the size limit")]
+    ResponseTooLarge,
 }
 
 #[cfg(test)]
