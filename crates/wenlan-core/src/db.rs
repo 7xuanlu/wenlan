@@ -26432,6 +26432,8 @@ impl MemoryDB {
                 SELECT m.supersedes, c.depth + 1
                 FROM memories m
                 JOIN chain c ON m.source_id = c.source_id
+                    AND m.source != 'episode'
+                    AND m.chunk_index = 0
                 WHERE m.supersedes IS NOT NULL
                   AND c.depth < ?2
             )
@@ -26444,7 +26446,9 @@ impl MemoryDB {
                 m.source_agent,
                 m.supersede_mode
             FROM chain c
-            JOIN memories m ON m.source_id = c.source_id AND m.chunk_index = 0
+            JOIN memories m ON m.source_id = c.source_id
+                AND m.source != 'episode'
+                AND m.chunk_index = 0
             ORDER BY c.depth ASC
         ";
 
@@ -42577,6 +42581,59 @@ pub(crate) mod tests {
         assert!(
             chain[0].delta_summary.is_some(),
             "non-deepest entry must have a computed delta_summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_chain_ignores_derived_and_secondary_rows() {
+        let (db, _dir) = test_db().await;
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "wc_shape_old".to_string(),
+            title: "Old".to_string(),
+            content: "Old canonical content.".to_string(),
+            memory_type: Some("fact".to_string()),
+            confirmed: Some(true),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "wc_shape_new".to_string(),
+            title: "New".to_string(),
+            content: "New canonical content.".to_string(),
+            memory_type: Some("fact".to_string()),
+            confirmed: Some(true),
+            supersedes: Some("wc_shape_old".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,supersedes)
+             VALUES
+                 ('wc-shape-secondary','secondary','memory','wc_shape_new','New',1,1,'text','wc_shape_old');
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,episode_of)
+             VALUES
+                 ('wc-shape-new-episode','episode','episode','wc_shape_new','New episode',0,1,'text','wc_shape_new'),
+                 ('wc-shape-old-episode','episode','episode','wc_shape_old','Old episode',0,1,'text','wc_shape_old');",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let chain = db.walk_supersede_chain("wc_shape_new").await.unwrap();
+        let ids: Vec<&str> = chain.iter().map(|entry| entry.source_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["wc_shape_new", "wc_shape_old"],
+            "revision history must contain only canonical memory heads"
         );
     }
 

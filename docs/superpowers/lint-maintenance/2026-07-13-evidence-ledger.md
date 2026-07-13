@@ -261,6 +261,24 @@ findings from their evidence and `affected_records`; see `D1` below.
 | follow_up_direction | Stable real-store rows targeting absent Page IDs can now be proposed for deterministic orphaning; semantic rebinding remains separate. |
 | status | `fixed`; live historical exposure remains unclassified. |
 
+## B8: Revision Chain Duplicates Derived and Secondary Rows
+
+| Field | Evidence |
+|---|---|
+| issue_id | `B8` |
+| scenario | Revision history is read for a superseding memory that also has a content-backed episode or secondary chunks. |
+| observed_live_exposure | Not claimed. The defect was exposed by the exact workspace library gate after episode-channel tests exercised the legal shared-`source_id` shape; isolated chain tests without that shape had passed. |
+| code_evidence | `walk_supersede_chain` excluded episodes and secondary chunks only at the recursive CTE anchor. Its recursive member joined every chunk, and its final projection joined both canonical memory and episode rows sharing a `source_id`. |
+| invariant | Each revision depth contains exactly one canonical non-episode `chunk_index=0` row, independent of derived retrieval channels or document chunk count. |
+| reproducer | `walk_chain_ignores_derived_and_secondary_rows` seeds a two-entry chain plus one secondary chunk and two same-owner episode rows. |
+| root_cause | Missing canonical-row predicates in the recursive member and final join multiplied one two-entry chain into six result rows. |
+| repair | Both joins now require `source != 'episode'` and `chunk_index = 0`; the existing anchor and public response contract are unchanged. |
+| lint_coverage | None. This is a read-path correctness invariant with a deterministic product test, not stored-data cleanup evidence. |
+| cleanup_class | `do_not_touch`; episode rows and secondary chunks are valid storage shapes. |
+| verification | RED: expected 2 canonical IDs, received 6. GREEN: all `walk_chain_` tests 6/6. Exact `cargo test --workspace --lib`: 2,699 passed, 0 failed, 26 ignored (CLI 22, core 2,238, MCP 184, server 156, types 99). One preceding full run hit the unchanged sparse-scale 2-second wall-clock assertion at 2.69 seconds; four isolated reruns passed in 0.86-1.02 seconds and the exact full rerun passed without changing the threshold. |
+| follow_up_direction | Keep legal derived/channel rows out of canonical lifecycle traversals by query predicate, never by deleting them. |
+| status | `fixed`; live historical exposure remains unproven. |
+
 ## D1: Truncated Agent Findings Are Hidden
 
 | Field | Evidence |
