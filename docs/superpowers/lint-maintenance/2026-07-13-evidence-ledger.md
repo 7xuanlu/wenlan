@@ -153,12 +153,12 @@ counts. Never copy raw artifact contents into this ledger.
 | invariant | Declared owners cascade/rebind; telemetry retention remains explicit and is not mislabeled orphan data. |
 | reproducer | `rebind_source_id_rolls_back_when_checkpoint_rebind_fails` aborts checkpoint rebinding and inventories old/new owners. |
 | root_cause | Rebinding is multi-statement, non-transactional, and treats an owned checkpoint write as best-effort. |
-| repair | Reproduced; transaction and declared-child rebinding specified in the Priority B addendum. |
+| repair | Primary rows, enrichment checkpoints, episode ownership, and child-vector ownership now rebind in one explicit transaction; owned-write errors and COMMIT failures roll back. |
 | lint_coverage | Owner-integrity checks only where retention contract is deterministic. |
 | cleanup_class | Stable old/new rename receipts may permit `deterministic_safe`; otherwise unclassified until live evidence. |
-| verification | RED: `cargo test -p wenlan-core --lib rebind_source_id_rolls_back_when_checkpoint_rebind_fails -- --nocapture` returned success with memories on new and checkpoints on old. |
-| follow_up_direction | Execute B3 addendum and add success-path child ownership assertions. |
-| status | `reproduced` |
+| verification | RED: `cargo test -p wenlan-core --lib rebind_source_id_rolls_back_when_checkpoint_rebind_fails -- --nocapture` returned success with memories on new and checkpoints on old. GREEN: fault/child ownership test 1/1 and daemon source rename route 1/1; core/server all-target Clippy passed. |
+| follow_up_direction | Run the source rename route and classify any live old/new split owners from stable receipts. |
+| status | `fixed`; live historical exposure remains unclassified. |
 
 ## B4: Checkpoint Ordering and Retry Convergence
 

@@ -12283,7 +12283,8 @@ impl MemoryDB {
     /// Rebind chunks from one source_id to another. Used for rename optimization:
     /// when a file is renamed (old vanishes, new appears with same content_hash),
     /// rebind the old document's chunks to the new doc_source_id instead of
-    /// delete+enqueue. Updates enrichment_steps to point to the new source_id.
+    /// delete+enqueue. Rebinds checkpoints and memory-owned retrieval children
+    /// in the same transaction as the primary chunks.
     pub async fn rebind_source_id(
         &self,
         source: &str,
@@ -12291,23 +12292,53 @@ impl MemoryDB {
         new_source_id: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
-            libsql::params![
-                new_source_id.to_string(),
-                source.to_string(),
-                old_source_id.to_string()
-            ],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id: {}", e)))?;
-        // Also update enrichment_steps to point to the new source_id.
-        conn.execute(
-            "UPDATE enrichment_steps SET source_id = ?1 WHERE source_id = ?2",
-            libsql::params![new_source_id.to_string(), old_source_id.to_string()],
-        )
-        .await
-        .ok();
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
+                libsql::params![new_source_id, source, old_source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id memories: {e}")))?;
+            conn.execute(
+                "UPDATE enrichment_steps SET source_id = ?1 WHERE source_id = ?2",
+                libsql::params![new_source_id, old_source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id checkpoints: {e}")))?;
+            if source == "memory" {
+                conn.execute(
+                    "UPDATE memories
+                     SET source_id = CASE WHEN source_id = ?1 THEN ?2 ELSE source_id END,
+                         episode_of = CASE WHEN episode_of = ?1 THEN ?2 ELSE episode_of END
+                     WHERE source = 'episode' AND (source_id = ?1 OR episode_of = ?1)",
+                    libsql::params![old_source_id, new_source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id episodes: {e}")))?;
+                conn.execute(
+                    "UPDATE child_vectors SET parent_id = ?1
+                     WHERE parent_kind = 'memory' AND parent_id = ?2",
+                    libsql::params![new_source_id, old_source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id children: {e}")))?;
+            }
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "rebind_source_id commit: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -29004,6 +29035,12 @@ pub(crate) mod tests {
                  INSERT INTO enrichment_steps
                      (source_id,step_name,status,attempts,updated_at)
                  VALUES ('source-old','extract','ok',1,1);
+                 INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,episode_of)
+                 VALUES ('episode-rebind','episode','episode','source-old','episode',0,1,'text','source-old');
+                 INSERT INTO child_vectors
+                     (id,parent_kind,parent_id,field,content,embedding)
+                 VALUES ('child-rebind','memory','source-old','claim','child',NULL);
                  CREATE TRIGGER abort_enrichment_step_rebind
                  BEFORE UPDATE OF source_id ON enrichment_steps
                  WHEN OLD.source_id = 'source-old'
@@ -29020,8 +29057,8 @@ pub(crate) mod tests {
             let conn = db.conn.lock().await;
             let mut counts = Vec::new();
             for sql in [
-                "SELECT COUNT(*) FROM memories WHERE source_id='source-old'",
-                "SELECT COUNT(*) FROM memories WHERE source_id='source-new'",
+                "SELECT COUNT(*) FROM memories WHERE source='memory' AND source_id='source-old'",
+                "SELECT COUNT(*) FROM memories WHERE source='memory' AND source_id='source-new'",
                 "SELECT COUNT(*) FROM enrichment_steps WHERE source_id='source-old'",
                 "SELECT COUNT(*) FROM enrichment_steps WHERE source_id='source-new'",
             ] {
@@ -29052,6 +29089,41 @@ pub(crate) mod tests {
         );
         assert_eq!((old_memories, new_memories), (1, 0));
         assert_eq!((old_steps, new_steps), (1, 0));
+
+        db.rebind_source_id("memory", "source-old", "source-new")
+            .await
+            .expect("retry after the fault is removed must converge");
+        let conn = db.conn.lock().await;
+        let episode_owner = conn
+            .query(
+                "SELECT source_id, episode_of FROM memories WHERE id='episode-rebind'",
+                (),
+            )
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(episode_owner.get::<String>(0).unwrap(), "source-new");
+        assert_eq!(
+            episode_owner.get::<Option<String>>(1).unwrap().as_deref(),
+            Some("source-new")
+        );
+        let child_owner = conn
+            .query(
+                "SELECT parent_id FROM child_vectors WHERE id='child-rebind'",
+                (),
+            )
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<String>(0)
+            .unwrap();
+        assert_eq!(child_owner, "source-new");
     }
 
     #[tokio::test]
