@@ -8134,113 +8134,123 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("begin transaction: {}", e)))?;
 
-        // Delete existing rows for these source_ids
-        for (source, source_id) in &source_ids_to_delete {
-            conn.execute(
-                "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
-                libsql::params![source.clone(), source_id.clone()],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("delete old memories: {}", e)))?;
-            // T15a: pair the parent delete with its child rows (no FK; parent_id
-            // is source_id not rowid, so cascade is explicit). Scoped to memory
-            // parents — episode/page parents never have children.
-            if source == "memory" {
+        let total = memory_rows.len();
+        let transaction_result: Result<(), WenlanError> = async {
+            // Delete existing rows for these source_ids
+            for (source, source_id) in &source_ids_to_delete {
                 conn.execute(
-                    "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
-                    libsql::params![source_id.clone()],
+                    "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
+                    libsql::params![source.clone(), source_id.clone()],
                 )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete old child_vectors: {}", e)))?;
+                .map_err(|e| WenlanError::VectorDb(format!("delete old memories: {}", e)))?;
+                // T15a: pair the parent delete with its child rows (no FK; parent_id
+                // is source_id not rowid, so cascade is explicit). Scoped to memory
+                // parents — episode/page parents never have children.
+                if source == "memory" {
+                    conn.execute(
+                        "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                        libsql::params![source_id.clone()],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete old child_vectors: {}", e))
+                    })?;
+                }
             }
-        }
 
-        // Insert new memory rows with proper NULL handling for optional fields
-        let total = memory_rows.len();
-        for (row, embedding) in memory_rows.into_iter().zip(embeddings.iter()) {
-            let vec_str = Self::vec_to_sql(embedding);
-            let confirmed_int: Option<i64> = row.confirmed.map(|b| if b { 1 } else { 0 });
+            // Insert new memory rows with proper NULL handling for optional fields
+            for (row, embedding) in memory_rows.into_iter().zip(embeddings.iter()) {
+                let vec_str = Self::vec_to_sql(embedding);
+                let confirmed_int: Option<i64> = row.confirmed.map(|b| if b { 1 } else { 0 });
 
-            let summary_val: libsql::Value =
-                row.summary.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let url_val: libsql::Value = row.url.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let language_val: libsql::Value = row
-                .language
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let byte_start_val: libsql::Value = row
-                .byte_start
-                .map(|v| v.into())
-                .unwrap_or(libsql::Value::Null);
-            let byte_end_val: libsql::Value = row
-                .byte_end
-                .map(|v| v.into())
-                .unwrap_or(libsql::Value::Null);
-            let semantic_unit_val: libsql::Value = row
-                .semantic_unit
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let memory_type_val: libsql::Value = row
-                .memory_type
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let space_val: libsql::Value =
-                row.space.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let source_agent_val: libsql::Value = row
-                .source_agent
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let confidence_val: libsql::Value = row
-                .confidence
-                .map(|v| (v as f64).into())
-                .unwrap_or(libsql::Value::Null);
-            let confirmed_val: libsql::Value = confirmed_int
-                .map(|v| v.into())
-                .unwrap_or(libsql::Value::Null);
-            let stability_val: libsql::Value = row
-                .stability
-                .clone()
-                .map(libsql::Value::Text)
-                .unwrap_or(libsql::Value::Text("new".to_string()));
-            let supersedes_val: libsql::Value = row
-                .supersedes
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let pending_revision_val: i64 = if row.pending_revision { 1 } else { 0 };
-            let entity_id_val: libsql::Value = row
-                .entity_id
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let quality_val: libsql::Value =
-                row.quality.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let importance_val: libsql::Value = row
-                .importance
-                .map(|v| (v as i64).into())
-                .unwrap_or(libsql::Value::Null);
-            let is_recap_val: i64 = if row.is_recap { 1 } else { 0 };
-            let structured_fields_val: libsql::Value = row
-                .structured_fields
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let retrieval_cue_val: libsql::Value = row
-                .retrieval_cue
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let source_text_val: libsql::Value = row
-                .source_text
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let episode_of_val: libsql::Value = row
-                .episode_of
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let content_hash_val: libsql::Value = row
-                .content_hash
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
+                let summary_val: libsql::Value = row
+                    .summary
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let url_val: libsql::Value =
+                    row.url.map(|s| s.into()).unwrap_or(libsql::Value::Null);
+                let language_val: libsql::Value = row
+                    .language
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let byte_start_val: libsql::Value = row
+                    .byte_start
+                    .map(|v| v.into())
+                    .unwrap_or(libsql::Value::Null);
+                let byte_end_val: libsql::Value = row
+                    .byte_end
+                    .map(|v| v.into())
+                    .unwrap_or(libsql::Value::Null);
+                let semantic_unit_val: libsql::Value = row
+                    .semantic_unit
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let memory_type_val: libsql::Value = row
+                    .memory_type
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let space_val: libsql::Value = row
+                    .space
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let source_agent_val: libsql::Value = row
+                    .source_agent
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let confidence_val: libsql::Value = row
+                    .confidence
+                    .map(|v| (v as f64).into())
+                    .unwrap_or(libsql::Value::Null);
+                let confirmed_val: libsql::Value = confirmed_int
+                    .map(|v| v.into())
+                    .unwrap_or(libsql::Value::Null);
+                let stability_val: libsql::Value = row
+                    .stability
+                    .clone()
+                    .map(libsql::Value::Text)
+                    .unwrap_or(libsql::Value::Text("new".to_string()));
+                let supersedes_val: libsql::Value = row
+                    .supersedes
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let pending_revision_val: i64 = if row.pending_revision { 1 } else { 0 };
+                let entity_id_val: libsql::Value = row
+                    .entity_id
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let quality_val: libsql::Value = row
+                    .quality
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let importance_val: libsql::Value = row
+                    .importance
+                    .map(|v| (v as i64).into())
+                    .unwrap_or(libsql::Value::Null);
+                let is_recap_val: i64 = if row.is_recap { 1 } else { 0 };
+                let structured_fields_val: libsql::Value = row
+                    .structured_fields
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let retrieval_cue_val: libsql::Value = row
+                    .retrieval_cue
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let source_text_val: libsql::Value = row
+                    .source_text
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let episode_of_val: libsql::Value = row
+                    .episode_of
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let content_hash_val: libsql::Value = row
+                    .content_hash
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
 
-            conn.execute(
-                "INSERT INTO memories (id, content, source, source_id, title, summary, url,
+                conn.execute(
+                    "INSERT INTO memories (id, content, source, source_id, title, summary, url,
                     chunk_index, last_modified, chunk_type, language, byte_start, byte_end,
                     semantic_unit, memory_type, space, source_agent, confidence, confirmed,
                     stability, supersedes, pending_revision, word_count,
@@ -8252,78 +8262,98 @@ impl MemoryDB {
                     ?24, ?25, ?26, ?27, ?28,
                     ?29, ?30, ?31,
                     vector32(?32), ?33, ?34, ?35, ?36)",
-                libsql::params![
-                    row.id,
-                    row.content,
-                    row.source,
-                    row.source_id,
-                    row.title,
-                    summary_val,
-                    url_val,
-                    row.chunk_index as i64,
-                    row.last_modified,
-                    row.chunk_type,
-                    language_val,
-                    byte_start_val,
-                    byte_end_val,
-                    semantic_unit_val,
-                    memory_type_val,
-                    space_val,
-                    source_agent_val,
-                    confidence_val,
-                    confirmed_val,
-                    stability_val,
-                    supersedes_val,
-                    pending_revision_val,
-                    row.word_count,
-                    entity_id_val,
-                    "legacy", // column retired; status derived from enrichment_steps
-                    quality_val,
-                    is_recap_val,
-                    row.supersede_mode,
-                    structured_fields_val,
-                    retrieval_cue_val,
-                    source_text_val,
-                    vec_str,
-                    row.last_modified, // created_at = last_modified at insert time
-                    importance_val,
-                    episode_of_val,
-                    content_hash_val
-                ],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("insert memory: {}", e)))?;
-        }
+                    libsql::params![
+                        row.id,
+                        row.content,
+                        row.source,
+                        row.source_id,
+                        row.title,
+                        summary_val,
+                        url_val,
+                        row.chunk_index as i64,
+                        row.last_modified,
+                        row.chunk_type,
+                        language_val,
+                        byte_start_val,
+                        byte_end_val,
+                        semantic_unit_val,
+                        memory_type_val,
+                        space_val,
+                        source_agent_val,
+                        confidence_val,
+                        confirmed_val,
+                        stability_val,
+                        supersedes_val,
+                        pending_revision_val,
+                        row.word_count,
+                        entity_id_val,
+                        "legacy", // column retired; status derived from enrichment_steps
+                        quality_val,
+                        is_recap_val,
+                        row.supersede_mode,
+                        structured_fields_val,
+                        retrieval_cue_val,
+                        source_text_val,
+                        vec_str,
+                        row.last_modified, // created_at = last_modified at insert time
+                        importance_val,
+                        episode_of_val,
+                        content_hash_val
+                    ],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("insert memory: {}", e)))?;
+            }
 
-        // T15a: insert child vectors in the SAME tx (empty when flag OFF).
-        for (row, embedding) in child_rows.into_iter().zip(child_embeddings.iter()) {
-            let vec_str = Self::vec_to_sql(embedding);
-            conn.execute(
-                "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
+            // T15a: insert child vectors in the SAME tx (empty when flag OFF).
+            for (row, embedding) in child_rows.into_iter().zip(child_embeddings.iter()) {
+                let vec_str = Self::vec_to_sql(embedding);
+                conn.execute(
+                    "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
                  VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
-                libsql::params![row.id, row.parent_id, row.field, row.content, vec_str],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("insert child_vector: {}", e)))?;
-        }
+                    libsql::params![row.id, row.parent_id, row.field, row.content, vec_str],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("insert child_vector: {}", e)))?;
+            }
 
-        // Soft-suppress superseded memories (skip when pending_revision — human hasn't approved yet)
-        for doc in &docs {
-            if let Some(ref superseded_id) = doc.supersedes {
-                if !doc.pending_revision {
-                    conn.execute(
-                        "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
-                        libsql::params![superseded_id.to_string()],
-                    )
-                    .await
-                    .ok(); // Best effort
+            // Soft-suppress superseded memories (skip when pending_revision — human hasn't approved yet)
+            for doc in &docs {
+                if let Some(ref superseded_id) = doc.supersedes {
+                    if !doc.pending_revision {
+                        conn.execute(
+                            "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
+                            libsql::params![superseded_id.to_string()],
+                        )
+                        .await
+                        .ok(); // Best effort
+                    }
                 }
             }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = transaction_result {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "{error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
         }
 
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("commit transaction: {}", e)))?;
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "commit transaction: {error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(WenlanError::VectorDb(format!(
+                "commit transaction: {error}"
+            )));
+        }
 
         log::info!("[memory_db] upserted {} memories", total);
         Ok(total)
@@ -26500,6 +26530,120 @@ pub(crate) mod tests {
 
         // Should have roughly the same number of memories, not double
         assert_eq!(count1, count2, "upsert should replace, not accumulate");
+    }
+
+    #[tokio::test]
+    async fn upsert_documents_rolls_back_and_reuses_connection() {
+        let (db, _dir) = test_db().await;
+        let original =
+            "Original evidence must remain available after a failed replacement. ".repeat(200);
+        db.upsert_documents_with_derived_channels_for_test(
+            vec![memory_doc_with_fields(
+                "tx-replace",
+                &original,
+                "{\"status\":\"original\"}",
+            )],
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+
+        let old_memories = db
+            .get_memories_by_source_id("memory", "tx-replace")
+            .await
+            .unwrap();
+        assert!(
+            old_memories.len() > 1,
+            "fixture must cover replacement of multiple chunks"
+        );
+        let mut old_chunk_inventory: Vec<_> = old_memories
+            .iter()
+            .map(|memory| (memory.id.clone(), memory.content.clone()))
+            .collect();
+        old_chunk_inventory.sort();
+        let old_child_count = count_child_vectors_for(&db, "tx-replace").await;
+        assert!(
+            old_child_count >= 2,
+            "fixture must include derived child rows"
+        );
+        let old_child_inventory = child_vector_inventory_for(&db, "tx-replace").await;
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "CREATE TRIGGER fail_tx_replacement
+                 BEFORE INSERT ON memories
+                 WHEN NEW.source = 'memory' AND NEW.source_id = 'tx-replace'
+                 BEGIN SELECT RAISE(ABORT, 'blocked replacement'); END",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let replacement = memory_doc_with_fields(
+            "tx-replace",
+            "Replacement content must not partially overwrite the original.",
+            "{\"status\":\"replacement\"}",
+        );
+        let error = db
+            .upsert_documents_with_derived_channels_for_test(vec![replacement.clone()], false, true)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("blocked replacement"),
+            "expected trigger failure, got {error}"
+        );
+
+        let memories_after_failure = db
+            .get_memories_by_source_id("memory", "tx-replace")
+            .await
+            .unwrap();
+        assert_eq!(
+            memories_after_failure.len(),
+            old_memories.len(),
+            "failed replacement must preserve every old chunk"
+        );
+        let mut chunk_inventory_after_failure: Vec<_> = memories_after_failure
+            .iter()
+            .map(|memory| (memory.id.clone(), memory.content.clone()))
+            .collect();
+        chunk_inventory_after_failure.sort();
+        assert_eq!(
+            chunk_inventory_after_failure, old_chunk_inventory,
+            "failed replacement must preserve old chunk identity and content"
+        );
+        assert_eq!(
+            count_child_vectors_for(&db, "tx-replace").await,
+            old_child_count,
+            "failed replacement must preserve derived child rows"
+        );
+        assert_eq!(
+            child_vector_inventory_for(&db, "tx-replace").await,
+            old_child_inventory,
+            "failed replacement must preserve child identity and content"
+        );
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER fail_tx_replacement", ())
+                .await
+                .unwrap();
+        }
+        db.upsert_documents_with_derived_channels_for_test(vec![replacement], false, true)
+            .await
+            .expect("connection should accept a new transaction after rollback");
+
+        let memories_after_retry = db
+            .get_memories_by_source_id("memory", "tx-replace")
+            .await
+            .unwrap();
+        assert_eq!(memories_after_retry.len(), 1);
+        assert_eq!(
+            memories_after_retry[0].content,
+            "Replacement content must not partially overwrite the original."
+        );
     }
 
     #[tokio::test]
@@ -46492,6 +46636,32 @@ pub(crate) mod tests {
             .await
             .unwrap();
         rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    async fn child_vector_inventory_for(
+        db: &MemoryDB,
+        parent_id: &str,
+    ) -> Vec<(String, String, String)> {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, field, content
+                 FROM child_vectors
+                 WHERE parent_kind = 'memory' AND parent_id = ?1
+                 ORDER BY id",
+                libsql::params![parent_id],
+            )
+            .await
+            .unwrap();
+        let mut inventory = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            inventory.push((
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+            ));
+        }
+        inventory
     }
 
     fn memory_doc_with_fields(source_id: &str, content: &str, fields_json: &str) -> RawDocument {

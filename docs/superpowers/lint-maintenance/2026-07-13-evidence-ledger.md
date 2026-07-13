@@ -59,16 +59,16 @@ counts. Never copy raw artifact contents into this ledger.
 | issue_id | `A3` |
 | scenario | Replacement upsert fails after deleting the previous logical document. |
 | observed_live_exposure | Transaction property; live residue is not sufficient proof. |
-| code_evidence | `crates/wenlan-core/src/db.rs`, `upsert_documents_with_derived_channels`; fallible statements occur after `BEGIN` without one explicit error rollback boundary. |
+| code_evidence | `crates/wenlan-core/src/db.rs`, `upsert_documents_with_derived_channels`; the RED fault injection observed all 8 previous chunks disappear after an insert abort because fallible statements returned after `BEGIN` without rollback. |
 | invariant | Failure preserves the previous document and derived rows; the same connection accepts the next write. |
-| reproducer | `BEFORE INSERT` abort trigger after seeding a previous multi-chunk document. |
-| root_cause | Candidate: early `?` returns can leave mutation and transaction state unresolved. |
-| repair | Pending RED confirmation. |
+| reproducer | `BEFORE INSERT` abort trigger after seeding an 8-chunk document plus narrative/structured-field child vectors; exact chunk and child inventories are compared before and after failure, followed by a same-connection retry. |
+| root_cause | Confirmed: early `?` returns left the deletes visible in an open failed transaction and left the shared connection unable to begin a clean replacement transaction. |
+| repair | Existing delete, insert, child-vector, and best-effort supersession statements now execute inside one explicit transaction-result boundary. Mutation or commit failure attempts `ROLLBACK` before returning. |
 | lint_coverage | None; rollback and connection reuse are product-test invariants. |
 | cleanup_class | `do_not_touch` until a specific residue owner is proven. |
-| verification | Not run. |
-| follow_up_direction | Task 4 explicit transaction outcome boundary. |
-| status | `candidate` |
+| verification | RED: failed replacement changed the previous chunk population from 8 to 0. GREEN: rollback/reuse test 1/1, existing upsert group 9/9, child-vector replacement 1/1. |
+| follow_up_direction | Real-store probe may discover historical residue, but this transaction property remains enforced by deterministic product tests rather than a lint finding. |
+| status | `fixed`; live historical exposure remains unproven. |
 
 ## A4: Atomic Logical Memory Update
 
