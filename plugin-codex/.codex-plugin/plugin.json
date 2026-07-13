@@ -24,6 +24,9 @@
     "longDescription": "Adds Codex-native Wenlan workflows for session briefing, memory capture, and first-run setup on top of the existing wenlan-mcp server and local runtime.",
     "developerName": "Qi-Xuan Lu",
     "category": "Productivity",
+    "logo": "./assets/logo.svg",
+    "logoDark": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
     "capabilities": [
       "Interactive",
       "Read",
