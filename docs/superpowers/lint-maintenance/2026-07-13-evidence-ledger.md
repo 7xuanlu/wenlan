@@ -279,6 +279,24 @@ findings from their evidence and `affected_records`; see `D1` below.
 | follow_up_direction | Keep legal derived/channel rows out of canonical lifecycle traversals by query predicate, never by deleting them. |
 | status | `fixed`; live historical exposure remains unproven. |
 
+## B9: Missing Memory Update Reports Success
+
+| Field | Evidence |
+|---|---|
+| issue_id | `B9` |
+| scenario | A client submits a non-empty update for a logical memory that does not exist. |
+| observed_live_exposure | Not claimed. The final branch review found the silent-success path by comparing the atomic writer with peer typed write capabilities. |
+| code_evidence | `apply_memory_update` returned `Ok(())` when its canonical-head pre-read found no row, so the daemon converted a missing target into HTTP 200. |
+| invariant | A requested mutation must either identify one canonical head or fail with a typed not-found response; an empty update remains a no-op. |
+| reproducer | Core missing-head update plus `PUT /api/memory/missing-update-head/update` with a content change. |
+| root_cause | The pre-read missing branch retained legacy no-op semantics after the route was consolidated behind the atomic writer. |
+| repair | The missing branch now returns `WenlanError::NotFound`, which the existing daemon error mapping renders as HTTP 404. The transaction-time affected-row conflict remains unchanged. |
+| lint_coverage | None. This is synchronous command feedback, not stored-data residue. |
+| cleanup_class | `do_not_touch`; no row exists to repair. |
+| verification | RED: core returned `Ok(())` and HTTP returned 200. GREEN: core 1/1 and HTTP 1/1 return the typed not-found behavior. |
+| follow_up_direction | Keep missing-target semantics consistent across typed write capabilities; no new endpoint or response type is needed. |
+| status | `fixed`. |
+
 ## D1: Truncated Agent Findings Are Hidden
 
 | Field | Evidence |

@@ -2818,6 +2818,34 @@ mod update_memory_endpoint_tests {
     }
 
     #[tokio::test]
+    async fn missing_memory_update_returns_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            ..Default::default()
+        }));
+
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/memory/missing-update-head/update")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"content":"replacement content"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn confirmed_false_keeps_an_already_confirmed_memory_confirmed() {
         let tmp = tempfile::tempdir().unwrap();
         let db = Arc::new(

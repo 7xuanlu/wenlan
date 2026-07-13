@@ -12682,7 +12682,9 @@ impl MemoryDB {
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("update_memory row: {e}")))?
             else {
-                return Ok(());
+                return Err(WenlanError::NotFound(format!(
+                    "memory {source_id} not found"
+                )));
             };
             HeadMetadata {
                 source: row.get(0).unwrap_or_else(|_| "memory".to_string()),
@@ -30454,6 +30456,18 @@ pub(crate) mod tests {
             updated_memories[0].content,
             "New updated memory content about machine learning."
         );
+    }
+
+    #[tokio::test]
+    async fn update_memory_missing_head_returns_not_found() {
+        let (db, _dir) = test_db().await;
+
+        let error = db
+            .update_memory("missing-update-head", "replacement content")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, WenlanError::NotFound(_)));
     }
 
     #[tokio::test]
