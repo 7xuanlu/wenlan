@@ -225,9 +225,9 @@ counts. Never copy raw artifact contents into this ledger.
 | invariant | Deleted targets become explicit unresolved links; valid provenance locator kinds remain distinguishable. |
 | reproducer | `page_links_target_delete_becomes_orphan_and_reresolves` deletes a resolved target, recreates its title under a new ID, and runs orphan repair. |
 | root_cause | Target deletion does not null inbound link targets, so stale non-NULL IDs never re-enter orphan resolution. |
-| repair | Reproduced; transactional target-null plus Page delete specified in the Priority B addendum. |
+| repair | `delete_page` now nulls inbound targets and deletes the Page in one transaction, with rollback on either write or COMMIT failure. |
 | lint_coverage | Existing Pages/provenance and broken-link checks first. |
 | cleanup_class | A target ID absent from Pages can be proposed as `deterministic_safe` orphaning; semantic rebinding remains separate. |
-| verification | RED: `cargo test -p wenlan-core --lib page_links_target_delete_becomes_orphan_and_reresolves -- --nocapture` retained the deleted target ID. |
-| follow_up_direction | Execute B7 addendum and keep same-scope ambiguity tests green. |
-| status | `reproduced` |
+| verification | RED: `cargo test -p wenlan-core --lib page_links_target_delete_becomes_orphan_and_reresolves -- --nocapture` retained the deleted target ID. GREEN: Page-link group 7/7, wikilink group 21/21, and core all-target Clippy. |
+| follow_up_direction | Stable real-store rows targeting absent Page IDs can now be proposed for deterministic orphaning; semantic rebinding remains separate. |
+| status | `fixed`; live historical exposure remains unclassified. |

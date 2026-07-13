@@ -22958,9 +22958,32 @@ impl MemoryDB {
 
     pub async fn delete_page(&self, id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute("DELETE FROM pages WHERE id = ?1", libsql::params![id])
+        conn.execute("BEGIN", ())
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("delete_page: {e}")))?;
+            .map_err(|e| WenlanError::VectorDb(format!("delete_page begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "UPDATE page_links SET target_page_id = NULL WHERE target_page_id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_page orphan links: {e}")))?;
+            conn.execute("DELETE FROM pages WHERE id = ?1", libsql::params![id])
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_page row: {e}")))?;
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "delete_page commit: {error}"
+            )));
+        }
         Ok(())
     }
 
