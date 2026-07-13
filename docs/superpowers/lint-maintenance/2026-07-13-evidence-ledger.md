@@ -23,14 +23,14 @@ counts. Never copy raw artifact contents into this ledger.
 | issue_id | `A1` |
 | scenario | Cleanup evaluates Page provenance that names a memory by logical `source_id` or internal row `id`. |
 | observed_live_exposure | Pending a stable real-store probe. |
-| code_evidence | `crates/wenlan-core/src/db.rs`, `cleanup_orphaned_page_sources` currently validates only `memories.source_id`. |
+| code_evidence | Pre-fix `cleanup_orphaned_page_sources` validated only `memories.source_id`; the canonical writer accepts both logical and internal memory identities. |
 | invariant | Either authorized memory identity preserves `page_sources` and memory `page_evidence`; only a missing owner is removable. |
 | reproducer | Focused cleanup fixture for logical id, row id, and missing owner. |
 | root_cause | Confirmed: both cleanup predicates recognized only logical `memories.source_id`, so a valid internal row-id locator was deleted. |
 | repair | Both dual-write cleanup predicates now use correlated `NOT EXISTS` and preserve a non-episode memory matching either `source_id` or `id` in the existing transaction. |
-| lint_coverage | Existing `pages.provenance.source_evidence_coverage` is the preferred check group. |
+| lint_coverage | Existing `pages.provenance.source_evidence_coverage` now computes non-episode owner presence using both logical `memories.source_id` and internal `memories.id`; a matching evidence kind cannot mask a missing owner. No new check id or runner surface was added. |
 | cleanup_class | Unclassified until live exposure is measured. |
-| verification | RED removed 2 rows instead of 1. GREEN: focused locator fixture 1/1, orphan-cleanup group 3/3, Page provenance adjacency 6/6. |
+| verification | RED removed 2 rows instead of 1. GREEN: focused cleanup locator fixture 1/1, orphan-cleanup group 3/3, missing-owner lint RED/GREEN 1/1, Page provenance 6/6, whole lint 191/191 with bounded test concurrency, `wenlan-types` 102/102, core/types all-target Clippy clean. |
 | follow_up_direction | Task 8 missing-owner lint coverage; Task 9 measures live residue without mutation. |
 | status | `fixed` |
 
@@ -41,12 +41,12 @@ counts. Never copy raw artifact contents into this ledger.
 | issue_id | `A2` |
 | scenario | Merge or delete an entity referenced by `memory_entities`, legacy memory ownership, aliases, relations, observations, or Pages. |
 | observed_live_exposure | Pending a stable real-store probe. |
-| code_evidence | `crates/wenlan-core/src/db.rs`, `merge_entities` and `delete_entity`; Page and canonical junction ownership are not handled as one transaction. |
+| code_evidence | Pre-fix `merge_entities` and `delete_entity` did not handle Page and canonical junction ownership as one transaction. |
 | invariant | Merge transfers every surviving reference without duplicates; delete nulls nullable owners and rolls back all statements on failure. |
 | reproducer | Junction collision, Page owner, and abort-trigger rollback fixtures. |
 | root_cause | Confirmed: merge omitted `memory_entities` and `pages.entity_id`; delete omitted Page ownership and ran memory/alias/entity statements without one transaction. |
 | repair | Merge now transfers canonical junction links with `INSERT OR IGNORE`, removes loser links, and re-points Pages inside its existing transaction. Delete now nulls memory/Page owners and deletes aliases/entity in one rollback-safe transaction; declared FK cascades remove junction/graph children. |
-| lint_coverage | `memory_entities.integrity` already covers missing memory/entity owners; Page owner coverage depends on Task 7 evidence. |
+| lint_coverage | `memory_entities.integrity` covers junction owners. Task 8 did not add a Page-entity catalog check because no accepted live probe has reproduced `pages_dangling_entity > 0`; the read-only aggregate remains and Task 9 will revisit if exposure is nonzero. |
 | cleanup_class | Unclassified until live exposure is measured. |
 | verification | RED: alias-only junction disappeared; abort left memory ownership cleared. GREEN: new merge 1/1, new delete rollback/retry 1/1, merge group 14/14, delete group 3/3. |
 | follow_up_direction | Task 7/8 decides whether live dangling Page owners justify a canonical lint check. |
