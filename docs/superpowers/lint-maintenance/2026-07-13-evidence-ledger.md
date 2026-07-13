@@ -44,13 +44,13 @@ counts. Never copy raw artifact contents into this ledger.
 | code_evidence | `crates/wenlan-core/src/db.rs`, `merge_entities` and `delete_entity`; Page and canonical junction ownership are not handled as one transaction. |
 | invariant | Merge transfers every surviving reference without duplicates; delete nulls nullable owners and rolls back all statements on failure. |
 | reproducer | Junction collision, Page owner, and abort-trigger rollback fixtures. |
-| root_cause | Candidate: incomplete reference inventory and missing delete transaction. |
-| repair | Pending RED confirmation. |
+| root_cause | Confirmed: merge omitted `memory_entities` and `pages.entity_id`; delete omitted Page ownership and ran memory/alias/entity statements without one transaction. |
+| repair | Merge now transfers canonical junction links with `INSERT OR IGNORE`, removes loser links, and re-points Pages inside its existing transaction. Delete now nulls memory/Page owners and deletes aliases/entity in one rollback-safe transaction; declared FK cascades remove junction/graph children. |
 | lint_coverage | `memory_entities.integrity` already covers missing memory/entity owners; Page owner coverage depends on Task 7 evidence. |
 | cleanup_class | Unclassified until live exposure is measured. |
-| verification | Not run. |
-| follow_up_direction | Task 3 transactional transfer/null repair. |
-| status | `candidate` |
+| verification | RED: alias-only junction disappeared; abort left memory ownership cleared. GREEN: new merge 1/1, new delete rollback/retry 1/1, merge group 14/14, delete group 3/3. |
+| follow_up_direction | Task 7/8 decides whether live dangling Page owners justify a canonical lint check. |
+| status | `fixed` |
 
 ## A3: Document Upsert Rollback
 

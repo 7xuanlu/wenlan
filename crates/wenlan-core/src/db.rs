@@ -14080,6 +14080,28 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("merge_entities mem: {e}")))?;
 
             conn.execute(
+                "INSERT OR IGNORE INTO memory_entities (memory_id, entity_id)
+                 SELECT memory_id, ?1 FROM memory_entities WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge_entities memory links: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM memory_entities WHERE entity_id = ?1",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge_entities old links: {e}")))?;
+
+            conn.execute(
+                "UPDATE pages SET entity_id = ?1 WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge_entities pages: {e}")))?;
+
+            conn.execute(
                 "UPDATE OR IGNORE entity_aliases SET canonical_entity_id = ?1 WHERE canonical_entity_id = ?2",
                 libsql::params![canonical_id, alias_id],
             )
@@ -14552,27 +14574,56 @@ impl MemoryDB {
 
     pub async fn delete_entity(&self, entity_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        // Null out entity_id references in memories (manual cascade since no FK)
-        conn.execute(
-            "UPDATE memories SET entity_id = NULL WHERE entity_id = ?1",
-            libsql::params![entity_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_entity cascade memories: {}", e)))?;
-        // Remove aliases referencing this entity before deleting it (FK constraint)
-        conn.execute(
-            "DELETE FROM entity_aliases WHERE canonical_entity_id = ?1",
-            libsql::params![entity_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_entity cascade aliases: {}", e)))?;
-        conn.execute(
-            "DELETE FROM entities WHERE id = ?1",
-            libsql::params![entity_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_entity: {}", e)))?;
-        Ok(())
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity begin: {e}")))?;
+
+        let result: Result<(), WenlanError> = async {
+            conn.execute(
+                "UPDATE memories SET entity_id = NULL WHERE entity_id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity memories: {e}")))?;
+
+            conn.execute(
+                "UPDATE pages SET entity_id = NULL WHERE entity_id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity pages: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM entity_aliases WHERE canonical_entity_id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity aliases: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM entities WHERE id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity entity: {e}")))?;
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => match conn.execute("COMMIT", ()).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    Err(WenlanError::VectorDb(format!("delete_entity commit: {e}")))
+                }
+            },
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
     }
 
     /// True if any non-archived memory carries the given space. Legacy data probe:
@@ -29578,6 +29629,144 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn delete_entity_rolls_back_and_clears_all_owned_references() {
+        let (db, _dir) = test_db().await;
+        let entity_id = db
+            .store_entity("Delete target", "person", None, None, None)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.upsert_documents(vec![make_memory_doc(
+            "delete_entity_memory",
+            "Memory owned by the delete target",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        db.update_memory_entity_id("delete_entity_memory", &entity_id)
+            .await
+            .unwrap();
+        db.link_memory_entities("delete_entity_memory", &[entity_id.as_str()])
+            .await
+            .unwrap();
+        db.insert_page(
+            "delete_entity_page",
+            "Entity-owned Page",
+            None,
+            "content",
+            Some(&entity_id),
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let aliases_before = {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entity_aliases
+                    (alias_name, canonical_entity_id, created_at, source)
+                 VALUES ('Delete target alias', ?1, unixepoch(), 'test')",
+                libsql::params![entity_id.clone()],
+            )
+            .await
+            .unwrap();
+            let aliases_before = {
+                let mut rows = conn
+                    .query(
+                        "SELECT COUNT(*) FROM entity_aliases
+                         WHERE canonical_entity_id = ?1",
+                        libsql::params![entity_id.clone()],
+                    )
+                    .await
+                    .unwrap();
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+            };
+            conn.execute_batch(
+                "CREATE TRIGGER fail_entity_delete
+                 BEFORE DELETE ON entities
+                 BEGIN
+                     SELECT RAISE(ABORT, 'blocked entity delete');
+                 END;",
+            )
+            .await
+            .unwrap();
+            aliases_before
+        };
+
+        let error = db.delete_entity(&entity_id).await.unwrap_err();
+        assert!(error.to_string().contains("blocked entity delete"));
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT
+                        (SELECT entity_id FROM memories
+                         WHERE source_id = 'delete_entity_memory' LIMIT 1),
+                        (SELECT entity_id FROM pages
+                         WHERE id = 'delete_entity_page'),
+                        (SELECT COUNT(*) FROM entity_aliases
+                         WHERE canonical_entity_id = ?1),
+                        (SELECT COUNT(*) FROM memory_entities
+                         WHERE entity_id = ?1),
+                        (SELECT COUNT(*) FROM entities WHERE id = ?1)",
+                    libsql::params![entity_id.clone()],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(
+                row.get::<Option<String>>(0).unwrap(),
+                Some(entity_id.clone())
+            );
+            assert_eq!(
+                row.get::<Option<String>>(1).unwrap(),
+                Some(entity_id.clone())
+            );
+            assert_eq!(
+                row.get::<i64>(2).unwrap(),
+                aliases_before,
+                "aliases must roll back"
+            );
+            assert_eq!(row.get::<i64>(3).unwrap(), 1, "junction must remain");
+            assert_eq!(row.get::<i64>(4).unwrap(), 1, "entity must remain");
+
+            conn.execute("DROP TRIGGER fail_entity_delete", ())
+                .await
+                .unwrap();
+        }
+
+        db.delete_entity(&entity_id).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT
+                    (SELECT entity_id FROM memories
+                     WHERE source_id = 'delete_entity_memory' LIMIT 1),
+                    (SELECT entity_id FROM pages WHERE id = 'delete_entity_page'),
+                    (SELECT COUNT(*) FROM entity_aliases
+                     WHERE canonical_entity_id = ?1),
+                    (SELECT COUNT(*) FROM memory_entities WHERE entity_id = ?1),
+                    (SELECT COUNT(*) FROM entities WHERE id = ?1)",
+                libsql::params![entity_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<Option<String>>(0).unwrap(), None);
+        assert_eq!(row.get::<Option<String>>(1).unwrap(), None);
+        assert_eq!(row.get::<i64>(2).unwrap(), 0);
+        assert_eq!(row.get::<i64>(3).unwrap(), 0);
+        assert_eq!(row.get::<i64>(4).unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn test_confirm_entity() {
         let (db, _dir) = test_db().await;
         let eid = db
@@ -41115,6 +41304,75 @@ pub(crate) mod tests {
             eid, canonical,
             "memory entity_id should re-point to canonical"
         );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_transfers_canonical_memory_links_and_page_owner() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.link_memory_entities(
+            "memory_linked_to_both",
+            &[canonical.as_str(), alias.as_str()],
+        )
+        .await
+        .unwrap();
+        db.link_memory_entities("memory_linked_to_alias", &[alias.as_str()])
+            .await
+            .unwrap();
+        db.insert_page(
+            "page_owned_by_alias",
+            "Alias Page",
+            None,
+            "content",
+            Some(&alias),
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT memory_id, entity_id FROM memory_entities
+                 ORDER BY memory_id, entity_id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut links = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            links.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+        }
+        assert_eq!(
+            links,
+            vec![
+                ("memory_linked_to_alias".to_string(), canonical.clone()),
+                ("memory_linked_to_both".to_string(), canonical.clone()),
+            ],
+            "alias-only links must transfer and collisions must deduplicate"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT entity_id FROM pages WHERE id = 'page_owned_by_alias'",
+                (),
+            )
+            .await
+            .unwrap();
+        let page_owner = rows
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<Option<String>>(0)
+            .unwrap();
+        assert_eq!(page_owner, Some(canonical));
     }
 
     #[tokio::test]
