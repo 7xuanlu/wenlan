@@ -71,10 +71,13 @@ pub fn extract_wikilinks(content: &str) -> Vec<String> {
 pub async fn resolve_against_pages(
     db: &MemoryDB,
     labels: &[String],
+    scope: Option<&str>,
 ) -> Result<Vec<Wikilink>, WenlanError> {
     let mut out = Vec::with_capacity(labels.len());
     for label in labels {
-        let target = db.find_active_page_id_by_title(label).await?;
+        let target = db
+            .find_unique_active_page_id_by_title_scoped(label, scope)
+            .await?;
         out.push(Wikilink {
             label: label.clone(),
             target_page_id: target,

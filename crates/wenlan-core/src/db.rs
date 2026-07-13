@@ -22354,7 +22354,13 @@ impl MemoryDB {
         content: &str,
     ) -> Result<(), WenlanError> {
         let labels = crate::synthesis::wikilinks::extract_wikilinks(content);
-        let links = crate::synthesis::wikilinks::resolve_against_pages(self, &labels).await?;
+        let scope = self
+            .get_page(page_id)
+            .await?
+            .and_then(|page| page.workspace.or(page.space));
+        let links =
+            crate::synthesis::wikilinks::resolve_against_pages(self, &labels, scope.as_deref())
+                .await?;
         self.replace_page_links(page_id, &links).await
     }
 
@@ -22425,14 +22431,27 @@ impl MemoryDB {
     ) -> Result<Option<Page>, WenlanError> {
         // Entity-first, but scoped.
         if let Some(eid) = entity_id {
-            if let Some(page) = self.get_page_by_entity(eid).await? {
-                let page_workspace = page.workspace.as_deref().or(page.space.as_deref());
-                let ws_ok = workspace.is_none_or(|w| page_workspace == Some(w));
-                let status_ok = page.review_status == "confirmed";
-                let human_owned = page.user_edited || page.creation_kind == "authored";
-                if ws_ok && status_ok && (allow_user_edited || !human_owned) {
-                    return Ok(Some(page));
-                }
+            let allow_human_owned = i64::from(allow_user_edited);
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
+                     FROM pages
+                     WHERE entity_id = ?1 AND status = 'active'
+                       AND COALESCE(review_status, 'confirmed') = 'confirmed'
+                       AND (?2 IS NULL OR COALESCE(workspace, space) = ?2)
+                       AND (?3 != 0 OR (COALESCE(user_edited, 0) = 0 AND COALESCE(creation_kind, 'distilled') <> 'authored'))
+                     ORDER BY id ASC LIMIT 1",
+                    libsql::params![eid, workspace, allow_human_owned],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("scoped page entity match: {e}")))?;
+            if let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                return Ok(Some(Self::row_to_page(&row)?));
             }
         }
         // Embedding cosine, scoped in SQL on space + review_status + ownership.
@@ -23036,6 +23055,53 @@ impl MemoryDB {
         }
     }
 
+    /// Find exactly one active page whose title and scope match. Automatic
+    /// wikilink resolution refuses ambiguous same-scope titles instead of
+    /// attaching to whichever row SQLite happens to return first.
+    pub async fn find_unique_active_page_id_by_title_scoped(
+        &self,
+        label: &str,
+        scope: Option<&str>,
+    ) -> Result<Option<String>, WenlanError> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM pages
+                 WHERE LOWER(title) = LOWER(?1) AND status = 'active'
+                   AND ((?2 IS NULL AND COALESCE(workspace, space) IS NULL)
+                        OR COALESCE(workspace, space) = ?2)
+                 ORDER BY id ASC LIMIT 2",
+                libsql::params![trimmed, scope],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("find_unique_active_page_id_by_title_scoped: {e}"))
+            })?;
+        let first = match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row) => row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+            None => return Ok(None),
+        };
+        if rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some(first))
+    }
+
     /// Replace the entire outbound-link set for a page in one BEGIN/COMMIT.
     /// Called from `update_page_content` and `insert_page` after wikilink
     /// extraction so the join table stays coherent with the body.
@@ -23195,64 +23261,60 @@ impl MemoryDB {
     /// the refinery uses this for the log line. Snapshots the label list
     /// under a brief lock, then drops the connection before the per-label
     /// lookups so other writers aren't starved while the resolver scans.
+    /// Resolution is per source Page and scope; existing non-NULL targets are
+    /// explicit inventory and are never rewritten here.
     pub async fn resolve_orphan_page_links(&self) -> Result<usize, WenlanError> {
-        let labels: Vec<String> = {
+        let orphan_rows: Vec<(String, String, Option<String>)> = {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT DISTINCT label_key FROM page_links WHERE target_page_id IS NULL",
+                    "SELECT pl.source_page_id, pl.label_key, COALESCE(p.workspace, p.space)
+                     FROM page_links pl
+                     INNER JOIN pages p ON p.id = pl.source_page_id
+                     WHERE pl.target_page_id IS NULL AND p.status = 'active'
+                     ORDER BY pl.source_page_id ASC, pl.label_key ASC",
                     (),
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("resolve_orphan_links list: {e}")))?;
-            let mut labels: Vec<String> = Vec::new();
+            let mut orphan_rows = Vec::new();
             while let Some(row) = rows
                 .next()
                 .await
                 .map_err(|e| WenlanError::VectorDb(e.to_string()))?
             {
-                labels.push(row.get::<String>(0).unwrap_or_default());
+                orphan_rows.push((
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<String>(1).unwrap_or_default(),
+                    row.get::<Option<String>>(2).unwrap_or(None),
+                ));
             }
-            labels
+            orphan_rows
         };
 
         let mut resolved = 0usize;
-        for label_key in labels {
+        for (source_page_id, label_key, scope) in orphan_rows {
             let trimmed = label_key.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            // Look up + update under a fresh short-lived lock per label so
-            // other writers (page inserts, ingest) aren't blocked while we
-            // walk the full orphan set.
+            let Some(target) = self
+                .find_unique_active_page_id_by_title_scoped(trimmed, scope.as_deref())
+                .await?
+            else {
+                continue;
+            };
             let conn = self.conn.lock().await;
-            let mut hit = conn
-                .query(
-                    "SELECT id FROM pages \
-                     WHERE LOWER(title) = ?1 AND status = 'active' \
-                     LIMIT 1",
-                    libsql::params![trimmed],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("resolve_orphan_links lookup: {e}")))?;
-            if let Some(row) = hit
-                .next()
-                .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-            {
-                let target: String = row
-                    .get(0)
-                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-                drop(hit);
-                conn.execute(
-                    "UPDATE page_links SET target_page_id = ?1 \
-                     WHERE label_key = ?2 AND target_page_id IS NULL",
-                    libsql::params![target, label_key],
+            let changed = conn
+                .execute(
+                    "UPDATE page_links SET target_page_id = ?1
+                     WHERE source_page_id = ?2 AND label_key = ?3
+                       AND target_page_id IS NULL",
+                    libsql::params![target, source_page_id, label_key],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("resolve_orphan_links update: {e}")))?;
-                resolved += 1;
-            }
+            resolved += changed as usize;
         }
         Ok(resolved)
     }
@@ -37614,6 +37676,31 @@ pub(crate) mod tests {
 
     // ---- page_links / wikilink graph ----
 
+    async fn insert_scoped_wikilink_page(
+        db: &MemoryDB,
+        id: &str,
+        title: &str,
+        content: &str,
+        scope: &str,
+    ) {
+        db.insert_page_with_kind(
+            id,
+            title,
+            None,
+            content,
+            None,
+            Some(scope),
+            &[],
+            &chrono::Utc::now().to_rfc3339(),
+            "research",
+            "confirmed",
+            Some(scope),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn list_active_page_titles_excludes_archived_and_honours_limit() {
         let (db, _dir) = test_db().await;
@@ -37690,6 +37777,146 @@ pub(crate) mod tests {
         assert_eq!(by_label.get("Alpha"), Some(&Some("page_alpha".to_string())));
         // Orphan stays NULL until the target gets created.
         assert_eq!(by_label.get("Quantum Knitting"), Some(&None));
+    }
+
+    #[tokio::test]
+    async fn wikilink_resolution_uses_the_source_page_scope() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(
+            &db,
+            "target-personal",
+            "Scoped Topic",
+            "personal body",
+            "personal",
+        )
+        .await;
+        insert_scoped_wikilink_page(&db, "target-work", "Scoped Topic", "work body", "work").await;
+        insert_scoped_wikilink_page(
+            &db,
+            "source-work",
+            "Work Source",
+            "see [[Scoped Topic]]",
+            "work",
+        )
+        .await;
+
+        let links = db.get_page_outbound_links("source-work").await.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target_page_id.as_deref(),
+            Some("target-work"),
+            "automatic resolution must stay in the source Page scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn wikilink_same_scope_duplicate_titles_remain_unresolved() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(&db, "duplicate-a", "Ambiguous", "body a", "work").await;
+        insert_scoped_wikilink_page(&db, "duplicate-b", "Ambiguous", "body b", "work").await;
+        insert_scoped_wikilink_page(
+            &db,
+            "source-ambiguous",
+            "Ambiguous Source",
+            "see [[Ambiguous]]",
+            "work",
+        )
+        .await;
+
+        let links = db
+            .get_page_outbound_links("source-ambiguous")
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target_page_id, None,
+            "same-scope ambiguity must remain visible as an orphan"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_wikilink_repair_is_scoped_per_source_page() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(
+            &db,
+            "orphan-source-work",
+            "Work Source",
+            "see [[Future Topic]]",
+            "work",
+        )
+        .await;
+        insert_scoped_wikilink_page(
+            &db,
+            "orphan-source-personal",
+            "Personal Source",
+            "see [[Future Topic]]",
+            "personal",
+        )
+        .await;
+        insert_scoped_wikilink_page(
+            &db,
+            "future-work",
+            "Future Topic",
+            "future work body",
+            "work",
+        )
+        .await;
+
+        assert_eq!(db.resolve_orphan_page_links().await.unwrap(), 1);
+        let work_links = db
+            .get_page_outbound_links("orphan-source-work")
+            .await
+            .unwrap();
+        let personal_links = db
+            .get_page_outbound_links("orphan-source-personal")
+            .await
+            .unwrap();
+        assert_eq!(work_links[0].target_page_id.as_deref(), Some("future-work"));
+        assert_eq!(
+            personal_links[0].target_page_id, None,
+            "a work target must not repair the personal source's orphan"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_resolver_preserves_explicit_cross_scope_targets() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(
+            &db,
+            "explicit-target-work",
+            "Explicit Work Target",
+            "work body",
+            "work",
+        )
+        .await;
+        insert_scoped_wikilink_page(
+            &db,
+            "explicit-source-personal",
+            "Explicit Personal Source",
+            "body",
+            "personal",
+        )
+        .await;
+        db.replace_page_links(
+            "explicit-source-personal",
+            &[crate::synthesis::wikilinks::Wikilink {
+                label: "Explicit Work Target".to_string(),
+                target_page_id: Some("explicit-target-work".to_string()),
+            }],
+        )
+        .await
+        .unwrap();
+
+        db.resolve_orphan_page_links().await.unwrap();
+        let links = db
+            .get_page_outbound_links("explicit-source-personal")
+            .await
+            .unwrap();
+        assert_eq!(
+            links[0].target_page_id.as_deref(),
+            Some("explicit-target-work"),
+            "automatic orphan repair must not rewrite an explicit target"
+        );
     }
 
     #[tokio::test]
@@ -43874,6 +44101,51 @@ pub(crate) mod tests {
         assert!(
             mismatched.is_none(),
             "workspace-scoped matching must not match pages from other workspaces"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_matching_page_scoped_entity_miss_releases_lock_before_embedding_fallback() {
+        let (db, _td) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let phrase = "entity miss must fall back to a same-scope embedding candidate";
+        db.insert_page_with_kind(
+            "page_entity_miss_fallback",
+            "Entity Miss Fallback",
+            Some(phrase),
+            phrase,
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let embedding = db
+            .generate_embeddings(&[phrase.to_string()])
+            .unwrap()
+            .remove(0);
+
+        let matched = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            db.find_matching_page_scoped(
+                Some("entity-does-not-exist"),
+                &embedding,
+                0.85,
+                Some("work"),
+                false,
+            ),
+        )
+        .await
+        .expect("entity miss must not deadlock before embedding fallback")
+        .unwrap();
+        assert_eq!(
+            matched.as_ref().map(|page| page.id.as_str()),
+            Some("page_entity_miss_fallback")
         );
     }
 

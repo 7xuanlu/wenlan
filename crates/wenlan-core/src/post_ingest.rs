@@ -65,7 +65,7 @@ pub async fn run_post_ingest_enrichment(
     content: &str,
     entity_id: Option<&str>,
     _memory_type: Option<&str>,
-    _domain: Option<&str>,
+    space: Option<&str>,
     _structured_fields: Option<&str>,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
@@ -351,11 +351,24 @@ pub async fn run_post_ingest_enrichment(
     let projection = knowledge_path.map(|path| {
         crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
     });
+    let growth_entity_id = db
+        .get_memory_entity_id(source_id)
+        .await
+        .unwrap_or_else(|_| {
+            current_entity_id
+                .clone()
+                .or_else(|| entity_id.map(str::to_string))
+        });
+    let growth_space = db
+        .get_memory_space(source_id)
+        .await
+        .unwrap_or_else(|_| space.map(str::to_string));
     match grow_page(
         db,
         source_id,
         content,
-        entity_id,
+        growth_entity_id.as_deref(),
+        growth_space.as_deref(),
         llm,
         prompts,
         distillation.page_growth_threshold,
@@ -575,11 +588,13 @@ pub(crate) async fn enrich_title(
 }
 
 /// Check if new memory matches an existing page; if so, update it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn grow_page(
     db: &MemoryDB,
     source_id: &str,
     content: &str,
     entity_id: Option<&str>,
+    space: Option<&str>,
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
     growth_threshold: f64,
@@ -597,7 +612,7 @@ pub(crate) async fn grow_page(
     };
 
     let page = match db
-        .find_matching_page(entity_id, mem_embedding, growth_threshold)
+        .find_matching_page_scoped(entity_id, mem_embedding, growth_threshold, space, true)
         .await?
     {
         Some(c) => c,
@@ -1441,6 +1456,179 @@ mod tests {
         }
     }
 
+    async fn insert_growth_page(
+        db: &MemoryDB,
+        id: &str,
+        entity_id: &str,
+        scope: &str,
+        content: &str,
+    ) {
+        db.insert_page_with_kind(
+            id,
+            id,
+            None,
+            content,
+            Some(entity_id),
+            Some(scope),
+            &[],
+            &chrono::Utc::now().to_rfc3339(),
+            "research",
+            "confirmed",
+            Some(scope),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn page_growth_mutates_only_the_memory_scope() {
+        let (db, _dir) = test_db().await;
+        let entity_id = db
+            .create_entity("Scoped Growth Entity", "Topic", Some("work"))
+            .await
+            .unwrap();
+        insert_growth_page(
+            &db,
+            "growth-personal",
+            &entity_id,
+            "personal",
+            "personal page must remain unchanged",
+        )
+        .await;
+        insert_growth_page(
+            &db,
+            "growth-work",
+            &entity_id,
+            "work",
+            "work page accepts the new evidence",
+        )
+        .await;
+
+        let source_id = "growth-scope-memory";
+        let content = "new scoped evidence belongs only to the work page";
+        let mut doc = make_doc(source_id, content);
+        doc.space = Some("work".to_string());
+        doc.entity_id = Some(entity_id.clone());
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let stub: Arc<dyn LlmProvider> = Arc::new(CapturingStubProvider {
+            response: "work page accepts the new evidence.[1]".to_string(),
+            captured_prompt: std::sync::Mutex::new(None),
+        });
+        // Force the entity-first path. A global entity lookup would see the
+        // personal Page first and then fail the scoped match.
+        let distillation = crate::tuning::DistillationConfig {
+            page_growth_threshold: 2.0,
+            ..Default::default()
+        };
+        run_post_ingest_enrichment(
+            &db,
+            source_id,
+            content,
+            Some(&entity_id),
+            Some("fact"),
+            Some("work"),
+            None,
+            Some(&stub),
+            &crate::prompts::PromptRegistry::default(),
+            &crate::tuning::RefineryConfig::default(),
+            &distillation,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let personal = db.get_page("growth-personal").await.unwrap().unwrap();
+        let work = db.get_page("growth-work").await.unwrap().unwrap();
+        assert!(
+            !personal.source_memory_ids.contains(&source_id.to_string()),
+            "cross-scope Page must not be grown"
+        );
+        assert!(
+            work.source_memory_ids.contains(&source_id.to_string()),
+            "same-scope Page must receive the new source"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_growth_uses_entity_linked_during_current_enrichment() {
+        let (db, _dir) = test_db().await;
+        let entity_name = "Current Run Entity";
+        let entity_id = db
+            .create_entity(entity_name, "Topic", Some("work"))
+            .await
+            .unwrap();
+        insert_growth_page(
+            &db,
+            "growth-current-entity",
+            &entity_id,
+            "work",
+            "page linked to the entity extracted in this run",
+        )
+        .await;
+
+        let source_id = "growth-current-entity-memory";
+        let content = "this memory is linked to an entity during enrichment";
+        let mut doc = make_doc(source_id, content);
+        doc.space = Some("work".to_string());
+        db.upsert_documents(vec![doc]).await.unwrap();
+
+        let precomputed_kg = vec![crate::extract::KgExtractionResult {
+            index: 0,
+            entities: vec![crate::extract::ExtractedEntity {
+                name: entity_name.to_string(),
+                entity_type: "Topic".to_string(),
+            }],
+            observations: Vec::new(),
+            relations: Vec::new(),
+        }];
+        let stub: Arc<dyn LlmProvider> = Arc::new(CapturingStubProvider {
+            response: "page linked to the entity extracted in this run.[1]".to_string(),
+            captured_prompt: std::sync::Mutex::new(None),
+        });
+        let tuning = crate::tuning::RefineryConfig {
+            entity_link_distance: -1.0,
+            ..Default::default()
+        };
+        let distillation = crate::tuning::DistillationConfig {
+            page_growth_threshold: 2.0,
+            ..Default::default()
+        };
+
+        run_post_ingest_enrichment(
+            &db,
+            source_id,
+            content,
+            None,
+            Some("fact"),
+            Some("work"),
+            None,
+            Some(&stub),
+            &crate::prompts::PromptRegistry::default(),
+            &tuning,
+            &distillation,
+            None,
+            None,
+            Some(precomputed_kg),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.get_memory_entity_id(source_id).await.unwrap().as_deref(),
+            Some(entity_id.as_str()),
+            "fixture must link the entity during this enrichment run"
+        );
+        let page = db.get_page("growth-current-entity").await.unwrap().unwrap();
+        assert!(
+            page.source_memory_ids.contains(&source_id.to_string()),
+            "Page growth must use the entity linked after extraction"
+        );
+    }
+
     #[tokio::test]
     async fn grow_page_strips_stale_markers_and_persists_citations() {
         let (db, _dir) = test_db().await;
@@ -1473,6 +1661,9 @@ mod tests {
             .await
             .unwrap()
             .id;
+        db.set_page_review_status(&page_id, "confirmed")
+            .await
+            .unwrap();
 
         // Seed the NEW memory that triggers growth.
         let mem_new = "mem_grow_new";
@@ -1494,6 +1685,7 @@ mod tests {
             &db,
             mem_new,
             new_content,
+            None,
             None,
             Some(&llm),
             &crate::prompts::PromptRegistry::default(),
@@ -1547,6 +1739,9 @@ mod tests {
             .await
             .unwrap()
             .id;
+        db.set_page_review_status(&page_id, "confirmed")
+            .await
+            .unwrap();
 
         // The NEW triggering source is a folder document: source_agent='folder'
         // + the `{source_id}::{provenance}` id shape stamped by
@@ -1570,6 +1765,7 @@ mod tests {
             &db,
             mem_new,
             new_content,
+            None,
             None,
             Some(&llm),
             &crate::prompts::PromptRegistry::default(),
@@ -1616,6 +1812,9 @@ mod tests {
             .await
             .unwrap()
             .id;
+        db.set_page_review_status(&page_id, "confirmed")
+            .await
+            .unwrap();
         let before = db.get_page(&page_id).await.unwrap().unwrap();
         assert_eq!(
             before.creation_kind, "authored",
@@ -1640,6 +1839,7 @@ mod tests {
             &db,
             mem_new,
             new_content,
+            None,
             None,
             Some(&llm),
             &crate::prompts::PromptRegistry::default(),

@@ -95,16 +95,16 @@ counts. Never copy raw artifact contents into this ledger.
 | issue_id | `A5` |
 | scenario | Automatic enrichment grows a Page or resolves a wikilink when equivalent titles/entities exist across spaces. |
 | observed_live_exposure | Pending a stable real-store probe; semantic wrong-target exposure needs bounded samples, not raw rows here. |
-| code_evidence | `crates/wenlan-core/src/post_ingest.rs` uses a global Page matcher and stale entity value; `crates/wenlan-core/src/synthesis/wikilinks.rs` and orphan resolution use global title/label matching. |
+| code_evidence | RED fixtures proved that Page growth could select an equivalent Page from another scope, ignored an entity linked during the current enrichment run, resolved duplicate titles by arbitrary global row order, and repaired every orphan sharing a label. |
 | invariant | Automatic matching is deterministic within the source scope; same-scope ambiguity remains unresolved; intentional cross-space links are preserved. |
 | reproducer | Duplicate cross-space titles/entities, same-scope ambiguity, and source-specific orphan-link fixtures. |
-| root_cause | Candidate: scope is dropped before matching and orphan updates are grouped globally. |
-| repair | Pending RED confirmation. |
+| root_cause | Confirmed: Page growth passed the pre-enrichment entity to a global matcher; entity-first matching fetched one global Page before checking scope; wikilink resolution omitted the source Page scope; orphan repair grouped updates by `label_key` alone. |
+| repair | Re-read the final memory entity and scope before growth; query entity and embedding candidates within that scope; resolve titles only when exactly one active same-scope Page exists; repair orphan rows by `(source_page_id, label_key)` while leaving explicit targets untouched. |
 | lint_coverage | Add only a deterministic wrong-scope detector with complete population; semantic relatedness remains Deep review. |
 | cleanup_class | Likely `needs_semantic_review` for existing links; not classified before evidence. |
-| verification | Not run. |
-| follow_up_direction | Task 6 scoped matcher and post-extraction entity reread. |
-| status | `candidate` |
+| verification | RED: `cargo test -p wenlan-core --lib page_growth_ -- --nocapture` failed 2/2 and `cargo test -p wenlan-core --lib wikilink_ -- --nocapture` failed the three automatic-resolution cases. GREEN: Page growth 2/2, direct growth 3/3, wikilink 21/21, scoped matcher 3/3, and all post-ingest tests 17/17. |
+| follow_up_direction | Use the read-only real-store probe to inventory wrong-scope existing links as bounded semantic-review candidates; do not infer that a same-title cross-space link is wrong without evidence. |
+| status | `fixed`; live historical exposure remains unclassified. |
 
 ## B1: KG and Dual-Pool Partial Commit
 
