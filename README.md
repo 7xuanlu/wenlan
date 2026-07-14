@@ -98,7 +98,7 @@ Plugin details and daily commands: [plugin/](plugin/.claude-plugin/README.md).
 ```bash
 npx -y wenlan setup
 codex plugin marketplace add .
-codex plugin add wenlan@wenlan-local
+codex plugin add wenlan@7xuanlu-wenlan
 ```
 
 Start a new Codex thread after installing so the plugin and MCP server load.

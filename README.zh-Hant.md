@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=13b6d59ab5e9cc080ce7fb567d8cd1aefa2d752d0a796974755ba9b05d0ea302 -->
+<!-- README_SYNC: source=README.md sha256=e5f8fa13cd089f1b8daf98ba5adbbb28ccb0c7d26d9a572cfb246c69e9ebd76a -->
 
 <p align="center">
   <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
@@ -102,7 +102,7 @@ App 原始碼：[wenlan-app](https://github.com/7xuanlu/wenlan-app)。產品詳�
 ```bash
 npx -y wenlan setup
 codex plugin marketplace add .
-codex plugin add wenlan@wenlan-local
+codex plugin add wenlan@7xuanlu-wenlan
 ```
 
 安裝後開啟新的 Codex thread，讓 plugin 和 MCP server 載入。

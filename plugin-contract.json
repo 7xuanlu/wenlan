@@ -34,7 +34,7 @@
       },
       "marketplace": {
         "path": ".agents/plugins/marketplace.json",
-        "name": "wenlan-local",
+        "name": "7xuanlu-wenlan",
         "plugin_name": "wenlan",
         "source": "local",
         "source_path": "./plugin-codex",
