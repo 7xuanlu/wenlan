@@ -1,7 +1,7 @@
 {
   "name": "wenlan",
   "version": "0.13.2+codex",
-  "description": "Codex-native workflow layer for Wenlan, the local-first personal memory layer for AI agents.",
+  "description": "A living knowledge base your agents build as they work. What they learn becomes source-cited wiki pages that refresh between sessions, so each new thread starts from your latest work.",
   "author": {
     "name": "Qi-Xuan Lu",
     "url": "https://github.com/7xuanlu"
@@ -11,7 +11,8 @@
   "license": "Apache-2.0",
   "keywords": [
     "codex",
-    "memory",
+    "wiki",
+    "knowledge-base",
     "wenlan",
     "mcp",
     "local-first"
@@ -20,8 +21,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Wenlan",
-    "shortDescription": "Local memory workflows for Codex",
-    "longDescription": "Adds Codex-native Wenlan workflows for session briefing, memory capture, and first-run setup on top of the existing wenlan-mcp server and local runtime.",
+    "shortDescription": "A living, source-cited wiki for Codex",
+    "longDescription": "Wenlan keeps a source-cited wiki current with your live Codex work. Your agents capture what they learn as they go, and Wenlan distills it into Markdown pages that refresh between sessions, so each new thread starts from the updated wiki rather than from raw history. Runs entirely on the local wenlan-mcp server and runtime.",
     "developerName": "Qi-Xuan Lu",
     "category": "Productivity",
     "logo": "./assets/logo.svg",
@@ -34,8 +35,8 @@
     ],
     "websiteURL": "https://wenlan.app",
     "defaultPrompt": [
-      "Brief me with Wenlan before we start",
-      "Capture this decision in Wenlan",
+      "Brief me from my Wenlan wiki",
+      "Show my Wenlan pages on this project",
       "Set up Wenlan"
     ],
     "brandColor": "#2563EB",
