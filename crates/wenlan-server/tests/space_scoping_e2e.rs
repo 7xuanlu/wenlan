@@ -57,3 +57,23 @@ async fn wave_2_records_scope_history_and_chunk_source_priority() {
 fn wave_2_records_registry_matches_completed_catalog_contracts() {
     space_scoping::record_cases::registry_matches_catalog();
 }
+
+#[tokio::test]
+async fn wave_2_derived_rejects_unknown_selectors() {
+    space_scoping::derived_cases::unknown_selectors_are_rejected().await;
+}
+
+#[tokio::test]
+async fn wave_2_derived_filters_projection_owners() {
+    space_scoping::derived_cases::projections_exclude_cross_scope_and_orphan_owners().await;
+}
+
+#[tokio::test]
+async fn wave_2_derived_filters_events_before_limit() {
+    space_scoping::derived_cases::event_scope_is_applied_before_limit().await;
+}
+
+#[test]
+fn wave_2_derived_registry_matches_completed_catalog_contracts() {
+    space_scoping::derived_cases::registry_matches_completed_contracts();
+}

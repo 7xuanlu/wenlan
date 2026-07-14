@@ -162,7 +162,40 @@ query and row failures. History anchors, recursive joins, final materialization,
 and returned predecessor identifiers are all scope-checked. The truthful
 catalog checkpoint is 55 total, 15 Global, and 21 remaining violations.
 
-Tasks 4-8 pending.
+### Task 4: Derived home, activity, retrieval, and tag projections
+
+RED evidence:
+
+- All four focused tests failed: the catalog observed `Missing`, an unknown
+  Space returned `200`, home stats counted a personal Memory, and
+  `limit=1` returned a newer personal retrieval before applying work scope.
+- The plan's original `cargo test -p wenlan-core --lib agent_activity` command
+  executed zero tests. It was removed rather than recorded as a false-green
+  verifier; the real activity path is exercised through the HTTP registry.
+
+GREEN evidence:
+
+| Contract | Command | Result |
+|---|---|---|
+| Home-stat Global compatibility | `cargo test -p wenlan-core --lib home_stats -- --nocapture` | 5 passed, 0 failed |
+| Retrieval Global compatibility | `cargo test -p wenlan-core --lib recent_retrievals -- --nocapture` | 7 passed, 0 failed |
+| Tag Global compatibility | `cargo test -p wenlan-core --lib document_tags -- --nocapture` | 6 passed, 0 failed |
+| Four derived HTTP routes | `cargo test -p wenlan-server --test space_scoping_e2e wave_2_derived -- --nocapture` | 4 passed, 0 failed |
+| Cumulative Space HTTP registry | `cargo test -p wenlan-server --test space_scoping_e2e -- --nocapture` | 15 passed, 0 failed |
+| Core catalog and diagnostics | `cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture` | 16 passed, 0 failed |
+| Server catalog mirror and handler contracts | `cargo test -p wenlan-server --lib sensitive -- --nocapture` | 8 passed, 0 failed |
+| Changed-crate lint | `cargo clippy -p wenlan-core -p wenlan-server --all-targets -- -D warnings` | passed |
+| Workspace compile | `cargo check --workspace --all-targets` | passed |
+
+The HTTP gate covers unknown `422`, aggregate isolation, filtering before
+response limit, mixed/personal/missing/empty event omission, Memory and file
+retrieval owners, Memory/Page/orphan tag owners, and unchanged Global
+visibility. Selected event scans widen for recall but are hard-capped at 10,000
+candidates; extreme invisible prefixes can underfill a response but cannot
+leak those events. The truthful catalog checkpoint is 55 total, 15 Global, and
+17 remaining violations.
+
+Tasks 5-8 pending.
 
 ## Downstream App
 

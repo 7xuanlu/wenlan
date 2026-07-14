@@ -631,7 +631,7 @@ pass without changing a success envelope.
   `list_agent_activity_scoped`, and one atomic `list_tags_scoped` result that
   contains both the filtered document map and recomputed distinct tag list.
 
-- [ ] **Step 1: Add RED fixtures for conservative derived ownership**
+- [x] **Step 1: Add RED fixtures for conservative derived ownership**
 
 For `/api/home-stats`, assert selected row lists and every aggregate exclude
 other/NULL rows. For retrieval/activity events seed ID sets that are empty,
@@ -650,7 +650,7 @@ cargo test -p wenlan-server --test space_scoping_e2e wave_2_derived -- --nocaptu
 
 Expected RED: all four routes are cataloged Global and expose mixed rows.
 
-- [ ] **Step 2: Implement scoped aggregate and event queries**
+- [x] **Step 2: Implement scoped aggregate and event queries**
 
 Each scoped event query obtains a bounded candidate population wider than the
 response limit, parses/deduplicates referenced IDs, and resolves all owners in
@@ -679,19 +679,18 @@ supersession joins, access-log owner joins, and top-memory candidates before
 `memories.(source, source_id)` and Page keys through `(pages.id,
 pages.workspace)`. Selected reads drop orphan keys; Global retains them.
 
-- [ ] **Step 3: Migrate handlers and catalog rows**
+- [x] **Step 3: Migrate handlers and catalog rows**
 
 All four routes are `HeaderOnly` even when they carry unrelated query controls.
 Move their catalog bindings from Global to `MemorySpace`, set
 `UnknownScopePolicy::Rejected`, and register their executed cases. Do not add
 Space to their response envelopes.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cargo test -p wenlan-core --lib home_stats -- --nocapture
 cargo test -p wenlan-core --lib recent_retrievals -- --nocapture
-cargo test -p wenlan-core --lib agent_activity -- --nocapture
 cargo test -p wenlan-core --lib document_tags -- --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_2_derived -- --nocapture
 cargo fmt --all -- --check

@@ -1095,6 +1095,7 @@ pub struct RecentLimitQuery {
 /// GET /api/retrievals/recent - Recent agent retrieval events joined to page titles.
 pub async fn handle_recent_retrievals(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<RecentLimitQuery>,
 ) -> Result<Json<Vec<wenlan_types::RetrievalEvent>>, ServerError> {
     let limit = q.limit.unwrap_or(10).clamp(1, 100);
@@ -1103,8 +1104,9 @@ pub async fn handle_recent_retrievals(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let events = db
-        .list_recent_retrievals(limit)
+        .list_recent_retrievals_scoped(limit, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(events))

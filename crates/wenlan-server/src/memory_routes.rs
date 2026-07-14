@@ -1482,13 +1482,15 @@ pub async fn handle_get_memory_stats(
 /// memories into a single `HomeStats` payload.
 pub async fn handle_get_home_stats(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_types::HomeStats>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let stats = db
-        .get_home_stats()
+        .get_home_stats_scoped(&scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(stats))
@@ -2442,6 +2444,7 @@ pub async fn handle_set_document_space(
 /// GET /api/activities
 pub async fn handle_list_activities(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Json<wenlan_types::responses::ActivityResponse>, ServerError> {
     let db = {
@@ -2454,8 +2457,9 @@ pub async fn handle_list_activities(
         .unwrap_or(50);
     let agent_name = params.get("agent_name").cloned();
     let since: Option<i64> = params.get("since").and_then(|v| v.parse().ok());
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let activities = db
-        .list_agent_activity(limit, agent_name.as_deref(), since)
+        .list_agent_activity_scoped(limit, agent_name.as_deref(), since, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::ActivityResponse {
@@ -2466,22 +2470,20 @@ pub async fn handle_list_activities(
 /// GET /api/tags
 pub async fn handle_list_tags(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_types::responses::TagsResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let tags = db
-        .list_all_tags()
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let document_tags = db
-        .list_document_tags()
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let projection = db
+        .list_tags_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::TagsResponse {
-        tags,
-        document_tags,
+        tags: projection.tags,
+        document_tags: projection.document_tags,
     }))
 }
 

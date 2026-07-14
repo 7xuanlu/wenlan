@@ -7,7 +7,7 @@ use super::{
 pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Post,"/api/search","memory_search",BodyThenHeader,CallerAssertedAgentTrust,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Post,"/api/context","memory_context",BodyThenHeader,CallerAssertedAgentTrust,MemorySpace,NoGate,Rejected,Forbidden),
-    row!(Get,"/api/retrievals/recent","retrieval_activity",Missing,UnauthenticatedLocal,MemorySpace,NoGate,NotApplicable,Forbidden),
+    row!(Get,"/api/retrievals/recent","retrieval_activity",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/memory/recent","memory_activity",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/memory/unconfirmed","memory_list",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Post,"/api/memory/search","memory_search",BodyThenHeader,CallerAssertedAgentTrust,MemorySpace,NoGate,Rejected,Forbidden),

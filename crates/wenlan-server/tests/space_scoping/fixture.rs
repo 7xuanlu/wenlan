@@ -6,6 +6,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::sources::RawDocument;
+use wenlan_types::requests::CreateConceptRequest;
 
 pub struct ScopeFixture {
     pub router: super::super::common::AppRouter,
@@ -78,6 +79,27 @@ impl ScopeFixture {
             }])
             .await
             .unwrap();
+    }
+
+    pub async fn seed_page(&self, title: &str, workspace: &str) -> String {
+        wenlan_core::post_write::create_page(
+            &self.db,
+            CreateConceptRequest {
+                title: title.to_string(),
+                content: format!("page canary {title}"),
+                summary: None,
+                entity_id: None,
+                space: Some(workspace.to_string()),
+                source_memory_ids: Vec::new(),
+                creation_kind: Some("authored".to_string()),
+                workspace: Some(workspace.to_string()),
+            },
+            "test",
+            None,
+        )
+        .await
+        .unwrap()
+        .id
     }
 
     pub async fn send(

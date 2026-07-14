@@ -4,7 +4,7 @@ use super::{
     Method::*,
     ScopeBinding::*,
     SelectionGate::{NotApplicable as NoGate, SingleIdMissing},
-    SelectorPrecedence::{BodyThenHeader, Missing, NotApplicable as NoSelector},
+    SelectorPrecedence::{BodyThenHeader, HeaderOnly, Missing, NotApplicable as NoSelector},
     SensitiveReadRoute,
 };
 
@@ -17,7 +17,7 @@ pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Post,"/api/memory/entities/search","entity_search",Missing,UnauthenticatedLocal,EntitySpace,NoGate,NotApplicable,Forbidden),
     row!(Get,"/api/memory/entities/{entity_id}","entity_detail",Missing,UnauthenticatedLocal,EntitySpace,SingleIdMissing,NotApplicable,Forbidden),
     row!(Get,"/api/memory/stats","memory_stats",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,AggregateOnly),
-    row!(Get,"/api/home-stats","home_stats_with_memory_rows",Missing,UnauthenticatedLocal,MemorySpace,NoGate,NotApplicable,Forbidden),
+    row!(Get,"/api/home-stats","home_stats_with_memory_rows",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/memory/entity-suggestions","entity_suggestions",Missing,UnauthenticatedLocal,MemorySpace,NoGate,NotApplicable,Forbidden),
     row!(Get,"/api/spaces","space_list",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
     row!(Get,"/api/sources","source_list",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),

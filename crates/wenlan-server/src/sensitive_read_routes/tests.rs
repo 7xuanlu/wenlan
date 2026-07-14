@@ -26,15 +26,18 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
     assert_eq!(page_search.selector_precedence, SelectorPrecedence::Missing);
     assert!(page_search.scope_contract_violation());
 
-    let home_stats = route(Method::Get, "/api/home-stats").expect("home stats");
-    assert_eq!(home_stats.data_class, "home_stats_with_memory_rows");
-    assert_eq!(home_stats.scope_binding, ScopeBinding::MemorySpace);
-    assert!(home_stats.scope_contract_violation());
-
-    let tags = route(Method::Get, "/api/tags").expect("tags");
-    assert_eq!(tags.data_class, "document_tag_map");
-    assert_eq!(tags.scope_binding, ScopeBinding::MemorySpace);
-    assert!(tags.scope_contract_violation());
+    for path in [
+        "/api/home-stats",
+        "/api/retrievals/recent",
+        "/api/activities",
+        "/api/tags",
+    ] {
+        let row = route(Method::Get, path).expect("derived projection row");
+        assert_eq!(row.selector_precedence, SelectorPrecedence::HeaderOnly);
+        assert_eq!(row.scope_binding, ScopeBinding::MemorySpace);
+        assert_eq!(row.unknown_scope, UnknownScopePolicy::Rejected);
+        assert!(!row.scope_contract_violation());
+    }
 
     for (path, gate) in [
         ("/api/memory/{id}/detail", SelectionGate::SingleId404),
@@ -146,7 +149,7 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         rows.iter()
             .filter(|row| row.scope_contract_violation())
             .count(),
-        21
+        17
     );
 }
 
