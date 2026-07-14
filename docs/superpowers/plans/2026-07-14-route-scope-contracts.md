@@ -829,7 +829,7 @@ violations are exactly `14`.
   the unscoped counterpart's return type and adds `scope: &ReadScope` as its
   final argument.
 
-- [ ] **Step 1: Add RED cases with category/workspace divergence**
+- [x] **Step 1: Add RED cases with category/workspace divergence**
 
 Create work Pages whose `pages.space='decision'`, personal Pages whose
 `pages.space='recap'`, and NULL-workspace Pages. Add an in-work source Memory to
@@ -855,7 +855,7 @@ cargo test -p wenlan-server --test space_scoping_e2e wave_3 -- --nocapture
 Expected RED: list filters `pages.space`, search ignores the header, direct
 children bypass parent scope, and source overlap can mask a workspace mismatch.
 
-- [ ] **Step 2: Add Page-scoped core methods**
+- [x] **Step 2: Add Page-scoped core methods**
 
 Implement the route-only wrappers in `db/scoped_pages.rs`; register the module
 from `db.rs` and keep focused query tests in `db/scoped_pages_test.rs`. Existing
@@ -885,14 +885,14 @@ non-Memory evidence metadata can remain without embedding cross-Space Memory
 text. Every missing or mismatched direct/child parent maps to the same static
 `404` body bytes, `"page not found"`; do not include the requested ID.
 
-- [ ] **Step 3: Migrate handlers and close Wave 3**
+- [x] **Step 3: Migrate handlers and close Wave 3**
 
 `POST /api/pages/search` uses body then header. `GET /api/pages` uses query then
 header. Other Page routes use header only; existing query controls remain
 independent. Add all 9 executed entries and update catalog rows. Assert exact
 pending KG set and violation count `5`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cargo test -p wenlan-types search_pages_request -- --nocapture

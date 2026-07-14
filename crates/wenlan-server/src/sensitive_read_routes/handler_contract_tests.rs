@@ -145,7 +145,7 @@ async fn direct_memory_detail_hides_conflicting_space_owner() {
 }
 
 #[tokio::test]
-async fn page_search_ignores_space_header_and_returns_cross_scope_rows() {
+async fn page_search_uses_space_header_and_excludes_cross_scope_rows() {
     let (app, _tmp) = fixture().await;
     let payload = json(
         app,
@@ -162,10 +162,7 @@ async fn page_search_ignores_space_header_and_returns_cross_scope_rows() {
         .iter()
         .filter_map(|page| page["workspace"].as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        workspaces,
-        std::collections::BTreeSet::from(["personal", "work"])
-    );
+    assert_eq!(workspaces, std::collections::BTreeSet::from(["work"]));
 }
 
 #[tokio::test]

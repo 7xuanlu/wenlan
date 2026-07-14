@@ -369,13 +369,24 @@ pub async fn direct_and_child_routes_are_gated() {
             false,
         )
         .await;
+    fixture
+        .seed_record(
+            "file",
+            "external-file",
+            Some("personal"),
+            "document",
+            12,
+            None,
+            false,
+        )
+        .await;
     let work = seed_page(
         &fixture,
         "work parent page",
         "decision",
         Some("work"),
         "work parent [[missing work topic]]",
-        &["work-memory", "personal-memory"],
+        &["work-memory", "personal-memory", "external-file"],
     )
     .await;
     let personal = seed_page(
@@ -441,6 +452,29 @@ pub async fn direct_and_child_routes_are_gated() {
     assert!(
         !serialized.contains("record canary personal-memory"),
         "cross-Space Memory content leaked: {serialized}"
+    );
+    assert!(
+        !serialized.contains("record canary external-file"),
+        "selected Page source materialized cross-Space external content: {serialized}"
+    );
+
+    let (status, global_sources) = json_body(
+        fixture
+            .send(
+                HttpMethod::GET,
+                &format!("/api/pages/{work}/sources"),
+                None,
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{global_sources}");
+    assert!(
+        global_sources
+            .to_string()
+            .contains("record canary external-file"),
+        "Global Page source compatibility lost external content: {global_sources}"
     );
 
     let (status, orphan) = json_body(

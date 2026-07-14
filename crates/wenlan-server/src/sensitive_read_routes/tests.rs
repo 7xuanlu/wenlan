@@ -23,8 +23,13 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
     assert!(!search.scope_contract_violation());
 
     let page_search = route(Method::Post, "/api/pages/search").expect("page search");
-    assert_eq!(page_search.selector_precedence, SelectorPrecedence::Missing);
-    assert!(page_search.scope_contract_violation());
+    assert_eq!(
+        page_search.selector_precedence,
+        SelectorPrecedence::BodyThenHeader
+    );
+    assert_eq!(page_search.scope_binding, ScopeBinding::PageWorkspace);
+    assert_eq!(page_search.unknown_scope, UnknownScopePolicy::Rejected);
+    assert!(!page_search.scope_contract_violation());
 
     for path in [
         "/api/home-stats",
@@ -149,7 +154,7 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         rows.iter()
             .filter(|row| row.scope_contract_violation())
             .count(),
-        14
+        5
     );
 }
 

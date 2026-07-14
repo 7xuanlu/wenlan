@@ -1934,10 +1934,16 @@ pub async fn handle_get_page_sources(
 
     let source_id_strings: Vec<String> =
         sources.iter().map(|s| s.memory_source_id.clone()).collect();
-    let memories = db
-        .get_memories_by_source_ids_scoped(&source_id_strings, &scope)
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+    let memories = match &scope {
+        wenlan_core::read_scope::ReadScope::Global => {
+            db.get_memories_by_source_ids(&source_id_strings).await
+        }
+        _ => {
+            db.get_memories_by_source_ids_scoped(&source_id_strings, &scope)
+                .await
+        }
+    }
+    .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
     let result: Vec<wenlan_types::PageSourceWithMemory> = sources
         .iter()

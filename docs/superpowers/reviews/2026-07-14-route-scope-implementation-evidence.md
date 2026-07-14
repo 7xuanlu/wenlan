@@ -236,7 +236,68 @@ same `404`. Global metadata remains backward compatible, including orphan
 capture references. The truthful catalog checkpoint is 55 total, 15 Global,
 and 14 remaining violations.
 
-Tasks 6-8 pending.
+The Task 5 Sol xhigh review found and closed three integration gaps before the
+wave was accepted: Global missing-snapshot compatibility again returns the
+legacy empty collection, scoped briefing row-decode errors propagate, and
+Uncategorized briefing/snapshot behavior has explicit canaries. A deliberately
+corrupt SQLite storage-type test could not be retained because pinned libSQL
+0.9.30 panics while constructing the row, before `Row::get`; the injected
+query-failure test is the stable fail-closed verifier at this dependency
+version. The second review verdict was APPROVED with no Critical or Important
+findings.
+
+### Task 6: Page workspace and child-route gates
+
+RED evidence:
+
+- Page search ignored both body and header selectors; selected list/search and
+  child routes could return cross-workspace rows.
+- Page category (`pages.space`) and workspace (`pages.workspace`) were
+  conflated by old list behavior.
+- Source overlap could materialize cross-Space Memory content through a Page
+  whose own workspace did not match.
+- The complete server library gate found three stale tests that still froze
+  Page search as unscoped and expected 14 catalog violations. Updating these
+  tests to the canonical scoped contract was required before acceptance.
+
+GREEN evidence:
+
+| Contract | Command | Result |
+|---|---|---|
+| Request backward compatibility | `cargo test -p wenlan-types search_pages_request -- --nocapture` | 3 passed, 0 failed |
+| MCP constructors and schema compatibility | `cargo test -p wenlan-mcp search_pages -- --nocapture` | 6 passed, 0 failed |
+| Page search candidate isolation | `cargo test -p wenlan-core --lib search_pages -- --nocapture` | 5 passed, 0 failed |
+| Page link and child behavior | `cargo test -p wenlan-core --lib page_links -- --nocapture` | 8 passed, 0 failed |
+| Scoped briefing failure propagation regression | `cargo test -p wenlan-core --lib db::scoped_records_test::scoped_briefing_stats_propagate_database_failures -- --exact --nocapture` | 1 passed, 0 failed |
+| Page list compatibility | `cargo test -p wenlan-server --test list_pages_by_space_e2e -- --nocapture` | 3 passed, 0 failed |
+| Header/query/body precedence | `cargo test -p wenlan-server --test space_header_fallback -- --nocapture` | 30 passed, 0 failed |
+| Complete cumulative Space HTTP registry | `cargo test -p wenlan-server --test space_scoping_e2e -- --nocapture` | 24 passed, 0 failed |
+| Core catalog and diagnostics | `cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture` | 16 passed, 0 failed |
+| Server catalog and handler contracts | `cargo test -p wenlan-server --lib sensitive_read_routes -- --nocapture` | 7 passed, 0 failed |
+| Changed-crate lint | `cargo clippy -p wenlan-types -p wenlan-core -p wenlan-server -p wenlan-mcp --all-targets -- -D warnings` | passed |
+| Workspace compile | `cargo check --workspace --all-targets` | passed |
+| Formatting and patch integrity | `cargo fmt --all -- --check`; `git diff --check` | passed |
+
+All nine Page keys now bind to `pages.workspace`; category remains an
+independent filter. Selected search filters before ranking and limit, direct
+and child routes share a parent gate and static `404`, and Memory-backed source
+materialization enforces Memory scope. Global behavior and legacy request JSON
+remain compatible. The truthful catalog checkpoint is 55 total, 15 Global,
+and 5 remaining KG violations. Task 5 review corrections and Task 6 are jointly
+recorded in commit `46f22972` because the repository pre-commit hook restaged
+all modified Rust files after formatting.
+
+The Task 6 Sol xhigh review found one Important Global compatibility regression:
+the selected Page-source loader had also replaced the legacy Global loader, so
+external-file provenance retained metadata but lost its materialized content.
+A new HTTP canary reproduced this as RED. The handler now delegates to the
+legacy non-episode loader only for `ReadScope::Global`; selected scopes keep the
+Memory-only scoped loader. The focused canary passed `1/1`, the cumulative
+Space suite passed `24/24`, the server catalog passed `7/7`, and Clippy,
+workspace check, fmt, and diff gates all passed. Re-review verdict: APPROVED
+with no remaining Critical or Important findings.
+
+Tasks 7-8 pending.
 
 ## Downstream App
 
