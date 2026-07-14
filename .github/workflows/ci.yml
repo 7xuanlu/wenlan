@@ -60,10 +60,18 @@ jobs:
               # on the one PR class most likely to introduce drift.
               - 'version.txt'
               - '.release-please-manifest.json'
+              # Same hole, plugin edition: crates/wenlan-cli/tests/distribution.rs
+              # asserts on the plugin manifests, so a plugin-only PR could break
+              # it and still show green -- the rust tests never ran.
+              - 'plugin/**'
+              - '.claude-plugin/**'
             plugin:
               - 'plugin/**'
               - 'plugin-codex/**'
               - '.agents/plugins/**'
+              # The Claude marketplace is contract-checked too; without this
+              # glob a PR touching only the storefront skips the guard.
+              - '.claude-plugin/**'
               - 'plugin-contract.json'
               - 'scripts/validate-codex-plugin-slice.py'
               - 'scripts/validate-plugin-contract.py'
