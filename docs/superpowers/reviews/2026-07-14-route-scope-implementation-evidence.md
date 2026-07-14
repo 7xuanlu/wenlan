@@ -346,6 +346,84 @@ tarball reports to be clean with exit `0`; a separate typed synthetic report
 with one route-scope defect owns exit `1`, incomplete precedence, and tarball
 producer-receipt assertions. Exact committed-HEAD execution is pending.
 
+The first exact-HEAD run passed baseline exit `0`, clean fixture exit `0`, and
+synthetic route-scope exit `1`, then correctly returned exit `1` after the
+privacy canaries were installed. A pure-HTTP reproduction identified the two
+expected canary findings as `pages.projection.identity` and
+`pages.projection.state_contract`; `serving.route_scope_contracts` remained
+clean. The harness now runs Global/registered/Uncategorized parity before
+installing canaries, then gives those two redaction findings their own explicit
+privacy run instead of treating malformed projections as a clean corpus.
+
+The read-only Task 8 audit used the same fingerprint framing and SQL as Task 1.
+Private receipt:
+
+```text
+/Users/lucian/.wenlan/sessions/route-scope-contracts/preflight-task8-2026-07-14.tsv
+SHA-256 cb01295ff0b68d04193227e21eecf7c59f873ef9c01ee440195632a41caab271
+mode 0600
+```
+
+| Surface | Task 8 before | Task 8 after | Verdict |
+|---|---|---|---|
+| SQLite durable bundle | `3fd426d7b0996c09ed9e60a3606a7ca2cd8e02aed404622e8b591c7d7a146da2` | `3fd426d7b0996c09ed9e60a3606a7ca2cd8e02aed404622e8b591c7d7a146da2` | unchanged |
+| Complete Page tree | `1b0ad445c8e5cc4ddea12f77849fb9bcc5adff3badd1877ca4fbeb4580d92f67` | `1b0ad445c8e5cc4ddea12f77849fb9bcc5adff3badd1877ca4fbeb4580d92f67` | unchanged |
+
+The binding receipt SHA and Page fingerprint are byte-identical to Task 1.
+The durable DB bundle differs from Task 1's `979c2e...71bf`, which is normal
+store drift between the two audit times; Task 8's own pair proves this read-only
+audit did not cause it. Aggregates also remain identical: Memory 24/4,549,
+Entity 8/52, Page 10/132, registry 24/24, with zero unregistered or literal
+non-NULL `uncategorized` bindings.
+
+Committed binding inventory (raw names excluded):
+
+```text
+domain  opaque_binding   registered  count
+memory  c75e7e2c7fa1de9c 1           87
+memory  722e5b6ece8cf823 1           57
+memory  cf462d799780860a 1           11
+memory  8c85b6639e62e10b 1           126
+memory  1cf387c012cd2d02 1           20
+memory  3536095ab27b8d3e 1           23
+memory  e85b598c2fc1d083 1           17
+memory  b6c4ac412ac88223 1           319
+memory  b9d1554b9a6c45c0 1           18
+memory  181fdd46fc4a7246 1           8
+memory  6e75c4d449acf4fb 1           9
+memory  be80e46b53b18331 1           13
+memory  4a0a339b0c6d0553 1           582
+memory  20f6a5cf581b9869 1           233
+memory  73dff70e25ad51ca 1           16
+memory  cf80cd8aed482d5d 1           34
+memory  7352f353c460e74c 1           18
+memory  8bb5bc296bf22844 1           159
+memory  83935311e5ce42e4 1           2567
+memory  45f0fe240d343faf 1           39
+memory  1cf61546e728d53d 1           51
+memory  00e13ed7af55b276 1           42
+memory  da7f739f62719846 1           53
+memory  ee871105e875f3de 1           47
+entity  8c85b6639e62e10b 1           1
+entity  1cf387c012cd2d02 1           1
+entity  e85b598c2fc1d083 1           2
+entity  4a0a339b0c6d0553 1           2
+entity  20f6a5cf581b9869 1           2
+entity  cf80cd8aed482d5d 1           1
+entity  83935311e5ce42e4 1           42
+entity  1cf61546e728d53d 1           1
+page    8c85b6639e62e10b 1           2
+page    e85b598c2fc1d083 1           1
+page    6e75c4d449acf4fb 1           1
+page    4a0a339b0c6d0553 1           10
+page    20f6a5cf581b9869 1           5
+page    cf80cd8aed482d5d 1           1
+page    83935311e5ce42e4 1           90
+page    00e13ed7af55b276 1           2
+page    da7f739f62719846 1           5
+page    ee871105e875f3de 1           15
+```
+
 ## Downstream App
 
 Companion worktree:

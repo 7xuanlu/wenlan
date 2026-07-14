@@ -1066,7 +1066,7 @@ fingerprints.
 Run from committed HEAD after the script change is committed; the script builds
 `git archive HEAD`, so a dirty-tree run is not valid evidence.
 
-- [ ] **Step 2: Repeat and compare the read-only orphan-binding preflight**
+- [x] **Step 2: Repeat and compare the read-only orphan-binding preflight**
 
 Resolve the configured live DB path without modifying it. Execute read-only
 queries equivalent to:

@@ -199,7 +199,16 @@ run_fixture actionable "$WORK/actionable.json" 1
 python3 "$PY" assert-report "$WORK/actionable.json" --complete true --scope global \
     --producer "$HEAD" --finding serving.route_scope_contracts
 
-echo "==> Seeding privacy and path canaries outside the measured lint window"
+echo "==> Proving global, registered, and uncategorized parity"
+run_pair global "" 0
+run_pair registered "?space=work" 0
+run_pair uncategorized "?space=uncategorized" 0
+python3 "$PY" assert-report "$WORK/registered-http.json" --complete true --scope registered \
+    --producer "$HEAD"
+python3 "$PY" assert-report "$WORK/uncategorized-http.json" --complete true \
+    --scope uncategorized --producer "$HEAD"
+
+echo "==> Seeding privacy and path canaries outside the clean scope window"
 mkdir -p "$PAGES/.wenlan" "$PAGES/_sources"
 printf '%s\n' '---' 'origin_id: PRIVATE_MALFORMED_ID_CANARY' 'origin_version: 2' '---' '# PRIVATE_TITLE_CANARY' '' 'PRIVATE_CONTENT_CANARY' >"$PAGES/PRIVATE_FILENAME_CANARY.md"
 printf '%s\n' '---' 'origin_id: PRIVATE_SOURCE_ID_CANARY' '---' 'PRIVATE_SOURCE_CONTENT_CANARY' >"$PAGES/_sources/PRIVATE_SOURCE_FILENAME_CANARY.md"
@@ -211,14 +220,11 @@ CANARIES=(
     PRIVATE_SOURCE_CONTENT_CANARY PRIVATE_STATE_ID_CANARY PRIVATE_ABSOLUTE_PATH_CANARY
 )
 
-echo "==> Proving global, registered, and uncategorized parity"
-run_pair global "" 0
-run_pair registered "?space=work" 0
-run_pair uncategorized "?space=uncategorized" 0
-python3 "$PY" assert-report "$WORK/registered-http.json" --complete true --scope registered \
-    --producer "$HEAD"
-python3 "$PY" assert-report "$WORK/uncategorized-http.json" --complete true \
-    --scope uncategorized --producer "$HEAD"
+echo "==> Proving projection findings remain private"
+run_pair privacy "" 1
+python3 "$PY" assert-report "$WORK/privacy-http.json" --complete true --scope global \
+    --producer "$HEAD" --finding pages.projection.identity \
+    --finding pages.projection.state_contract
 private_args=()
 for canary in "${CANARIES[@]}"; do private_args+=(--canary "$canary"); done
 echo "==> Proving unknown scope and forbidden wiki surfaces"
