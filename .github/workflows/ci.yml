@@ -60,6 +60,11 @@ jobs:
               # on the one PR class most likely to introduce drift.
               - 'version.txt'
               - '.release-please-manifest.json'
+              # Same hole, plugin edition: crates/wenlan-cli/tests/distribution.rs
+              # asserts on the plugin manifests, so a plugin-only PR could break
+              # it and still show green -- the rust tests never ran.
+              - 'plugin/**'
+              - '.claude-plugin/**'
             plugin:
               - 'plugin/**'
               - 'plugin-codex/**'
