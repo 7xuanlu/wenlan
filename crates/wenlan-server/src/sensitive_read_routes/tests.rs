@@ -118,8 +118,10 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         (Method::Get, "/api/pages/recent-changes"),
         (Method::Get, "/api/pages"),
         (Method::Post, "/api/pages/search"),
+        (Method::Post, "/api/pages/export"),
         (Method::Get, "/api/pages/orphan-links"),
         (Method::Get, "/api/pages/{id}"),
+        (Method::Post, "/api/pages/{id}/export"),
         (Method::Get, "/api/pages/{id}/sources"),
         (Method::Get, "/api/pages/{id}/links"),
         (Method::Get, "/api/pages/{id}/revisions"),
@@ -146,8 +148,8 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         .map(|row| (row.method, row.path))
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(rows.len(), 55);
-    assert_eq!(keys.len(), 55, "duplicate sensitive route key");
+    assert_eq!(rows.len(), 57);
+    assert_eq!(keys.len(), 57, "duplicate sensitive route key");
     assert_eq!(global, GLOBAL.iter().copied().collect());
     assert_eq!(scoped, SCOPED.iter().copied().collect());
     assert_eq!(

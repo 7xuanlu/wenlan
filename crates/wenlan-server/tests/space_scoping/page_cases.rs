@@ -91,6 +91,13 @@ pub async fn unknown_selectors_are_rejected() {
             Method::Post,
         ),
         (
+            HttpMethod::POST,
+            "/api/pages/export".to_string(),
+            Some(json!({"vault_path":"/tmp/wenlan-route-scope-export"})),
+            "/api/pages/export",
+            Method::Post,
+        ),
+        (
             HttpMethod::GET,
             "/api/pages/orphan-links".to_string(),
             None,
@@ -103,6 +110,13 @@ pub async fn unknown_selectors_are_rejected() {
             None,
             "/api/pages/{id}",
             Method::Get,
+        ),
+        (
+            HttpMethod::POST,
+            format!("/api/pages/{page}/export"),
+            Some(json!({"vault_path":"/tmp/wenlan-route-scope-export"})),
+            "/api/pages/{id}/export",
+            Method::Post,
         ),
         (
             HttpMethod::GET,

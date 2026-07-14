@@ -2097,15 +2097,18 @@ pub async fn handle_create_page(
 /// POST /api/pages/export
 pub async fn handle_export_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(req): Json<ExportPagesRequest>,
 ) -> Result<Json<wenlan_types::ExportStats>, ServerError> {
-    let pages = {
+    let db = {
         let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-        db.list_pages("active", 1000, 0)
-            .await
-            .map_err(|e| ServerError::Internal(e.to_string()))?
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let pages = db
+        .list_pages_scoped("active", 1000, 0, &scope)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
     let vault_path = req
         .vault_path
         .unwrap_or_else(|| "~/obsidian-vault/Wenlan/pages".to_string());
@@ -2127,6 +2130,7 @@ pub async fn handle_export_pages(
 /// POST /api/pages/{id}/export
 pub async fn handle_export_page(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(page_id): Path<String>,
     Json(req): Json<wenlan_types::requests::ExportPageRequest>,
 ) -> Result<Json<wenlan_types::responses::ExportPageResponse>, ServerError> {
@@ -2138,11 +2142,12 @@ pub async fn handle_export_page(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let page = db
-        .get_page(&page_id)
+        .get_page_scoped(&page_id, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
-        .ok_or_else(|| ServerError::NotFound(format!("Page not found: {}", page_id)))?;
+        .ok_or_else(|| ServerError::NotFound("page not found".to_string()))?;
 
     let expanded = if let Some(rest) = req.vault_path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();

@@ -166,6 +166,63 @@ async fn page_search_uses_space_header_and_excludes_cross_scope_rows() {
 }
 
 #[tokio::test]
+async fn bulk_page_export_filters_workspace_before_materializing_files() {
+    let (app, tmp) = fixture().await;
+    let vault = tmp.path().join("bulk-export");
+    let body = serde_json::json!({ "vault_path": vault }).to_string();
+
+    let payload = json(app, post("/api/pages/export", "work", &body)).await;
+
+    assert_eq!(payload["exported"], 1);
+    assert_eq!(payload["failed"], 0);
+    assert!(vault.join("work-scopeprobe.md").is_file());
+    assert!(!vault.join("personal-scopeprobe.md").exists());
+}
+
+#[tokio::test]
+async fn single_page_export_hides_conflicting_workspace_owner() {
+    let (app, tmp) = fixture().await;
+    let personal = json(
+        app.clone(),
+        Request::builder()
+            .uri("/api/pages?space=personal")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    let personal_id = personal["pages"][0]["id"]
+        .as_str()
+        .expect("personal page id");
+    let vault = tmp.path().join("single-export");
+    let body = serde_json::json!({ "vault_path": vault }).to_string();
+
+    let mismatch = app
+        .clone()
+        .oneshot(post(
+            &format!("/api/pages/{personal_id}/export"),
+            "work",
+            &body,
+        ))
+        .await
+        .expect("mismatch response");
+    let missing = app
+        .oneshot(post("/api/pages/missing-page/export", "work", &body))
+        .await
+        .expect("missing response");
+
+    assert_eq!(mismatch.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(missing.status(), axum::http::StatusCode::NOT_FOUND);
+    let mismatch_body = to_bytes(mismatch.into_body(), usize::MAX)
+        .await
+        .expect("mismatch body");
+    let missing_body = to_bytes(missing.into_body(), usize::MAX)
+        .await
+        .expect("missing body");
+    assert_eq!(mismatch_body, missing_body);
+    assert!(!vault.exists());
+}
+
+#[tokio::test]
 async fn home_stats_and_tags_observably_return_row_level_data() {
     let (app, _tmp) = fixture().await;
     let home = json(

@@ -72,8 +72,14 @@ pub const WAVE_3_PAGES: &[ExpectedContract] = &[
     page_header(Method::Get, "/api/pages/recent-changes"),
     page_query(Method::Get, "/api/pages"),
     page_body(Method::Post, "/api/pages/search"),
+    page_header(Method::Post, "/api/pages/export"),
     page_header(Method::Get, "/api/pages/orphan-links"),
     page_header_gate(Method::Get, "/api/pages/{id}", SelectionGate::SingleId404),
+    page_header_gate(
+        Method::Post,
+        "/api/pages/{id}/export",
+        SelectionGate::SingleId404,
+    ),
     page_header_gate(
         Method::Get,
         "/api/pages/{id}/sources",
@@ -296,7 +302,11 @@ pub fn assert_wave_3_pages_catalog_contract() {
         .iter()
         .map(|case| (case.method, case.path))
         .collect::<BTreeSet<_>>();
-    assert_eq!(keys.len(), 9, "Wave 3 Pages must contain nine unique keys");
+    assert_eq!(
+        keys.len(),
+        11,
+        "Wave 3 Pages must contain eleven unique keys"
+    );
 
     for expected in WAVE_3_PAGES {
         let actual = route(expected.method, expected.path).expect("cataloged Wave 3 Page route");
@@ -360,7 +370,7 @@ pub fn assert_wave_4_knowledge_catalog_contract() {
     }
 
     let rows = wenlan_server::sensitive_read_routes::sensitive_read_routes().collect::<Vec<_>>();
-    assert_eq!(rows.len(), 55);
+    assert_eq!(rows.len(), 57);
     assert_eq!(
         rows.iter()
             .filter(|row| row.scope_binding == ScopeBinding::Global)
@@ -371,7 +381,7 @@ pub fn assert_wave_4_knowledge_catalog_contract() {
         rows.iter()
             .filter(|row| row.scope_binding != ScopeBinding::Global)
             .count(),
-        40
+        42
     );
     assert_eq!(
         rows.iter()
