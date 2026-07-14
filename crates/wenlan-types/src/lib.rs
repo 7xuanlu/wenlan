@@ -16,6 +16,7 @@ pub mod memory_type;
 pub mod narrative;
 pub mod onboarding;
 pub mod pages;
+pub mod repair;
 pub mod requests;
 pub mod responses;
 pub mod sources;
@@ -39,6 +40,7 @@ pub use memory::{
 pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION};
 pub use narrative::NarrativeResponse;
 pub use pages::{Page, PageEvidence};
+pub use repair::*;
 pub use requests::AcceptRefinementRequest;
 pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
@@ -91,6 +93,10 @@ pub struct PageSourceWithMemory {
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
+
+#[cfg(test)]
+#[path = "repair_tests.rs"]
+mod repair_tests;
 
 #[cfg(test)]
 mod tests {
