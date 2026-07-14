@@ -8,6 +8,7 @@ use crate::{
     db::MemoryDB,
     error::WenlanError,
     lint::{
+        context::ExecutionGate,
         pages::fs::{scan_page_root_controlled, PageScanControl},
         snapshot::{LintReadSnapshot, SnapshotError, SnapshotReceipt},
     },
@@ -25,8 +26,8 @@ use std::{
 use uuid::Uuid;
 use wenlan_types::{
     lint::{
-        LintDigest, LintEvidenceRef, LintGateEffect, LintOutcome, LintReport, LintScope,
-        LintScopeKind, LintSemanticAction,
+        LintDigest, LintEvidenceRef, LintGateEffect, LintOutcome, LintProfile, LintReport,
+        LintScope, LintScopeKind, LintSemanticAction,
     },
     repair::{
         ApplyRepairRequest, PrepareRepairRequest, RepairAllowedEffects, RepairApplyReceipt,
@@ -279,6 +280,9 @@ impl PendingApplyReceipt {
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
+        if let Some(parent) = self.pending_path.parent() {
+            sync_dir(parent)?;
+        }
         Ok(())
     }
 
@@ -607,7 +611,6 @@ pub async fn record_repair_verification(
         return Ok(receipt);
     }
     validate_verification_reports(&manifest, request.general_report(), request.deep_report())?;
-    let connection = db.conn.lock().await;
     validate_current_report_receipts(
         db,
         request.general_report(),
@@ -615,6 +618,7 @@ pub async fn record_repair_verification(
         page_root,
     )
     .await?;
+    let connection = db.conn.lock().await;
     validate_target_space_on_connection(
         &connection,
         manifest.target().memory_source_id(),
@@ -710,8 +714,8 @@ async fn validate_current_report_receipts(
     page_root: Option<&Path>,
 ) -> Result<(), WenlanError> {
     let snapshot = db.open_lint_snapshot().await.map_err(snapshot_error)?;
-    let general_page = current_page_digest(page_root, false).await?;
-    let deep_page = current_page_digest(page_root, true).await?;
+    let general_page = current_page_digest(page_root, LintProfile::General).await?;
+    let deep_page = current_page_digest(page_root, LintProfile::Deep).await?;
     let current = snapshot.finish().await.map_err(snapshot_error)?;
     if !current.is_consistent() {
         return Err(WenlanError::Conflict(
@@ -735,19 +739,21 @@ async fn validate_current_report_receipts(
 
 async fn current_page_digest(
     page_root: Option<&Path>,
-    include_body_digests: bool,
+    profile: LintProfile,
 ) -> Result<LintDigest, WenlanError> {
     let Some(root) = page_root else {
         return Ok(lint_digest([0; 32]));
     };
     let root = root.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let scan =
-            scan_page_root_controlled(&root, include_body_digests, &PageScanControl::unbounded())
-                .map_err(page_snapshot_error)?;
+    let timeout = ExecutionGate::page_budget_for(profile);
+    let control = PageScanControl::with_timeout(timeout);
+    let worker_control = control.clone();
+    let mut task = tokio::task::spawn_blocking(move || {
+        let scan = scan_page_root_controlled(&root, profile == LintProfile::Deep, &worker_control)
+            .map_err(page_snapshot_error)?;
         let before = scan.normalized_bytes();
         let after = scan
-            .verify_unchanged(&root)
+            .verify_unchanged_with_control(&root, &worker_control)
             .map_err(page_snapshot_error)?
             .after_normalized_bytes();
         if before != after {
@@ -756,9 +762,20 @@ async fn current_page_digest(
             ));
         }
         Ok(lint_digest(before))
-    })
-    .await
-    .map_err(|error| WenlanError::VectorDb(format!("repair page snapshot task: {error}")))?
+    });
+    match tokio::time::timeout(timeout, &mut task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(WenlanError::VectorDb(format!(
+            "repair page snapshot task: {error}"
+        ))),
+        Err(_) => {
+            control.cancel();
+            let _ = task.await;
+            Err(WenlanError::Conflict(
+                "repair_verification_reports_stale: page snapshot deadline exceeded".to_string(),
+            ))
+        }
+    }
 }
 
 fn validate_check_deltas(
@@ -836,89 +853,10 @@ pub(crate) async fn validate_target_space_on_connection(
     Ok(())
 }
 
-pub(crate) async fn non_target_fingerprint_on_connection(
-    connection: &libsql::Connection,
-    target_source_id: &str,
-) -> Result<RepairDigest, WenlanError> {
-    let mut table_rows = connection
-        .query(
-            "SELECT name FROM sqlite_schema
-             WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-            (),
-        )
-        .await
-        .map_err(database_error)?;
-    let mut tables = Vec::new();
-    while let Some(row) = table_rows.next().await.map_err(database_error)? {
-        tables.push(row.get::<String>(0).map_err(database_error)?);
-    }
-    drop(table_rows);
-
-    let mut digest = Sha256::new();
-    digest.update(b"wenlan-repair-non-target-v1");
-    for table in tables {
-        digest_field(&mut digest, table.as_bytes());
-        let pragma = format!("PRAGMA table_info({})", quote_literal(&table));
-        let mut column_rows = connection
-            .query(&pragma, ())
-            .await
-            .map_err(database_error)?;
-        let mut columns = Vec::new();
-        while let Some(row) = column_rows.next().await.map_err(database_error)? {
-            columns.push(row.get::<String>(1).map_err(database_error)?);
-        }
-        drop(column_rows);
-        for column in &columns {
-            digest_field(&mut digest, column.as_bytes());
-        }
-        if columns.is_empty() {
-            continue;
-        }
-        let selected = columns
-            .iter()
-            .map(|column| format!("quote({})", quote_identifier(column)))
-            .collect::<Vec<_>>()
-            .join(",");
-        let ordering = (1..=columns.len())
-            .map(|index| index.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        let (sql, params) = if table == "memories" {
-            (
-                format!(
-                    "SELECT {selected} FROM {}\
-                     WHERE NOT (source='memory' AND source_id=?1) ORDER BY {ordering}",
-                    quote_identifier(&table)
-                ),
-                libsql::params::Params::Positional(vec![libsql::Value::Text(
-                    target_source_id.to_string(),
-                )]),
-            )
-        } else {
-            (
-                format!(
-                    "SELECT {selected} FROM {} ORDER BY {ordering}",
-                    quote_identifier(&table)
-                ),
-                libsql::params::Params::None,
-            )
-        };
-        let mut rows = connection
-            .query(&sql, params)
-            .await
-            .map_err(database_error)?;
-        while let Some(row) = rows.next().await.map_err(database_error)? {
-            digest.update(b"row");
-            for index in 0..columns.len() {
-                let index = i32::try_from(index).map_err(|_| {
-                    WenlanError::Validation("repair_target_schema_too_wide".to_string())
-                })?;
-                let value: String = row.get(index).map_err(database_error)?;
-                digest_field(&mut digest, value.as_bytes());
-            }
-        }
-    }
-    Ok(repair_digest(&digest.finalize()))
+pub(crate) fn effect_guard_receipt(normalized_total_changes: u64) -> RepairDigest {
+    let mut bytes = b"wenlan-repair-effect-guard-v1".to_vec();
+    bytes.extend_from_slice(&normalized_total_changes.to_le_bytes());
+    repair_digest(&bytes)
 }
 
 fn validate_selected_finding(request: &PrepareRepairRequest) -> Result<(), WenlanError> {
@@ -1180,15 +1118,6 @@ fn repair_digest(bytes: &[u8]) -> RepairDigest {
 
 fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
-}
-
-fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn digest_field(digest: &mut Sha256, value: &[u8]) {
-    digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
-    digest.update(value);
 }
 
 fn safe_manifest_id(value: &str) -> bool {

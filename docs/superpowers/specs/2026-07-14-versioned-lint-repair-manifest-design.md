@@ -128,8 +128,11 @@ receipt is computed again immediately before apply.
 The v1 `reclassify_memory` owner closure is every memory chunk with the target
 source ID. No Page, graph, observation, relation, tag, or other memory owner is
 allowed to change. Prepare stores the full before-image for that closure in the
-rollback artifact. Apply computes a non-target lint-relevant fingerprint before
-and after the canonical transaction; a mismatch rolls the transaction back.
+rollback artifact. Apply captures SQLite's connection-local `total_changes`
+before the update and normalizes the post-update counter by the exact allowed
+target row count. The two effect-guard receipts must match; any trigger or
+other side effect adds extra changes and rolls the transaction back. This is
+constant-space and does not scan unrelated rows, embeddings, or FTS tables.
 
 ## Artifact Layout
 
@@ -197,9 +200,10 @@ and returns `409 repair_target_stale` on any CAS mismatch.
 The core holds the per-manifest operation lock, then executes
 `post_write::reclassify_memory_cas` in one transaction.
 The writer validates target scope, updates every chunk consistently, verifies
-the declared owner closure/non-target fingerprint, and commits. Any writer,
-fingerprint, receipt, or artifact failure rolls back. The pending apply receipt
-is fsynced before database commit, published no-clobber after commit, and
+the declared owner closure through the normalized transaction-local change
+counter, and commits. Any writer, receipt, or artifact failure rolls back. The
+pending apply receipt and its containing directory are fsynced before database
+commit, published no-clobber after commit, and
 recovered after a crash by matching the current target to its recorded
 after-receipt. A successful apply receipt contains the before/after target
 receipts, actual allowed effects, writer result, and manifest digest.
@@ -215,9 +219,10 @@ post-run snapshot receipts to describe the current state, verifies the target
 evidence digest no longer appears in the classification finding, checks both
 reports are complete, rejects any new actionable/incomplete check outside the
 declared assertion set, binds both reports to current DB and Page receipts, and
-confirms the apply receipt contains the in-transaction non-target fingerprint
-proof. It does not require unrelated daemon state to remain frozen after the
-apply transaction. Success writes the immutable verification receipt through
+confirms the apply receipt contains the in-transaction effect-guard proof.
+Page receipt scans use the same General/Deep time bounds as lint and finish
+before the canonical DB mutex is acquired. It does not require unrelated daemon
+state to remain frozen after the apply transaction. Success writes the immutable verification receipt through
 the same per-manifest lock and no-clobber publication rule.
 
 If post-repair lint fails, the canonical mutation remains applied but the run

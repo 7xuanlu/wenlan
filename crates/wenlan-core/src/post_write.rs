@@ -87,8 +87,7 @@ where
         if &before_target_receipt != expected_receipt {
             return Err(WenlanError::Conflict("repair_target_stale".to_string()));
         }
-        let non_target_before =
-            crate::repair::non_target_fingerprint_on_connection(&conn, source_id).await?;
+        let non_target_before = crate::repair::effect_guard_receipt(conn.total_changes());
         let affected = conn
             .execute(
                 "UPDATE memories SET memory_type=?1
@@ -109,8 +108,11 @@ where
                 "repair_target_write_unproven".to_string(),
             ));
         }
-        let non_target_after =
-            crate::repair::non_target_fingerprint_on_connection(&conn, source_id).await?;
+        let normalized_total_changes = conn
+            .total_changes()
+            .checked_sub(target_rows)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        let non_target_after = crate::repair::effect_guard_receipt(normalized_total_changes);
         if non_target_after != non_target_before {
             return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
         }

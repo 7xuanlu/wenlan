@@ -58,7 +58,7 @@ pub(crate) struct PageScanControl {
 }
 
 impl PageScanControl {
-    pub(crate) fn unbounded() -> Self {
+    fn unbounded() -> Self {
         Self {
             canceled: Arc::new(AtomicBool::new(false)),
             deadline: None,

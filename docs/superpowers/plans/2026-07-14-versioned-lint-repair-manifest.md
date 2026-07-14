@@ -366,11 +366,13 @@ pub async fn reclassify_memory_cas(
 
 Lock `db.conn` once, begin an immediate transaction, recompute the ordered
 target receipt and target Space inside the transaction, return
-`Conflict("repair_target_stale")` before UPDATE on mismatch, compute the
-non-target lint-relevant fingerprint, update all target chunks, assert affected
-row count equals the rollback artifact row count, recompute both fingerprints,
-and commit only when the target receipt changed and the non-target digest did
-not. Roll back on every error.
+`Conflict("repair_target_stale")` before UPDATE on mismatch, capture
+connection-local `total_changes`, update all target chunks, assert affected row
+count equals the rollback artifact row count, and normalize the post-update
+counter by that exact row count. Commit only when the target receipt changed
+and the before/normalized-after effect-guard digests match. This catches trigger
+escape in constant space without scanning unrelated rows, embedding blobs, or
+FTS shadow tables. Roll back on every error.
 
 Route the existing non-CAS `/api/memory/reclassify/{source_id}` handler through
 `post_write::update_memory` so all ordinary reclassification also uses the
@@ -384,8 +386,9 @@ the rollback artifact digest, holds a per-manifest advisory lock, calls only
 `reclassify_memory_cas`, fsyncs a pending receipt before commit, then publishes
 `apply-receipt.json` atomically without replacement. Recovery distinguishes a
 live locked writer from crash residue and promotes a committed target even when
-unrelated daemon state changed later. It never accepts caller-supplied target
-or mutation fields.
+unrelated daemon state changed later. Both the pending file and its containing
+directory are fsynced before the database commit is allowed. It never accepts
+caller-supplied target or mutation fields.
 
 - [ ] **Step 5: Verify GREEN**
 
@@ -481,7 +484,9 @@ constraints, compares the submitted DB and Page receipts with current state,
 and writes `verification-receipt.json` under the per-manifest lock with
 no-clobber publication. The apply receipt proves non-target stability inside
 the CAS transaction; verification does not freeze unrelated daemon state after
-that transaction. It does not run lint and cannot mutate canonical data.
+that transaction. Page scans reuse the bounded General/Deep lint budgets and
+finish before acquiring `db.conn`. It does not run lint and cannot mutate
+canonical data.
 
 - [ ] **Step 5: Verify GREEN and route catalog parity**
 
