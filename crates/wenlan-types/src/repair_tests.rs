@@ -8,7 +8,7 @@ use crate::{
     },
     repair::{
         ApplyRepairRequest, RepairAllowedEffects, RepairApplyReceipt, RepairDigest,
-        RepairExpectedState, RepairManifest, RepairManifestDraft, RepairMutation,
+        RepairExpectedState, RepairLintScope, RepairManifest, RepairManifestDraft, RepairMutation,
         RepairPostAssertions, RepairRollbackArtifact, RepairScope, RepairSource, RepairTarget,
         RepairVerificationReceipt, RepairWriter,
     },
@@ -45,6 +45,7 @@ fn fixture_manifest() -> RepairManifest {
     )
     .unwrap();
     let source = RepairSource::try_new(
+        RepairLintScope::global(),
         LintScope::global(),
         finding,
         snapshots(1),
@@ -91,6 +92,19 @@ fn repair_digest_requires_exact_lowercase_sha256() {
     ] {
         assert!(RepairDigest::parse(invalid).is_err(), "accepted {invalid}");
     }
+}
+
+#[test]
+fn durable_lint_scope_is_typed_and_matches_report_scope_kind() {
+    let registered = RepairLintScope::registered("work".into()).unwrap();
+    assert!(registered.matches_report_scope_kind(&LintScope::registered(
+        LintOpaqueId::from_sorted_position(0).unwrap()
+    )));
+    assert!(!registered.matches_report_scope_kind(&LintScope::global()));
+    assert!(RepairLintScope::registered(" ".into()).is_err());
+
+    let value = serde_json::json!({"kind": "registered", "space": "work", "extra": true});
+    assert!(serde_json::from_value::<RepairLintScope>(value).is_err());
 }
 
 #[test]

@@ -3,7 +3,7 @@
 
 use crate::{
     lint::{
-        LintDigest, LintProducerReceipt, LintProfile, LintScope, LintSemanticAction,
+        LintDigest, LintProducerReceipt, LintProfile, LintScope, LintScopeKind, LintSemanticAction,
         LintSemanticFinding, LintSnapshotReceipts, LINT_CHECK_CATALOG_VERSION,
         LINT_REPORT_SCHEMA_VERSION,
     },
@@ -128,6 +128,70 @@ impl<'de> Deserialize<'de> for RepairDigest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RepairLintScope {
+    Global,
+    Registered { space: String },
+    Uncategorized,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum RepairLintScopeWire {
+    Global,
+    Registered { space: String },
+    Uncategorized,
+}
+
+impl RepairLintScope {
+    pub const fn global() -> Self {
+        Self::Global
+    }
+
+    pub fn registered(space: String) -> Result<Self, RepairContractError> {
+        if valid_nonempty(&space) {
+            Ok(Self::Registered { space })
+        } else {
+            Err(RepairContractError::InvalidSource)
+        }
+    }
+
+    pub const fn uncategorized() -> Self {
+        Self::Uncategorized
+    }
+
+    pub fn space(&self) -> Option<&str> {
+        match self {
+            Self::Registered { space } => Some(space),
+            Self::Global | Self::Uncategorized => None,
+        }
+    }
+
+    pub fn matches_report_scope_kind(&self, report_scope: &LintScope) -> bool {
+        matches!(
+            (self, report_scope.kind()),
+            (Self::Global, LintScopeKind::Global)
+                | (Self::Registered { .. }, LintScopeKind::Registered)
+                | (Self::Uncategorized, LintScopeKind::Uncategorized)
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairLintScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match RepairLintScopeWire::deserialize(deserializer)? {
+            RepairLintScopeWire::Global => Ok(Self::global()),
+            RepairLintScopeWire::Registered { space } => Self::registered(space),
+            RepairLintScopeWire::Uncategorized => Ok(Self::uncategorized()),
+        }
+        .map_err(D::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RepairScope {
     Registered { space: String },
     Uncategorized,
@@ -230,7 +294,8 @@ impl<'de> Deserialize<'de> for RepairTarget {
 pub struct RepairSource {
     report_schema_version: u16,
     check_catalog_version: u16,
-    scope: LintScope,
+    lint_scope: RepairLintScope,
+    report_scope: LintScope,
     check_id: String,
     finding: LintSemanticFinding,
     general_snapshots: LintSnapshotReceipts,
@@ -245,7 +310,8 @@ pub struct RepairSource {
 struct RepairSourceWire {
     report_schema_version: u16,
     check_catalog_version: u16,
-    scope: LintScope,
+    lint_scope: RepairLintScope,
+    report_scope: LintScope,
     check_id: String,
     finding: LintSemanticFinding,
     general_snapshots: LintSnapshotReceipts,
@@ -258,7 +324,8 @@ struct RepairSourceWire {
 impl RepairSource {
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
-        scope: LintScope,
+        lint_scope: RepairLintScope,
+        report_scope: LintScope,
         finding: LintSemanticFinding,
         general_snapshots: LintSnapshotReceipts,
         deep_snapshots: LintSnapshotReceipts,
@@ -266,7 +333,8 @@ impl RepairSource {
         deep_producer_receipt: LintProducerReceipt,
         agent_work_digest: LintDigest,
     ) -> Result<Self, RepairContractError> {
-        if finding.proposed_action() != LintSemanticAction::ReclassifyMemory
+        if !lint_scope.matches_report_scope_kind(&report_scope)
+            || finding.proposed_action() != LintSemanticAction::ReclassifyMemory
             || finding.unresolved_disagreement()
             || finding.evidence_ids().is_empty()
         {
@@ -275,7 +343,8 @@ impl RepairSource {
         Ok(Self {
             report_schema_version: LINT_REPORT_SCHEMA_VERSION,
             check_catalog_version: LINT_CHECK_CATALOG_VERSION,
-            scope,
+            lint_scope,
+            report_scope,
             check_id: REPAIR_CLASSIFICATION_CHECK_ID.to_string(),
             finding,
             general_snapshots,
@@ -286,8 +355,12 @@ impl RepairSource {
         })
     }
 
-    pub fn scope(&self) -> &LintScope {
-        &self.scope
+    pub fn lint_scope(&self) -> &RepairLintScope {
+        &self.lint_scope
+    }
+
+    pub fn report_scope(&self) -> &LintScope {
+        &self.report_scope
     }
 
     pub fn finding(&self) -> &LintSemanticFinding {
@@ -324,7 +397,8 @@ impl<'de> Deserialize<'de> for RepairSource {
             return Err(D::Error::custom(RepairContractError::InvalidSource));
         }
         Self::try_new(
-            wire.scope,
+            wire.lint_scope,
+            wire.report_scope,
             wire.finding,
             wire.general_snapshots,
             wire.deep_snapshots,
@@ -846,6 +920,7 @@ impl<'de> Deserialize<'de> for RepairManifest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PrepareRepairRequest {
+    lint_scope: RepairLintScope,
     general_report: LintReport,
     deep_report: LintReport,
     selected_finding: LintSemanticFinding,
@@ -855,6 +930,7 @@ pub struct PrepareRepairRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrepareRepairRequestWire {
+    lint_scope: RepairLintScope,
     general_report: LintReport,
     deep_report: LintReport,
     selected_finding: LintSemanticFinding,
@@ -863,12 +939,15 @@ struct PrepareRepairRequestWire {
 
 impl PrepareRepairRequest {
     pub fn try_new(
+        lint_scope: RepairLintScope,
         general_report: LintReport,
         deep_report: LintReport,
         selected_finding: LintSemanticFinding,
         after_memory_type: MemoryType,
     ) -> Result<Self, RepairContractError> {
-        if general_report.profile() != LintProfile::General
+        if !lint_scope.matches_report_scope_kind(general_report.scope())
+            || !lint_scope.matches_report_scope_kind(deep_report.scope())
+            || general_report.profile() != LintProfile::General
             || deep_report.profile() != LintProfile::Deep
             || !general_report.complete()
             || !deep_report.complete()
@@ -880,11 +959,16 @@ impl PrepareRepairRequest {
             return Err(RepairContractError::InvalidPrepareRequest);
         }
         Ok(Self {
+            lint_scope,
             general_report,
             deep_report,
             selected_finding,
             after_memory_type,
         })
+    }
+
+    pub fn lint_scope(&self) -> &RepairLintScope {
+        &self.lint_scope
     }
 
     pub fn general_report(&self) -> &LintReport {
@@ -911,6 +995,7 @@ impl<'de> Deserialize<'de> for PrepareRepairRequest {
     {
         let wire = PrepareRepairRequestWire::deserialize(deserializer)?;
         Self::try_new(
+            wire.lint_scope,
             wire.general_report,
             wire.deep_report,
             wire.selected_finding,

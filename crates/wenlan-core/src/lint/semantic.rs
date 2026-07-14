@@ -2,20 +2,33 @@ use super::catalog::catalog_entry;
 use super::context::{LintContext, PopulationBasis};
 use crate::llm_provider::{LlmBackend, LlmProvider, LlmRequest};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use wenlan_types::lint::{
     LintAgentCandidate, LintAgentSubmission, LintAgentVerdict, LintAgentWork, LintApplicability,
-    LintCheckResult, LintCheckResultInput, LintCoverage, LintEvidenceRef, LintGateEffect,
-    LintMetric, LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome, LintPrecondition,
-    LintReasonCode, LintRecommendationCode, LintSemanticAction, LintSemanticCheckId,
-    LintSemanticDecision, LintSemanticFinding, LintSemanticPopulation, LintSemanticProviderRoute,
-    LintSeverity, LintSummaryCode, LintValidationMethod, LINT_MAX_EVIDENCE_PER_CHECK,
+    LintCheckResult, LintCheckResultInput, LintCoverage, LintDigest, LintEvidenceRef,
+    LintGateEffect, LintMetric, LintMetricCode, LintMetricValue, LintOpaqueId, LintOutcome,
+    LintPrecondition, LintReasonCode, LintRecommendationCode, LintSemanticAction,
+    LintSemanticCheckId, LintSemanticDecision, LintSemanticFinding, LintSemanticPopulation,
+    LintSemanticProviderRoute, LintSeverity, LintSummaryCode, LintValidationMethod,
+    LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
 #[path = "semantic_candidates.rs"]
 mod candidates;
 use candidates::CandidateSet;
+
+pub(crate) fn semantic_record_digest(kind: &str, durable_id: &str) -> LintDigest {
+    semantic_record_key_digest(&format!("{kind}:{durable_id}"))
+}
+
+pub(super) fn semantic_record_key_digest(key: &str) -> LintDigest {
+    let digest: [u8; 32] = Sha256::digest(key.as_bytes()).into();
+    LintDigest::from_u64(u64::from_le_bytes(
+        digest[..8].try_into().expect("digest prefix"),
+    ))
+}
 
 #[cfg(not(test))]
 const MODEL_TIMEOUT: Duration = Duration::from_secs(30);
