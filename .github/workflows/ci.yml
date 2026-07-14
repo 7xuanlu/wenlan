@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
       - 'LICENSE'
@@ -31,6 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       rust:    ${{ steps.filter.outputs.rust }}
+      docs:    ${{ steps.filter.outputs.docs }}
       plugin:  ${{ steps.filter.outputs.plugin }}
       npm:     ${{ steps.filter.outputs.npm }}
       windows: ${{ steps.filter.outputs.windows }}
@@ -54,6 +53,7 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
+              - 'scripts/lint-scale-gate.sh'
               # Release PRs must run the drift guard: 0.10.1 merged with
               # version drift precisely because these two files don't match
               # any glob above, so the rust tests (incl. drift_guard) skipped
@@ -68,6 +68,19 @@ jobs:
               - 'scripts/validate-codex-plugin-slice.py'
               - 'scripts/validate-plugin-contract.py'
               - 'scripts/validate-plugin-contract.test.sh'
+            docs:
+              - 'README.md'
+              - 'README.zh-Hans.md'
+              - 'README.zh-Hant.md'
+              - 'docs/eval/**'
+              - 'scripts/check-readme-translations.py'
+              - 'scripts/check-readme-translations.test.sh'
+              - 'scripts/update-readme-eval.py'
+              - 'scripts/update-readme-eval.test.py'
+              - 'scripts/validate-versions.sh'
+              - 'scripts/validate-versions.test.sh'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
             npm:
               - 'crates/*/npm/**'
             windows:
@@ -80,6 +93,8 @@ jobs:
               - 'crates/wenlan-server/src/main.rs'
               - 'crates/wenlan-mcp/npm/install.js'
               - 'scripts/smoke-windows.ps1'
+              - 'scripts/lint-scale-gate.sh'
+              - 'crates/wenlan-core/src/lint/**'
               - 'install.sh'
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -169,6 +184,7 @@ jobs:
       # win than rust-cache alone on cold cache.
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
@@ -195,6 +211,16 @@ jobs:
         uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:
           tool: cargo-nextest
+      # Pin FastEmbed's cache independently of its upstream default and restore
+      # it before the first model-consuming test.
+      - name: Cache fastembed model (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.FASTEMBED_CACHE_DIR }}
+          key: fastembed-bge-base-en-v1.5-q-v2
+          restore-keys: |
+            fastembed-bge-base-en-v1.5-q-
       # Workspace lib tests skipped on Windows — Linux + macOS catch the
       # same cross-platform unit logic in ~5-15min vs 25min on Windows.
       # Windows-specific behavior (paths, mcp_add, schtasks) is covered
@@ -208,6 +234,47 @@ jobs:
         # nextest spawns one process per test by default — sidesteps the
         # ONNX atexit FFI race that required --test-threads=1 with cargo test.
         run: cargo nextest run --workspace --lib --test-threads=1
+      - name: Page lint scale gate (Linux time + RSS)
+        if: matrix.os == 'ubuntu-24.04'
+        run: bash scripts/lint-scale-gate.sh "$RUNNER_TEMP/task-19-memory-lint-debugger-linux.txt"
+      - name: Page lint scale gate (Windows functional)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          # Functional portability only; the Linux leg owns time and RSS thresholds.
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "lint-scale-fixture"
+          $receipt = Join-Path $env:RUNNER_TEMP "task-19-memory-lint-debugger-windows.txt"
+          $env:WENLAN_LINT_SCALE_FIXTURE = $fixture
+          $setup = "lint::pages::diagnostic_scale_test::generate_diagnostic_scale_fixture"
+          $gate = "lint::pages::diagnostic_scale_test::production_page_group_scale_gate"
+          $head = git rev-parse HEAD
+          @(
+            "task=19 diagnostic scale and portability gate",
+            "cwd=$PWD",
+            "head=$head",
+            "platform=Windows",
+            "fixture_command=cargo test -p wenlan-core --lib $setup -- --ignored --exact --nocapture",
+            "functional_command=cargo test -p wenlan-core --lib $gate -- --ignored --exact --nocapture",
+            "model_embedder=not constructed or loaded"
+          ) | Set-Content -Path $receipt
+          cargo test -p wenlan-core --lib $setup -- --ignored --exact --nocapture 2>&1 |
+            Tee-Object -FilePath $receipt -Append
+          $setupCode = $LASTEXITCODE
+          if ($setupCode -ne 0) { throw "scale fixture generation failed" }
+          cargo test -p wenlan-core --lib $gate -- --ignored --exact --nocapture 2>&1 |
+            Tee-Object -FilePath $receipt -Append
+          $gateCode = $LASTEXITCODE
+          "exit_code=$gateCode" | Add-Content -Path $receipt
+          if ($gateCode -ne 0) { throw "Windows functional scale gate failed" }
+      - name: Upload Page lint scale receipt
+        if: always() && (matrix.os == 'ubuntu-24.04' || matrix.os == 'windows-2022')
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-19-lint-scale-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/task-19-memory-lint-debugger-*.txt
+          retention-days: 30
+          if-no-files-found: error
       # Integration tests for wenlan-cli + wenlan-server. We deliberately do
       # NOT use `--workspace --tests` because that pulls in wenlan-core's
       # `eval_harness.rs` which requires `ANTHROPIC_API_KEY` (not in CI).
@@ -219,19 +286,6 @@ jobs:
       # sync/enrich/delete lifecycle in-process).
       - name: Integration tests wenlan-cli + wenlan-server
         run: cargo nextest run -p wenlan -p wenlan-server
-      - name: Cache fastembed model (Linux)
-        if: matrix.os == 'ubuntu-24.04'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          # Wenlan's `resolve_fastembed_cache_dir` writes to
-          # `dirs::data_dir()/wenlan/memorydb/fastembed_cache` on Linux when
-          # no per-DB path or WENLAN_TEST_FASTEMBED_CACHE override is given.
-          # The previous `~/.fastembed_cache` path never matched what tests
-          # actually wrote (Path Validation Error in post-run save).
-          path: ~/.local/share/wenlan/memorydb/fastembed_cache
-          key: fastembed-bge-base-en-v1.5-q-v2
-          restore-keys: |
-            fastembed-bge-base-en-v1.5-q-
       - name: Run integration tests (core) (Linux)
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
@@ -298,9 +352,7 @@ jobs:
       # fastembed model restored above.
       - name: E2E folder ingest over HTTP (Linux)
         if: matrix.os == 'ubuntu-24.04'
-        run: |
-          export WENLAN_TEST_FASTEMBED_CACHE="$HOME/.local/share/wenlan/memorydb/fastembed_cache"
-          bash scripts/smoke-folder-ingest.sh
+        run: bash scripts/smoke-folder-ingest.sh
       # Linux Docker smoke + Windows release-build smoke previously ran here.
       # Both duplicated work that release.yml already does on every tag push
       # (Docker daemon image + Windows release matrix). Dropping them shaves
@@ -379,6 +431,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
@@ -397,17 +450,32 @@ jobs:
         with:
           tool: cargo-nextest
       # real_router.rs boots a real MemoryDB, which loads the FastEmbed ONNX
-      # model (network fetch if uncached). Reuse the cache key the `test`
-      # job's ubuntu leg populates so this job skips the cold HF download.
+      # model (network fetch if uncached). Reuse the cache from any previous
+      # successful Linux consumer so this job normally skips the cold fetch.
       - name: Cache fastembed model (Linux)
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.local/share/wenlan/memorydb/fastembed_cache
+          path: ${{ env.FASTEMBED_CACHE_DIR }}
           key: fastembed-bge-base-en-v1.5-q-v2
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
       - name: Quarantined tests (wenlan-mcp + wenlan-types)
         run: cargo nextest run -p wenlan-mcp -p wenlan-types
+
+  docs:
+    name: docs provenance
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Validate README translations and eval provenance
+        run: |
+          python3 scripts/check-readme-translations.py
+          bash scripts/check-readme-translations.test.sh
+          python3 scripts/update-readme-eval.py --check docs/eval/readme_metrics.example.json
+          python3 scripts/update-readme-eval.test.py
+          bash scripts/validate-versions.test.sh
 
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where the test matrix skips via detect-changes) report success instead
@@ -419,7 +487,7 @@ jobs:
   # is their normal state on PRs not touching those surfaces.
   conclusion:
     name: conclusion
-    needs: [detect-changes, fmt, lint, test, plugin, npm]
+    needs: [detect-changes, fmt, lint, test, docs, plugin, npm]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -430,7 +498,7 @@ jobs:
             echo "detect-changes did not succeed: $dc"
             exit 1
           fi
-          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}'; do
+          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.docs.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}'; do
             case "$r" in
               success|skipped) ;;
               *) echo "Upstream job failed: $r"; exit 1 ;;

@@ -10,11 +10,20 @@ use std::path::PathBuf;
 
 const KNOWLEDGE_STATE_SCHEMA_V2: u32 = 2;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct KnowledgeState {
     #[serde(default = "default_schema_v2")]
     schema_version: u32,
     pages: HashMap<String, PageFileState>,
+}
+
+impl Default for KnowledgeState {
+    fn default() -> Self {
+        Self {
+            schema_version: KNOWLEDGE_STATE_SCHEMA_V2,
+            pages: HashMap::new(),
+        }
+    }
 }
 
 fn default_schema_v2() -> u32 {
@@ -39,14 +48,55 @@ struct LegacyKnowledgeStateV1 {
 
 pub struct KnowledgeWriter {
     path: PathBuf,
+    tracker: std::sync::Arc<crate::page_projection_tracker::PageProjectionTracker>,
 }
 
 impl KnowledgeWriter {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
+    pub fn new(path: PathBuf, database: &crate::db::MemoryDB) -> Self {
+        Self {
+            path,
+            tracker: database.page_projection_tracker(),
+        }
     }
 
-    pub fn write_page(&self, page: &Page) -> Result<String, WenlanError> {
+    pub fn begin_projection_write(&self) -> KnowledgeProjectionWriteRef<'_> {
+        KnowledgeProjectionWriteRef {
+            writer: self,
+            guard: self.tracker.begin_write(),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_for_test(path: PathBuf) -> Self {
+        Self {
+            path,
+            tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn begin_test_write(&self) -> crate::page_projection_tracker::PageProjectionWriteGuard {
+        self.tracker.begin_write()
+    }
+
+    #[cfg(test)]
+    fn write_page_for_test(&self, page: &Page) -> Result<String, WenlanError> {
+        let guard = self.begin_test_write();
+        self.write_page(&guard, page)
+    }
+
+    #[cfg(test)]
+    fn remove_page_for_test(&self, page_id: &str) -> Result<(), WenlanError> {
+        let guard = self.begin_test_write();
+        self.remove_page(&guard, page_id)
+    }
+
+    pub fn write_page(
+        &self,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        page: &Page,
+    ) -> Result<String, WenlanError> {
+        self.validate_guard(guard)?;
         let wenlan_dir = self.path.join(".wenlan");
         std::fs::create_dir_all(&wenlan_dir)?;
 
@@ -135,7 +185,12 @@ impl KnowledgeWriter {
         self.load_state().pages.get(page_id).map(|s| s.file.clone())
     }
 
-    pub fn remove_page(&self, page_id: &str) -> Result<(), WenlanError> {
+    pub fn remove_page(
+        &self,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        page_id: &str,
+    ) -> Result<(), WenlanError> {
+        self.validate_guard(guard)?;
         let mut state = self.load_state();
 
         if let Some(entry) = state.pages.remove(page_id) {
@@ -157,6 +212,19 @@ impl KnowledgeWriter {
         }
 
         Ok(())
+    }
+
+    fn validate_guard(
+        &self,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+    ) -> Result<(), WenlanError> {
+        if guard.belongs_to(&self.tracker) {
+            Ok(())
+        } else {
+            Err(WenlanError::VectorDb(
+                "page projection write guard does not own this writer".to_string(),
+            ))
+        }
     }
 
     fn load_state(&self) -> KnowledgeState {
@@ -193,7 +261,11 @@ impl KnowledgeWriter {
             };
         }
 
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut state: KnowledgeState = serde_json::from_str(&data).unwrap_or_default();
+        if state.schema_version == 0 {
+            state.schema_version = KNOWLEDGE_STATE_SCHEMA_V2;
+        }
+        state
     }
 
     fn save_state(&self, state: &KnowledgeState) -> Result<(), WenlanError> {
@@ -201,6 +273,43 @@ impl KnowledgeWriter {
         let data = serde_json::to_string_pretty(state)?;
         std::fs::write(&state_path, data)?;
         Ok(())
+    }
+}
+
+pub struct KnowledgeProjectionWriteRef<'writer> {
+    writer: &'writer KnowledgeWriter,
+    guard: crate::page_projection_tracker::PageProjectionWriteGuard,
+}
+
+impl KnowledgeProjectionWriteRef<'_> {
+    pub fn write_page(&self, page: &Page) -> Result<String, WenlanError> {
+        self.writer.write_page(&self.guard, page)
+    }
+
+    pub fn remove_page(&self, page_id: &str) -> Result<(), WenlanError> {
+        self.writer.remove_page(&self.guard, page_id)
+    }
+}
+
+pub struct KnowledgeProjectionWrite {
+    writer: KnowledgeWriter,
+    guard: crate::page_projection_tracker::PageProjectionWriteGuard,
+}
+
+impl KnowledgeProjectionWrite {
+    pub fn new(path: PathBuf, database: &crate::db::MemoryDB) -> Self {
+        Self {
+            writer: KnowledgeWriter::new(path, database),
+            guard: database.begin_page_projection_write(),
+        }
+    }
+
+    pub fn write_page(&self, page: &Page) -> Result<String, WenlanError> {
+        self.writer.write_page(&self.guard, page)
+    }
+
+    pub fn remove_page(&self, page_id: &str) -> Result<(), WenlanError> {
+        self.writer.remove_page(&self.guard, page_id)
     }
 }
 
@@ -301,10 +410,10 @@ mod tests {
     #[test]
     fn test_write_page_creates_file() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
         let page = test_concept();
 
-        let path = writer.write_page(&page).unwrap();
+        let path = writer.write_page_for_test(&page).unwrap();
         assert!(path.ends_with("rust-ownership.md"));
 
         let content = std::fs::read_to_string(&path).unwrap();
@@ -321,11 +430,12 @@ mod tests {
     #[test]
     fn test_write_updates_state() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
 
-        writer.write_page(&test_concept()).unwrap();
+        writer.write_page_for_test(&test_concept()).unwrap();
 
         let state = writer.load_state();
+        assert_eq!(state.schema_version, KNOWLEDGE_STATE_SCHEMA_V2);
         assert!(state.pages.contains_key("concept_test123"));
         assert_eq!(state.pages["concept_test123"].file, "rust-ownership.md");
         assert_eq!(state.pages["concept_test123"].version, 2);
@@ -334,12 +444,12 @@ mod tests {
     #[test]
     fn test_remove_page_deletes_file() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
 
-        let path = writer.write_page(&test_concept()).unwrap();
+        let path = writer.write_page_for_test(&test_concept()).unwrap();
         assert!(std::path::Path::new(&path).exists());
 
-        writer.remove_page("concept_test123").unwrap();
+        writer.remove_page_for_test("concept_test123").unwrap();
         assert!(!std::path::Path::new(&path).exists());
 
         let state = writer.load_state();
@@ -349,14 +459,14 @@ mod tests {
     #[test]
     fn test_remove_nonexistent_page_noop() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
-        writer.remove_page("nonexistent").unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.remove_page_for_test("nonexistent").unwrap();
     }
 
     #[test]
     fn test_write_multiple_pages() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
 
         let c1 = Page {
             id: "concept_a".to_string(),
@@ -369,8 +479,8 @@ mod tests {
             ..test_concept()
         };
 
-        writer.write_page(&c1).unwrap();
-        writer.write_page(&c2).unwrap();
+        writer.write_page_for_test(&c1).unwrap();
+        writer.write_page_for_test(&c2).unwrap();
 
         assert!(dir.path().join("alpha.md").exists());
         assert!(dir.path().join("beta.md").exists());
@@ -382,10 +492,10 @@ mod tests {
     #[test]
     fn test_knowledge_writer_overwrite_on_version_change() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
 
         let mut page = test_concept();
-        writer.write_page(&page).unwrap();
+        writer.write_page_for_test(&page).unwrap();
 
         let v1 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v1.contains("origin_version: 2"));
@@ -393,7 +503,7 @@ mod tests {
         // Update version and content
         page.version = 3;
         page.content = "## Updated\nNew content.".to_string();
-        writer.write_page(&page).unwrap();
+        writer.write_page_for_test(&page).unwrap();
 
         let v2 = std::fs::read_to_string(dir.path().join("rust-ownership.md")).unwrap();
         assert!(v2.contains("origin_version: 3"));
@@ -408,7 +518,7 @@ mod tests {
     #[test]
     fn test_load_state_migrates_v1_concept_keys_to_page() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
 
         // Write a legacy v1 state.json by hand.
         let v1_json = r#"{
@@ -438,15 +548,32 @@ mod tests {
     }
 
     #[test]
+    fn test_load_state_upgrades_writer_default_v0() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join(".wenlan")).unwrap();
+        std::fs::write(
+            dir.path().join(".wenlan/state.json"),
+            r#"{"schema_version":0,"pages":{}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            writer.load_state().schema_version,
+            KNOWLEDGE_STATE_SCHEMA_V2
+        );
+    }
+
+    #[test]
     fn test_knowledge_writer_no_domain() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
 
         let page = Page {
             space: None,
             ..test_concept()
         };
-        let path = writer.write_page(&page).unwrap();
+        let path = writer.write_page_for_test(&page).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("space:"));
     }
@@ -475,14 +602,14 @@ mod tests {
     #[test]
     fn stubs_resolve_then_gc_when_page_removed() {
         let dir = tempfile::TempDir::new().unwrap();
-        let writer = KnowledgeWriter::new(dir.path().to_path_buf());
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
         let mut page = test_concept();
         page.source_memory_ids = vec!["mem_x".to_string()];
-        writer.write_page(&page).unwrap();
+        writer.write_page_for_test(&page).unwrap();
         let stub = dir.path().join("_sources").join("mem_x.md");
         assert!(stub.exists(), "stub projected on write");
 
-        writer.remove_page(&page.id).unwrap();
+        writer.remove_page_for_test(&page.id).unwrap();
         assert!(!stub.exists(), "orphan stub GC'd on page removal");
     }
 

@@ -8,7 +8,7 @@
 //!   `src/migrations/`). Changes whenever a migration lands, which
 //!   invalidates eval caches that were built against the old schema.
 //!
-//! - `WENLAN_GIT_SHA`: 12-char short git SHA of HEAD. Unset in tarball
+//! - `WENLAN_GIT_SHA`: full 40-char git SHA of HEAD. Unset in tarball
 //!   builds where `.git/` is absent (the `option_env!` call-sites handle
 //!   the None case gracefully).
 
@@ -62,7 +62,7 @@ fn main() {
     // Best-effort: silently skipped in tarball / CI checkouts without .git.
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(output) = std::process::Command::new("git")
-        .args(["rev-parse", "--short=12", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
     {
         if output.status.success() {

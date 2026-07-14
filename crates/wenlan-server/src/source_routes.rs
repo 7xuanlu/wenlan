@@ -320,7 +320,18 @@ pub(crate) async fn sync_directory_source(
     // the root live auto-recovers it. For a single-file source the root IS
     // the file, so a deleted file lands here too: never auto-deleted, the
     // user removes the source explicitly.
-    if !directory_root_is_live(&source.path) {
+    let root = source.path.clone();
+    let root_display = root.display().to_string();
+    let files = tokio::task::spawn_blocking(move || {
+        directory_root_is_live(&root).then(|| scan_directory(&root))
+    })
+    .await
+    .map_err(|error| {
+        ServerError::Internal(format!(
+            "directory filesystem task failed for source {id} at {root_display}: {error}"
+        ))
+    })?;
+    let Some(files) = files else {
         mark_source_unavailable(&id, "source path is missing or unreadable");
         return Ok(SyncStatsResponse {
             files_found: 0,
@@ -330,9 +341,8 @@ pub(crate) async fn sync_directory_source(
             error_detail: None,
             paused: None,
         });
-    }
+    };
 
-    let files = scan_directory(&source.path);
     let knowledge_path = config.knowledge_path_or_default();
     let scanned: std::collections::HashSet<String> = files
         .iter()
@@ -384,18 +394,29 @@ pub(crate) async fn sync_directory_source(
         let file_key = file_path.to_string_lossy().to_string();
         let is_gdrive = is_google_drive_path(file_path);
 
-        let metadata = match std::fs::metadata(file_path) {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("[sync] stat failed for {}: {}", file_path.display(), e);
-                errors += 1;
-                file_errors += 1;
-                if is_gdrive {
-                    gdrive_errors += 1;
+        let metadata_path = file_path.clone();
+        let metadata =
+            match tokio::task::spawn_blocking(move || std::fs::metadata(metadata_path)).await {
+                Ok(Ok(metadata)) => metadata,
+                Ok(Err(e)) => {
+                    tracing::warn!("[sync] stat failed for {}: {}", file_path.display(), e);
+                    errors += 1;
+                    file_errors += 1;
+                    if is_gdrive {
+                        gdrive_errors += 1;
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
+                Err(e) => {
+                    tracing::warn!("[sync] stat task failed for {}: {}", file_path.display(), e);
+                    errors += 1;
+                    file_errors += 1;
+                    if is_gdrive {
+                        gdrive_errors += 1;
+                    }
+                    continue;
+                }
+            };
         let mtime_ns = metadata
             .modified()
             .ok()
@@ -411,9 +432,15 @@ pub(crate) async fn sync_directory_source(
             }
         }
 
-        let bytes = match std::fs::read(file_path) {
-            Ok(bytes) => bytes,
-            Err(e) => {
+        // The mtime fast path above keeps unchanged files out of the read/hash phase.
+        let read_path = file_path.clone();
+        let hash = match tokio::task::spawn_blocking(move || {
+            std::fs::read(read_path).map(|bytes| content_hash_bytes(&bytes))
+        })
+        .await
+        {
+            Ok(Ok(hash)) => hash,
+            Ok(Err(e)) => {
                 tracing::warn!("[sync] read failed for {}: {}", file_path.display(), e);
                 errors += 1;
                 file_errors += 1;
@@ -422,8 +449,16 @@ pub(crate) async fn sync_directory_source(
                 }
                 continue;
             }
+            Err(e) => {
+                tracing::warn!("[sync] read task failed for {}: {}", file_path.display(), e);
+                errors += 1;
+                file_errors += 1;
+                if is_gdrive {
+                    gdrive_errors += 1;
+                }
+                continue;
+            }
         };
-        let hash = content_hash_bytes(&bytes);
         if let Some(ref ss) = existing {
             if ss.content_hash == hash {
                 let _ = db.upsert_sync_state(&id, &file_key, mtime_ns, &hash).await;

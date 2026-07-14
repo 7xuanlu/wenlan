@@ -21,6 +21,9 @@ use wenlan_types::{
     sources::Source,
 };
 
+mod lint;
+pub use lint::origin_host_from_env;
+
 const DEFAULT_HOST: &str = "http://127.0.0.1:7878";
 
 /// Local mirror of the daemon's `SyncStatsResponse` (defined in `wenlan-server`,
@@ -37,13 +40,6 @@ pub struct SyncStats {
     pub error_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<String>,
-}
-
-pub fn origin_host_from_env() -> String {
-    std::env::var("WENLAN_HOST")
-        .unwrap_or_else(|_| DEFAULT_HOST.to_string())
-        .trim_end_matches('/')
-        .to_string()
 }
 
 pub struct WenlanClient {

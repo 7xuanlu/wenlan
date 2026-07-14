@@ -30,7 +30,7 @@
 //! (`mark_paused` with backoff) instead of burning retries in-loop — the
 //! scheduler re-claims after the backoff and resumes from the checkpoint,
 //! upgrading the stub to the real digest. A file that parses to nothing is
-//! terminal (`mark_done`, no page).
+//! terminal (durable sync receipt + queue completion, no page).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -149,8 +149,9 @@ pub async fn run_document_enrichment(
                 // Still record sync_state so the next sync skips it instead of
                 // re-parsing it every tick.
                 log::warn!("[doc-enrich] {file_path}: not ingestable ({reason}); marking done");
-                let _ = db.mark_done(&source_id, &file_path).await;
-                record_sync_state(db, entry).await;
+                if !complete_with_sync_receipt(db, entry).await {
+                    return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+                }
                 return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
             }
             Err(join_err) => {
@@ -213,8 +214,9 @@ pub async fn run_document_enrichment(
 
     if chunks.is_empty() {
         log::warn!("[doc-enrich] {file_path}: no chunks after upsert; marking done");
-        let _ = db.mark_done(&source_id, &file_path).await;
-        record_sync_state(db, entry).await;
+        if !complete_with_sync_receipt(db, entry).await {
+            return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+        }
         return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
     }
     if let Some(stored_title) = chunks
@@ -312,8 +314,17 @@ pub async fn run_document_enrichment(
             };
         }
         // No LLM configured: terminal (a retry can't do better without a provider).
-        let _ = db.mark_done(&source_id, &file_path).await;
-        record_sync_state(db, entry).await;
+        if !complete_with_sync_receipt(db, entry).await {
+            return DocumentEnrichmentOutcome {
+                doc_source_id,
+                page_id,
+                chunk_ids,
+                summary: body,
+                entities: Vec::new(),
+                completed: false,
+                paused: true,
+            };
+        }
         return DocumentEnrichmentOutcome {
             doc_source_id,
             page_id,
@@ -374,8 +385,17 @@ pub async fn run_document_enrichment(
         };
     }
 
-    let _ = db.mark_done(&source_id, &file_path).await;
-    record_sync_state(db, entry).await;
+    if !complete_with_sync_receipt(db, entry).await {
+        return DocumentEnrichmentOutcome {
+            doc_source_id,
+            page_id,
+            chunk_ids,
+            summary: digest,
+            entities,
+            completed: false,
+            paused: true,
+        };
+    }
     DocumentEnrichmentOutcome {
         doc_source_id,
         page_id,
@@ -387,8 +407,8 @@ pub async fn run_document_enrichment(
     }
 }
 
-/// Record the file's tracked `source_sync_state` after TERMINAL processing
-/// (§4: the sync_state row is written on SUCCESSFUL processing, by the queue).
+/// Atomically record the file's tracked `source_sync_state` and transition the
+/// queue row to terminal. A failed receipt pauses the row for retry.
 /// The scan-side mtime+hash skip and the deletion diff both read this table:
 /// without the write, a directory file is re-enqueued on every sync and its
 /// chunks are never reaped after deletion.
@@ -399,7 +419,7 @@ pub async fn run_document_enrichment(
 /// the row is written with `mtime_ns = 0` and the ENQUEUE-time hash, so the
 /// next sync cannot mtime-skip it: it re-hashes, sees the drift, and re-enriches
 /// (or, for a vanished file, the deletion diff reaps the chunks just written).
-async fn record_sync_state(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) {
+async fn complete_with_sync_receipt(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) -> bool {
     let path = PathBuf::from(&entry.file_path);
     let stat = tokio::task::spawn_blocking(move || {
         let meta = std::fs::metadata(&path).ok()?;
@@ -428,14 +448,17 @@ async fn record_sync_state(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) {
         (None, eh) => (0, eh.unwrap_or_default().to_string()),
     };
     if let Err(e) = db
-        .upsert_sync_state(&entry.source_id, &entry.file_path, mtime_ns, &hash)
+        .complete_document_enrichment(&entry.source_id, &entry.file_path, mtime_ns, &hash)
         .await
     {
         log::warn!(
-            "[doc-enrich] {}: upsert_sync_state failed: {e}",
+            "[doc-enrich] {}: terminal receipt failed: {e}; pausing",
             entry.file_path
         );
+        pause(db, entry, "source sync receipt failed").await;
+        return false;
     }
+    true
 }
 
 /// Pause a document for retry with an exponential-ish backoff. `mark_paused`
@@ -451,8 +474,8 @@ async fn pause(db: &MemoryDB, entry: &DocEnrichmentQueueEntry, reason: &str) {
 }
 
 /// Write (idempotently) the single `creation_kind='source'` page for a document,
-/// citing its chunks. Deletes any existing page with the deterministic id first
-/// so a retry (stub → real digest) reuses the same id without an INSERT conflict.
+/// citing its chunks. Existing machine-owned source Pages update in place so a
+/// failed retry cannot delete the last valid Page or its provenance.
 async fn write_source_page(
     db: &MemoryDB,
     page_id: &str,
@@ -461,7 +484,21 @@ async fn write_source_page(
     content: &str,
     chunk_ids: &[String],
 ) -> Result<(), WenlanError> {
-    let _ = db.delete_page(page_id).await;
+    if db.get_page(page_id).await?.is_some() {
+        return page_write(
+            db,
+            PageWrite::ReplaceSource {
+                page_id,
+                title,
+                summary,
+                content,
+                source_memory_ids: chunk_ids,
+                agent: "doc-enrich",
+            },
+        )
+        .await
+        .map(|_| ());
+    }
     let req = CreateConceptRequest {
         title: title.to_string(),
         content: content.to_string(),
@@ -1022,6 +1059,129 @@ mod tests {
                 .iter()
                 .all(|row| row.source_kind == "external_file"),
             "document source-page evidence must preserve folder chunk provenance, got {evidence:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn source_page_replacement_failure_preserves_last_valid_page_and_provenance() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+        let outcome =
+            run_document_enrichment(&db, &entry, None, None, &PromptRegistry::default()).await;
+        let before = db.get_page(&outcome.page_id).await.unwrap().unwrap();
+        let evidence_before = db.get_page_evidence(&outcome.page_id).await.unwrap();
+        assert!(!evidence_before.is_empty());
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER abort_source_page_replacement
+                 BEFORE UPDATE OF content ON pages
+                 WHEN OLD.id = '{}'
+                 BEGIN SELECT RAISE(ABORT, 'blocked source page replacement'); END;",
+                outcome.page_id.replace('\'', "''")
+            ))
+            .await
+            .unwrap();
+        }
+        let err = write_source_page(
+            &db,
+            &outcome.page_id,
+            &before.title,
+            before.summary.as_deref(),
+            "replacement body",
+            &outcome.chunk_ids,
+        )
+        .await
+        .expect_err("replacement insert fault must be returned");
+        assert!(err.to_string().contains("blocked source page replacement"));
+        let after_failure = db.get_page(&outcome.page_id).await.unwrap();
+        let evidence_after_failure = db.get_page_evidence(&outcome.page_id).await.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_source_page_replacement", ())
+                .await
+                .unwrap();
+        }
+        write_source_page(
+            &db,
+            &outcome.page_id,
+            &before.title,
+            before.summary.as_deref(),
+            "replacement body",
+            &outcome.chunk_ids,
+        )
+        .await
+        .expect("connection and replacement path must remain reusable");
+
+        assert!(
+            after_failure.is_some(),
+            "failed replacement must preserve the last valid source Page"
+        );
+        assert_eq!(after_failure.unwrap().content, before.content);
+        assert_eq!(
+            evidence_after_failure.len(),
+            evidence_before.len(),
+            "failed replacement must preserve Page provenance"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_receipt_failure_does_not_leave_same_hash_queue_terminal() {
+        let (db, dir) = test_db().await;
+        let path = write_doc(dir.path());
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "CREATE TRIGGER abort_source_sync_receipt
+                 BEFORE INSERT ON source_sync_state
+                 BEGIN SELECT RAISE(ABORT, 'blocked source sync receipt'); END;",
+            )
+            .await
+            .unwrap();
+        }
+
+        run_document_enrichment(&db, &entry, None, None, &PromptRegistry::default()).await;
+        let queue_after_failure = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+        let receipt_after_failure = db.get_sync_state("folder-notes", &file_path).await.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_source_sync_receipt", ())
+                .await
+                .unwrap();
+        }
+        db.enqueue_document("folder-notes", &file_path, Some("hashA"))
+            .await
+            .expect("connection and queue must remain reusable");
+        let queue_after_reenqueue = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            receipt_after_failure.is_some() || queue_after_failure.status != "done",
+            "terminal queue state must imply a durable source-sync receipt"
+        );
+        assert_ne!(
+            queue_after_reenqueue.status, "done",
+            "same-hash re-enqueue must recover a missing sync receipt"
         );
     }
 

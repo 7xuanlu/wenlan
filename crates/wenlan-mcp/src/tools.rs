@@ -10,7 +10,7 @@ use rmcp::{
     service::{NotificationContext, RequestContext, RoleServer},
     tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Deserialize an `Option<usize>` that also accepts stringified numbers (e.g. `"10"`).
 /// MCP clients like Claude Desktop sometimes send numeric params as strings.
@@ -181,6 +181,140 @@ pub struct ContextParams {
     )]
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LintProfileParam {
+    General,
+    Deep,
+}
+
+impl From<LintProfileParam> for wenlan_types::lint::LintProfile {
+    fn from(value: LintProfileParam) -> Self {
+        match value {
+            LintProfileParam::General => Self::General,
+            LintProfileParam::Deep => Self::Deep,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LintParams {
+    #[schemars(description = "Diagnostic depth. Defaults to general.")]
+    pub profile: Option<LintProfileParam>,
+    #[schemars(description = "Optional registered space, or uncategorized.")]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(
+        description = "Prepare bounded high-recall semantic candidates for the calling agent. Deep only."
+    )]
+    #[serde(default)]
+    pub agent_assist: bool,
+    #[schemars(description = "Typed verdicts over a prior agent-assist work packet. Deep only.")]
+    #[serde(default)]
+    pub agent_submission: Option<LintAgentSubmissionParam>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LintSemanticDecisionParam {
+    Pass,
+    Finding,
+}
+
+impl From<LintSemanticDecisionParam> for wenlan_types::lint::LintSemanticDecision {
+    fn from(value: LintSemanticDecisionParam) -> Self {
+        match value {
+            LintSemanticDecisionParam::Pass => Self::Pass,
+            LintSemanticDecisionParam::Finding => Self::Finding,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LintSemanticReasonParam {
+    ClassificationMismatch,
+    PotentialContradiction,
+    PotentialStaleness,
+    MentionWithoutLink,
+    ExistingLinkMismatch,
+    SharedContextWithoutRelation,
+    ExistingRelationMismatch,
+    PotentialUnfaithfulClaim,
+    PotentialInadequateProvenance,
+    ClaimOverlapWithoutEvidence,
+    ExistingEvidenceMismatch,
+    PotentialRetrievalMiss,
+    DanglingOwner,
+    TemporalEvolution,
+    RelatedButNotEvidence,
+}
+
+impl From<LintSemanticReasonParam> for wenlan_types::lint::LintSemanticReasonCode {
+    fn from(value: LintSemanticReasonParam) -> Self {
+        use LintSemanticReasonParam as Param;
+        match value {
+            Param::ClassificationMismatch => Self::ClassificationMismatch,
+            Param::PotentialContradiction => Self::PotentialContradiction,
+            Param::PotentialStaleness => Self::PotentialStaleness,
+            Param::MentionWithoutLink => Self::MentionWithoutLink,
+            Param::ExistingLinkMismatch => Self::ExistingLinkMismatch,
+            Param::SharedContextWithoutRelation => Self::SharedContextWithoutRelation,
+            Param::ExistingRelationMismatch => Self::ExistingRelationMismatch,
+            Param::PotentialUnfaithfulClaim => Self::PotentialUnfaithfulClaim,
+            Param::PotentialInadequateProvenance => Self::PotentialInadequateProvenance,
+            Param::ClaimOverlapWithoutEvidence => Self::ClaimOverlapWithoutEvidence,
+            Param::ExistingEvidenceMismatch => Self::ExistingEvidenceMismatch,
+            Param::PotentialRetrievalMiss => Self::PotentialRetrievalMiss,
+            Param::DanglingOwner => Self::DanglingOwner,
+            Param::TemporalEvolution => Self::TemporalEvolution,
+            Param::RelatedButNotEvidence => Self::RelatedButNotEvidence,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct LintAgentVerdictParam {
+    pub candidate_ref: u16,
+    pub decision: LintSemanticDecisionParam,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub second_decision: Option<LintSemanticDecisionParam>,
+    pub reason_code: LintSemanticReasonParam,
+    pub confidence_basis_points: u16,
+    pub counterevidence_refs: Vec<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct LintAgentSubmissionParam {
+    pub work_digest: String,
+    pub verdicts: Vec<LintAgentVerdictParam>,
+}
+
+impl TryFrom<LintAgentSubmissionParam> for wenlan_types::lint::LintAgentSubmission {
+    type Error = wenlan_types::lint::LintContractError;
+
+    fn try_from(value: LintAgentSubmissionParam) -> Result<Self, Self::Error> {
+        let verdicts = value
+            .verdicts
+            .into_iter()
+            .map(|verdict| {
+                wenlan_types::lint::LintAgentVerdict::try_new(
+                    verdict.candidate_ref,
+                    verdict.decision.into(),
+                    verdict.second_decision.map(Into::into),
+                    verdict.reason_code.into(),
+                    verdict.confidence_basis_points,
+                    verdict.counterevidence_refs,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::try_new(
+            wenlan_types::lint::LintDigest::from_hex(&value.work_digest)?,
+            verdicts,
+        )
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -579,12 +713,15 @@ fn tool_error(e: WenlanError, verb: &str) -> CallToolResult {
              The {verb} was NOT completed.\n\n{}",
             daemon_setup_hint()
         ),
-        WenlanError::Api { status, body } => format!(
-            "Wenlan daemon returned HTTP {status}: {body}. The {verb} may not have completed."
+        WenlanError::Api { status } => {
+            format!("Wenlan daemon returned HTTP {status}. The {verb} may not have completed.")
+        }
+        WenlanError::Deserialize => String::from(
+            "Failed to parse daemon response. \
+             This may indicate a version mismatch between wenlan-mcp and the daemon.",
         ),
-        WenlanError::Deserialize(detail) => format!(
-            "Failed to parse daemon response: {detail}. \
-             This may indicate a version mismatch between wenlan-mcp and the daemon."
+        WenlanError::ResponseTooLarge => format!(
+            "The daemon response exceeded Wenlan MCP's size limit. The {verb} was not completed."
         ),
     };
     CallToolResult::error(vec![Content::text(msg)])
@@ -832,7 +969,7 @@ impl WenlanMcpServer {
     pub async fn doctor_impl(&self) -> Result<CallToolResult, McpError> {
         let status: serde_json::Value = match self.client.get("/api/setup/status").await {
             Ok(r) => r,
-            Err(WenlanError::Api { status: 404, .. }) => {
+            Err(WenlanError::Api { status: 404 }) => {
                 return Ok(CallToolResult::error(vec![Content::text(
                     "Wenlan daemon is running, but it does not expose /api/setup/status. \
                      Update Wenlan, then run `wenlan doctor`."
@@ -845,6 +982,36 @@ impl WenlanMcpServer {
         Ok(CallToolResult::success(vec![Content::text(
             format_doctor_message(&status),
         )]))
+    }
+
+    pub async fn lint_impl(&self, params: LintParams) -> Result<CallToolResult, McpError> {
+        let profile = params.profile.map(Into::into);
+        let submission: Option<wenlan_types::lint::LintAgentSubmission> = params
+            .agent_submission
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|error: wenlan_types::lint::LintContractError| {
+                McpError::invalid_params(error.to_string(), None)
+            })?;
+        let agent_assist = params.agent_assist || submission.is_some();
+        if agent_assist && profile != Some(wenlan_types::lint::LintProfile::Deep) {
+            return Err(McpError::invalid_params("agent_assist_requires_deep", None));
+        }
+        let query = wenlan_types::lint::LintRequestQuery::new(
+            wenlan_types::lint::LintQuery::new(profile, effective_space(&params.space)),
+            false,
+            agent_assist,
+        );
+        let report: wenlan_types::lint::LintReport = match submission.as_ref() {
+            Some(submission) => try_call!(
+                self.client.post_with_query("/api/lint", &query, submission),
+                "lint"
+            ),
+            None => try_call!(self.client.get_with_query("/api/lint", &query), "lint"),
+        };
+        let value = serde_json::to_value(report)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
     }
 
     pub async fn forget_impl(&self, memory_id: &str) -> Result<CallToolResult, McpError> {
@@ -1736,6 +1903,17 @@ impl WenlanMcpServer {
     )]
     async fn doctor(&self) -> Result<CallToolResult, McpError> {
         self.doctor_impl().await
+    }
+
+    #[tool(
+        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic checks plus full-store local semantic candidate generation; bounded candidate packets are adjudicated either by the daemon's configured provider or, with explicit agent_assist consent, by the calling agent through a typed prepare-and-submit protocol. Results are the canonical typed report; incomplete takes precedence over findings.",
+        annotations(title = "Lint", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn lint(
+        &self,
+        Parameters(params): Parameters<LintParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.lint_impl(params).await
     }
 
     #[tool(

@@ -398,13 +398,14 @@ async fn run_daemon() -> anyhow::Result<()> {
                         pages.len(),
                         knowledge_path.display()
                     );
-                    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(
+                    let projection = wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(
                         knowledge_path.clone(),
+                        &db_arc,
                     );
                     let mut written = 0usize;
                     let mut failed = 0usize;
                     for page in &pages {
-                        match writer.write_page(page) {
+                        match projection.write_page(page) {
                             Ok(_) => written += 1,
                             Err(e) => {
                                 tracing::warn!(
@@ -481,9 +482,10 @@ async fn run_daemon() -> anyhow::Result<()> {
         (&config.external_llm_endpoint, &config.external_llm_model)
     {
         if !endpoint.is_empty() && !model.is_empty() {
-            let provider = wenlan_core::llm_provider::OpenAICompatibleProvider::new(
+            let provider = wenlan_core::llm_provider::OpenAICompatibleProvider::new_with_key(
                 endpoint.clone(),
                 model.clone(),
+                config.external_llm_api_key.clone(),
             );
             server_state.external_llm = Some(Arc::new(provider));
             tracing::info!("External LLM provider initialized from config");
@@ -820,7 +822,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // Serve
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service()).await?;
 
     Ok(())
 }

@@ -10,18 +10,26 @@ pub mod import_routes;
 pub mod ingest_batcher;
 pub mod ingest_routes;
 pub mod knowledge_routes;
+pub mod lint_routes;
 pub mod memory_routes;
 pub mod onboarding_routes;
 pub mod refinery_routes;
 pub mod reflection_debounce;
+mod route_registry;
 pub mod router;
 pub mod routes;
+pub mod runtime_observation;
 pub mod scheduler;
 pub mod security;
+pub mod sensitive_read_routes;
 pub mod source_routes;
 pub mod space_header;
 pub mod state;
 pub mod websocket;
+
+#[cfg(test)]
+#[path = "lint_endpoint_test.rs"]
+mod lint_endpoint_test;
 
 /// Shared mutex for tests that mutate the process-wide `WENLAN_DATA_DIR` env
 /// var. Rust tests run in parallel by default, so any test that swaps this env

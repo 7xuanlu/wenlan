@@ -22,7 +22,7 @@ async fn body_as_json<T: serde::de::DeserializeOwned>(response: axum::http::Resp
     serde_json::from_slice(&bytes).expect("response body is valid JSON of expected type")
 }
 
-async fn get_spaces(router: &axum::Router) -> (StatusCode, Vec<Space>) {
+async fn get_spaces(router: &common::AppRouter) -> (StatusCode, Vec<Space>) {
     let resp = router
         .clone()
         .oneshot(

@@ -49,6 +49,11 @@ pub fn mark_llm_ready() {
     }
 }
 
+/// Whether a configured provider has successfully completed warmup or served traffic.
+pub fn llm_provider_ready() -> bool {
+    LLM_READINESS_FIRED.get().is_some()
+}
+
 /// A single inference request.
 #[derive(Debug, Clone)]
 pub struct LlmRequest {
@@ -1196,16 +1201,22 @@ impl LlmProvider for ApiProvider {
 pub struct OpenAICompatibleProvider {
     endpoint: String,
     model: String,
+    api_key: Option<String>,
     client: reqwest::Client,
 }
 
 impl OpenAICompatibleProvider {
     pub fn new(endpoint: String, model: String) -> Self {
+        Self::new_with_key(endpoint, model, None)
+    }
+
+    pub fn new_with_key(endpoint: String, model: String, api_key: Option<String>) -> Self {
         // Ensure endpoint doesn't have trailing slash
         let endpoint = endpoint.trim_end_matches('/').to_string();
         Self {
             endpoint,
             model,
+            api_key,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60)) // longer timeout for local models
                 .build()
@@ -1239,11 +1250,20 @@ impl LlmProvider for OpenAICompatibleProvider {
         });
 
         let url = format!("{}/chat/completions", self.endpoint);
-        let resp = self
+        let mut request = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&body)
+            .json(&body);
+        if let Some(key) = self
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
+            request = request.header("authorization", format!("Bearer {key}"));
+        }
+        let resp = request
             .send()
             .await
             .map_err(|e| LlmError::InferenceFailed(format!("Request failed: {}", e)))?;

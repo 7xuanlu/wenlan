@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use wenlan_core::sources::compute_effective_confidence;
@@ -1982,13 +1983,14 @@ pub async fn handle_delete_page(
             .ok_or(ServerError::DbNotInitialized)?
     };
 
+    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+    let projection =
+        wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(knowledge_path, &db);
     db.delete_page(&id)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
-    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path);
-    if let Err(e) = writer.remove_page(&id) {
+    if let Err(e) = projection.remove_page(&id) {
         tracing::warn!(
             "[page] DB row deleted but md projection cleanup failed for {}: {}",
             id,
@@ -2719,29 +2721,177 @@ pub async fn handle_update_memory(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    if let Some(content) = &req.content {
-        db.update_memory(&id, content)
-            .await
-            .map_err(|e| ServerError::Internal(e.to_string()))?;
-    }
-    if let Some(space) = &req.space {
-        let registered_space =
-            registered_request_space(&db, &Some(space.clone()), "update_memory").await?;
-        db.update_memory_space_opt(&id, registered_space.as_deref())
-            .await
-            .map_err(|e| ServerError::Internal(e.to_string()))?;
-    }
-    if let Some(true) = req.confirmed {
-        db.confirm_memory(&id)
-            .await
-            .map_err(|e| ServerError::Internal(e.to_string()))?;
-    }
-    if let Some(memory_type) = &req.memory_type {
-        db.update_memory_type(&id, memory_type)
-            .await
-            .map_err(|e| ServerError::Internal(e.to_string()))?;
-    }
+
+    let memory_type = req
+        .memory_type
+        .as_deref()
+        .map(MemoryType::from_str)
+        .transpose()
+        .map_err(ServerError::BadRequest)?
+        .map(|memory_type| memory_type.to_string());
+    let registered_space = match &req.space {
+        Some(space) => {
+            Some(registered_request_space(&db, &Some(space.clone()), "update_memory").await?)
+        }
+        None => None,
+    };
+
+    wenlan_core::post_write::update_memory(
+        &db,
+        &id,
+        wenlan_core::post_write::MemoryUpdate {
+            content: req.content.as_deref(),
+            space: registered_space.as_ref().map(|space| space.as_deref()),
+            confirm: req.confirmed == Some(true),
+            memory_type: memory_type.as_deref(),
+        },
+    )
+    .await
+    .map_err(ServerError::from)?;
     Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
+}
+
+#[cfg(test)]
+mod update_memory_endpoint_tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+    use wenlan_types::sources::RawDocument;
+
+    use crate::state::ServerState;
+
+    #[tokio::test]
+    async fn invalid_memory_type_rejects_the_whole_update_before_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "invalid-update".to_string(),
+            title: "Original".to_string(),
+            content: "Original content must remain unchanged.".to_string(),
+            memory_type: Some("fact".to_string()),
+            space: Some("work".to_string()),
+            confirmed: Some(false),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/memory/invalid-update/update")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "content": "Partially applied content must never persist.",
+                            "confirmed": true,
+                            "memory_type": "not-a-memory-type"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let memory = db
+            .get_memory_detail("invalid-update")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(memory.content, "Original content must remain unchanged.");
+        assert_eq!(memory.memory_type.as_deref(), Some("fact"));
+        assert!(!memory.confirmed);
+    }
+
+    #[tokio::test]
+    async fn missing_memory_update_returns_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            ..Default::default()
+        }));
+
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/memory/missing-update-head/update")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"content":"replacement content"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn confirmed_false_keeps_an_already_confirmed_memory_confirmed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "confirm-false-noop".to_string(),
+            title: "Confirmed".to_string(),
+            content: "An already confirmed memory stays confirmed.".to_string(),
+            memory_type: Some("fact".to_string()),
+            confirmed: Some(true),
+            stability: Some("confirmed".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/memory/confirm-false-noop/update")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"confirmed":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            db.get_memory_detail("confirm-false-noop")
+                .await
+                .unwrap()
+                .unwrap()
+                .confirmed,
+            "confirmed=false remains a no-op"
+        );
+    }
 }
 
 /// PUT /api/memory/{id}/stability
@@ -3356,7 +3506,7 @@ pub async fn handle_refresh_page(
     }
 
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone());
+    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone(), &db);
 
     // Snapshot the current md content for rollback. If the file is missing
     // we tolerate it — the page may have been created before the projection
@@ -3365,6 +3515,7 @@ pub async fn handle_refresh_page(
     let existing_md_content = existing_state_file
         .as_ref()
         .and_then(|f| std::fs::read_to_string(knowledge_path.join(f)).ok());
+    let projection = writer.begin_projection_write();
 
     // Build the refreshed Page for md rendering. Bump version + last_modified
     // mirror what `update_page_content` writes to the DB row.
@@ -3415,7 +3566,7 @@ pub async fn handle_refresh_page(
     };
 
     // 1. md-first
-    writer
+    projection
         .write_page(&refreshed_page)
         .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
 
@@ -3449,7 +3600,7 @@ pub async fn handle_refresh_page(
             (Some(filename), Some(prev)) => {
                 std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
             }
-            _ => writer.remove_page(&id).map_err(|err| err.to_string()),
+            _ => projection.remove_page(&id).map_err(|err| err.to_string()),
         };
         if let Err(rb) = rollback {
             tracing::warn!(
@@ -4041,7 +4192,7 @@ mod search_agent_attribution_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
 
     async fn build_state_with_db() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("failed to create tempdir");
@@ -4057,7 +4208,7 @@ mod search_agent_attribution_tests {
         (Arc::new(RwLock::new(server_state)), tmp)
     }
 
-    async fn fetch_activities(app: axum::Router) -> Vec<wenlan_types::AgentActivityRow> {
+    async fn fetch_activities(app: AppRouter) -> Vec<wenlan_types::AgentActivityRow> {
         let resp = app
             .oneshot(
                 Request::builder()
@@ -4175,7 +4326,7 @@ mod search_rerank_tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
     use wenlan_core::reranker::{NoopReranker, Reranker};
 
     async fn build_state(with_reranker: bool) -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
@@ -4199,7 +4350,7 @@ mod search_rerank_tests {
     }
 
     async fn search_response(
-        app: axum::Router,
+        app: AppRouter,
         body: &'static str,
     ) -> wenlan_types::responses::SearchMemoryResponse {
         let resp = app
@@ -4373,7 +4524,7 @@ mod search_quick_path_page_tests {
     use tower::ServiceExt;
     use wenlan_types::requests::CreateConceptRequest;
 
-    use crate::state::ServerState;
+    use crate::{router::AppRouter, state::ServerState};
 
     async fn seed_confirmed_distilled_page(
         db: &wenlan_core::db::MemoryDB,
@@ -4495,7 +4646,7 @@ mod search_quick_path_page_tests {
     }
 
     async fn search(
-        app: axum::Router,
+        app: AppRouter,
         agent: Option<&str>,
     ) -> wenlan_types::responses::SearchMemoryResponse {
         let mut builder = Request::builder()

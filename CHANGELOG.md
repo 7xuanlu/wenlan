@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.13.1](https://github.com/7xuanlu/wenlan/compare/v0.13.0...v0.13.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* add whole-system and deep semantic lint diagnostics ([#343](https://github.com/7xuanlu/wenlan/issues/343)) ([1c912fb](https://github.com/7xuanlu/wenlan/commit/1c912fb10986b600227be72da2b36abc5cc2e36a))
+* harden lint diagnostics from live dogfood ([#349](https://github.com/7xuanlu/wenlan/issues/349)) ([f567f22](https://github.com/7xuanlu/wenlan/commit/f567f2243251d428e1de06fc1cf198814ff57f1c))
+* keep daemon responsive during directory sync ([#350](https://github.com/7xuanlu/wenlan/issues/350)) ([54f3dd3](https://github.com/7xuanlu/wenlan/commit/54f3dd3903de0566be30becc1c241ed1b88fc887))
+
+## [0.13.0](https://github.com/7xuanlu/wenlan/compare/v0.12.1...v0.13.0) (2026-07-12)
+
+
+### Features
+
+* external-LLM API key (Bearer), config hot-swap, external status ([#342](https://github.com/7xuanlu/wenlan/issues/342)) ([960095c](https://github.com/7xuanlu/wenlan/commit/960095c457a7992c69fc77a7d1b2f3d6b77d9f5e))
+
+## [0.12.1](https://github.com/7xuanlu/wenlan/compare/v0.12.0...v0.12.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* enforce release and public contract drift checks ([#341](https://github.com/7xuanlu/wenlan/issues/341)) ([9a59085](https://github.com/7xuanlu/wenlan/commit/9a590858f34336ece715a4b6ab537865b31df6cc))
+* route document source pages through PageWrite ([a0861b2](https://github.com/7xuanlu/wenlan/commit/a0861b241767a58e46008bf2236c7dde54ca56d8))
+
 ## [0.12.0](https://github.com/7xuanlu/wenlan/compare/v0.11.0...v0.12.0) (2026-07-08)
 
 

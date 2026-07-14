@@ -7,7 +7,7 @@ use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
 use wenlan_core::quality_gate::QualityGate;
 use wenlan_core::sources::RawDocument;
-use wenlan_server::router::build_router;
+pub use wenlan_server::router::{build_router, AppRouter};
 use wenlan_server::state::ServerState;
 use wenlan_types::requests::CreateConceptRequest;
 
@@ -76,7 +76,7 @@ pub async fn create_page_fixture(
 /// The caller binds `_tmp` to keep the `TempDir` alive for the test's
 /// duration; it drops (and cleans up) when the test function returns.
 #[allow(dead_code)]
-pub async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
+pub async fn test_app() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>) {
     let dir = tempfile::tempdir().unwrap();
     let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
         .await
@@ -97,7 +97,7 @@ pub async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
 /// otherwise reject content that is intentionally similar to an existing
 /// memory — e.g., when testing the topic-match-protected path.
 #[allow(dead_code)]
-pub async fn test_app_no_gate() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
+pub async fn test_app_no_gate() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>) {
     let dir = tempfile::tempdir().unwrap();
     let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
         .await

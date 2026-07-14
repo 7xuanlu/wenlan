@@ -13,10 +13,10 @@ use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
 use wenlan_core::sources::RawDocument;
-use wenlan_server::router::build_router;
+use wenlan_server::router::{build_router, AppRouter};
 use wenlan_server::state::ServerState;
 
-async fn test_app() -> (axum::Router, tempfile::TempDir, Arc<MemoryDB>) {
+async fn test_app() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>) {
     let dir = tempfile::tempdir().unwrap();
     let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
         .await

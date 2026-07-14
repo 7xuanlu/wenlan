@@ -25,11 +25,33 @@ const BACKSTOP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// Initial delay — lets on-device model warm up before first backstop.
 const INITIAL_DELAY: Duration = Duration::from_secs(60);
+const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// Bounded per-poll drain of the document-enrichment queue. Serial (one doc at a
 /// time); caps how many queued documents a single poll processes so a large
 /// backlog can't monopolize the poll loop (steeps, page-watcher). Per-chunk
 /// checkpointing means the remainder is simply picked up on the next poll.
 const MAX_DOC_ENRICH_PER_POLL: usize = 4;
+
+fn derived_receipt_sweep_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.duration_since(last) >= DERIVED_RECEIPT_SWEEP_INTERVAL)
+}
+
+async fn run_derived_receipt_sweep_if_due<F, Fut, E>(
+    last: &mut Option<Instant>,
+    now: Instant,
+    sweep: F,
+) -> Result<bool, E>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    if !derived_receipt_sweep_due(*last, now) {
+        return Ok(false);
+    }
+    let result = sweep().await;
+    *last = Some(now);
+    result.map(|()| true)
+}
 
 /// Lightweight write-event tracker shared between store handlers and the scheduler.
 ///
@@ -150,6 +172,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_citation_sweep = Instant::now()
             .checked_sub(CITATION_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
+        let mut last_derived_receipt_sweep = None;
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -396,6 +419,15 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 last_backstop = now;
             }
 
+            if let Err(error) =
+                run_derived_receipt_sweep_if_due(&mut last_derived_receipt_sweep, now, || {
+                    db.record_derived_artifact_sweep()
+                })
+                .await
+            {
+                tracing::warn!("[scheduler] derived receipt sweep error: {error}");
+            }
+
             // --- 5. Enrichment sweep: back-fill entity linkage for memories
             //        ingested while the LLM was unavailable. ---
             if wenlan_core::db::entity_sweep_enabled()
@@ -496,11 +528,18 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
     });
 }
 
+/// Background polling respects an explicit pause but keeps probing unavailable
+/// roots so transient filesystem failures can recover automatically.
+fn should_poll_directory_source(source: &wenlan_types::sources::Source) -> bool {
+    source.source_type == wenlan_types::sources::SourceType::Directory
+        && !matches!(source.status, wenlan_types::sources::SyncStatus::Paused)
+}
+
 /// One Directory-source sync + document-enrichment-queue-drive pass (§4).
 /// Factored out of the 30s poll loop so it is unit-testable without the timer.
 ///
 /// Each call:
-/// 1. syncs every registered Directory source via the SHARED
+/// 1. syncs every recoverable Directory source via the SHARED
 ///    [`crate::source_routes::sync_directory_source`] (cheap mtime/hash diff +
 ///    deletion propagation — no LLM, no network), enqueueing changed files, then
 /// 2. drains up to `max_docs` claimable documents through
@@ -521,11 +560,11 @@ async fn run_directory_sync_tick(
     let config = wenlan_core::config::load_config();
     let knowledge_path = config.knowledge_path_or_default();
 
-    // 1. Sync every Directory source (log-and-continue on error).
+    // 1. Sync recoverable Directory sources (log-and-continue on error).
     for source in config
         .sources
         .iter()
-        .filter(|s| s.source_type == wenlan_types::sources::SourceType::Directory)
+        .filter(|source| should_poll_directory_source(source))
     {
         if let Err(e) =
             crate::source_routes::sync_directory_source(db.clone(), source, &config).await
@@ -676,6 +715,7 @@ async fn fire_steep(
     label: &str,
 ) {
     let started = std::time::Instant::now();
+    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
     match wenlan_core::refinery::run_periodic_steep_with_api(
         db,
         llm,
@@ -686,6 +726,7 @@ async fn fire_steep(
         refinery_cfg,
         confidence_cfg,
         distillation_cfg,
+        Some(&knowledge_path),
         trigger,
     )
     .await
@@ -733,6 +774,46 @@ mod tests {
     #[test]
     fn test_adaptive_gap_empty_returns_ceiling() {
         assert_eq!(adaptive_gap(&[]), BURST_GAP_CEILING);
+    }
+
+    #[tokio::test]
+    async fn derived_receipt_sweep_dispatches_initially_then_every_thirty_minutes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let now = Instant::now();
+        let mut last = None;
+        let calls = AtomicUsize::new(0);
+        assert!(run_derived_receipt_sweep_if_due(&mut last, now, || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok::<(), ()>(())
+        })
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert!(!run_derived_receipt_sweep_if_due(
+            &mut last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL - Duration::from_secs(1),
+            || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), ()>(())
+            },
+        )
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        assert!(run_derived_receipt_sweep_if_due(
+            &mut last,
+            now + DERIVED_RECEIPT_SWEEP_INTERVAL,
+            || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), ()>(())
+            },
+        )
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]
@@ -940,6 +1021,38 @@ mod tests {
             ..wenlan_core::config::Config::default()
         })
         .unwrap();
+    }
+
+    #[test]
+    fn directory_sync_tick_polls_recoverable_sources_but_not_paused() {
+        let mut source = wenlan_types::sources::Source {
+            id: "directory-notes".to_string(),
+            source_type: wenlan_types::sources::SourceType::Directory,
+            path: std::path::PathBuf::from("/tmp/notes"),
+            status: wenlan_types::sources::SyncStatus::Active,
+            last_sync: None,
+            file_count: 0,
+            memory_count: 0,
+            last_sync_errors: 0,
+            last_sync_error_detail: None,
+        };
+
+        assert!(should_poll_directory_source(&source));
+
+        source.status =
+            wenlan_types::sources::SyncStatus::Unavailable("filesystem stalled".to_string());
+        assert!(should_poll_directory_source(&source));
+
+        source.status =
+            wenlan_types::sources::SyncStatus::Error("transient file error".to_string());
+        assert!(should_poll_directory_source(&source));
+
+        source.status = wenlan_types::sources::SyncStatus::Paused;
+        assert!(!should_poll_directory_source(&source));
+
+        source.status = wenlan_types::sources::SyncStatus::Active;
+        source.source_type = wenlan_types::sources::SourceType::Obsidian;
+        assert!(!should_poll_directory_source(&source));
     }
 
     async fn new_test_db() -> (Arc<wenlan_core::db::MemoryDB>, tempfile::TempDir) {

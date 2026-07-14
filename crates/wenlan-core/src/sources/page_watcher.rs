@@ -180,7 +180,7 @@ async fn sync_one_file(
         let (_, fresh_body) = obsidian::extract_frontmatter(&fresh);
         if raw_body != fresh_body.trim_end_matches('\n') {
             let writer =
-                crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf());
+                crate::export::knowledge::KnowledgeWriter::new(knowledge_path.to_path_buf(), db);
             // Only re-project if the writer already maps this page to a file (state
             // entry present) — otherwise write_page's unique_filename would fork a
             // `<slug>-2.md` duplicate against the on-disk file we're reading (real on a
@@ -188,7 +188,7 @@ async fn sync_one_file(
             // pick the canonical file; leave it as-is until a genuine re-distill
             // re-establishes the mapping. The page row is untouched either way.
             if writer.page_filename(&existing.id).is_some() {
-                writer.write_page(&existing)?;
+                writer.begin_projection_write().write_page(&existing)?;
             }
         }
         return Ok(Outcome::Unchanged);
@@ -237,6 +237,15 @@ mod tests {
         let emitter: Arc<dyn crate::events::EventEmitter> = Arc::new(NoopEmitter);
         let db = MemoryDB::new(&path, emitter).await.unwrap();
         (db, dir)
+    }
+
+    fn tracked_writer(db: &MemoryDB, path: &Path) -> KnowledgeWriter {
+        KnowledgeWriter::new(path.to_path_buf(), db)
+    }
+
+    fn project_page(db: &MemoryDB, writer: &KnowledgeWriter, page: &Page) -> String {
+        let guard = db.begin_page_projection_write();
+        writer.write_page(&guard, page).unwrap()
     }
 
     fn write_page_md(dir: &std::path::Path, page: &Page, body_override: Option<&str>) {
@@ -455,8 +464,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
-        writer.write_page(&page).unwrap();
+        let writer = tracked_writer(&db, knowledge_dir.path());
+        project_page(&db, &writer, &page);
         let md_path = knowledge_dir
             .path()
             .join(writer.page_filename(&page.id).expect("state has file"));
@@ -513,8 +522,8 @@ mod tests {
         .unwrap();
         // Project via the live writer — the .md now carries the delimiter
         // Sources block + sources: frontmatter that Page.content lacks.
-        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
-        writer.write_page(&page).unwrap();
+        let writer = tracked_writer(&db, knowledge_dir.path());
+        project_page(&db, &writer, &page);
 
         // First watcher tick must see the projection as Unchanged, NOT a
         // user edit — otherwise the refinery is locked out of every page.
@@ -558,8 +567,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
-        let fname = writer.write_page(&page).unwrap();
+        let writer = tracked_writer(&db, knowledge_dir.path());
+        let fname = project_page(&db, &writer, &page);
         let md_path = knowledge_dir.path().join(&fname);
 
         // The projected file has the Sources block. User edits the PROSE only,
@@ -616,8 +625,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
-        writer.write_page(&page).unwrap();
+        let writer = tracked_writer(&db, knowledge_dir.path());
+        project_page(&db, &writer, &page);
         let md_path = knowledge_dir
             .path()
             .join(writer.page_filename(&page.id).expect("state has file"));
@@ -726,8 +735,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
-        writer.write_page(&page).unwrap();
+        let writer = tracked_writer(&db, knowledge_dir.path());
+        project_page(&db, &writer, &page);
 
         // Pure projection + a watcher tick with NO user edit. The on-disk file
         // carries the Sources block (with [[mem_alpha]]/[[mem_beta]]), but the
@@ -773,8 +782,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let writer = KnowledgeWriter::new(knowledge_dir.path().to_path_buf());
-        writer.write_page(&page).unwrap();
+        let writer = tracked_writer(&db, knowledge_dir.path());
+        project_page(&db, &writer, &page);
 
         // Two consecutive ticks — both Unchanged, DB never gains the block.
         for _ in 0..2 {

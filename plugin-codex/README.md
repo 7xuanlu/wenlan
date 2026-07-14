@@ -13,7 +13,7 @@ codex plugin add wenlan@wenlan-local
 ```
 
 Start a new Codex thread after installing so the skills and MCP server load.
-Then try `/init`, `/brief`, `/capture <memory>`, `/recall <query>`,
+Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`,
 `/pages <query>`, or `/handoff`.
 
 ## Development
@@ -26,7 +26,7 @@ codex plugin add wenlan@wenlan-local
 ```
 
 The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back
-to `npx -y wenlan-mcp@^0.12.0`. It passes `--agent-name codex` so captures are
+to `npx -y wenlan-mcp@^0.13.1`. It passes `--agent-name codex` so captures are
 labeled as Codex writes.
 
 Before changing plugin skills, manifests, MCP runner wiring, or the local

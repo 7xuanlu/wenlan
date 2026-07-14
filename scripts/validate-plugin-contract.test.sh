@@ -54,6 +54,10 @@ assert_rejects "setup autocomplete drift" \
     perl -0pi -e 's/user-invocable: true/user-invocable: false/' \
     "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
 
+assert_rejects "codex README setup command drift" \
+    perl -0pi -e 's|/setup|/init|g' \
+    "$TMPDIR_TEST/root/plugin-codex/README.md"
+
 assert_rejects "codex resolver parity drift" \
     perl -0pi -e 's/cwd-config-default/codex-default/' \
     "$TMPDIR_TEST/root/plugin-codex/bin/resolve-space.sh"
@@ -65,3 +69,15 @@ assert_rejects "marketplace source drift" \
 assert_rejects "claude stdio default drift" \
     perl -0pi -e 's/"claude-code"/"codex"/' \
     "$TMPDIR_TEST/root/crates/wenlan-mcp/src/main.rs"
+
+assert_rejects "claude lint general-call drift" \
+    perl -0pi -e 's/General uses exactly one lint MCP call/General uses one lint MCP call/g' \
+    "$TMPDIR_TEST/root/plugin/skills/lint/SKILL.md"
+
+assert_rejects "codex lint agent-submit drift" \
+    perl -0pi -e 's/submit verdicts exactly once/submit verdicts when useful/g' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/lint/SKILL.md"
+
+assert_rejects "claude lint fallback drift" \
+    perl -0pi -e 's/There is no CLI or\s+HTTP fallback\./There is a CLI fallback./g' \
+    "$TMPDIR_TEST/root/plugin/skills/lint/SKILL.md"
