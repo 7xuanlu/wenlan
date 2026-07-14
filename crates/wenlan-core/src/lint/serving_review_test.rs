@@ -28,22 +28,24 @@ fn route_contract_records_observed_scope_and_trust_semantics() {
     assert_eq!(page_search.selector_precedence, SelectorPrecedence::Missing);
     assert!(page_search.scope_contract_violation());
 
-    for path in [
-        "/api/memory/{id}/detail",
-        "/api/memory/by-ids",
-        "/api/memory/{id}/versions",
-        "/api/chunks/{source_id}",
-        "/api/snapshots/{id}/captures-with-content",
+    for (path, gate) in [
+        ("/api/memory/{id}/detail", SelectionGate::SingleId404),
+        ("/api/memory/by-ids", SelectionGate::BatchFiltered),
+        ("/api/memory/{id}/versions", SelectionGate::SingleId404),
+        ("/api/chunks/{source_id}", SelectionGate::SingleId404),
     ] {
         let row = route(Method::Get, path).expect("direct read row");
-        assert!(matches!(
-            row.selection_gate,
-            SelectionGate::SingleIdMissing
-                | SelectionGate::BatchMissing
-                | SelectionGate::ParentCollectionMissing
-        ));
-        assert!(row.scope_contract_violation());
+        assert_eq!(row.selection_gate, gate);
+        assert!(!row.scope_contract_violation());
     }
+
+    let snapshot =
+        route(Method::Get, "/api/snapshots/{id}/captures-with-content").expect("snapshot read row");
+    assert_eq!(
+        snapshot.selection_gate,
+        SelectionGate::ParentCollectionMissing
+    );
+    assert!(snapshot.scope_contract_violation());
 }
 
 #[test]
@@ -136,7 +138,7 @@ async fn route_scope_result_is_derived_from_canonical_contract() {
     let report = run(&db, None).await;
     let result = check(&report, ROUTE_SCOPE_ID);
     let defects = super::super::routes::scope_contract_violations().count() as u64;
-    assert_eq!(defects, 32);
+    assert_eq!(defects, 21);
     assert_eq!(metric(result, LintMetricCode::AffectedRecords), defects);
 }
 

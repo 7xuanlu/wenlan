@@ -50,6 +50,36 @@ impl ScopeFixture {
         self.db.pin_memory(source_id).await.unwrap();
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn seed_record(
+        &self,
+        source: &str,
+        source_id: &str,
+        space: Option<&str>,
+        memory_type: &str,
+        last_modified: i64,
+        supersedes: Option<&str>,
+        pending_revision: bool,
+    ) {
+        self.db
+            .upsert_documents(vec![RawDocument {
+                source: source.to_string(),
+                source_id: source_id.to_string(),
+                title: format!("title-{source_id}"),
+                content: format!("record canary {source_id}"),
+                last_modified,
+                memory_type: Some(memory_type.to_string()),
+                space: space.map(str::to_string),
+                confirmed: Some(true),
+                stability: Some("confirmed".to_string()),
+                supersedes: supersedes.map(str::to_string),
+                pending_revision,
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+    }
+
     pub async fn send(
         &self,
         method: Method,

@@ -519,7 +519,7 @@ ranking; catalog violations are exactly `32`.
 - Reuses: Wave 1 `list_memories_scoped` for `GET /api/decisions`.
 - Produces: executed registry entries for 11 Wave 2 routes; Wave 2 closes in Task 5.
 
-- [ ] **Step 1: Add RED cases for the 11 routes**
+- [x] **Step 1: Add RED cases for the 11 routes**
 
 Exercise enrichment status, revisions, indexed files, chunks, suggest-tags,
 detail, by-IDs, versions, decisions, pending-revisions list, and pending-revision
@@ -547,7 +547,7 @@ cargo test -p wenlan-server --test space_scoping_e2e wave_2_records -- --nocaptu
 Expected RED: direct routes ignore Space, unknown reads fall back, batches leak,
 and chunk errors can become partial/empty `200`.
 
-- [ ] **Step 2: Implement scoped direct, batch, and history queries**
+- [x] **Step 2: Implement scoped direct, batch, and history queries**
 
 Direct queries combine ID and binding in one SQL lookup. History anchors and
 every returned predecessor/successor row must match; stop at a mismatch. Batch
@@ -570,18 +570,19 @@ pub async fn get_memories_by_source_ids_scoped(
 
 pub async fn get_chunks_scoped(
     &self, source_id: &str, scope: &ReadScope,
-) -> Result<Vec<MemoryDetail>, WenlanError>;
+) -> Result<Option<Vec<MemoryDetail>>, WenlanError>;
 ```
 
-- [ ] **Step 3: Replace the chunk loop with one bounded ordered query**
+- [x] **Step 3: Replace the chunk loop with one bounded ordered query**
 
 Build concrete parameterized SQL branches per `ReadScope`. Apply
 `memories.space` before choosing source priority, then select only the first
 in-scope family (`memory` before `file`), order by `chunk_index`, and cap at
-`10_000`. Return `NotFound("chunks not found")` for an empty selected population
-and propagate query/row failures.
+`10_000`. Return `Ok(None)` for an empty selected population so the HTTP layer
+can apply the same static `404` non-disclosure response, and propagate query/row
+failures.
 
-- [ ] **Step 4: Migrate handlers and catalog entries**
+- [x] **Step 4: Migrate handlers and catalog entries**
 
 `GET /api/decisions` is `QueryThenHeader`; the other 10 use `HeaderOnly` even
 when they already carry unrelated query fields. `/api/memory/by-ids` uses
@@ -589,7 +590,7 @@ when they already carry unrelated query fields. `/api/memory/by-ids` uses
 routes use `NotApplicable`. Replace the old revisions missing-ID `200` assertion
 with `404` and preserve all success envelope tests.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 cargo test -p wenlan-core --lib get_memory_detail -- --nocapture

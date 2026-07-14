@@ -36,21 +36,27 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
     assert_eq!(tags.scope_binding, ScopeBinding::MemorySpace);
     assert!(tags.scope_contract_violation());
 
+    for (path, gate) in [
+        ("/api/memory/{id}/detail", SelectionGate::SingleId404),
+        ("/api/memory/by-ids", SelectionGate::BatchFiltered),
+        ("/api/memory/{id}/versions", SelectionGate::SingleId404),
+        ("/api/chunks/{source_id}", SelectionGate::SingleId404),
+        (
+            "/api/memory/pending-revision/{source_id}",
+            SelectionGate::SingleId404,
+        ),
+    ] {
+        let row = route(Method::Get, path).expect("direct row");
+        assert_eq!(row.selection_gate, gate);
+        assert!(!row.scope_contract_violation());
+    }
     for path in [
-        "/api/memory/{id}/detail",
-        "/api/memory/by-ids",
-        "/api/memory/{id}/versions",
-        "/api/chunks/{source_id}",
-        "/api/memory/pending-revision/{source_id}",
         "/api/snapshots/{id}/captures",
         "/api/snapshots/{id}/captures-with-content",
     ] {
-        assert!(matches!(
-            route(Method::Get, path).expect("direct row").selection_gate,
-            SelectionGate::SingleIdMissing
-                | SelectionGate::BatchMissing
-                | SelectionGate::ParentCollectionMissing
-        ));
+        let row = route(Method::Get, path).expect("parent collection row");
+        assert_eq!(row.selection_gate, SelectionGate::ParentCollectionMissing);
+        assert!(row.scope_contract_violation());
     }
 }
 
@@ -140,7 +146,7 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         rows.iter()
             .filter(|row| row.scope_contract_violation())
             .count(),
-        32
+        21
     );
 }
 

@@ -126,7 +126,43 @@ and summary populations are filtered before ranking and `LIMIT`. The exact 8
 Wave 1 keys are executed, and the truthful catalog checkpoint is 55 total, 15
 Global, and 32 remaining violations.
 
-Tasks 3-8 pending.
+### Task 3: Memory, document, and history reads
+
+RED evidence:
+
+- The exact 11-route registry initially observed `FallsBackUnscoped` and
+  missing selection gates; unknown Space selectors returned `200` instead of
+  `422`.
+- A direct Memory ID owned by `personal` returned `200` under the `work`
+  header instead of the same static `404` as a missing ID.
+- Indexed-file and batch reads materialized cross-Space rows.
+- After the first scoped implementation, the history gate still failed because
+  an in-scope Memory exposed an out-of-scope predecessor ID through its
+  `supersedes` field even though traversal had stopped.
+
+GREEN evidence:
+
+| Contract | Command | Result |
+|---|---|---|
+| Exact 11-route HTTP registry, non-disclosure, ordering, Global/Uncategorized, collision, and history isolation | `cargo test -p wenlan-server --test space_scoping_e2e wave_2_records -- --nocapture` | 5 passed, 0 failed |
+| Injected chunk-query failure remains an error | `cargo test -p wenlan-core --lib scoped_chunks_propagate_database_failures -- --nocapture` | 1 passed, 0 failed |
+| Direct Memory detail compatibility | `cargo test -p wenlan-core --lib get_memory_detail -- --nocapture` | 3 passed, 0 failed |
+| Version-chain behavior | `cargo test -p wenlan-core --lib version_chain -- --nocapture` | 1 passed, 0 failed |
+| Pending-revision behavior | `cargo test -p wenlan-core --lib pending_revision -- --nocapture` | 24 passed, 0 failed |
+| Chunk behavior | `cargo test -p wenlan-core --lib chunks -- --nocapture` | 12 passed, 0 failed |
+| Existing route envelopes | `cargo test -p wenlan-server --test route_convergence -- --nocapture` | 13 passed, 0 failed |
+| Existing curation reads | `cargo test -p wenlan-server --test curation_read_routes -- --nocapture` | 7 passed, 0 failed |
+| Core catalog and diagnostics | `cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture` | 16 passed, 0 failed |
+| Server catalog mirror and handler contracts | `cargo test -p wenlan-server --lib sensitive -- --nocapture` | 8 passed, 0 failed |
+
+Direct and batch Memory routes now select only `source='memory'`; a same-ID
+file cannot satisfy Memory ownership. Chunks apply scope before choosing the
+Memory/file family, use one ordered query capped at 10,000 rows, and propagate
+query and row failures. History anchors, recursive joins, final materialization,
+and returned predecessor identifiers are all scope-checked. The truthful
+catalog checkpoint is 55 total, 15 Global, and 21 remaining violations.
+
+Tasks 4-8 pending.
 
 ## Downstream App
 

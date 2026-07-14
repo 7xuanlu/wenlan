@@ -32,3 +32,28 @@ async fn wave_1_ranked_routes_exclude_cross_scope_rows() {
 fn wave_1_registry_matches_completed_catalog_contracts() {
     space_scoping::case_runner::assert_wave_1_catalog_contract();
 }
+
+#[tokio::test]
+async fn wave_2_records_reject_unknown_selectors() {
+    space_scoping::record_cases::unknown_selectors_are_rejected().await;
+}
+
+#[tokio::test]
+async fn wave_2_records_hide_mismatched_direct_ids() {
+    space_scoping::record_cases::direct_routes_do_not_disclose_mismatched_ids().await;
+}
+
+#[tokio::test]
+async fn wave_2_records_filter_collections_before_materialization() {
+    space_scoping::record_cases::collections_filter_before_materialization().await;
+}
+
+#[tokio::test]
+async fn wave_2_records_scope_history_and_chunk_source_priority() {
+    space_scoping::record_cases::history_and_chunk_source_priority_are_scoped().await;
+}
+
+#[test]
+fn wave_2_records_registry_matches_completed_catalog_contracts() {
+    space_scoping::record_cases::registry_matches_catalog();
+}
