@@ -1147,7 +1147,7 @@ limit behavior, 404 non-disclosure, response compatibility, and test false
 greens. Apply only evidence-backed findings through RED tests, rerun affected
 gates, and record both verdicts in the evidence file.
 
-- [ ] **Step 6: Commit, publish, and open both PRs**
+- [x] **Step 6: Commit, publish, and open both PRs**
 
 ```bash
 git add scripts/lint-e2e.sh scripts/lint-e2e.py

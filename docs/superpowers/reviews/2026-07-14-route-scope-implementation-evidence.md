@@ -541,3 +541,12 @@ None weakens data isolation or the read-only lint contract.
 | App `cargo fmt`, workspace Clippy, full library suite | passed; 307 tests passed, 1 ignored |
 | Exact product commit `217558d8` `scripts/lint-e2e.sh` | passed from exact checkout and tarball checkout |
 | `git diff --check` | passed |
+
+## Publication
+
+- Companion App PR: <https://github.com/7xuanlu/wenlan-app/pull/89>
+- Daemon/core/CLI/lint PR: <https://github.com/7xuanlu/wenlan/pull/356>
+
+Both branches were fetched against current `origin/main` immediately before
+publication and were zero commits behind. The App PR was opened first as the
+downstream compatibility gate; the daemon PR links it directly.
