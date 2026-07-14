@@ -72,3 +72,12 @@ Proceed to executable planning only against the reconciled design. Before
 implementation, run one bounded plan-level conflict check with Claude and one
 independent Codex reviewer. Per-task five-way review is not required; RED-first
 tests, serial verification, and a final dual-model review remain mandatory.
+
+## Post-Council Baseline Refresh
+
+The worktree was rebased from the reviewed `8cfae406` baseline onto
+`origin/main` at `09725cdf` before executable planning. The intervening mainline
+changes affect plugin presentation and CI, not the sensitive-read catalog,
+daemon handlers, core query ownership, or scope contract. The executable plan
+therefore uses design commit `02104092` and current main `09725cdf` without
+reopening the approved product contract.
