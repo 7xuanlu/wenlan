@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.2](https://github.com/7xuanlu/wenlan/compare/v0.13.1...v0.13.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* gate releases behind a prerelease, not a draft ([#340](https://github.com/7xuanlu/wenlan/issues/340)) ([ecdfd0a](https://github.com/7xuanlu/wenlan/commit/ecdfd0aec6dadd55c9a0c32f91d9fdf2c7a479cb))
+* harden evidence-driven lint maintenance paths ([#351](https://github.com/7xuanlu/wenlan/issues/351)) ([92020e6](https://github.com/7xuanlu/wenlan/commit/92020e6e9417b5d0206ae32abf4f563672f2c63c))
+
 ## [0.13.1](https://github.com/7xuanlu/wenlan/compare/v0.13.0...v0.13.1) (2026-07-13)
 
 
