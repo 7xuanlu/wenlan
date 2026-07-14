@@ -1096,6 +1096,8 @@ impl<'de> Deserialize<'de> for PrepareRepairRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Intent-binding request for cooperating agent workflows. The exact phrase is
+/// deliberately not a local authentication or malicious-process boundary.
 pub struct ApplyRepairRequest {
     manifest_id: String,
     approved_manifest_digest: RepairDigest,

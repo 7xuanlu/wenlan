@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Durable preparation and CAS application of approval-gated repairs.
+//! Durable preparation and CAS application of workflow-approved repairs.
+//!
+//! The exact approval phrase binds cooperating agent workflows to one manifest;
+//! it is not an authentication boundary against malicious local processes.
 
 use crate::{
     db::MemoryDB,
     error::WenlanError,
-    lint::snapshot::{LintReadSnapshot, SnapshotError, SnapshotReceipt},
+    lint::{
+        pages::fs::{scan_page_root_controlled, PageScanControl},
+        snapshot::{LintReadSnapshot, SnapshotError, SnapshotReceipt},
+    },
 };
+use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -37,6 +44,7 @@ const ROLLBACK_FILE: &str = "rollback-v1.json";
 const APPLY_RECEIPT_FILE: &str = "apply-receipt.json";
 const APPLY_RECEIPT_PENDING_FILE: &str = ".apply-receipt.json.pending";
 const VERIFICATION_RECEIPT_FILE: &str = "verification-receipt.json";
+const OPERATION_LOCK_FILE: &str = ".operation.lock";
 
 #[derive(Debug, Clone)]
 pub struct RepairArtifactStore {
@@ -138,6 +146,28 @@ impl RepairArtifactStore {
         Ok((rollback, bytes))
     }
 
+    fn lock_manifest_operation(
+        &self,
+        manifest_id: &str,
+    ) -> Result<ManifestOperationLock, WenlanError> {
+        let path = self.manifest_dir(manifest_id)?.join(OPERATION_LOCK_FILE);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        set_private_file_permissions(&path)?;
+        file.try_lock_exclusive().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                WenlanError::Conflict("repair_operation_in_progress".to_string())
+            } else {
+                WenlanError::Io(error)
+            }
+        })?;
+        Ok(ManifestOperationLock { _file: file })
+    }
+
     fn begin_apply_receipt(&self, manifest_id: &str) -> Result<PendingApplyReceipt, WenlanError> {
         let manifest_dir = self.manifest_dir(manifest_id)?;
         let final_path = manifest_dir.join(APPLY_RECEIPT_FILE);
@@ -198,8 +228,7 @@ impl RepairArtifactStore {
         ));
         let result = (|| {
             write_private_file(&temp_path, &serde_json::to_vec_pretty(receipt)?)?;
-            fs::rename(&temp_path, &final_path)?;
-            sync_dir(&manifest_dir)?;
+            publish_no_replace(&temp_path, &final_path, "repair_already_verified")?;
             Ok::<(), WenlanError>(())
         })();
         if result.is_err() && temp_path.exists() {
@@ -233,6 +262,10 @@ impl RepairArtifactStore {
     }
 }
 
+struct ManifestOperationLock {
+    _file: File,
+}
+
 struct PendingApplyReceipt {
     file: Option<File>,
     pending_path: PathBuf,
@@ -250,11 +283,11 @@ impl PendingApplyReceipt {
     }
 
     fn publish(self) -> Result<(), WenlanError> {
-        fs::rename(&self.pending_path, &self.final_path)?;
-        if let Some(parent) = self.final_path.parent() {
-            sync_dir(parent)?;
-        }
-        Ok(())
+        publish_no_replace(
+            &self.pending_path,
+            &self.final_path,
+            "repair_already_applied",
+        )
     }
 
     fn abort(mut self) {
@@ -291,6 +324,7 @@ pub async fn prepare_memory_reclassification(
     request: PrepareRepairRequest,
     now_epoch: i64,
 ) -> Result<RepairManifest, WenlanError> {
+    ensure_repair_artifacts_supported()?;
     if now_epoch <= 0 {
         return Err(WenlanError::Validation(
             "invalid_repair_prepared_at".to_string(),
@@ -398,6 +432,7 @@ pub async fn apply_repair(
     request: ApplyRepairRequest,
     now_epoch: i64,
 ) -> Result<RepairApplyReceipt, WenlanError> {
+    ensure_repair_artifacts_supported()?;
     if now_epoch <= 0 {
         return Err(WenlanError::Validation(
             "invalid_repair_applied_at".to_string(),
@@ -409,6 +444,7 @@ pub async fn apply_repair(
             "repair_approval_mismatch".to_string(),
         ));
     }
+    let _operation_lock = store.lock_manifest_operation(manifest.manifest_id())?;
     if let Some(receipt) = recover_apply_receipt(db, store, &manifest).await? {
         return Ok(receipt);
     }
@@ -472,7 +508,13 @@ async fn recover_apply_receipt(
     let manifest_dir = store.manifest_dir(manifest.manifest_id())?;
     let final_path = manifest_dir.join(APPLY_RECEIPT_FILE);
     if final_path.exists() {
-        return store.load_apply_receipt(manifest).map(Some);
+        let receipt = store.load_apply_receipt(manifest)?;
+        let pending_path = manifest_dir.join(APPLY_RECEIPT_PENDING_FILE);
+        if pending_path.exists() {
+            fs::remove_file(pending_path)?;
+            sync_dir(&manifest_dir)?;
+        }
+        return Ok(Some(receipt));
     }
     let pending_path = manifest_dir.join(APPLY_RECEIPT_PENDING_FILE);
     if !pending_path.exists() {
@@ -494,17 +536,9 @@ async fn recover_apply_receipt(
         Err(_) => None,
     };
     if let Some(receipt) = parsed {
-        let (target_now, non_target_now) = current_effect_receipts(
-            db,
-            manifest.target().memory_source_id(),
-            manifest.target().scope().space(),
-        )
-        .await?;
-        if target_now == *receipt.after_target_receipt()
-            && non_target_now == *receipt.non_target_after()
-        {
-            fs::rename(&pending_path, &final_path)?;
-            sync_dir(&manifest_dir)?;
+        let (target_now, _) = target_receipt_current(db, manifest).await?;
+        if target_now == *receipt.after_target_receipt() {
+            publish_no_replace(&pending_path, &final_path, "repair_already_applied")?;
             return Ok(Some(receipt));
         }
         if target_now != *manifest.expected_state().canonical_receipt() {
@@ -543,8 +577,10 @@ pub async fn record_repair_verification(
     db: &MemoryDB,
     store: &RepairArtifactStore,
     request: VerifyRepairRequest,
+    page_root: Option<&Path>,
     now_epoch: i64,
 ) -> Result<RepairVerificationReceipt, WenlanError> {
+    ensure_repair_artifacts_supported()?;
     if now_epoch <= 0 {
         return Err(WenlanError::Validation(
             "invalid_repair_verified_at".to_string(),
@@ -556,6 +592,7 @@ pub async fn record_repair_verification(
             "repair_verification_manifest_mismatch".to_string(),
         ));
     }
+    let _operation_lock = store.lock_manifest_operation(manifest.manifest_id())?;
     let apply_receipt = store.load_apply_receipt(&manifest)?;
     if apply_receipt.receipt_digest() != request.apply_receipt_digest()
         || apply_receipt.actual_effects() != manifest.allowed_effects()
@@ -570,15 +607,23 @@ pub async fn record_repair_verification(
         return Ok(receipt);
     }
     validate_verification_reports(&manifest, request.general_report(), request.deep_report())?;
-    let (target_now, non_target_now) = current_effect_receipts(
+    let connection = db.conn.lock().await;
+    validate_current_report_receipts(
         db,
+        request.general_report(),
+        request.deep_report(),
+        page_root,
+    )
+    .await?;
+    validate_target_space_on_connection(
+        &connection,
         manifest.target().memory_source_id(),
         manifest.target().scope().space(),
     )
     .await?;
-    if target_now != *apply_receipt.after_target_receipt()
-        || non_target_now != *apply_receipt.non_target_after()
-    {
+    let (target_now, _) =
+        target_receipt_on_connection(&connection, manifest.target().memory_source_id()).await?;
+    if target_now != *apply_receipt.after_target_receipt() {
         return Err(WenlanError::Conflict(
             "repair_verification_state_changed".to_string(),
         ));
@@ -595,36 +640,8 @@ pub async fn record_repair_verification(
     let receipt_digest = repair_digest(&draft.canonical_bytes()?);
     let receipt = RepairVerificationReceipt::from_draft(draft, receipt_digest);
     store.persist_verification_receipt(&receipt)?;
+    drop(connection);
     Ok(receipt)
-}
-
-async fn current_effect_receipts(
-    db: &MemoryDB,
-    target_source_id: &str,
-    expected_space: Option<&str>,
-) -> Result<(RepairDigest, RepairDigest), WenlanError> {
-    let connection = db.conn.lock().await;
-    connection
-        .execute("BEGIN", ())
-        .await
-        .map_err(database_error)?;
-    let result = async {
-        validate_target_space_on_connection(&connection, target_source_id, expected_space).await?;
-        let (target, _) = target_receipt_on_connection(&connection, target_source_id).await?;
-        let non_target =
-            non_target_fingerprint_on_connection(&connection, target_source_id).await?;
-        Ok::<_, WenlanError>((target, non_target))
-    }
-    .await;
-    let rollback = connection
-        .execute("ROLLBACK", ())
-        .await
-        .map_err(database_error);
-    match (result, rollback) {
-        (Ok(receipts), Ok(_)) => Ok(receipts),
-        (Err(error), Ok(_)) => Err(error),
-        (_, Err(error)) => Err(error),
-    }
 }
 
 fn validate_verification_reports(
@@ -684,6 +701,64 @@ fn stable_report_snapshot(report: &LintReport) -> bool {
     report.snapshots().db().post_run_digest() == Some(report.snapshots().db().analysis_digest())
         && report.snapshots().pages().after_scan_digest()
             == Some(report.snapshots().pages().before_scan_digest())
+}
+
+async fn validate_current_report_receipts(
+    db: &MemoryDB,
+    general: &LintReport,
+    deep: &LintReport,
+    page_root: Option<&Path>,
+) -> Result<(), WenlanError> {
+    let snapshot = db.open_lint_snapshot().await.map_err(snapshot_error)?;
+    let general_page = current_page_digest(page_root, false).await?;
+    let deep_page = current_page_digest(page_root, true).await?;
+    let current = snapshot.finish().await.map_err(snapshot_error)?;
+    if !current.is_consistent() {
+        return Err(WenlanError::Conflict(
+            "repair_verification_reports_stale".to_string(),
+        ));
+    }
+    let current_db = lint_digest(current.analysis_receipt_digest().as_bytes());
+    for (report, current_page) in [(general, general_page), (deep, deep_page)] {
+        if report.snapshots().db().analysis_digest() != &current_db
+            || report.snapshots().db().post_run_digest() != Some(&current_db)
+            || report.snapshots().pages().before_scan_digest() != &current_page
+            || report.snapshots().pages().after_scan_digest() != Some(&current_page)
+        {
+            return Err(WenlanError::Conflict(
+                "repair_verification_reports_stale".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn current_page_digest(
+    page_root: Option<&Path>,
+    include_body_digests: bool,
+) -> Result<LintDigest, WenlanError> {
+    let Some(root) = page_root else {
+        return Ok(lint_digest([0; 32]));
+    };
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let scan =
+            scan_page_root_controlled(&root, include_body_digests, &PageScanControl::unbounded())
+                .map_err(page_snapshot_error)?;
+        let before = scan.normalized_bytes();
+        let after = scan
+            .verify_unchanged(&root)
+            .map_err(page_snapshot_error)?
+            .after_normalized_bytes();
+        if before != after {
+            return Err(WenlanError::Conflict(
+                "repair_verification_reports_stale".to_string(),
+            ));
+        }
+        Ok(lint_digest(before))
+    })
+    .await
+    .map_err(|error| WenlanError::VectorDb(format!("repair page snapshot task: {error}")))?
 }
 
 fn validate_check_deltas(
@@ -1132,6 +1207,37 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), WenlanError> {
     Ok(())
 }
 
+fn publish_no_replace(
+    pending_path: &Path,
+    final_path: &Path,
+    exists_error: &str,
+) -> Result<(), WenlanError> {
+    fs::hard_link(pending_path, final_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            WenlanError::Conflict(exists_error.to_string())
+        } else {
+            WenlanError::Io(error)
+        }
+    })?;
+    fs::remove_file(pending_path)?;
+    if let Some(parent) = final_path.parent() {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_repair_artifacts_supported() -> Result<(), WenlanError> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_repair_artifacts_supported() -> Result<(), WenlanError> {
+    Err(WenlanError::Validation(
+        "lint_repair_unsupported_platform".to_string(),
+    ))
+}
+
 fn ensure_private_dir(path: &Path) -> Result<(), WenlanError> {
     fs::create_dir_all(path)?;
     set_private_dir_permissions(path)
@@ -1174,6 +1280,10 @@ fn sync_dir(_path: &Path) -> Result<(), WenlanError> {
 
 fn snapshot_error(error: SnapshotError) -> WenlanError {
     WenlanError::VectorDb(format!("repair snapshot: {error}"))
+}
+
+fn page_snapshot_error(error: crate::lint::pages::fs::PageFsError) -> WenlanError {
+    WenlanError::Conflict(format!("repair_verification_reports_stale: {error}"))
 }
 
 fn database_error(error: libsql::Error) -> WenlanError {
@@ -1506,12 +1616,22 @@ mod tests {
         wenlan_types::lint::LintReport,
         wenlan_types::lint::LintReport,
     ) {
+        verification_reports_at(db, None).await
+    }
+
+    async fn verification_reports_at(
+        db: &MemoryDB,
+        page_root: Option<&Path>,
+    ) -> (
+        wenlan_types::lint::LintReport,
+        wenlan_types::lint::LintReport,
+    ) {
         let general = LintRunner::new(LintClock::fixed(), CancellationToken::new())
             .run(
                 db,
                 &LintQuery::new(Some(LintProfile::General), None),
-                None,
-                false,
+                page_root,
+                page_root.is_some(),
             )
             .await
             .unwrap();
@@ -1520,8 +1640,8 @@ mod tests {
             .run(
                 db,
                 &LintQuery::new(Some(LintProfile::Deep), None),
-                None,
-                false,
+                page_root,
+                page_root.is_some(),
             )
             .await
             .unwrap();
@@ -1548,8 +1668,8 @@ mod tests {
             .run(
                 db,
                 &LintQuery::new(Some(LintProfile::Deep), None),
-                None,
-                false,
+                page_root,
+                page_root.is_some(),
             )
             .await
             .unwrap();
@@ -1649,7 +1769,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_recovers_committed_receipt_that_was_not_published() {
+    async fn apply_recovers_committed_receipt_after_unrelated_background_write() {
         let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
         let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
         let receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
@@ -1661,6 +1781,15 @@ mod tests {
             manifest_dir.join(APPLY_RECEIPT_PENDING_FILE),
         )
         .unwrap();
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE memories SET title='background' WHERE id='row-other'",
+                (),
+            )
+            .await
+            .unwrap();
 
         let recovered = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
             .await
@@ -1669,6 +1798,34 @@ mod tests {
         assert_eq!(recovered, receipt);
         assert!(manifest_dir.join(APPLY_RECEIPT_FILE).is_file());
         assert!(!manifest_dir.join(APPLY_RECEIPT_PENDING_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn apply_refuses_while_manifest_operation_lock_is_held() {
+        use fs2::FileExt as _;
+
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let lock_path = store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join(".operation.lock");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+
+        let result = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001).await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message)) if message == "repair_operation_in_progress"
+        ));
+        assert_eq!(target_memory_types(&db).await, vec![None, None]);
     }
 
     #[tokio::test]
@@ -1732,6 +1889,7 @@ mod tests {
             &db,
             &store,
             exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
             1_721_000_002,
         )
         .await
@@ -1755,14 +1913,55 @@ mod tests {
         let (general, deep) = verification_reports(&db).await;
         let request = exact_verify(&manifest, &apply_receipt, general, deep);
 
-        let first = record_repair_verification(&db, &store, request.clone(), 1_721_000_002)
+        let first = record_repair_verification(&db, &store, request.clone(), None, 1_721_000_002)
             .await
             .unwrap();
-        let retried = record_repair_verification(&db, &store, request, 1_721_000_003)
+        let retried = record_repair_verification(&db, &store, request, None, 1_721_000_003)
             .await
             .unwrap();
 
         assert_eq!(retried, first);
+    }
+
+    #[tokio::test]
+    async fn verification_refuses_while_manifest_operation_lock_is_held() {
+        use fs2::FileExt as _;
+
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        let lock_path = store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join(OPERATION_LOCK_FILE);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message)) if message == "repair_operation_in_progress"
+        ));
+        assert!(!store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join(VERIFICATION_RECEIPT_FILE)
+            .exists());
     }
 
     #[tokio::test]
@@ -1813,6 +2012,7 @@ mod tests {
             &db,
             &store,
             exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
             1_721_000_002,
         )
         .await;
@@ -1824,7 +2024,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_rejects_non_target_change_after_apply() {
+    async fn verification_allows_unrelated_write_after_apply_when_reports_are_fresh() {
         let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
         let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
         let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
@@ -1841,17 +2041,72 @@ mod tests {
             .unwrap();
         let (general, deep) = verification_reports(&db).await;
 
+        let receipt = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(receipt.manifest_id(), manifest.manifest_id());
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_reports_that_are_no_longer_current() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        db.conn
+            .lock()
+            .await
+            .execute("UPDATE memories SET title='later' WHERE id='row-other'", ())
+            .await
+            .unwrap();
+
         let result = record_repair_verification(
             &db,
             &store,
             exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
             1_721_000_002,
         )
         .await;
 
         assert!(matches!(
             result,
-            Err(WenlanError::Conflict(message)) if message == "repair_verification_state_changed"
+            Err(WenlanError::Conflict(message)) if message == "repair_verification_reports_stale"
+        ));
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_reports_after_page_projection_changes() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let page_root = tempfile::tempdir().unwrap();
+        let (general, deep) = verification_reports_at(&db, Some(page_root.path())).await;
+        std::fs::write(page_root.path().join("changed.md"), "# changed").unwrap();
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            Some(page_root.path()),
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message)) if message.starts_with("repair_verification_reports_stale")
         ));
     }
 
@@ -1903,6 +2158,7 @@ mod tests {
             &db,
             &store,
             exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
             1_721_000_002,
         )
         .await;

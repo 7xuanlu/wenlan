@@ -380,9 +380,12 @@ existing canonical write boundary; preserve its request/response behavior.
 
 `apply_repair` loads server-owned manifest bytes, recomputes their SHA-256,
 compares the exact approval digest, rejects an existing apply receipt, verifies
-the rollback artifact digest, calls only `reclassify_memory_cas`, then writes
-`apply-receipt.json` atomically. It never accepts caller-supplied target or
-mutation fields.
+the rollback artifact digest, holds a per-manifest advisory lock, calls only
+`reclassify_memory_cas`, fsyncs a pending receipt before commit, then publishes
+`apply-receipt.json` atomically without replacement. Recovery distinguishes a
+live locked writer from crash residue and promotes a committed target even when
+unrelated daemon state changed later. It never accepts caller-supplied target
+or mutation fields.
 
 - [ ] **Step 5: Verify GREEN**
 
@@ -470,12 +473,15 @@ failures to 500 through the existing `ServerError` conversion.
 
 - [ ] **Step 4: Implement verification receipt checks**
 
-Add `record_repair_verification(db, store, request)` in core. It loads the
+Add `record_repair_verification(db, store, request, page_root)` in core. It loads the
 immutable apply receipt, rejects stale final snapshot receipts, requires
 General and Deep completeness, checks the target evidence digest is absent
 from `memories.semantic.classification`, verifies declared check-delta
-constraints, and writes `verification-receipt.json` atomically. It does not run
-lint and cannot mutate canonical data.
+constraints, compares the submitted DB and Page receipts with current state,
+and writes `verification-receipt.json` under the per-manifest lock with
+no-clobber publication. The apply receipt proves non-target stability inside
+the CAS transaction; verification does not freeze unrelated daemon state after
+that transaction. It does not run lint and cannot mutate canonical data.
 
 - [ ] **Step 5: Verify GREEN and route catalog parity**
 

@@ -30,6 +30,8 @@ A user can take one actionable agent-assisted Deep finding and receive:
    the repair did not write outside its declared owner closure.
 
 No canonical data changes before the explicit approval in step 4.
+The exact phrase is an intent-binding workflow gate for cooperating agents,
+not authentication against malicious software already running as the user.
 
 ## Non-Goals
 
@@ -41,6 +43,9 @@ No canonical data changes before the explicit approval in step 4.
   memory-entity-link adapter in this slice.
 - No application of a manifest whose target cannot be resolved from durable
   lint evidence without ambiguity.
+- No Windows repair execution in v1; core returns
+  `lint_repair_unsupported_platform` until Windows has equivalent durable
+  no-clobber publication and user-only artifact ACLs.
 
 ## Architecture
 
@@ -139,9 +144,12 @@ code. Store them outside every worktree:
   verification-receipt.json   # absent before successful verification
 ```
 
-Create the directory with owner-only access where the platform supports it.
-Write each file to a sibling temporary path, `fsync`, then atomically rename.
-Never overwrite an existing immutable manifest or receipt. Tool output may show
+On Unix, create the directory and files with owner-only access. Hold an
+advisory per-manifest operation lock across apply/recovery or verification so a
+live writer cannot be mistaken for crash residue. Write each receipt to a
+sibling pending path, `fsync`, then publish it with an atomic no-clobber hard
+link and sync the parent directory. Non-Unix repair operations fail closed in
+v1. Never overwrite an existing immutable manifest or receipt. Tool output may show
 IDs, field names, enum values, and digests; it must not print rollback content
 or unrelated memory excerpts.
 
@@ -174,6 +182,11 @@ Only the exact reply `apply repair <manifest-id> <manifest-digest>` authorizes
 apply. Ambiguous approval, approval of another digest, or a changed manifest
 does not mutate.
 
+This contract prevents a cooperating skill from treating vague conversation as
+authorization. It is not a daemon authentication mechanism: another local
+process can derive the phrase from the manifest and remains inside Wenlan's
+existing trusted-local-process threat model.
+
 ### 4. Apply
 
 `apply_repair` accepts only `manifest_id` and `approved_manifest_digest`; the
@@ -181,13 +194,15 @@ daemon loads its own immutable manifest bytes. It validates the digest and
 schema, confirms no prior apply receipt exists, recomputes the target receipt,
 and returns `409 repair_target_stale` on any CAS mismatch.
 
-The core then executes `post_write::reclassify_memory_cas` in one transaction.
+The core holds the per-manifest operation lock, then executes
+`post_write::reclassify_memory_cas` in one transaction.
 The writer validates target scope, updates every chunk consistently, verifies
 the declared owner closure/non-target fingerprint, and commits. Any writer,
-fingerprint, receipt, or artifact failure rolls back and leaves no apply
-receipt. A successful commit writes an immutable apply receipt containing the
-before/after target receipts, actual allowed effects, writer result, and
-manifest digest.
+fingerprint, receipt, or artifact failure rolls back. The pending apply receipt
+is fsynced before database commit, published no-clobber after commit, and
+recovered after a crash by matching the current target to its recorded
+after-receipt. A successful apply receipt contains the before/after target
+receipts, actual allowed effects, writer result, and manifest digest.
 
 ### 5. Rerun and verify
 
@@ -199,8 +214,11 @@ This endpoint does not run lint. It validates report contracts, requires their
 post-run snapshot receipts to describe the current state, verifies the target
 evidence digest no longer appears in the classification finding, checks both
 reports are complete, rejects any new actionable/incomplete check outside the
-declared assertion set, and confirms the apply receipt's non-target fingerprint
-proof. Success writes the immutable verification receipt.
+declared assertion set, binds both reports to current DB and Page receipts, and
+confirms the apply receipt contains the in-transaction non-target fingerprint
+proof. It does not require unrelated daemon state to remain frozen after the
+apply transaction. Success writes the immutable verification receipt through
+the same per-manifest lock and no-clobber publication rule.
 
 If post-repair lint fails, the canonical mutation remains applied but the run
 is visibly `applied_unverified`; the skill surfaces the failure and stops. It
@@ -263,8 +281,15 @@ Implementation follows RED-GREEN-REFACTOR and must prove:
 - writer failure and effect-escape injection roll back every target chunk;
 - successful apply changes only the declared memory owner closure;
 - rollback and manifest artifact hashes verify after restart;
+- concurrent apply/verify is serialized per manifest and cannot replace an
+  immutable receipt;
+- crash recovery promotes a committed pending receipt even after an unrelated
+  background write;
 - verification rejects stale/incomplete/new-finding reports and accepts the
-  exact clean target delta;
+  exact clean target delta, while fresh reports remain verifiable after
+  unrelated post-apply daemon writes;
+- verification rejects DB or Page receipts that no longer describe current
+  state;
 - existing `/api/lint` and both `/lint` skills remain read-only and contain no
   repair inference or mutation path;
 - Claude/Codex plugin contract parity and typed MCP response checks pass.

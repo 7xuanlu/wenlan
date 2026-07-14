@@ -27,6 +27,7 @@ async fn repair_context(
     (
         std::sync::Arc<wenlan_core::db::MemoryDB>,
         RepairArtifactStore,
+        Option<std::path::PathBuf>,
     ),
     ServerError,
 > {
@@ -36,7 +37,11 @@ async fn repair_context(
         .repair_root
         .clone()
         .ok_or_else(|| ServerError::Internal("repair artifact root not configured".to_string()))?;
-    Ok((db, RepairArtifactStore::new(root)))
+    let page_root = state
+        .lint_config
+        .page_root()
+        .map(std::path::Path::to_path_buf);
+    Ok((db, RepairArtifactStore::new(root), page_root))
 }
 
 fn now_epoch_seconds() -> Result<i64, ServerError> {
@@ -52,7 +57,7 @@ async fn handle_prepare(
     State(state): State<SharedState>,
     Json(request): Json<PrepareRepairRequest>,
 ) -> Result<Json<RepairManifest>, ServerError> {
-    let (db, store) = repair_context(&state).await?;
+    let (db, store, _) = repair_context(&state).await?;
     wenlan_core::repair::prepare_memory_reclassification(&db, &store, request, now_epoch_seconds()?)
         .await
         .map(Json)
@@ -63,7 +68,7 @@ async fn handle_apply(
     State(state): State<SharedState>,
     Json(request): Json<ApplyRepairRequest>,
 ) -> Result<Json<RepairApplyReceipt>, ServerError> {
-    let (db, store) = repair_context(&state).await?;
+    let (db, store, _) = repair_context(&state).await?;
     wenlan_core::repair::apply_repair(&db, &store, request, now_epoch_seconds()?)
         .await
         .map(Json)
@@ -74,9 +79,15 @@ async fn handle_verify(
     State(state): State<SharedState>,
     Json(request): Json<VerifyRepairRequest>,
 ) -> Result<Json<RepairVerificationReceipt>, ServerError> {
-    let (db, store) = repair_context(&state).await?;
-    wenlan_core::repair::record_repair_verification(&db, &store, request, now_epoch_seconds()?)
-        .await
-        .map(Json)
-        .map_err(ServerError::from)
+    let (db, store, page_root) = repair_context(&state).await?;
+    wenlan_core::repair::record_repair_verification(
+        &db,
+        &store,
+        request,
+        page_root.as_deref(),
+        now_epoch_seconds()?,
+    )
+    .await
+    .map(Json)
+    .map_err(ServerError::from)
 }

@@ -125,7 +125,9 @@ pub struct ServerState {
     /// independent ones. `None` when the DB is not initialized — handlers
     /// fall back to the direct per-request upsert path in that case.
     pub ingest_batcher: Option<IngestBatcher>,
-    /// Durable, private artifacts for approval-gated lint repairs.
+    /// Durable, private artifacts for workflow-approved lint repairs.
+    /// Core rejects repair operations on platforms without the required
+    /// owner-only permissions and directory-sync durability.
     pub repair_root: Option<PathBuf>,
     pub lint_config: LintServerConfig,
     pub lint_observer: Arc<dyn LintRunObserver>,

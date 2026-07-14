@@ -12,6 +12,8 @@ versioned repair manifest. `/lint` and `/api/lint` remain fully read-only; this
 separate skill is the only agent workflow that may call repair tools. There is
 no batch mode, `--fix`, provider-slot CLI, live-data auto-repair, or automatic
 rollback, and there is no CLI or HTTP fallback.
+If the daemon reports `lint_repair_unsupported_platform`, stop without a
+fallback or mutation; v1 requires Unix artifact durability and permissions.
 
 Accept at most one scope selector: `global`, `uncategorized`, or
 `space:<name>`. Reject other or repeated arguments. For `global`, omit `space`;
@@ -62,6 +64,9 @@ Never call apply_lint_repair in the same turn as prepare_lint_repair. Match the
 later reply byte-for-byte without trimming whitespace or normalizing case.
 “Fix it”, “yes”, paraphrases, edited ids/digests, or
 approval for another manifest do not authorize a write.
+This is a human-in-the-loop workflow gate for cooperating agents, not local
+process authentication; never describe it as protection from malicious local
+software.
 
 ## Apply: exact approval and CAS write
 
