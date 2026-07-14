@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::{
     lint::{
-        LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest, LintOpaqueId, LintPageSnapshotMode,
-        LintPageSnapshotReceipt, LintProducerReceipt, LintScope, LintSemanticAction,
-        LintSemanticFinding, LintSemanticProviderRoute, LintSemanticReasonCode,
-        LintSnapshotReceipts,
+        LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest, LintEvidenceRef, LintGateEffect,
+        LintOpaqueId, LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt,
+        LintProducerReceipt, LintScope, LintSemanticAction, LintSemanticFinding,
+        LintSemanticProviderRoute, LintSemanticReasonCode, LintSnapshotReceipts,
     },
     repair::{
-        ApplyRepairRequest, RepairAllowedEffects, RepairApplyReceipt, RepairDigest,
-        RepairExpectedState, RepairLintScope, RepairManifest, RepairManifestDraft, RepairMutation,
-        RepairPostAssertions, RepairRollbackArtifact, RepairScope, RepairSource, RepairTarget,
-        RepairVerificationReceipt, RepairWriter,
+        ApplyRepairRequest, RepairAllowedEffects, RepairApplyReceipt, RepairApplyReceiptDraft,
+        RepairCheckBaseline, RepairDigest, RepairExpectedState, RepairLintScope, RepairManifest,
+        RepairManifestDraft, RepairMutation, RepairPostAssertions, RepairRollbackArtifact,
+        RepairScope, RepairSource, RepairTarget, RepairVerificationReceipt,
+        RepairVerificationReceiptDraft, RepairWriter,
     },
 };
 
@@ -29,6 +30,27 @@ fn snapshots(seed: u64) -> LintSnapshotReceipts {
             LintDigest::from_u64(seed + 1),
             Some(LintDigest::from_u64(seed + 1)),
         ),
+    )
+}
+
+fn baselines() -> (Vec<RepairCheckBaseline>, Vec<RepairCheckBaseline>) {
+    (
+        vec![RepairCheckBaseline::try_new(
+            "memories.structural.integrity".into(),
+            LintOutcome::Pass,
+            LintGateEffect::Actionable,
+            vec![],
+        )
+        .unwrap()],
+        vec![RepairCheckBaseline::try_new(
+            "memories.semantic.classification".into(),
+            LintOutcome::Finding,
+            LintGateEffect::Actionable,
+            vec![LintEvidenceRef::ReasonCode {
+                reason_code: crate::lint::LintReasonCode::SemanticAgentAdjudicationRequired,
+            }],
+        )
+        .unwrap()],
     )
 }
 
@@ -60,6 +82,7 @@ fn fixture_manifest() -> RepairManifest {
         RepairScope::registered("work".into()).unwrap(),
     )
     .unwrap();
+    let (general_baseline, deep_baseline) = baselines();
     let draft = RepairManifestDraft::try_new(
         "repair_550e8400-e29b-41d4-a716-446655440000".into(),
         1_721_000_000,
@@ -74,10 +97,30 @@ fn fixture_manifest() -> RepairManifest {
             RepairDigest::parse(SHA256_B).unwrap(),
         )
         .unwrap(),
-        RepairPostAssertions::try_new(evidence_id, vec![]).unwrap(),
+        RepairPostAssertions::try_new(evidence_id, general_baseline, deep_baseline, vec![])
+            .unwrap(),
     )
     .unwrap();
     RepairManifest::try_new(draft, RepairDigest::parse(SHA256_A).unwrap()).unwrap()
+}
+
+#[test]
+fn post_assertion_baselines_are_sorted_unique_and_strict() {
+    let (general, deep) = baselines();
+    let assertions =
+        RepairPostAssertions::try_new(LintDigest::from_u64(42), general.clone(), deep, vec![])
+            .unwrap();
+    assert_eq!(assertions.general_baseline(), general);
+
+    let duplicate = vec![general[0].clone(), general[0].clone()];
+    assert!(
+        RepairPostAssertions::try_new(LintDigest::from_u64(42), duplicate, vec![], vec![],)
+            .is_err()
+    );
+
+    let mut value = serde_json::to_value(assertions).unwrap();
+    value["general_baseline"][0]["hidden_content"] = serde_json::json!("secret");
+    assert!(serde_json::from_value::<RepairPostAssertions>(value).is_err());
 }
 
 #[test]
@@ -132,9 +175,11 @@ fn mutation_deserializer_rejects_unknown_fields() {
 
 #[test]
 fn apply_request_binds_exact_manifest_digest() {
+    let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
     let request = ApplyRepairRequest::try_new(
-        "repair_550e8400-e29b-41d4-a716-446655440000".into(),
+        manifest_id.into(),
         RepairDigest::parse(SHA256_A).unwrap(),
+        format!("apply repair {manifest_id} {SHA256_A}"),
     )
     .expect("valid apply request");
 
@@ -143,6 +188,12 @@ fn apply_request_binds_exact_manifest_digest() {
         "repair_550e8400-e29b-41d4-a716-446655440000"
     );
     assert_eq!(request.approved_manifest_digest().as_str(), SHA256_A);
+    assert!(ApplyRepairRequest::try_new(
+        manifest_id.into(),
+        RepairDigest::parse(SHA256_A).unwrap(),
+        "yes apply it".into(),
+    )
+    .is_err());
 }
 
 #[test]
@@ -177,7 +228,7 @@ fn manifest_rejects_noop_wrong_schema_and_unknown_fields() {
 #[test]
 fn apply_receipt_deserializer_revalidates_schema_and_effect_proof() {
     let target = RepairTarget::memory("mem_target".into(), RepairScope::uncategorized()).unwrap();
-    let receipt = RepairApplyReceipt::try_new(
+    let draft = RepairApplyReceiptDraft::try_new(
         "repair_550e8400-e29b-41d4-a716-446655440000".into(),
         RepairDigest::parse(SHA256_A).unwrap(),
         1_721_000_001,
@@ -187,9 +238,13 @@ fn apply_receipt_deserializer_revalidates_schema_and_effect_proof() {
         RepairDigest::parse(SHA256_A).unwrap(),
         RepairAllowedEffects::memory_type(target),
         RepairWriter::ReclassifyMemory,
-        RepairDigest::parse(SHA256_B).unwrap(),
     )
     .unwrap();
+    let canonical = draft.canonical_bytes().unwrap();
+    assert!(!String::from_utf8(canonical)
+        .unwrap()
+        .contains("receipt_digest"));
+    let receipt = RepairApplyReceipt::from_draft(draft, RepairDigest::parse(SHA256_B).unwrap());
     let value = serde_json::to_value(receipt).unwrap();
 
     let mut wrong_schema = value.clone();
@@ -203,16 +258,20 @@ fn apply_receipt_deserializer_revalidates_schema_and_effect_proof() {
 
 #[test]
 fn verification_receipt_deserializer_revalidates_schema() {
-    let receipt = RepairVerificationReceipt::try_new(
+    let draft = RepairVerificationReceiptDraft::try_new(
         "repair_550e8400-e29b-41d4-a716-446655440000".into(),
         RepairDigest::parse(SHA256_A).unwrap(),
         RepairDigest::parse(SHA256_B).unwrap(),
         1_721_000_002,
         snapshots(7),
         snapshots(9),
-        RepairDigest::parse(SHA256_A).unwrap(),
     )
     .unwrap();
+    let canonical: serde_json::Value =
+        serde_json::from_slice(&draft.canonical_bytes().unwrap()).unwrap();
+    assert!(canonical.get("receipt_digest").is_none());
+    let receipt =
+        RepairVerificationReceipt::from_draft(draft, RepairDigest::parse(SHA256_A).unwrap());
     let mut value = serde_json::to_value(receipt).unwrap();
     value["receipt_schema_version"] = serde_json::json!(2);
 

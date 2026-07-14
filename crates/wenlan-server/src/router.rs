@@ -6,7 +6,7 @@ use crate::route_registry::{delete, get, post, put, TrackedRouter};
 use crate::state::SharedState;
 use crate::{
     config_routes, import_routes, ingest_routes, knowledge_routes, lint_routes, memory_routes,
-    onboarding_routes, refinery_routes, routes, security, source_routes, websocket,
+    onboarding_routes, refinery_routes, repair_routes, routes, security, source_routes, websocket,
 };
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
@@ -27,7 +27,7 @@ pub fn build_router(state: SharedState) -> AppRouter {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    lint_routes::register(TrackedRouter::new())
+    repair_routes::register(lint_routes::register(TrackedRouter::new()))
         // General
         .route("/api/health", get(routes::handle_health))
         .route("/api/status", get(routes::handle_status))

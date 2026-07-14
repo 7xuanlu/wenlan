@@ -47,6 +47,10 @@ REQUIRED_SKILL_INTERFACE = {
         "display_name": "Wenlan Lint",
         "short_description": "Run general or agent-assisted deep diagnostics",
     },
+    "lint-repair": {
+        "display_name": "Wenlan Lint Repair",
+        "short_description": "Safely repair one lint finding with exact approval",
+    },
     "pages": {
         "display_name": "Wenlan Pages",
         "short_description": "List or open distilled Wenlan pages from Codex",

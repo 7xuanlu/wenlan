@@ -127,3 +127,23 @@ fn pages_skill_replaces_read() {
         );
     }
 }
+
+#[test]
+fn lint_repair_is_separate_and_approval_gated_on_both_surfaces() {
+    for path in [
+        "plugin/skills/lint-repair/SKILL.md",
+        "plugin-codex/skills/lint-repair/SKILL.md",
+    ] {
+        let text = read_text(path);
+        for needle in [
+            "`/lint` and `/api/lint` remain fully read-only",
+            "only one target",
+            "apply repair <manifest-id> <manifest-digest>",
+            "Never call apply_lint_repair in the same turn as prepare_lint_repair",
+            "applied_unverified",
+            "no CLI or HTTP fallback",
+        ] {
+            assert!(text.contains(needle), "{path} missing guardrail: {needle}");
+        }
+    }
+}

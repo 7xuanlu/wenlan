@@ -64,13 +64,17 @@ impl RepairWriteProof {
     }
 }
 
-pub async fn reclassify_memory_cas(
+pub async fn reclassify_memory_cas<F>(
     db: &MemoryDB,
     source_id: &str,
     expected_receipt: &RepairDigest,
     expected_space: Option<&str>,
     after_memory_type: MemoryType,
-) -> Result<RepairWriteProof, WenlanError> {
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
     let conn = db.conn.lock().await;
     conn.execute("BEGIN IMMEDIATE", ())
         .await
@@ -130,6 +134,14 @@ pub async fn reclassify_memory_cas(
             return Err(error);
         }
     };
+    if let Err(error) = before_commit(&proof) {
+        if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+            return Err(WenlanError::VectorDb(format!(
+                "{error}; repair rollback failed: {rollback_error}"
+            )));
+        }
+        return Err(error);
+    }
     if let Err(error) = conn.execute("COMMIT", ()).await {
         let _ = conn.execute("ROLLBACK", ()).await;
         return Err(WenlanError::VectorDb(format!(

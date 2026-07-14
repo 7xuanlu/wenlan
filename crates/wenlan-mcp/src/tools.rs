@@ -216,6 +216,58 @@ pub struct LintParams {
     pub agent_submission: Option<LintAgentSubmissionParam>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RepairLintScopeParam {
+    Global,
+    Registered { space: String },
+    Uncategorized,
+}
+
+impl TryFrom<RepairLintScopeParam> for wenlan_types::repair::RepairLintScope {
+    type Error = wenlan_types::repair::RepairContractError;
+
+    fn try_from(value: RepairLintScopeParam) -> Result<Self, Self::Error> {
+        match value {
+            RepairLintScopeParam::Global => Ok(Self::global()),
+            RepairLintScopeParam::Registered { space } => Self::registered(space),
+            RepairLintScopeParam::Uncategorized => Ok(Self::uncategorized()),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PrepareLintRepairParams {
+    pub lint_scope: RepairLintScopeParam,
+    #[schemars(with = "serde_json::Value")]
+    pub general_report: wenlan_types::lint::LintReport,
+    #[schemars(with = "serde_json::Value")]
+    pub deep_report: wenlan_types::lint::LintReport,
+    #[schemars(with = "serde_json::Value")]
+    pub selected_finding: wenlan_types::lint::LintSemanticFinding,
+    #[schemars(description = "Canonical target memory type.")]
+    pub after_memory_type: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplyLintRepairParams {
+    pub manifest_id: String,
+    pub approved_manifest_digest: String,
+    #[schemars(description = "Exact user approval: apply repair <manifest-id> <manifest-digest>")]
+    pub approval: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VerifyLintRepairParams {
+    pub manifest_id: String,
+    pub manifest_digest: String,
+    pub apply_receipt_digest: String,
+    #[schemars(with = "serde_json::Value")]
+    pub general_report: wenlan_types::lint::LintReport,
+    #[schemars(with = "serde_json::Value")]
+    pub deep_report: wenlan_types::lint::LintReport,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LintSemanticDecisionParam {
@@ -1010,6 +1062,101 @@ impl WenlanMcpServer {
             None => try_call!(self.client.get_with_query("/api/lint", &query), "lint"),
         };
         let value = serde_json::to_value(report)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
+    }
+
+    fn reject_remote_lint_repair(&self) -> Option<CallToolResult> {
+        (self.transport == TransportMode::Http).then(|| {
+            CallToolResult::error(vec![Content::text(
+                "Lint repair operations are not available over remote connections. Use local stdio MCP on the machine running Wenlan."
+                    .to_string(),
+            )])
+        })
+    }
+
+    pub async fn prepare_lint_repair_impl(
+        &self,
+        params: PrepareLintRepairParams,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(blocked) = self.reject_remote_lint_repair() {
+            return Ok(blocked);
+        }
+        let lint_scope = params.lint_scope.try_into().map_err(
+            |error: wenlan_types::repair::RepairContractError| {
+                McpError::invalid_params(error.to_string(), None)
+            },
+        )?;
+        let after_memory_type = params
+            .after_memory_type
+            .parse::<wenlan_types::MemoryType>()
+            .map_err(|error| McpError::invalid_params(error, None))?;
+        let request = wenlan_types::repair::PrepareRepairRequest::try_new(
+            lint_scope,
+            params.general_report,
+            params.deep_report,
+            params.selected_finding,
+            after_memory_type,
+        )
+        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let manifest: wenlan_types::repair::RepairManifest = try_call!(
+            self.client.post("/api/repairs/prepare", &request),
+            "repair prepare"
+        );
+        let value = serde_json::to_value(manifest)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
+    }
+
+    pub async fn apply_lint_repair_impl(
+        &self,
+        params: ApplyLintRepairParams,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(blocked) = self.reject_remote_lint_repair() {
+            return Ok(blocked);
+        }
+        let digest = wenlan_types::repair::RepairDigest::parse(&params.approved_manifest_digest)
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let request = wenlan_types::repair::ApplyRepairRequest::try_new(
+            params.manifest_id,
+            digest,
+            params.approval,
+        )
+        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let receipt: wenlan_types::repair::RepairApplyReceipt = try_call!(
+            self.client.post("/api/repairs/apply", &request),
+            "repair apply"
+        );
+        let value = serde_json::to_value(receipt)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
+    }
+
+    pub async fn verify_lint_repair_impl(
+        &self,
+        params: VerifyLintRepairParams,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(blocked) = self.reject_remote_lint_repair() {
+            return Ok(blocked);
+        }
+        let manifest_digest = wenlan_types::repair::RepairDigest::parse(&params.manifest_digest)
+            .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let apply_receipt_digest =
+            wenlan_types::repair::RepairDigest::parse(&params.apply_receipt_digest)
+                .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let request = wenlan_types::repair::VerifyRepairRequest::try_new(
+            params.manifest_id,
+            manifest_digest,
+            apply_receipt_digest,
+            params.general_report,
+            params.deep_report,
+        )
+        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+        let receipt: wenlan_types::repair::RepairVerificationReceipt = try_call!(
+            self.client.post("/api/repairs/verify", &request),
+            "repair verify"
+        );
+        let value = serde_json::to_value(receipt)
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
         Ok(CallToolResult::structured(value))
     }
@@ -1918,6 +2065,57 @@ impl WenlanMcpServer {
     }
 
     #[tool(
+        description = "Prepare one approval-gated lint repair manifest from complete General and agent-assisted Deep reports. This resolves one opaque finding to one durable owner, captures the exact mutation and rollback artifact, and does not mutate canonical data. Local stdio only.",
+        annotations(
+            title = "Prepare lint repair",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn prepare_lint_repair(
+        &self,
+        Parameters(params): Parameters<PrepareLintRepairParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.prepare_lint_repair_impl(params).await
+    }
+
+    #[tool(
+        description = "Apply exactly one prepared lint repair through the daemon's CAS canonical writer. Requires the exact user approval string `apply repair <manifest-id> <manifest-digest>` and refuses stale targets. Local stdio only.",
+        annotations(
+            title = "Apply lint repair",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn apply_lint_repair(
+        &self,
+        Parameters(params): Parameters<ApplyLintRepairParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.apply_lint_repair_impl(params).await
+    }
+
+    #[tool(
+        description = "Record verification for an applied lint repair after rerunning complete General and applicable agent-assisted Deep lint. Rejects surviving target evidence, new actionable findings, stale reports, or any non-target state change. Local stdio only.",
+        annotations(
+            title = "Verify lint repair",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn verify_lint_repair(
+        &self,
+        Parameters(params): Parameters<VerifyLintRepairParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.verify_lint_repair_impl(params).await
+    }
+
+    #[tool(
         description = "Delete a memory by ID. Use when the user says 'forget this', 'delete that', 'that's wrong and should be removed'. Requires the source_id — get it from recall first.\n\nThis is destructive and cannot be undone. For corrections, prefer storing a new memory with the supersedes param pointing to the old one — this preserves history.",
         annotations(
             title = "Forget",
@@ -2527,6 +2725,22 @@ fn strip_space_from_tool_schema(mut tool: Tool) -> Tool {
     tool
 }
 
+const LINT_REPAIR_TOOL_NAMES: &[&str] = &[
+    "prepare_lint_repair",
+    "apply_lint_repair",
+    "verify_lint_repair",
+];
+
+impl WenlanMcpServer {
+    fn visible_tools(&self) -> Vec<Tool> {
+        let mut tools = Self::tool_router().list_all();
+        if self.transport == TransportMode::Http {
+            tools.retain(|tool| !LINT_REPAIR_TOOL_NAMES.contains(&tool.name.as_ref()));
+        }
+        tools
+    }
+}
+
 // ===== ServerHandler =====
 
 #[tool_handler]
@@ -2536,7 +2750,7 @@ impl ServerHandler for WenlanMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let tools = Self::tool_router().list_all();
+        let tools = self.visible_tools();
         let tools = if crate::lock_state::is_locked() {
             tools
                 .into_iter()
@@ -2750,6 +2964,48 @@ mod tests {
         assert_eq!(TransportMode::Stdio, TransportMode::Stdio);
         assert_eq!(TransportMode::Http, TransportMode::Http);
         assert_ne!(TransportMode::Stdio, TransportMode::Http);
+    }
+
+    #[test]
+    fn lint_repair_tools_are_visible_only_over_stdio() {
+        let stdio = make_server(TransportMode::Stdio, "agent", None)
+            .visible_tools()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<Vec<_>>();
+        let http = make_server(TransportMode::Http, "agent", None)
+            .visible_tools()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<Vec<_>>();
+        for name in [
+            "prepare_lint_repair",
+            "apply_lint_repair",
+            "verify_lint_repair",
+        ] {
+            assert!(stdio.iter().any(|candidate| candidate == name));
+            assert!(!http.iter().any(|candidate| candidate == name));
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_lint_repair_refuses_http_before_network() {
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let result = make_server(TransportMode::Http, "agent", None)
+            .apply_lint_repair_impl(ApplyLintRepairParams {
+                manifest_id: manifest_id.to_string(),
+                approved_manifest_digest: digest.to_string(),
+                approval: format!("apply repair {manifest_id} {digest}"),
+            })
+            .await
+            .unwrap();
+        match &result.content[0].raw {
+            rmcp::model::RawContent::Text(text) => {
+                assert!(text.text.contains("not available over remote connections"));
+            }
+            other => panic!("unexpected content: {other:?}"),
+        }
     }
 
     // ===== Param deserialization: CaptureParams =====

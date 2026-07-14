@@ -104,6 +104,12 @@
       "codex_openai_interface": true
     },
     {
+      "name": "lint-repair",
+      "status": "shared_now",
+      "codex_user_invocable": true,
+      "codex_openai_interface": true
+    },
+    {
       "name": "pages",
       "status": "shared_now",
       "codex_user_invocable": true,

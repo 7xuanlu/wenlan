@@ -19,7 +19,15 @@ from typing import Any
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_SKILL_STATUSES = {"shared_now", "claude_only_until_ported"}
 CODEX_SKILLS_WITHOUT_MCP_REFERENCE = {"help", "pages"}
-CODEX_SKILLS_USING_RESOLVER = {"brief", "capture", "distill", "handoff", "lint", "recall"}
+CODEX_SKILLS_USING_RESOLVER = {
+    "brief",
+    "capture",
+    "distill",
+    "handoff",
+    "lint",
+    "lint-repair",
+    "recall",
+}
 CODEX_REQUIRED_GUARDRAILS = {
     "forget": [
         "cannot be undone",
@@ -45,6 +53,14 @@ LINT_SHARED_GUARDRAILS = [
     "no CLI or HTTP fallback",
     "global",
     "uncategorized",
+]
+LINT_REPAIR_SHARED_GUARDRAILS = [
+    "`/lint` and `/api/lint` remain fully read-only",
+    "only one target",
+    "apply repair <manifest-id> <manifest-digest>",
+    "Never call apply_lint_repair in the same turn as prepare_lint_repair",
+    "`applied_unverified`",
+    "no CLI or HTTP fallback",
 ]
 
 
@@ -352,6 +368,27 @@ def validate_skill_surface(
                 fail(f"{rel(root, skill_path)} must call exactly {expected_tool!r}")
             normalized_text = " ".join(text.split())
             for needle in LINT_SHARED_GUARDRAILS:
+                if needle not in normalized_text:
+                    fail(f"{rel(root, skill_path)} must contain guardrail {needle!r}")
+            resolver = (
+                "$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh"
+                if surface == "claude"
+                else "plugin-codex/bin/resolve-space.sh"
+            )
+            if resolver not in text:
+                fail(f"{rel(root, skill_path)} must use {resolver}")
+        if name == "lint-repair":
+            for tool in (
+                "lint",
+                "prepare_lint_repair",
+                "apply_lint_repair",
+                "verify_lint_repair",
+            ):
+                expected_tool = f"{expected_prefix}{tool}"
+                if expected_tool not in text:
+                    fail(f"{rel(root, skill_path)} must call {expected_tool!r}")
+            normalized_text = " ".join(text.split())
+            for needle in LINT_REPAIR_SHARED_GUARDRAILS:
                 if needle not in normalized_text:
                     fail(f"{rel(root, skill_path)} must contain guardrail {needle!r}")
             resolver = (

@@ -178,6 +178,7 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Build state
     let mut server_state = ServerState::new();
+    server_state.repair_root = Some(wenlan_root.join("repairs"));
 
     // Init MemoryDB
     let emitter: Arc<dyn wenlan_core::events::EventEmitter> = Arc::new(wenlan_core::NoopEmitter);

@@ -16,6 +16,7 @@ pub mod onboarding_routes;
 pub mod read_scope;
 pub mod refinery_routes;
 pub mod reflection_debounce;
+pub mod repair_routes;
 mod route_registry;
 pub mod router;
 pub mod routes;
@@ -31,6 +32,10 @@ pub mod websocket;
 #[cfg(test)]
 #[path = "lint_endpoint_test.rs"]
 mod lint_endpoint_test;
+
+#[cfg(test)]
+#[path = "repair_endpoint_test.rs"]
+mod repair_endpoint_test;
 
 /// Shared mutex for tests that mutate the process-wide `WENLAN_DATA_DIR` env
 /// var. Rust tests run in parallel by default, so any test that swaps this env

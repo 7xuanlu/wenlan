@@ -666,6 +666,8 @@ impl<'de> Deserialize<'de> for RepairRollbackArtifact {
 pub struct RepairPostAssertions {
     target_check_id: String,
     target_evidence_id: LintDigest,
+    general_baseline: Vec<RepairCheckBaseline>,
+    deep_baseline: Vec<RepairCheckBaseline>,
     require_complete_general: bool,
     require_complete_deep: bool,
     reject_new_actionable: bool,
@@ -678,6 +680,8 @@ pub struct RepairPostAssertions {
 struct RepairPostAssertionsWire {
     target_check_id: String,
     target_evidence_id: LintDigest,
+    general_baseline: Vec<RepairCheckBaseline>,
+    deep_baseline: Vec<RepairCheckBaseline>,
     require_complete_general: bool,
     require_complete_deep: bool,
     reject_new_actionable: bool,
@@ -685,14 +689,88 @@ struct RepairPostAssertionsWire {
     allowed_non_target_check_deltas: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepairCheckBaseline {
+    check_id: String,
+    outcome: crate::lint::LintOutcome,
+    gate_effect: crate::lint::LintGateEffect,
+    evidence: Vec<crate::lint::LintEvidenceRef>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepairCheckBaselineWire {
+    check_id: String,
+    outcome: crate::lint::LintOutcome,
+    gate_effect: crate::lint::LintGateEffect,
+    evidence: Vec<crate::lint::LintEvidenceRef>,
+}
+
+impl RepairCheckBaseline {
+    pub fn try_new(
+        check_id: String,
+        outcome: crate::lint::LintOutcome,
+        gate_effect: crate::lint::LintGateEffect,
+        evidence: Vec<crate::lint::LintEvidenceRef>,
+    ) -> Result<Self, RepairContractError> {
+        if !valid_nonempty(&check_id) {
+            return Err(RepairContractError::InvalidPostAssertions);
+        }
+        Ok(Self {
+            check_id,
+            outcome,
+            gate_effect,
+            evidence,
+        })
+    }
+
+    pub fn check_id(&self) -> &str {
+        &self.check_id
+    }
+
+    pub const fn outcome(&self) -> crate::lint::LintOutcome {
+        self.outcome
+    }
+
+    pub const fn gate_effect(&self) -> crate::lint::LintGateEffect {
+        self.gate_effect
+    }
+
+    pub fn evidence(&self) -> &[crate::lint::LintEvidenceRef] {
+        &self.evidence
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairCheckBaseline {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RepairCheckBaselineWire::deserialize(deserializer)?;
+        Self::try_new(wire.check_id, wire.outcome, wire.gate_effect, wire.evidence)
+            .map_err(D::Error::custom)
+    }
+}
+
+fn valid_check_baseline(values: &[RepairCheckBaseline]) -> bool {
+    !values.is_empty()
+        && values
+            .windows(2)
+            .all(|pair| pair[0].check_id() < pair[1].check_id())
+}
+
 impl RepairPostAssertions {
     pub fn try_new(
         target_evidence_id: LintDigest,
+        general_baseline: Vec<RepairCheckBaseline>,
+        deep_baseline: Vec<RepairCheckBaseline>,
         allowed_non_target_check_deltas: Vec<String>,
     ) -> Result<Self, RepairContractError> {
-        if allowed_non_target_check_deltas
-            .iter()
-            .any(|value| !valid_nonempty(value))
+        if !valid_check_baseline(&general_baseline)
+            || !valid_check_baseline(&deep_baseline)
+            || allowed_non_target_check_deltas
+                .iter()
+                .any(|value| !valid_nonempty(value))
             || !allowed_non_target_check_deltas
                 .windows(2)
                 .all(|pair| pair[0] < pair[1])
@@ -702,6 +780,8 @@ impl RepairPostAssertions {
         Ok(Self {
             target_check_id: REPAIR_CLASSIFICATION_CHECK_ID.to_string(),
             target_evidence_id,
+            general_baseline,
+            deep_baseline,
             require_complete_general: true,
             require_complete_deep: true,
             reject_new_actionable: true,
@@ -712,6 +792,14 @@ impl RepairPostAssertions {
 
     pub fn target_evidence_id(&self) -> &LintDigest {
         &self.target_evidence_id
+    }
+
+    pub fn general_baseline(&self) -> &[RepairCheckBaseline] {
+        &self.general_baseline
+    }
+
+    pub fn deep_baseline(&self) -> &[RepairCheckBaseline] {
+        &self.deep_baseline
     }
 
     pub fn allowed_non_target_check_deltas(&self) -> &[String] {
@@ -735,6 +823,8 @@ impl<'de> Deserialize<'de> for RepairPostAssertions {
         }
         Self::try_new(
             wire.target_evidence_id,
+            wire.general_baseline,
+            wire.deep_baseline,
             wire.allowed_non_target_check_deltas,
         )
         .map_err(D::Error::custom)
@@ -1009,6 +1099,7 @@ impl<'de> Deserialize<'de> for PrepareRepairRequest {
 pub struct ApplyRepairRequest {
     manifest_id: String,
     approved_manifest_digest: RepairDigest,
+    approval: String,
 }
 
 #[derive(Deserialize)]
@@ -1016,19 +1107,27 @@ pub struct ApplyRepairRequest {
 struct ApplyRepairRequestWire {
     manifest_id: String,
     approved_manifest_digest: RepairDigest,
+    approval: String,
 }
 
 impl ApplyRepairRequest {
     pub fn try_new(
         manifest_id: String,
         approved_manifest_digest: RepairDigest,
+        approval: String,
     ) -> Result<Self, RepairContractError> {
-        if !valid_manifest_id(&manifest_id) {
+        let expected = format!(
+            "apply repair {} {}",
+            manifest_id,
+            approved_manifest_digest.as_str()
+        );
+        if !valid_manifest_id(&manifest_id) || approval != expected {
             return Err(RepairContractError::InvalidApplyRequest);
         }
         Ok(Self {
             manifest_id,
             approved_manifest_digest,
+            approval,
         })
     }
 
@@ -1039,6 +1138,10 @@ impl ApplyRepairRequest {
     pub fn approved_manifest_digest(&self) -> &RepairDigest {
         &self.approved_manifest_digest
     }
+
+    pub fn approval(&self) -> &str {
+        &self.approval
+    }
 }
 
 impl<'de> Deserialize<'de> for ApplyRepairRequest {
@@ -1047,12 +1150,17 @@ impl<'de> Deserialize<'de> for ApplyRepairRequest {
         D: Deserializer<'de>,
     {
         let wire = ApplyRepairRequestWire::deserialize(deserializer)?;
-        Self::try_new(wire.manifest_id, wire.approved_manifest_digest).map_err(D::Error::custom)
+        Self::try_new(
+            wire.manifest_id,
+            wire.approved_manifest_digest,
+            wire.approval,
+        )
+        .map_err(D::Error::custom)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RepairApplyReceipt {
+pub struct RepairApplyReceiptDraft {
     receipt_schema_version: u16,
     manifest_id: String,
     manifest_digest: RepairDigest,
@@ -1063,6 +1171,52 @@ pub struct RepairApplyReceipt {
     non_target_after: RepairDigest,
     actual_effects: RepairAllowedEffects,
     writer: RepairWriter,
+}
+
+impl RepairApplyReceiptDraft {
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        manifest_id: String,
+        manifest_digest: RepairDigest,
+        applied_at: i64,
+        before_target_receipt: RepairDigest,
+        after_target_receipt: RepairDigest,
+        non_target_before: RepairDigest,
+        non_target_after: RepairDigest,
+        actual_effects: RepairAllowedEffects,
+        writer: RepairWriter,
+    ) -> Result<Self, RepairContractError> {
+        if !valid_manifest_id(&manifest_id)
+            || applied_at <= 0
+            || before_target_receipt == after_target_receipt
+            || non_target_before != non_target_after
+            || writer != RepairWriter::ReclassifyMemory
+        {
+            return Err(RepairContractError::InvalidReceipt);
+        }
+        Ok(Self {
+            receipt_schema_version: REPAIR_RECEIPT_SCHEMA_VERSION,
+            manifest_id,
+            manifest_digest,
+            applied_at,
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            actual_effects,
+            writer,
+        })
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepairApplyReceipt {
+    #[serde(flatten)]
+    draft: RepairApplyReceiptDraft,
     receipt_digest: RepairDigest,
 }
 
@@ -1096,16 +1250,7 @@ impl RepairApplyReceipt {
         writer: RepairWriter,
         receipt_digest: RepairDigest,
     ) -> Result<Self, RepairContractError> {
-        if !valid_manifest_id(&manifest_id)
-            || applied_at <= 0
-            || before_target_receipt == after_target_receipt
-            || non_target_before != non_target_after
-            || writer != RepairWriter::ReclassifyMemory
-        {
-            return Err(RepairContractError::InvalidReceipt);
-        }
-        Ok(Self {
-            receipt_schema_version: REPAIR_RECEIPT_SCHEMA_VERSION,
+        let draft = RepairApplyReceiptDraft::try_new(
             manifest_id,
             manifest_digest,
             applied_at,
@@ -1115,16 +1260,23 @@ impl RepairApplyReceipt {
             non_target_after,
             actual_effects,
             writer,
+        )?;
+        Ok(Self::from_draft(draft, receipt_digest))
+    }
+
+    pub fn from_draft(draft: RepairApplyReceiptDraft, receipt_digest: RepairDigest) -> Self {
+        Self {
+            draft,
             receipt_digest,
-        })
+        }
     }
 
     pub fn manifest_id(&self) -> &str {
-        &self.manifest_id
+        &self.draft.manifest_id
     }
 
     pub fn manifest_digest(&self) -> &RepairDigest {
-        &self.manifest_digest
+        &self.draft.manifest_digest
     }
 
     pub fn receipt_digest(&self) -> &RepairDigest {
@@ -1132,7 +1284,31 @@ impl RepairApplyReceipt {
     }
 
     pub fn actual_effects(&self) -> &RepairAllowedEffects {
-        &self.actual_effects
+        &self.draft.actual_effects
+    }
+
+    pub fn before_target_receipt(&self) -> &RepairDigest {
+        &self.draft.before_target_receipt
+    }
+
+    pub fn after_target_receipt(&self) -> &RepairDigest {
+        &self.draft.after_target_receipt
+    }
+
+    pub fn non_target_before(&self) -> &RepairDigest {
+        &self.draft.non_target_before
+    }
+
+    pub fn non_target_after(&self) -> &RepairDigest {
+        &self.draft.non_target_after
+    }
+
+    pub const fn writer(&self) -> RepairWriter {
+        self.draft.writer
+    }
+
+    pub fn canonical_unsigned_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        self.draft.canonical_bytes()
     }
 }
 
@@ -1145,7 +1321,7 @@ impl<'de> Deserialize<'de> for RepairApplyReceipt {
         if wire.receipt_schema_version != REPAIR_RECEIPT_SCHEMA_VERSION {
             return Err(D::Error::custom(RepairContractError::InvalidReceipt));
         }
-        Self::try_new(
+        let draft = RepairApplyReceiptDraft::try_new(
             wire.manifest_id,
             wire.manifest_digest,
             wire.applied_at,
@@ -1155,9 +1331,9 @@ impl<'de> Deserialize<'de> for RepairApplyReceipt {
             wire.non_target_after,
             wire.actual_effects,
             wire.writer,
-            wire.receipt_digest,
         )
-        .map_err(D::Error::custom)
+        .map_err(D::Error::custom)?;
+        Ok(Self::from_draft(draft, wire.receipt_digest))
     }
 }
 
@@ -1245,7 +1421,7 @@ impl<'de> Deserialize<'de> for VerifyRepairRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RepairVerificationReceipt {
+pub struct RepairVerificationReceiptDraft {
     receipt_schema_version: u16,
     manifest_id: String,
     manifest_digest: RepairDigest,
@@ -1253,6 +1429,41 @@ pub struct RepairVerificationReceipt {
     verified_at: i64,
     general_snapshots: LintSnapshotReceipts,
     deep_snapshots: LintSnapshotReceipts,
+}
+
+impl RepairVerificationReceiptDraft {
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        manifest_id: String,
+        manifest_digest: RepairDigest,
+        apply_receipt_digest: RepairDigest,
+        verified_at: i64,
+        general_snapshots: LintSnapshotReceipts,
+        deep_snapshots: LintSnapshotReceipts,
+    ) -> Result<Self, RepairContractError> {
+        if !valid_manifest_id(&manifest_id) || verified_at <= 0 {
+            return Err(RepairContractError::InvalidReceipt);
+        }
+        Ok(Self {
+            receipt_schema_version: REPAIR_RECEIPT_SCHEMA_VERSION,
+            manifest_id,
+            manifest_digest,
+            apply_receipt_digest,
+            verified_at,
+            general_snapshots,
+            deep_snapshots,
+        })
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepairVerificationReceipt {
+    #[serde(flatten)]
+    draft: RepairVerificationReceiptDraft,
     receipt_digest: RepairDigest,
 }
 
@@ -1280,23 +1491,42 @@ impl RepairVerificationReceipt {
         deep_snapshots: LintSnapshotReceipts,
         receipt_digest: RepairDigest,
     ) -> Result<Self, RepairContractError> {
-        if !valid_manifest_id(&manifest_id) || verified_at <= 0 {
-            return Err(RepairContractError::InvalidReceipt);
-        }
-        Ok(Self {
-            receipt_schema_version: REPAIR_RECEIPT_SCHEMA_VERSION,
+        let draft = RepairVerificationReceiptDraft::try_new(
             manifest_id,
             manifest_digest,
             apply_receipt_digest,
             verified_at,
             general_snapshots,
             deep_snapshots,
+        )?;
+        Ok(Self::from_draft(draft, receipt_digest))
+    }
+
+    pub fn from_draft(draft: RepairVerificationReceiptDraft, receipt_digest: RepairDigest) -> Self {
+        Self {
+            draft,
             receipt_digest,
-        })
+        }
     }
 
     pub fn receipt_digest(&self) -> &RepairDigest {
         &self.receipt_digest
+    }
+
+    pub fn manifest_id(&self) -> &str {
+        &self.draft.manifest_id
+    }
+
+    pub fn manifest_digest(&self) -> &RepairDigest {
+        &self.draft.manifest_digest
+    }
+
+    pub fn apply_receipt_digest(&self) -> &RepairDigest {
+        &self.draft.apply_receipt_digest
+    }
+
+    pub fn canonical_unsigned_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        self.draft.canonical_bytes()
     }
 }
 
@@ -1309,15 +1539,15 @@ impl<'de> Deserialize<'de> for RepairVerificationReceipt {
         if wire.receipt_schema_version != REPAIR_RECEIPT_SCHEMA_VERSION {
             return Err(D::Error::custom(RepairContractError::InvalidReceipt));
         }
-        Self::try_new(
+        let draft = RepairVerificationReceiptDraft::try_new(
             wire.manifest_id,
             wire.manifest_digest,
             wire.apply_receipt_digest,
             wire.verified_at,
             wire.general_snapshots,
             wire.deep_snapshots,
-            wire.receipt_digest,
         )
-        .map_err(D::Error::custom)
+        .map_err(D::Error::custom)?;
+        Ok(Self::from_draft(draft, wire.receipt_digest))
     }
 }

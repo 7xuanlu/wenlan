@@ -125,6 +125,8 @@ pub struct ServerState {
     /// independent ones. `None` when the DB is not initialized — handlers
     /// fall back to the direct per-request upsert path in that case.
     pub ingest_batcher: Option<IngestBatcher>,
+    /// Durable, private artifacts for approval-gated lint repairs.
+    pub repair_root: Option<PathBuf>,
     pub lint_config: LintServerConfig,
     pub lint_observer: Arc<dyn LintRunObserver>,
 }
@@ -151,6 +153,7 @@ impl Default for ServerState {
             write_signal: WriteSignal::new(),
             reflection_debouncer: ReflectionDebouncer::new(),
             ingest_batcher: None,
+            repair_root: None,
             lint_config: LintServerConfig::default(),
             lint_observer: Arc::new(NoopLintRunObserver),
         }

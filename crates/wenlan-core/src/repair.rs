@@ -17,12 +17,17 @@ use std::{
 };
 use uuid::Uuid;
 use wenlan_types::{
-    lint::{LintDigest, LintEvidenceRef, LintScope, LintScopeKind, LintSemanticAction},
+    lint::{
+        LintDigest, LintEvidenceRef, LintGateEffect, LintOutcome, LintReport, LintScope,
+        LintScopeKind, LintSemanticAction,
+    },
     repair::{
         ApplyRepairRequest, PrepareRepairRequest, RepairAllowedEffects, RepairApplyReceipt,
-        RepairDigest, RepairExpectedState, RepairLintScope, RepairManifest, RepairManifestDraft,
-        RepairMutation, RepairPostAssertions, RepairRollbackArtifact, RepairScope, RepairSource,
-        RepairTarget, RepairWriter, REPAIR_RECEIPT_SCHEMA_VERSION, REPAIR_ROLLBACK_FORMAT_VERSION,
+        RepairApplyReceiptDraft, RepairCheckBaseline, RepairDigest, RepairExpectedState,
+        RepairLintScope, RepairManifest, RepairManifestDraft, RepairMutation, RepairPostAssertions,
+        RepairRollbackArtifact, RepairScope, RepairSource, RepairTarget, RepairVerificationReceipt,
+        RepairVerificationReceiptDraft, RepairWriter, VerifyRepairRequest,
+        REPAIR_CLASSIFICATION_CHECK_ID, REPAIR_ROLLBACK_FORMAT_VERSION,
     },
     MemoryType,
 };
@@ -31,6 +36,7 @@ const MANIFEST_FILE: &str = "manifest.json";
 const ROLLBACK_FILE: &str = "rollback-v1.json";
 const APPLY_RECEIPT_FILE: &str = "apply-receipt.json";
 const APPLY_RECEIPT_PENDING_FILE: &str = ".apply-receipt.json.pending";
+const VERIFICATION_RECEIPT_FILE: &str = "verification-receipt.json";
 
 #[derive(Debug, Clone)]
 pub struct RepairArtifactStore {
@@ -157,6 +163,74 @@ impl RepairArtifactStore {
             final_path,
         })
     }
+
+    fn load_apply_receipt(
+        &self,
+        manifest: &RepairManifest,
+    ) -> Result<RepairApplyReceipt, WenlanError> {
+        let path = self
+            .manifest_dir(manifest.manifest_id())?
+            .join(APPLY_RECEIPT_FILE);
+        let receipt: RepairApplyReceipt = serde_json::from_slice(&fs::read(path)?)?;
+        if receipt.manifest_id() != manifest.manifest_id()
+            || receipt.manifest_digest() != manifest.manifest_digest()
+            || repair_digest(&receipt.canonical_unsigned_bytes()?) != *receipt.receipt_digest()
+        {
+            return Err(WenlanError::Validation(
+                "repair_apply_receipt_mismatch".to_string(),
+            ));
+        }
+        Ok(receipt)
+    }
+
+    fn persist_verification_receipt(
+        &self,
+        receipt: &RepairVerificationReceipt,
+    ) -> Result<(), WenlanError> {
+        let manifest_dir = self.manifest_dir(receipt.manifest_id())?;
+        let final_path = manifest_dir.join(VERIFICATION_RECEIPT_FILE);
+        if final_path.exists() {
+            return Err(WenlanError::Conflict("repair_already_verified".to_string()));
+        }
+        let temp_path = manifest_dir.join(format!(
+            ".{VERIFICATION_RECEIPT_FILE}.tmp-{}",
+            Uuid::new_v4()
+        ));
+        let result = (|| {
+            write_private_file(&temp_path, &serde_json::to_vec_pretty(receipt)?)?;
+            fs::rename(&temp_path, &final_path)?;
+            sync_dir(&manifest_dir)?;
+            Ok::<(), WenlanError>(())
+        })();
+        if result.is_err() && temp_path.exists() {
+            let _ = fs::remove_file(temp_path);
+        }
+        result
+    }
+
+    fn load_verification_receipt(
+        &self,
+        manifest: &RepairManifest,
+        apply_receipt: &RepairApplyReceipt,
+    ) -> Result<Option<RepairVerificationReceipt>, WenlanError> {
+        let path = self
+            .manifest_dir(manifest.manifest_id())?
+            .join(VERIFICATION_RECEIPT_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let receipt: RepairVerificationReceipt = serde_json::from_slice(&fs::read(path)?)?;
+        if receipt.manifest_id() != manifest.manifest_id()
+            || receipt.manifest_digest() != manifest.manifest_digest()
+            || receipt.apply_receipt_digest() != apply_receipt.receipt_digest()
+            || repair_digest(&receipt.canonical_unsigned_bytes()?) != *receipt.receipt_digest()
+        {
+            return Err(WenlanError::Validation(
+                "repair_verification_receipt_mismatch".to_string(),
+            ));
+        }
+        Ok(Some(receipt))
+    }
 }
 
 struct PendingApplyReceipt {
@@ -166,12 +240,16 @@ struct PendingApplyReceipt {
 }
 
 impl PendingApplyReceipt {
-    fn finish(mut self, receipt: &RepairApplyReceipt) -> Result<(), WenlanError> {
+    fn prepare(&mut self, receipt: &RepairApplyReceipt) -> Result<(), WenlanError> {
         let bytes = serde_json::to_vec_pretty(receipt)?;
         let mut file = self.file.take().expect("pending apply receipt file");
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
+        Ok(())
+    }
+
+    fn publish(self) -> Result<(), WenlanError> {
         fs::rename(&self.pending_path, &self.final_path)?;
         if let Some(parent) = self.final_path.parent() {
             sync_dir(parent)?;
@@ -201,20 +279,6 @@ struct ResolvedTarget {
     space: Option<String>,
     version: Option<i64>,
     evidence_id: LintDigest,
-}
-
-#[derive(Serialize)]
-struct RepairApplyReceiptMaterial<'a> {
-    receipt_schema_version: u16,
-    manifest_id: &'a str,
-    manifest_digest: &'a RepairDigest,
-    applied_at: i64,
-    before_target_receipt: &'a RepairDigest,
-    after_target_receipt: &'a RepairDigest,
-    non_target_before: &'a RepairDigest,
-    non_target_after: &'a RepairDigest,
-    actual_effects: &'a RepairAllowedEffects,
-    writer: RepairWriter,
 }
 
 pub fn semantic_record_digest(kind: &str, durable_id: &str) -> LintDigest {
@@ -281,8 +345,13 @@ pub async fn prepare_memory_reclassification(
     let rollback_contract =
         RepairRollbackArtifact::try_new(ROLLBACK_FILE.to_string(), repair_digest(&rollback_bytes))
             .map_err(|error| WenlanError::Validation(error.to_string()))?;
-    let post_assertions = RepairPostAssertions::try_new(target.evidence_id, vec![])
-        .map_err(|error| WenlanError::Validation(error.to_string()))?;
+    let post_assertions = RepairPostAssertions::try_new(
+        target.evidence_id,
+        repair_check_baseline(general)?,
+        repair_check_baseline(deep)?,
+        vec![],
+    )
+    .map_err(|error| WenlanError::Validation(error.to_string()))?;
     let manifest_id = format!("repair_{}", Uuid::new_v4());
     let draft = RepairManifestDraft::try_new(
         manifest_id,
@@ -305,6 +374,24 @@ pub async fn prepare_memory_reclassification(
     Ok(manifest)
 }
 
+fn repair_check_baseline(
+    report: &wenlan_types::lint::LintReport,
+) -> Result<Vec<RepairCheckBaseline>, WenlanError> {
+    report
+        .checks()
+        .iter()
+        .map(|check| {
+            RepairCheckBaseline::try_new(
+                check.check_id().to_string(),
+                check.outcome(),
+                check.gate_effect(),
+                check.evidence().to_vec(),
+            )
+            .map_err(|error| WenlanError::Validation(error.to_string()))
+        })
+        .collect()
+}
+
 pub async fn apply_repair(
     db: &MemoryDB,
     store: &RepairArtifactStore,
@@ -322,21 +409,44 @@ pub async fn apply_repair(
             "repair_approval_mismatch".to_string(),
         ));
     }
+    if let Some(receipt) = recover_apply_receipt(db, store, &manifest).await? {
+        return Ok(receipt);
+    }
     let (rollback, _) = store.load_rollback(&manifest)?;
     if target_receipt(&rollback)? != *manifest.expected_state().canonical_receipt() {
         return Err(WenlanError::Validation(
             "repair_rollback_target_mismatch".to_string(),
         ));
     }
-    let pending = store.begin_apply_receipt(manifest.manifest_id())?;
+    let mut pending = store.begin_apply_receipt(manifest.manifest_id())?;
     let after_memory_type = MemoryType::from_str(manifest.mutation().after_memory_type())
         .map_err(WenlanError::Validation)?;
+    let mut prepared_receipt = None;
     let proof = match crate::post_write::reclassify_memory_cas(
         db,
         manifest.target().memory_source_id(),
         manifest.expected_state().canonical_receipt(),
         manifest.target().scope().space(),
         after_memory_type,
+        |proof| {
+            let draft = RepairApplyReceiptDraft::try_new(
+                manifest.manifest_id().to_string(),
+                manifest.manifest_digest().clone(),
+                now_epoch,
+                proof.before_target_receipt().clone(),
+                proof.after_target_receipt().clone(),
+                proof.non_target_before().clone(),
+                proof.non_target_after().clone(),
+                manifest.allowed_effects().clone(),
+                manifest.writer(),
+            )
+            .map_err(|error| WenlanError::Validation(error.to_string()))?;
+            let receipt_digest = repair_digest(&draft.canonical_bytes()?);
+            let receipt = RepairApplyReceipt::from_draft(draft, receipt_digest);
+            pending.prepare(&receipt)?;
+            prepared_receipt = Some(receipt);
+            Ok(())
+        },
     )
     .await
     {
@@ -346,34 +456,272 @@ pub async fn apply_repair(
             return Err(error);
         }
     };
-    let material = RepairApplyReceiptMaterial {
-        receipt_schema_version: REPAIR_RECEIPT_SCHEMA_VERSION,
-        manifest_id: manifest.manifest_id(),
-        manifest_digest: manifest.manifest_digest(),
-        applied_at: now_epoch,
-        before_target_receipt: proof.before_target_receipt(),
-        after_target_receipt: proof.after_target_receipt(),
-        non_target_before: proof.non_target_before(),
-        non_target_after: proof.non_target_after(),
-        actual_effects: manifest.allowed_effects(),
-        writer: manifest.writer(),
+    let receipt = prepared_receipt.ok_or_else(|| {
+        WenlanError::VectorDb("repair_receipt_not_prepared_before_commit".to_string())
+    })?;
+    debug_assert_eq!(proof.after_target_receipt(), receipt.after_target_receipt());
+    pending.publish()?;
+    Ok(receipt)
+}
+
+async fn recover_apply_receipt(
+    db: &MemoryDB,
+    store: &RepairArtifactStore,
+    manifest: &RepairManifest,
+) -> Result<Option<RepairApplyReceipt>, WenlanError> {
+    let manifest_dir = store.manifest_dir(manifest.manifest_id())?;
+    let final_path = manifest_dir.join(APPLY_RECEIPT_FILE);
+    if final_path.exists() {
+        return store.load_apply_receipt(manifest).map(Some);
+    }
+    let pending_path = manifest_dir.join(APPLY_RECEIPT_PENDING_FILE);
+    if !pending_path.exists() {
+        return Ok(None);
+    }
+    let pending = fs::read(&pending_path)?;
+    let parsed = match serde_json::from_slice::<RepairApplyReceipt>(&pending) {
+        Ok(receipt) => {
+            let receipt_digest = repair_digest(&receipt.canonical_unsigned_bytes()?);
+            if receipt.manifest_id() == manifest.manifest_id()
+                && receipt.manifest_digest() == manifest.manifest_digest()
+                && receipt_digest == *receipt.receipt_digest()
+            {
+                Some(receipt)
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
     };
-    let receipt_digest = repair_digest(&serde_json::to_vec(&material)?);
-    let receipt = RepairApplyReceipt::try_new(
+    if let Some(receipt) = parsed {
+        let (target_now, non_target_now) = current_effect_receipts(
+            db,
+            manifest.target().memory_source_id(),
+            manifest.target().scope().space(),
+        )
+        .await?;
+        if target_now == *receipt.after_target_receipt()
+            && non_target_now == *receipt.non_target_after()
+        {
+            fs::rename(&pending_path, &final_path)?;
+            sync_dir(&manifest_dir)?;
+            return Ok(Some(receipt));
+        }
+        if target_now != *manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict(
+                "repair_apply_recovery_required".to_string(),
+            ));
+        }
+    } else {
+        let (target_now, _) = target_receipt_current(db, manifest).await?;
+        if target_now != *manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict(
+                "repair_apply_recovery_required".to_string(),
+            ));
+        }
+    }
+    fs::remove_file(&pending_path)?;
+    sync_dir(&manifest_dir)?;
+    Ok(None)
+}
+
+async fn target_receipt_current(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+) -> Result<(RepairDigest, u64), WenlanError> {
+    let connection = db.conn.lock().await;
+    validate_target_space_on_connection(
+        &connection,
+        manifest.target().memory_source_id(),
+        manifest.target().scope().space(),
+    )
+    .await?;
+    target_receipt_on_connection(&connection, manifest.target().memory_source_id()).await
+}
+
+pub async fn record_repair_verification(
+    db: &MemoryDB,
+    store: &RepairArtifactStore,
+    request: VerifyRepairRequest,
+    now_epoch: i64,
+) -> Result<RepairVerificationReceipt, WenlanError> {
+    if now_epoch <= 0 {
+        return Err(WenlanError::Validation(
+            "invalid_repair_verified_at".to_string(),
+        ));
+    }
+    let manifest = store.load_manifest(request.manifest_id())?;
+    if manifest.manifest_digest() != request.manifest_digest() {
+        return Err(WenlanError::Conflict(
+            "repair_verification_manifest_mismatch".to_string(),
+        ));
+    }
+    let apply_receipt = store.load_apply_receipt(&manifest)?;
+    if apply_receipt.receipt_digest() != request.apply_receipt_digest()
+        || apply_receipt.actual_effects() != manifest.allowed_effects()
+        || apply_receipt.writer() != manifest.writer()
+        || apply_receipt.before_target_receipt() != manifest.expected_state().canonical_receipt()
+    {
+        return Err(WenlanError::Validation(
+            "repair_apply_receipt_mismatch".to_string(),
+        ));
+    }
+    if let Some(receipt) = store.load_verification_receipt(&manifest, &apply_receipt)? {
+        return Ok(receipt);
+    }
+    validate_verification_reports(&manifest, request.general_report(), request.deep_report())?;
+    let (target_now, non_target_now) = current_effect_receipts(
+        db,
+        manifest.target().memory_source_id(),
+        manifest.target().scope().space(),
+    )
+    .await?;
+    if target_now != *apply_receipt.after_target_receipt()
+        || non_target_now != *apply_receipt.non_target_after()
+    {
+        return Err(WenlanError::Conflict(
+            "repair_verification_state_changed".to_string(),
+        ));
+    }
+    let draft = RepairVerificationReceiptDraft::try_new(
         manifest.manifest_id().to_string(),
         manifest.manifest_digest().clone(),
+        apply_receipt.receipt_digest().clone(),
         now_epoch,
-        proof.before_target_receipt().clone(),
-        proof.after_target_receipt().clone(),
-        proof.non_target_before().clone(),
-        proof.non_target_after().clone(),
-        manifest.allowed_effects().clone(),
-        manifest.writer(),
-        receipt_digest,
+        request.general_report().snapshots().clone(),
+        request.deep_report().snapshots().clone(),
     )
     .map_err(|error| WenlanError::Validation(error.to_string()))?;
-    pending.finish(&receipt)?;
+    let receipt_digest = repair_digest(&draft.canonical_bytes()?);
+    let receipt = RepairVerificationReceipt::from_draft(draft, receipt_digest);
+    store.persist_verification_receipt(&receipt)?;
     Ok(receipt)
+}
+
+async fn current_effect_receipts(
+    db: &MemoryDB,
+    target_source_id: &str,
+    expected_space: Option<&str>,
+) -> Result<(RepairDigest, RepairDigest), WenlanError> {
+    let connection = db.conn.lock().await;
+    connection
+        .execute("BEGIN", ())
+        .await
+        .map_err(database_error)?;
+    let result = async {
+        validate_target_space_on_connection(&connection, target_source_id, expected_space).await?;
+        let (target, _) = target_receipt_on_connection(&connection, target_source_id).await?;
+        let non_target =
+            non_target_fingerprint_on_connection(&connection, target_source_id).await?;
+        Ok::<_, WenlanError>((target, non_target))
+    }
+    .await;
+    let rollback = connection
+        .execute("ROLLBACK", ())
+        .await
+        .map_err(database_error);
+    match (result, rollback) {
+        (Ok(receipts), Ok(_)) => Ok(receipts),
+        (Err(error), Ok(_)) => Err(error),
+        (_, Err(error)) => Err(error),
+    }
+}
+
+fn validate_verification_reports(
+    manifest: &RepairManifest,
+    general: &LintReport,
+    deep: &LintReport,
+) -> Result<(), WenlanError> {
+    if !manifest
+        .source()
+        .lint_scope()
+        .matches_report_scope_kind(general.scope())
+        || !manifest
+            .source()
+            .lint_scope()
+            .matches_report_scope_kind(deep.scope())
+        || general.scope() != manifest.source().report_scope()
+        || deep.scope() != manifest.source().report_scope()
+        || deep.agent_work().is_none()
+        || !stable_report_snapshot(general)
+        || !stable_report_snapshot(deep)
+    {
+        return Err(WenlanError::Validation(
+            "repair_verification_report_mismatch".to_string(),
+        ));
+    }
+    validate_check_deltas(
+        manifest.post_assertions().general_baseline(),
+        general,
+        manifest.post_assertions().allowed_non_target_check_deltas(),
+    )?;
+    validate_check_deltas(
+        manifest.post_assertions().deep_baseline(),
+        deep,
+        manifest.post_assertions().allowed_non_target_check_deltas(),
+    )?;
+    let target_survives = deep
+        .checks()
+        .iter()
+        .find(|check| check.check_id() == REPAIR_CLASSIFICATION_CHECK_ID)
+        .is_some_and(|check| {
+            check.evidence().iter().any(|evidence| match evidence {
+                LintEvidenceRef::SemanticFinding { finding } => finding
+                    .evidence_ids()
+                    .contains(manifest.post_assertions().target_evidence_id()),
+                _ => false,
+            })
+        });
+    if target_survives {
+        return Err(WenlanError::Validation(
+            "repair_target_assertion_failed".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn stable_report_snapshot(report: &LintReport) -> bool {
+    report.snapshots().db().post_run_digest() == Some(report.snapshots().db().analysis_digest())
+        && report.snapshots().pages().after_scan_digest()
+            == Some(report.snapshots().pages().before_scan_digest())
+}
+
+fn validate_check_deltas(
+    baseline: &[RepairCheckBaseline],
+    report: &LintReport,
+    allowed_check_deltas: &[String],
+) -> Result<(), WenlanError> {
+    if baseline.len() != report.checks().len() {
+        return Err(WenlanError::Validation(
+            "repair_verification_catalog_mismatch".to_string(),
+        ));
+    }
+    for (before, after) in baseline.iter().zip(report.checks()) {
+        if before.check_id() != after.check_id() || before.gate_effect() != after.gate_effect() {
+            return Err(WenlanError::Validation(
+                "repair_verification_catalog_mismatch".to_string(),
+            ));
+        }
+        if allowed_check_deltas
+            .binary_search_by(|value| value.as_str().cmp(after.check_id()))
+            .is_ok()
+        {
+            continue;
+        }
+        let new_actionable = after.gate_effect() == LintGateEffect::Actionable
+            && after.outcome() == LintOutcome::Finding
+            && (before.outcome() != LintOutcome::Finding
+                || after
+                    .evidence()
+                    .iter()
+                    .any(|evidence| !before.evidence().contains(evidence)));
+        if new_actionable {
+            return Err(WenlanError::Validation(
+                "repair_new_actionable_finding".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn target_receipt_on_connection(
@@ -848,7 +1196,10 @@ mod tests {
             LintAgentSubmission, LintAgentVerdict, LintEvidenceRef, LintProfile, LintQuery,
             LintSemanticCheckId, LintSemanticDecision,
         },
-        repair::{ApplyRepairRequest, PrepareRepairRequest, RepairDigest, RepairLintScope},
+        repair::{
+            ApplyRepairRequest, PrepareRepairRequest, RepairDigest, RepairLintScope,
+            VerifyRepairRequest,
+        },
         MemoryType,
     };
 
@@ -1118,9 +1469,15 @@ mod tests {
     }
 
     fn exact_apply(manifest: &RepairManifest) -> ApplyRepairRequest {
+        let approval = format!(
+            "apply repair {} {}",
+            manifest.manifest_id(),
+            manifest.manifest_digest().as_str()
+        );
         ApplyRepairRequest::try_new(
             manifest.manifest_id().to_string(),
             manifest.manifest_digest().clone(),
+            approval,
         )
         .unwrap()
     }
@@ -1143,15 +1500,94 @@ mod tests {
         output
     }
 
+    async fn verification_reports(
+        db: &MemoryDB,
+    ) -> (
+        wenlan_types::lint::LintReport,
+        wenlan_types::lint::LintReport,
+    ) {
+        let general = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+            .run(
+                db,
+                &LintQuery::new(Some(LintProfile::General), None),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let prepared = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+            .with_semantic_agent_assist()
+            .run(
+                db,
+                &LintQuery::new(Some(LintProfile::Deep), None),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let work = prepared.agent_work().expect("agent work");
+        let verdicts = work
+            .candidates()
+            .iter()
+            .map(|candidate| {
+                LintAgentVerdict::try_new(
+                    candidate.reference(),
+                    LintSemanticDecision::Pass,
+                    None,
+                    candidate.reason_code(),
+                    9_000,
+                    vec![],
+                )
+                .unwrap()
+            })
+            .collect();
+        let submission =
+            LintAgentSubmission::try_new(work.work_digest().clone(), verdicts).unwrap();
+        let deep = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+            .with_semantic_agent_submission(submission)
+            .run(
+                db,
+                &LintQuery::new(Some(LintProfile::Deep), None),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        (general, complete_deep_fixture(deep))
+    }
+
+    fn exact_verify(
+        manifest: &RepairManifest,
+        apply_receipt: &RepairApplyReceipt,
+        general: wenlan_types::lint::LintReport,
+        deep: wenlan_types::lint::LintReport,
+    ) -> VerifyRepairRequest {
+        VerifyRepairRequest::try_new(
+            manifest.manifest_id().to_string(),
+            manifest.manifest_digest().clone(),
+            apply_receipt.receipt_digest().clone(),
+            general,
+            deep,
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn wrong_approval_or_stale_target_performs_zero_writes() {
         let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
         let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
         let before = fingerprint(&db).await;
+        let wrong_digest =
+            RepairDigest::parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                .unwrap();
         let wrong = ApplyRepairRequest::try_new(
             manifest.manifest_id().to_string(),
-            RepairDigest::parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-                .unwrap(),
+            wrong_digest.clone(),
+            format!(
+                "apply repair {} {}",
+                manifest.manifest_id(),
+                wrong_digest.as_str()
+            ),
         )
         .unwrap();
 
@@ -1213,6 +1649,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_recovers_committed_receipt_that_was_not_published() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let manifest_dir = store.manifest_dir(manifest.manifest_id()).unwrap();
+        std::fs::rename(
+            manifest_dir.join(APPLY_RECEIPT_FILE),
+            manifest_dir.join(APPLY_RECEIPT_PENDING_FILE),
+        )
+        .unwrap();
+
+        let recovered = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+
+        assert_eq!(recovered, receipt);
+        assert!(manifest_dir.join(APPLY_RECEIPT_FILE).is_file());
+        assert!(!manifest_dir.join(APPLY_RECEIPT_PENDING_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn apply_discards_precommit_partial_receipt_and_retries() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let manifest_dir = store.manifest_dir(manifest.manifest_id()).unwrap();
+        std::fs::write(manifest_dir.join(APPLY_RECEIPT_PENDING_FILE), b"partial").unwrap();
+
+        let receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.manifest_id(), manifest.manifest_id());
+        assert!(manifest_dir.join(APPLY_RECEIPT_FILE).is_file());
+        assert!(!manifest_dir.join(APPLY_RECEIPT_PENDING_FILE).exists());
+    }
+
+    #[tokio::test]
     async fn effect_escape_rolls_back_target_and_trigger_side_effect() {
         let (db, _db_dir) = fixture().await;
         db.conn
@@ -1242,6 +1717,200 @@ mod tests {
         ));
         assert_eq!(before, fingerprint(&db).await);
         assert_eq!(target_memory_types(&db).await, vec![None, None]);
+    }
+
+    #[tokio::test]
+    async fn verification_records_receipt_only_after_post_lint_and_effect_proof() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+
+        let receipt = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(receipt.manifest_id(), manifest.manifest_id());
+        assert!(store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join("verification-receipt.json")
+            .is_file());
+    }
+
+    #[tokio::test]
+    async fn verification_retry_returns_the_existing_receipt() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        let request = exact_verify(&manifest, &apply_receipt, general, deep);
+
+        let first = record_repair_verification(&db, &store, request.clone(), 1_721_000_002)
+            .await
+            .unwrap();
+        let retried = record_repair_verification(&db, &store, request, 1_721_000_003)
+            .await
+            .unwrap();
+
+        assert_eq!(retried, first);
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_target_evidence_that_survives_post_lint() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        let mut value = serde_json::to_value(deep).unwrap();
+        let checks = value["checks"].as_array_mut().unwrap();
+        let target = checks
+            .iter_mut()
+            .find(|check| check["check_id"] == REPAIR_CLASSIFICATION_CHECK_ID)
+            .unwrap();
+        target["outcome"] = serde_json::json!("finding");
+        target["severity"] = serde_json::json!("warning");
+        target["applicability"] = serde_json::json!("applicable");
+        target["precondition"] = serde_json::json!("ready");
+        target["evidence"] = serde_json::json!([{
+            "kind": "semantic_finding",
+            "finding": manifest.source().finding()
+        }]);
+        let passed = checks
+            .iter()
+            .filter(|check| check["outcome"] == "pass")
+            .count();
+        let findings = checks
+            .iter()
+            .filter(|check| check["outcome"] == "finding")
+            .count();
+        let actionable_findings = checks
+            .iter()
+            .filter(|check| check["outcome"] == "finding" && check["gate_effect"] == "actionable")
+            .count();
+        value["totals"] = serde_json::json!({
+            "checks": checks.len(),
+            "passed": passed,
+            "findings": findings,
+            "actionable_findings": actionable_findings,
+            "advisory_findings": findings - actionable_findings,
+            "incomplete": 0
+        });
+        let deep = serde_json::from_value(value).unwrap();
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Validation(message)) if message == "repair_target_assertion_failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_non_target_change_after_apply() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE memories SET title='changed' WHERE id='row-other'",
+                (),
+            )
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message)) if message == "repair_verification_state_changed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_new_actionable_check() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        let mut value = serde_json::to_value(deep).unwrap();
+        let checks = value["checks"].as_array_mut().unwrap();
+        let injected = checks
+            .iter_mut()
+            .find(|check| {
+                check["check_id"] != REPAIR_CLASSIFICATION_CHECK_ID
+                    && check["outcome"] == "pass"
+                    && check["gate_effect"] == "actionable"
+            })
+            .unwrap();
+        injected["outcome"] = serde_json::json!("finding");
+        injected["severity"] = serde_json::json!("warning");
+        injected["applicability"] = serde_json::json!("applicable");
+        injected["precondition"] = serde_json::json!("ready");
+        let passed = checks
+            .iter()
+            .filter(|check| check["outcome"] == "pass")
+            .count();
+        let findings = checks
+            .iter()
+            .filter(|check| check["outcome"] == "finding")
+            .count();
+        let actionable_findings = checks
+            .iter()
+            .filter(|check| check["outcome"] == "finding" && check["gate_effect"] == "actionable")
+            .count();
+        value["totals"] = serde_json::json!({
+            "checks": checks.len(),
+            "passed": passed,
+            "findings": findings,
+            "actionable_findings": actionable_findings,
+            "advisory_findings": findings - actionable_findings,
+            "incomplete": 0
+        });
+        let deep = serde_json::from_value(value).unwrap();
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Validation(message)) if message == "repair_new_actionable_finding"
+        ));
     }
 
     #[test]

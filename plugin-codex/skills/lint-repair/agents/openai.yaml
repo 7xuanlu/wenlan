@@ -1,0 +1,3 @@
+interface:
+  display_name: "Wenlan Lint Repair"
+  short_description: "Safely repair one lint finding with exact approval"
