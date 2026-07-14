@@ -52,6 +52,26 @@ fn legacy_read_scope(space: Option<&str>) -> ReadScope {
     }
 }
 
+fn superseder_not_exists(
+    scope: &ReadScope,
+    target_alias: &str,
+    superseder_conditions: &str,
+) -> String {
+    let scope_guard = if matches!(scope, ReadScope::Global) {
+        String::new()
+    } else {
+        format!(
+            " AND ((superseder.space = {target_alias}.space) OR \
+             (superseder.space IS NULL AND {target_alias}.space IS NULL))"
+        )
+    };
+    format!(
+        "NOT EXISTS (SELECT 1 FROM memories superseder \
+         WHERE superseder.supersedes = {target_alias}.source_id \
+         AND {superseder_conditions}{scope_guard})"
+    )
+}
+
 fn capture_memory_source(source: &str) -> &str {
     match source {
         "focus" => "focus_capture",
@@ -73,11 +93,11 @@ fn parse_activity_ids(ids_csv: &str) -> Vec<String> {
         .collect()
 }
 
-fn scoped_activity_candidate_limit(limit: usize) -> i64 {
+fn scoped_activity_batch_size(limit: usize) -> i64 {
     let widened = limit
         .saturating_mul(10)
         .max(limit.saturating_add(100))
-        .min(10_000);
+        .min(1_000);
     i64::try_from(widened).unwrap_or(i64::MAX)
 }
 
@@ -96,11 +116,15 @@ async fn activity_owners(
             "WITH refs(id) AS (
                  SELECT CAST(value AS TEXT) FROM json_each(?1)
              )
-             SELECT refs.id, m.space
+             SELECT refs.id,
+                    CASE WHEN typeof(m.space) IN ('text', 'null') THEN m.space ELSE NULL END,
+                    typeof(m.space)
                FROM refs
                JOIN memories m ON m.source_id = refs.id AND m.source != 'episode'
              UNION ALL
-             SELECT refs.id, p.workspace
+             SELECT refs.id,
+                    CASE WHEN typeof(p.workspace) IN ('text', 'null') THEN p.workspace ELSE NULL END,
+                    typeof(p.workspace)
                FROM refs
                JOIN pages p ON p.id = refs.id",
             libsql::params![ids_json],
@@ -116,6 +140,12 @@ async fn activity_owners(
         .map_err(|e| WenlanError::VectorDb(format!("resolve activity owner row: {e}")))?
     {
         let id = row.get::<String>(0).unwrap_or_default();
+        let owner_type = row.get::<String>(2).unwrap_or_default();
+        if owner_type != "text" && owner_type != "null" {
+            return Err(WenlanError::VectorDb(
+                "invalid activity owner storage type".to_string(),
+            ));
+        }
         let owner = row.get::<Option<String>>(1).unwrap_or(None);
         if let Some(existing) = owners.get(&id) {
             if existing != &owner {
@@ -8571,9 +8601,16 @@ impl MemoryDB {
             for doc in &docs {
                 if let Some(ref superseded_id) = doc.supersedes {
                     if !doc.pending_revision {
+                        let superseder_space = doc
+                            .space
+                            .clone()
+                            .map(libsql::Value::Text)
+                            .unwrap_or(libsql::Value::Null);
                         conn.execute(
-                            "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
-                            libsql::params![superseded_id.to_string()],
+                            "UPDATE memories SET confirmed = 0
+                              WHERE source_id = ?1 AND source = 'memory'
+                                AND ((space = ?2) OR (space IS NULL AND ?2 IS NULL))",
+                            libsql::params![superseded_id.to_string(), superseder_space],
                         )
                         .await
                         .ok(); // Best effort
@@ -8637,12 +8674,13 @@ impl MemoryDB {
         // Mirror search_memory: hide supersede_mode='hide' targets; archive-mode
         // memories stay visible. Subquery is restricted to memory rows, so
         // documents/webpages are unaffected even when source_filter is None.
-        let supersedes_exclusion = "AND c.pending_revision = 0 AND c.source_id NOT IN (\
-            SELECT supersedes FROM memories \
-            WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' \
-            AND supersede_mode = 'hide' \
-            GROUP BY supersedes\
-        )";
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "c",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory' \
+             AND superseder.supersede_mode = 'hide'",
+        );
+        let supersedes_exclusion = format!("AND c.pending_revision = 0 AND {hidden_by_superseder}");
 
         // --- Vector search ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
@@ -9002,14 +9040,17 @@ impl MemoryDB {
         // T21: 'evicted' rows are soft-evicted by the refinery and must NOT surface
         // in default retrieval (recoverable by clearing supersede_mode). 'archive'
         // decisions stay visible — only 'evicted' is self-excluded here.
-        let supersedes_exclusion = "AND c.pending_revision = 0 \
-            AND (c.supersede_mode IS NULL OR c.supersede_mode != 'evicted') \
-            AND c.source_id NOT IN (\
-            SELECT supersedes FROM memories \
-            WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' \
-            AND supersede_mode = 'hide' \
-            GROUP BY supersedes\
-        )";
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "c",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory' \
+             AND superseder.supersede_mode = 'hide'",
+        );
+        let supersedes_exclusion = format!(
+            "AND c.pending_revision = 0 \
+             AND (c.supersede_mode IS NULL OR c.supersede_mode != 'evicted') \
+             AND {hidden_by_superseder}"
+        );
 
         // --- Vector search ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
@@ -9234,10 +9275,22 @@ impl MemoryDB {
         // Collect source_ids that are superseded by archive-mode memories
         let archived_ids: HashSet<String> = {
             let mut ids = HashSet::new();
-            let mut rows = conn.query(
-                "SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' AND supersede_mode = 'archive'",
-                libsql::params![],
-            ).await.map_err(|e| WenlanError::VectorDb(format!("archived_ids query: {}", e)))?;
+            let (scope_sql, scope_values) = match scope {
+                ReadScope::Global => ("", Vec::new()),
+                ReadScope::Space(space) => {
+                    ("AND space = ?1", vec![libsql::Value::Text(space.clone())])
+                }
+                ReadScope::Uncategorized => ("AND space IS NULL", Vec::new()),
+            };
+            let sql = format!(
+                "SELECT supersedes FROM memories \
+                 WHERE supersedes IS NOT NULL AND pending_revision = 0 \
+                   AND source = 'memory' AND supersede_mode = 'archive' {scope_sql}"
+            );
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(scope_values))
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("archived_ids query: {e}")))?;
             while let Ok(Some(row)) = rows.next().await {
                 if let Ok(sid) = row.get::<String>(0) {
                     ids.insert(sid);
@@ -13904,7 +13957,12 @@ impl MemoryDB {
     ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
 
-        let mut sql = String::from(
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "memories",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory'",
+        );
+        let mut sql = format!(
             "SELECT source_id, title,
                     GROUP_CONCAT(content, '\n') as content,
                     MAX(summary) as summary,
@@ -13937,7 +13995,7 @@ impl MemoryDB {
              FROM memories
              WHERE source = 'memory'
                AND pending_revision = 0
-               AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)"
+               AND {hidden_by_superseder}"
         );
         let mut params: Vec<libsql::Value> = Vec::new();
 
@@ -14339,7 +14397,12 @@ impl MemoryDB {
         scope: &ReadScope,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
-        let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "memories",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory'",
+        );
+        let supersedes_exclusion = format!("AND pending_revision = 0 AND {hidden_by_superseder}");
 
         let space_clause = match scope {
             ReadScope::Global => "",
@@ -14658,7 +14721,11 @@ impl MemoryDB {
         conditions.push("pending_revision = 0".to_string());
         // T2: never list verbatim episode rows in the filtered file view.
         conditions.push("source != 'episode'".to_string());
-        conditions.push("source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)".to_string());
+        conditions.push(superseder_not_exists(
+            scope,
+            "memories",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory'",
+        ));
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -18783,6 +18850,8 @@ impl MemoryDB {
             ReadScope::Space(_) => "AND c.space = ?2",
             ReadScope::Uncategorized => "AND c.space IS NULL",
         };
+        let hidden_by_superseder =
+            superseder_not_exists(scope, "c", "superseder.source = 'memory'");
         let sql = format!(
             "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.space,
                     c.source_agent, c.confidence, c.confirmed, c.stability,
@@ -18800,9 +18869,7 @@ impl MemoryDB {
              WHERE c.source = 'memory'
                AND c.stability = 'new'
                AND COALESCE(c.is_recap, 0) = 0
-               AND c.source_id NOT IN (
-                   SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND source = 'memory'
-               )
+               AND {hidden_by_superseder}
                {}
              ORDER BY
                c.pending_revision DESC,
@@ -22388,108 +22455,116 @@ impl MemoryDB {
         if target_limit == 0 {
             return Ok(Vec::new());
         }
-        let candidate_limit = scoped_activity_candidate_limit(target_limit);
+        let batch_limit = scoped_activity_batch_size(target_limit);
         let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT timestamp, agent_name, query, memory_ids
-                   FROM agent_activity
-                  WHERE action IN ('search','read') AND memory_ids != ''
-                  ORDER BY timestamp DESC
-                  LIMIT ?1",
-                libsql::params![candidate_limit],
-            )
-            .await
-            .map_err(|e| {
-                WenlanError::VectorDb(format!("list_recent_retrievals_scoped scan: {e}"))
-            })?;
-        let mut raw = Vec::new();
-        let mut all_ids = Vec::new();
-        let mut seen_ids = HashSet::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("list_recent_retrievals_scoped row: {e}")))?
-        {
-            let timestamp = row.get::<i64>(0).unwrap_or(0);
-            let agent = row.get::<String>(1).unwrap_or_default();
-            let query = row.get::<String>(2).ok().filter(|query| !query.is_empty());
-            let ids = parse_activity_ids(&row.get::<String>(3).unwrap_or_default());
-            for id in &ids {
-                if seen_ids.insert(id.clone()) {
-                    all_ids.push(id.clone());
-                }
-            }
-            raw.push((timestamp, agent, query, ids));
-        }
-        drop(rows);
-        let owners = activity_owners(&conn, &all_ids).await?;
-
         let mut events = Vec::new();
-        for (timestamp, agent_name, query, ids) in raw {
-            if events.len() >= target_limit {
+        let mut offset = 0i64;
+        loop {
+            let mut rows = conn
+                .query(
+                    "SELECT timestamp, agent_name, query, memory_ids
+                       FROM agent_activity
+                      WHERE action IN ('search','read') AND memory_ids != ''
+                      ORDER BY timestamp DESC, id DESC
+                      LIMIT ?1 OFFSET ?2",
+                    libsql::params![batch_limit, offset],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("list_recent_retrievals_scoped scan: {e}"))
+                })?;
+            let mut raw = Vec::new();
+            let mut all_ids = Vec::new();
+            let mut seen_ids = HashSet::new();
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("list_recent_retrievals_scoped row: {e}"))
+            })? {
+                let timestamp = row.get::<i64>(0).unwrap_or(0);
+                let agent = row.get::<String>(1).unwrap_or_default();
+                let query = row.get::<String>(2).ok().filter(|query| !query.is_empty());
+                let ids = parse_activity_ids(&row.get::<String>(3).unwrap_or_default());
+                for id in &ids {
+                    if seen_ids.insert(id.clone()) {
+                        all_ids.push(id.clone());
+                    }
+                }
+                raw.push((timestamp, agent, query, ids));
+            }
+            drop(rows);
+            let batch_len = raw.len();
+            if batch_len == 0 {
                 break;
             }
-            if !all_ids_match_scope(&ids, &owners, scope) {
-                continue;
-            }
+            let owners = activity_owners(&conn, &all_ids).await?;
 
-            let mut page_titles = Vec::new();
-            let mut page_ids = Vec::new();
-            let mut seen_page_ids = HashSet::new();
-            for id in &ids {
-                let pattern = format!("%\"{}\"%", id);
-                let (page_sql, page_values) = match scope {
-                    ReadScope::Space(space) => (
-                        "SELECT id, title FROM pages
+            for (timestamp, agent_name, query, ids) in raw {
+                if events.len() >= target_limit {
+                    break;
+                }
+                if !all_ids_match_scope(&ids, &owners, scope) {
+                    continue;
+                }
+
+                let mut page_titles = Vec::new();
+                let mut page_ids = Vec::new();
+                let mut seen_page_ids = HashSet::new();
+                for id in &ids {
+                    let pattern = format!("%\"{}\"%", id);
+                    let (page_sql, page_values) = match scope {
+                        ReadScope::Space(space) => (
+                            "SELECT id, title FROM pages
                           WHERE status = 'active' AND source_memory_ids LIKE ?1
                             AND workspace = ?2
                           LIMIT 5",
-                        vec![
-                            libsql::Value::Text(pattern),
-                            libsql::Value::Text(space.clone()),
-                        ],
-                    ),
-                    ReadScope::Uncategorized => (
-                        "SELECT id, title FROM pages
+                            vec![
+                                libsql::Value::Text(pattern),
+                                libsql::Value::Text(space.clone()),
+                            ],
+                        ),
+                        ReadScope::Uncategorized => (
+                            "SELECT id, title FROM pages
                           WHERE status = 'active' AND source_memory_ids LIKE ?1
                             AND workspace IS NULL
                           LIMIT 5",
-                        vec![libsql::Value::Text(pattern)],
-                    ),
-                    ReadScope::Global => unreachable!(),
-                };
-                let mut page_rows = conn
-                    .query(page_sql, libsql::params_from_iter(page_values))
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("list_recent_retrievals_scoped pages: {e}"))
-                    })?;
-                while let Some(row) = page_rows.next().await.map_err(|e| {
-                    WenlanError::VectorDb(format!("list_recent_retrievals_scoped page row: {e}"))
-                })? {
-                    let page_id = row.get::<String>(0).unwrap_or_default();
-                    let title = row.get::<String>(1).unwrap_or_default();
-                    if !page_id.is_empty()
-                        && !title.is_empty()
-                        && seen_page_ids.insert(page_id.clone())
-                    {
-                        page_ids.push(page_id);
-                        page_titles.push(title);
+                            vec![libsql::Value::Text(pattern)],
+                        ),
+                        ReadScope::Global => unreachable!(),
+                    };
+                    let mut page_rows = conn
+                        .query(page_sql, libsql::params_from_iter(page_values))
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!(
+                                "list_recent_retrievals_scoped pages: {e}"
+                            ))
+                        })?;
+                    while let Some(row) = page_rows.next().await.map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "list_recent_retrievals_scoped page row: {e}"
+                        ))
+                    })? {
+                        let page_id = row.get::<String>(0).unwrap_or_default();
+                        let title = row.get::<String>(1).unwrap_or_default();
+                        if !page_id.is_empty()
+                            && !title.is_empty()
+                            && seen_page_ids.insert(page_id.clone())
+                        {
+                            page_ids.push(page_id);
+                            page_titles.push(title);
+                        }
                     }
                 }
-            }
 
-            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let (snippet_scope, snippet_scope_value) = match scope {
-                ReadScope::Space(space) => {
-                    ("AND m.space = ?", Some(libsql::Value::Text(space.clone())))
-                }
-                ReadScope::Uncategorized => ("AND m.space IS NULL", None),
-                ReadScope::Global => unreachable!(),
-            };
-            let snippet_sql = format!(
-                "SELECT m.source_id, COALESCE(m.title, ''), COALESCE(m.content, '')
+                let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let (snippet_scope, snippet_scope_value) = match scope {
+                    ReadScope::Space(space) => {
+                        ("AND m.space = ?", Some(libsql::Value::Text(space.clone())))
+                    }
+                    ReadScope::Uncategorized => ("AND m.space IS NULL", None),
+                    ReadScope::Global => unreachable!(),
+                };
+                let snippet_sql = format!(
+                    "SELECT m.source_id, COALESCE(m.title, ''), COALESCE(m.content, '')
                    FROM memories m
                   WHERE m.source != 'episode' AND m.source_id IN ({placeholders})
                     {snippet_scope}
@@ -22497,54 +22572,61 @@ impl MemoryDB {
                         SELECT MIN(m2.chunk_index) FROM memories m2
                          WHERE m2.source != 'episode' AND m2.source_id = m.source_id
                     )"
-            );
-            let mut snippet_values = ids
-                .iter()
-                .cloned()
-                .map(libsql::Value::Text)
-                .collect::<Vec<_>>();
-            if let Some(value) = snippet_scope_value {
-                snippet_values.push(value);
-            }
-            let mut snippet_rows = conn
-                .query(&snippet_sql, libsql::params_from_iter(snippet_values))
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("list_recent_retrievals_scoped snippets: {e}"))
-                })?;
-            let mut snippet_map = HashMap::new();
-            while let Some(row) = snippet_rows.next().await.map_err(|e| {
-                WenlanError::VectorDb(format!("list_recent_retrievals_scoped snippet row: {e}"))
-            })? {
-                let source_id = row.get::<String>(0).unwrap_or_default();
-                let title = row.get::<String>(1).unwrap_or_default();
-                let content = row.get::<String>(2).unwrap_or_default();
-                let snippet = if !title.is_empty() && !title_looks_garbage(&title) {
-                    title.chars().take(80).collect::<String>()
-                } else if !content.is_empty() {
-                    content.chars().take(100).collect::<String>()
-                } else if !title.is_empty() {
-                    title.chars().take(80).collect::<String>()
-                } else {
+                );
+                let mut snippet_values = ids
+                    .iter()
+                    .cloned()
+                    .map(libsql::Value::Text)
+                    .collect::<Vec<_>>();
+                if let Some(value) = snippet_scope_value {
+                    snippet_values.push(value);
+                }
+                let mut snippet_rows = conn
+                    .query(&snippet_sql, libsql::params_from_iter(snippet_values))
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "list_recent_retrievals_scoped snippets: {e}"
+                        ))
+                    })?;
+                let mut snippet_map = HashMap::new();
+                while let Some(row) = snippet_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("list_recent_retrievals_scoped snippet row: {e}"))
+                })? {
+                    let source_id = row.get::<String>(0).unwrap_or_default();
+                    let title = row.get::<String>(1).unwrap_or_default();
+                    let content = row.get::<String>(2).unwrap_or_default();
+                    let snippet = if !title.is_empty() && !title_looks_garbage(&title) {
+                        title.chars().take(80).collect::<String>()
+                    } else if !content.is_empty() {
+                        content.chars().take(100).collect::<String>()
+                    } else if !title.is_empty() {
+                        title.chars().take(80).collect::<String>()
+                    } else {
+                        continue;
+                    };
+                    snippet_map.insert(source_id, snippet);
+                }
+                let memory_snippets = ids
+                    .iter()
+                    .filter_map(|id| snippet_map.remove(id))
+                    .collect::<Vec<_>>();
+                if page_titles.is_empty() && memory_snippets.is_empty() {
                     continue;
-                };
-                snippet_map.insert(source_id, snippet);
+                }
+                events.push(wenlan_types::RetrievalEvent {
+                    timestamp_ms: timestamp.saturating_mul(1000),
+                    agent_name,
+                    query,
+                    page_titles,
+                    page_ids,
+                    memory_snippets,
+                });
             }
-            let memory_snippets = ids
-                .iter()
-                .filter_map(|id| snippet_map.remove(id))
-                .collect::<Vec<_>>();
-            if page_titles.is_empty() && memory_snippets.is_empty() {
-                continue;
+            if events.len() >= target_limit || batch_len < batch_limit as usize {
+                break;
             }
-            events.push(wenlan_types::RetrievalEvent {
-                timestamp_ms: timestamp.saturating_mul(1000),
-                agent_name,
-                query,
-                page_titles,
-                page_ids,
-                memory_snippets,
-            });
+            offset = offset.saturating_add(batch_len as i64);
         }
         Ok(events)
     }
@@ -23279,96 +23361,105 @@ impl MemoryDB {
             sql.push_str(" AND timestamp >= ?");
             values.push(libsql::Value::Integer(timestamp));
         }
-        sql.push_str(" ORDER BY timestamp DESC LIMIT ?");
-        values.push(libsql::Value::Integer(scoped_activity_candidate_limit(
-            limit,
-        )));
-
-        let mut rows = conn
-            .query(&sql, libsql::params_from_iter(values))
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("list_agent_activity_scoped: {e}")))?;
-        let mut raw = Vec::new();
-        let mut all_ids = Vec::new();
-        let mut seen_ids = HashSet::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("list_agent_activity_scoped row: {e}")))?
-        {
-            let memory_ids = row.get::<String>(4).ok().filter(|ids| !ids.is_empty());
-            let ids = memory_ids
-                .as_deref()
-                .map(parse_activity_ids)
-                .unwrap_or_default();
-            for id in &ids {
-                if seen_ids.insert(id.clone()) {
-                    all_ids.push(id.clone());
-                }
-            }
-            raw.push((
-                AgentActivityRow {
-                    id: row.get::<i64>(0).unwrap_or(0),
-                    timestamp: row.get::<i64>(1).unwrap_or(0),
-                    agent_name: row.get::<String>(2).unwrap_or_default(),
-                    action: row.get::<String>(3).unwrap_or_default(),
-                    memory_ids,
-                    query: row.get::<String>(5).ok().filter(|value| !value.is_empty()),
-                    detail: row.get::<String>(6).ok().filter(|value| !value.is_empty()),
-                    memory_titles: Vec::new(),
-                },
-                ids,
-            ));
-        }
-        drop(rows);
-        let owners = activity_owners(&conn, &all_ids).await?;
-
+        sql.push_str(" ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?");
+        let batch_limit = scoped_activity_batch_size(limit);
         let mut activities = Vec::new();
-        for (mut activity, ids) in raw {
-            if activities.len() >= limit {
-                break;
-            }
-            if !all_ids_match_scope(&ids, &owners, scope) {
-                continue;
-            }
-
-            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let (scope_sql, scope_value) = match scope {
-                ReadScope::Space(space) => {
-                    ("AND space = ?", Some(libsql::Value::Text(space.clone())))
-                }
-                ReadScope::Uncategorized => ("AND space IS NULL", None),
-                ReadScope::Global => unreachable!(),
-            };
-            let title_sql = format!(
-                "SELECT DISTINCT title FROM memories
-                  WHERE source != 'episode' AND source_id IN ({placeholders}) {scope_sql}
-                  GROUP BY source_id"
-            );
-            let mut title_values = ids
-                .iter()
-                .cloned()
-                .map(libsql::Value::Text)
-                .collect::<Vec<_>>();
-            if let Some(value) = scope_value {
-                title_values.push(value);
-            }
-            let mut title_rows = conn
-                .query(&title_sql, libsql::params_from_iter(title_values))
+        let mut offset = 0i64;
+        loop {
+            let mut query_values = values.clone();
+            query_values.push(libsql::Value::Integer(batch_limit));
+            query_values.push(libsql::Value::Integer(offset));
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(query_values))
                 .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("list_agent_activity_scoped titles: {e}"))
-                })?;
-            while let Some(row) = title_rows.next().await.map_err(|e| {
-                WenlanError::VectorDb(format!("list_agent_activity_scoped title row: {e}"))
+                .map_err(|e| WenlanError::VectorDb(format!("list_agent_activity_scoped: {e}")))?;
+            let mut raw = Vec::new();
+            let mut all_ids = Vec::new();
+            let mut seen_ids = HashSet::new();
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("list_agent_activity_scoped row: {e}"))
             })? {
-                if let Ok(title) = row.get::<String>(0) {
-                    if !title.is_empty() {
-                        activity.memory_titles.push(title);
+                let memory_ids = row.get::<String>(4).ok().filter(|ids| !ids.is_empty());
+                let ids = memory_ids
+                    .as_deref()
+                    .map(parse_activity_ids)
+                    .unwrap_or_default();
+                for id in &ids {
+                    if seen_ids.insert(id.clone()) {
+                        all_ids.push(id.clone());
                     }
                 }
+                raw.push((
+                    AgentActivityRow {
+                        id: row.get::<i64>(0).unwrap_or(0),
+                        timestamp: row.get::<i64>(1).unwrap_or(0),
+                        agent_name: row.get::<String>(2).unwrap_or_default(),
+                        action: row.get::<String>(3).unwrap_or_default(),
+                        memory_ids,
+                        query: row.get::<String>(5).ok().filter(|value| !value.is_empty()),
+                        detail: row.get::<String>(6).ok().filter(|value| !value.is_empty()),
+                        memory_titles: Vec::new(),
+                    },
+                    ids,
+                ));
             }
-            activities.push(activity);
+            drop(rows);
+            let batch_len = raw.len();
+            if batch_len == 0 {
+                break;
+            }
+            let owners = activity_owners(&conn, &all_ids).await?;
+
+            for (mut activity, ids) in raw {
+                if activities.len() >= limit {
+                    break;
+                }
+                if !all_ids_match_scope(&ids, &owners, scope) {
+                    continue;
+                }
+
+                let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let (scope_sql, scope_value) = match scope {
+                    ReadScope::Space(space) => {
+                        ("AND space = ?", Some(libsql::Value::Text(space.clone())))
+                    }
+                    ReadScope::Uncategorized => ("AND space IS NULL", None),
+                    ReadScope::Global => unreachable!(),
+                };
+                let title_sql = format!(
+                    "SELECT DISTINCT title FROM memories
+                  WHERE source != 'episode' AND source_id IN ({placeholders}) {scope_sql}
+                  GROUP BY source_id"
+                );
+                let mut title_values = ids
+                    .iter()
+                    .cloned()
+                    .map(libsql::Value::Text)
+                    .collect::<Vec<_>>();
+                if let Some(value) = scope_value {
+                    title_values.push(value);
+                }
+                let mut title_rows = conn
+                    .query(&title_sql, libsql::params_from_iter(title_values))
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("list_agent_activity_scoped titles: {e}"))
+                    })?;
+                while let Some(row) = title_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("list_agent_activity_scoped title row: {e}"))
+                })? {
+                    if let Ok(title) = row.get::<String>(0) {
+                        if !title.is_empty() {
+                            activity.memory_titles.push(title);
+                        }
+                    }
+                }
+                activities.push(activity);
+            }
+            if activities.len() >= limit || batch_len < batch_limit as usize {
+                break;
+            }
+            offset = offset.saturating_add(batch_len as i64);
         }
         Ok(activities)
     }

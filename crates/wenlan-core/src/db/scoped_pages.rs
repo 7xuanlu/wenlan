@@ -93,16 +93,29 @@ impl MemoryDB {
         ];
         vector_params.extend(values.clone());
         let mut vector_results = Vec::new();
+        let mut channel_errors = Vec::new();
+        let mut vector_succeeded = false;
         match conn.query(&vector_sql, vector_params).await {
             Ok(mut rows) => {
-                while let Ok(Some(row)) = rows.next().await {
-                    if let Ok(page) = Self::row_to_page(&row) {
-                        let distance = row.get::<f64>(20).unwrap_or(1.0);
-                        vector_results.push((page.id.clone(), distance, page));
-                    }
+                vector_succeeded = true;
+                while let Some(row) = rows.next().await.map_err(|error| {
+                    WenlanError::VectorDb(format!("search_pages_scoped vector row: {error}"))
+                })? {
+                    let page = Self::row_to_page(&row).map_err(|error| {
+                        WenlanError::VectorDb(format!("search_pages_scoped vector decode: {error}"))
+                    })?;
+                    let distance = row.get::<f64>(20).map_err(|error| {
+                        WenlanError::VectorDb(format!(
+                            "search_pages_scoped vector distance: {error}"
+                        ))
+                    })?;
+                    vector_results.push((page.id.clone(), distance, page));
                 }
             }
-            Err(error) => log::warn!("[search_pages_scoped] vector search failed: {error}"),
+            Err(error) => {
+                log::warn!("[search_pages_scoped] vector search failed: {error}");
+                channel_errors.push(format!("vector: {error}"));
+            }
         }
 
         use crate::retrieval::fts_query::{
@@ -124,6 +137,7 @@ impl MemoryDB {
              ORDER BY rank LIMIT ?2"
         );
         let mut fts_results = Vec::new();
+        let mut fts_succeeded = false;
         for fts_query in fts_queries {
             let mut params = vec![
                 libsql::Value::Text(fts_query),
@@ -132,19 +146,32 @@ impl MemoryDB {
             params.extend(values.clone());
             match conn.query(&fts_sql, params).await {
                 Ok(mut rows) => {
-                    while let Ok(Some(row)) = rows.next().await {
-                        if let Ok(page) = Self::row_to_page(&row) {
-                            fts_results.push((page.id.clone(), page));
-                        }
+                    fts_succeeded = true;
+                    while let Some(row) = rows.next().await.map_err(|error| {
+                        WenlanError::VectorDb(format!("search_pages_scoped FTS row: {error}"))
+                    })? {
+                        let page = Self::row_to_page(&row).map_err(|error| {
+                            WenlanError::VectorDb(format!(
+                                "search_pages_scoped FTS decode: {error}"
+                            ))
+                        })?;
+                        fts_results.push((page.id.clone(), page));
                     }
                 }
                 Err(error) => {
-                    log::debug!("[search_pages_scoped] FTS search failed: {error}")
+                    log::debug!("[search_pages_scoped] FTS search failed: {error}");
+                    channel_errors.push(format!("fts: {error}"));
                 }
             }
             if !fts_results.is_empty() {
                 break;
             }
+        }
+        if !vector_succeeded && !fts_succeeded {
+            return Err(WenlanError::VectorDb(format!(
+                "search_pages_scoped has no available search channel: {}",
+                channel_errors.join("; ")
+            )));
         }
         drop(conn);
 

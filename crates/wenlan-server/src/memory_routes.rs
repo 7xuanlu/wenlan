@@ -4570,6 +4570,7 @@ mod search_quick_path_page_tests {
         let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
             .await
             .expect("MemoryDB::new");
+        db.create_space("work", None, false).await.unwrap();
 
         // Tier-2 caller: "review" allows tier 2, denies tier 1; "unknown" denies tier 2.
         db.register_agent("trusted-agent").await.unwrap();

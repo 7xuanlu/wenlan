@@ -7,7 +7,7 @@
 mod common;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderValue, Request, StatusCode};
 use std::sync::OnceLock;
 use tower::ServiceExt;
 use wenlan_types::responses::{
@@ -257,6 +257,34 @@ async fn search_memory_unregistered_header_is_rejected() {
 
     let res = router.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn search_memory_malformed_space_headers_are_rejected() {
+    for (preferred, legacy) in [(true, true), (false, true)] {
+        let (router, _tmp, _db) = common::test_app().await;
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/api/memory/search")
+            .header("Content-Type", "application/json");
+        if legacy {
+            builder = builder.header("X-Origin-Space", "career");
+        }
+        let mut request = builder
+            .body(Body::from(r#"{"query":"malformed header canary"}"#))
+            .unwrap();
+        let malformed = HeaderValue::from_bytes(&[0xff]).unwrap();
+        if preferred {
+            request.headers_mut().insert("X-Wenlan-Space", malformed);
+        } else {
+            request.headers_mut().insert("X-Origin-Space", malformed);
+        }
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = body_as_json(response).await;
+        assert_eq!(body["error"], "invalid Space header");
+    }
 }
 
 #[tokio::test]

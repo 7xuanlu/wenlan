@@ -239,6 +239,135 @@ async fn search_pages_scopes_before_vector_limit() {
 }
 
 #[tokio::test]
+async fn selected_page_search_propagates_total_database_failure() {
+    let (db, _tmp) = test_db().await;
+    let conn = db.conn.lock().await;
+    conn.execute_batch("ALTER TABLE pages RENAME TO pages_unavailable;")
+        .await
+        .unwrap();
+    drop(conn);
+
+    let result = db
+        .search_pages_scoped("query", 10, None, &ReadScope::Space("work".to_string()))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "total DB failure must not become a clean 200"
+    );
+}
+
+#[tokio::test]
+async fn cross_space_superseder_does_not_hide_selected_memory() {
+    let (db, _tmp) = test_db().await;
+    let mut target = memory_doc("work-target", "work");
+    target.content = "deliberately unrelated candidate text work target".to_string();
+    let mut superseder = memory_doc("personal-superseder", "personal");
+    superseder.content = "deliberately unrelated candidate text personal superseder".to_string();
+    superseder.supersedes = Some("work-target".to_string());
+    superseder.supersede_mode = "hide".to_string();
+    let mut archive_target = memory_doc("work-archive-target", "work");
+    archive_target.content =
+        "deliberately unrelated candidate text work archive target".to_string();
+    let mut archive_superseder = memory_doc("personal-archive-superseder", "personal");
+    archive_superseder.content =
+        "deliberately unrelated candidate text personal archive superseder".to_string();
+    archive_superseder.supersedes = Some("work-archive-target".to_string());
+    archive_superseder.supersede_mode = "archive".to_string();
+    db.upsert_documents(vec![target, superseder, archive_target, archive_superseder])
+        .await
+        .unwrap();
+    assert_eq!(
+        db.get_memory_space("personal-archive-superseder")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("personal")
+    );
+    let scope = ReadScope::Space("work".to_string());
+
+    let ranked = db
+        .search_memory(
+            "deliberately unrelated candidate text",
+            10,
+            None,
+            &scope,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let generic = db
+        .search(
+            "deliberately unrelated candidate text",
+            10,
+            Some("memory"),
+            &scope,
+        )
+        .await
+        .unwrap();
+    let listed = db
+        .list_memories_scoped(&scope, None, None, None, 10)
+        .await
+        .unwrap();
+    let typed = db
+        .load_memories_by_type_scoped("fact", 10, &scope)
+        .await
+        .unwrap();
+    let filtered = db
+        .list_filtered_scoped(Some("memory"), None, &scope, 10)
+        .await
+        .unwrap();
+
+    assert!(
+        ranked
+            .iter()
+            .any(|memory| memory.source_id == "work-target"),
+        "a personal superseder must not alter work search visibility"
+    );
+    assert!(
+        generic
+            .iter()
+            .any(|memory| memory.source_id == "work-target"),
+        "the generic ranked path must share scoped superseder isolation"
+    );
+    assert!(
+        listed
+            .iter()
+            .any(|memory| memory.source_id == "work-target"),
+        "a personal superseder must not alter work collection visibility"
+    );
+    assert!(
+        typed.iter().any(|memory| memory.source_id == "work-target"),
+        "typed collections must share scoped superseder isolation"
+    );
+    assert!(
+        filtered
+            .iter()
+            .any(|memory| memory.source_id == "work-target"),
+        "filtered collections must share scoped superseder isolation"
+    );
+    assert!(
+        ranked
+            .iter()
+            .find(|memory| memory.source_id == "work-archive-target")
+            .is_some_and(|memory| !memory.is_archived),
+        "a personal archive superseder must not mark a work result archived: {ranked:#?}"
+    );
+
+    db.set_stability("work-target", "new").await.unwrap();
+    let nurture = db.get_nurture_cards_scoped(10, &scope).await.unwrap();
+    assert!(
+        nurture
+            .iter()
+            .any(|memory| memory.source_id == "work-target"),
+        "nurture collections must share scoped superseder isolation"
+    );
+}
+
+#[tokio::test]
 async fn selected_page_visibility_requires_matching_workspace() {
     let (db, _tmp) = test_db().await;
     let source_ids = HashSet::from(["work-memory".to_string()]);

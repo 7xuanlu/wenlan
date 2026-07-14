@@ -344,7 +344,9 @@ work, personal, SQL-NULL, and literal `space='uncategorized'` Pages. The lint
 E2E harness now expects real baseline/Global/registered/Uncategorized and
 tarball reports to be clean with exit `0`; a separate typed synthetic report
 with one route-scope defect owns exit `1`, incomplete precedence, and tarball
-producer-receipt assertions. Exact committed-HEAD execution is pending.
+producer-receipt assertions. Commit `662da31d` passed exact committed-HEAD
+execution. The final post-review HEAD will repeat the same gate after the
+hardening fixes below are committed.
 
 The first exact-HEAD run passed baseline exit `0`, clean fixture exit `0`, and
 synthetic route-scope exit `1`, then correctly returned exit `1` after the
@@ -449,4 +451,43 @@ search payload. When that dependency is upgraded, its Rust constructor must add
 
 ## Final Reviews
 
-Pending Codex Sol xhigh and Claude Opus xhigh implementation verdicts.
+The first integrated Codex Sol xhigh review found five Important gaps after the
+initial full gate:
+
+1. malformed preferred Space headers silently became Global or fell back to a
+   legacy selector;
+2. cross-Space superseders could hide, demote, or mark selected-Space memories
+   archived;
+3. the scoped retrieval/activity feeds stopped after a finite widened candidate
+   window and could miss valid older events;
+4. selected Page search returned an empty success when both DB search channels
+   failed; and
+5. malformed Memory/Page owner storage could trigger libSQL's invalid-value
+   panic during scoped activity reads.
+
+RED canaries reproduced each behavior. The fixes reject malformed headers with
+a static `422`, scope both superseder reads and write-time soft suppression,
+paginate activity rows until the requested visible count or source exhaustion,
+require at least one successful Page search channel while propagating row
+decode errors, and normalize owner storage through SQL `typeof` guards before
+typed row decoding. The stale Page quick-path fixtures also now register the
+Space they select, preserving the fail-closed resolver contract.
+
+| Hardening contract | Focused result |
+|---|---|
+| Scoped Page, superseder, and failure paths | 9 passed, 0 failed |
+| Scoped record/activity paths | 5 passed, 0 failed |
+| Server library including corrected fixtures | 160 passed, 0 failed |
+| Malformed preferred and legacy HTTP headers | 1 passed, 0 failed |
+| Existing same/NULL-Space soft suppression | 1 passed, 0 failed |
+| Changed-crate Clippy | passed |
+
+The expanded superseder canary then exposed a write-path side effect: inserting
+a personal superseder had globally set its work predecessor to
+`confirmed = 0`. The UPDATE now requires equal Space ownership, including SQL
+NULL equality; the same/NULL-Space legacy suppression test remains green.
+
+Codex Sol xhigh re-review and the delta-only follow-up both returned
+**APPROVED**, with no remaining Critical or Important findings. Claude Opus
+xhigh adversarial review remains pending until the final committed-HEAD gates
+are green.

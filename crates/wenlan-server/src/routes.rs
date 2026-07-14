@@ -2039,6 +2039,7 @@ mod context_page_selection_tests {
         let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
             .await
             .expect("MemoryDB::new");
+        db.create_space("work", None, false).await.unwrap();
 
         // A tier-2 caller: trust "review" allows tier 2, denies tier 1.
         db.register_agent("test-agent").await.unwrap();
@@ -2219,6 +2220,7 @@ mod search_supplemental_pages_tests {
         let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
             .await
             .expect("MemoryDB::new");
+        db.create_space("work", None, false).await.unwrap();
 
         // tier-2 caller: trust "review" allows tier 2, denies tier 1; "unknown"
         // (no header) denies tier 2.
