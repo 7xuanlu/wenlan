@@ -709,8 +709,6 @@ jobs:
     # Runs only after EVERY build + publish job succeeds. A failure in any of
     # them skips this job (GitHub requires all `needs` to succeed), so the
     # release stays a prerelease — never a `releases/latest` without artifacts.
-    # Clearing the prerelease flag here is also what fires `release: released`
-    # (and notify-marketplace) at the right moment: after the artifacts exist.
     needs: [release, docker-manifest, publish-crates, publish-npm, update-homebrew]
     runs-on: ubuntu-latest
     steps:
