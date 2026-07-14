@@ -297,15 +297,16 @@ def validate_marketplace(root: Path, surface: str, config: dict[str, Any]) -> No
         plugin.get("category"),
         marketplace_config["category"],
     )
-    if "description" in plugin:
-        # The storefront blurb is not a second copy to keep in sync by hand:
-        # it must be the manifest's own description.
-        manifest = read_json(root, root / config["manifest_path"])
-        require_equal(
-            f"{label} description",
-            plugin.get("description"),
-            manifest.get("description"),
-        )
+    # The storefront listing is not a second copy to keep in sync by hand: the
+    # blurb and the discovery tags must be the manifest's own.
+    manifest = read_json(root, root / config["manifest_path"])
+    for field in ("description", "keywords"):
+        if field in plugin:
+            require_equal(
+                f"{label} {field}",
+                plugin.get(field),
+                manifest.get(field),
+            )
 
 
 def validate_skill_surface(

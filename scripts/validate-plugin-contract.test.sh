@@ -68,15 +68,19 @@ assert_rejects "marketplace source drift" \
     "$TMPDIR_TEST/root/.agents/plugins/marketplace.json"
 
 assert_rejects "claude marketplace category drift" \
-    perl -0pi -e 's/"category": "knowledge-base"/"category": "memory"/' \
+    perl -0pi -e 's/"category": "productivity"/"category": "memory"/' \
     "$TMPDIR_TEST/root/.claude-plugin/marketplace.json"
 
 assert_rejects "claude manifest category drift" \
-    perl -0pi -e 's/"category": "knowledge-base"/"category": "memory"/' \
+    perl -0pi -e 's/"category": "productivity"/"category": "memory"/' \
     "$TMPDIR_TEST/root/plugin/.claude-plugin/plugin.json"
 
 assert_rejects "claude marketplace description drift" \
     perl -0pi -e 's/"description": "A living knowledge base/"description": "A memory layer/' \
+    "$TMPDIR_TEST/root/.claude-plugin/marketplace.json"
+
+assert_rejects "claude marketplace keywords drift" \
+    perl -0pi -e 's/"wiki",/"memory-layer",/' \
     "$TMPDIR_TEST/root/.claude-plugin/marketplace.json"
 
 assert_rejects "claude stdio default drift" \
