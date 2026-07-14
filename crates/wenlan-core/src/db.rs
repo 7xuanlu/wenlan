@@ -5,6 +5,7 @@ use crate::error::WenlanError;
 use crate::events::EventEmitter;
 use crate::pages::Page;
 use crate::privacy::redact_pii;
+use crate::read_scope::ReadScope;
 use crate::retrieval::document_cap::{cap_per_document, DEFAULT_PER_DOCUMENT_CAP};
 use crate::sources::{stability_tier, RawDocument};
 
@@ -17,6 +18,161 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 mod count;
+mod scoped_entities;
+mod scoped_pages;
+
+#[cfg(test)]
+mod scoped_entities_test;
+#[cfg(test)]
+mod scoped_pages_test;
+#[cfg(test)]
+mod scoped_records_test;
+
+fn push_read_scope_filter(
+    scope: &ReadScope,
+    column: &str,
+    conditions: &mut Vec<String>,
+    values: &mut Vec<libsql::Value>,
+) {
+    match scope {
+        ReadScope::Global => {}
+        ReadScope::Space(space) => {
+            conditions.push(format!("{column} = ?"));
+            values.push(libsql::Value::Text(space.clone()));
+        }
+        ReadScope::Uncategorized => conditions.push(format!("{column} IS NULL")),
+    }
+}
+
+fn legacy_read_scope(space: Option<&str>) -> ReadScope {
+    match space {
+        None => ReadScope::Global,
+        Some("uncategorized") => ReadScope::Uncategorized,
+        Some(space) => ReadScope::Space(space.to_string()),
+    }
+}
+
+fn superseder_not_exists(
+    scope: &ReadScope,
+    target_alias: &str,
+    superseder_conditions: &str,
+) -> String {
+    let scope_guard = if matches!(scope, ReadScope::Global) {
+        String::new()
+    } else {
+        format!(
+            " AND ((superseder.space = {target_alias}.space) OR \
+             (superseder.space IS NULL AND {target_alias}.space IS NULL))"
+        )
+    };
+    format!(
+        "NOT EXISTS (SELECT 1 FROM memories superseder \
+         WHERE superseder.supersedes = {target_alias}.source_id \
+         AND {superseder_conditions}{scope_guard})"
+    )
+}
+
+fn capture_memory_source(source: &str) -> &str {
+    match source {
+        "focus" => "focus_capture",
+        "hotkey" => "hotkey_capture",
+        "snip" => "snip_capture",
+        "thought" => "quick_thought",
+        other => other,
+    }
+}
+
+fn parse_activity_ids(ids_csv: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    ids_csv
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .filter(|id| seen.insert((*id).to_string()))
+        .map(str::to_string)
+        .collect()
+}
+
+fn scoped_activity_batch_size(limit: usize) -> i64 {
+    let widened = limit
+        .saturating_mul(10)
+        .max(limit.saturating_add(100))
+        .min(1_000);
+    i64::try_from(widened).unwrap_or(i64::MAX)
+}
+
+async fn activity_owners(
+    conn: &libsql::Connection,
+    ids: &[String],
+) -> Result<HashMap<String, Option<String>>, WenlanError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let ids_json = serde_json::to_string(ids)
+        .map_err(|e| WenlanError::VectorDb(format!("serialize activity owners: {e}")))?;
+    let mut rows = conn
+        .query(
+            "WITH refs(id) AS (
+                 SELECT CAST(value AS TEXT) FROM json_each(?1)
+             )
+             SELECT refs.id,
+                    CASE WHEN typeof(m.space) IN ('text', 'null') THEN m.space ELSE NULL END,
+                    typeof(m.space)
+               FROM refs
+               JOIN memories m ON m.source_id = refs.id AND m.source != 'episode'
+             UNION ALL
+             SELECT refs.id,
+                    CASE WHEN typeof(p.workspace) IN ('text', 'null') THEN p.workspace ELSE NULL END,
+                    typeof(p.workspace)
+               FROM refs
+               JOIN pages p ON p.id = refs.id",
+            libsql::params![ids_json],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("resolve activity owners: {e}")))?;
+
+    let mut owners = HashMap::new();
+    let mut conflicts = HashSet::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("resolve activity owner row: {e}")))?
+    {
+        let id = row.get::<String>(0).unwrap_or_default();
+        let owner_type = row.get::<String>(2).unwrap_or_default();
+        if owner_type != "text" && owner_type != "null" {
+            return Err(WenlanError::VectorDb(
+                "invalid activity owner storage type".to_string(),
+            ));
+        }
+        let owner = row.get::<Option<String>>(1).unwrap_or(None);
+        if let Some(existing) = owners.get(&id) {
+            if existing != &owner {
+                conflicts.insert(id);
+            }
+        } else {
+            owners.insert(id, owner);
+        }
+    }
+    for id in conflicts {
+        owners.remove(&id);
+    }
+    Ok(owners)
+}
+
+fn all_ids_match_scope(
+    ids: &[String],
+    owners: &HashMap<String, Option<String>>,
+    scope: &ReadScope,
+) -> bool {
+    !ids.is_empty()
+        && ids.iter().all(|id| {
+            owners
+                .get(id)
+                .is_some_and(|space| scope.matches(space.as_deref()))
+        })
+}
 
 #[derive(Clone, serde::Serialize)]
 pub struct MigrationProgress {
@@ -1435,6 +1591,12 @@ pub use wenlan_types::{
 
 // Re-export wire type from wenlan-types so existing consumers keep working.
 pub use wenlan_types::responses::MemoryDetail;
+
+#[derive(Debug)]
+pub struct ScopedTags {
+    pub tags: Vec<String>,
+    pub document_tags: HashMap<String, Vec<String>>,
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DistillationCluster {
@@ -7377,6 +7539,94 @@ impl MemoryDB {
         Ok(out)
     }
 
+    /// Return the document tag map and its distinct tag projection from one
+    /// scoped population. Selected reads retain only exact Memory/Page owners.
+    pub async fn list_tags_scoped(&self, scope: &ReadScope) -> Result<ScopedTags, WenlanError> {
+        let (sql, values) = match scope {
+            ReadScope::Global => (
+                "SELECT source, source_id, tag
+                   FROM document_tags
+                  ORDER BY source, source_id, tag"
+                    .to_string(),
+                Vec::new(),
+            ),
+            ReadScope::Space(space) => (
+                "SELECT dt.source, dt.source_id, dt.tag
+                   FROM document_tags dt
+                  WHERE (dt.source = 'memory' AND EXISTS (
+                            SELECT 1 FROM memories m
+                             WHERE m.source = dt.source
+                               AND m.source_id = dt.source_id
+                               AND m.space = ?1
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM memories other
+                                    WHERE other.source = dt.source
+                                      AND other.source_id = dt.source_id
+                                      AND (other.space IS NULL OR other.space <> ?1)
+                               )
+                        ))
+                     OR (dt.source = 'page' AND EXISTS (
+                            SELECT 1 FROM pages p
+                             WHERE p.id = dt.source_id
+                               AND p.workspace = ?1
+                        ))
+                  ORDER BY dt.source, dt.source_id, dt.tag"
+                    .to_string(),
+                vec![libsql::Value::Text(space.clone())],
+            ),
+            ReadScope::Uncategorized => (
+                "SELECT dt.source, dt.source_id, dt.tag
+                   FROM document_tags dt
+                  WHERE (dt.source = 'memory' AND EXISTS (
+                            SELECT 1 FROM memories m
+                             WHERE m.source = dt.source
+                               AND m.source_id = dt.source_id
+                               AND m.space IS NULL
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM memories other
+                                    WHERE other.source = dt.source
+                                      AND other.source_id = dt.source_id
+                                      AND other.space IS NOT NULL
+                               )
+                        ))
+                     OR (dt.source = 'page' AND EXISTS (
+                            SELECT 1 FROM pages p
+                             WHERE p.id = dt.source_id
+                               AND p.workspace IS NULL
+                        ))
+                  ORDER BY dt.source, dt.source_id, dt.tag"
+                    .to_string(),
+                Vec::new(),
+            ),
+        };
+
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_tags_scoped: {e}")))?;
+        let mut tags = std::collections::BTreeSet::new();
+        let mut document_tags: HashMap<String, Vec<String>> = HashMap::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_tags_scoped row: {e}")))?
+        {
+            let source: String = row.get(0).unwrap_or_default();
+            let source_id: String = row.get(1).unwrap_or_default();
+            let tag: String = row.get(2).unwrap_or_default();
+            tags.insert(tag.clone());
+            document_tags
+                .entry(format!("{source}::{source_id}"))
+                .or_default()
+                .push(tag);
+        }
+        Ok(ScopedTags {
+            tags: tags.into_iter().collect(),
+            document_tags,
+        })
+    }
+
     /// Get memories that need re-embedding (structured content was set but embedding is stale).
     pub async fn get_reembed_candidates(
         &self,
@@ -8351,9 +8601,16 @@ impl MemoryDB {
             for doc in &docs {
                 if let Some(ref superseded_id) = doc.supersedes {
                     if !doc.pending_revision {
+                        let superseder_space = doc
+                            .space
+                            .clone()
+                            .map(libsql::Value::Text)
+                            .unwrap_or(libsql::Value::Null);
                         conn.execute(
-                            "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
-                            libsql::params![superseded_id.to_string()],
+                            "UPDATE memories SET confirmed = 0
+                              WHERE source_id = ?1 AND source = 'memory'
+                                AND ((space = ?2) OR (space IS NULL AND ?2 IS NULL))",
+                            libsql::params![superseded_id.to_string(), superseder_space],
                         )
                         .await
                         .ok(); // Best effort
@@ -8395,7 +8652,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         source_filter: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
@@ -8412,24 +8669,18 @@ impl MemoryDB {
             filter_conditions.push("c.source = ?".to_string());
             filter_values.push(libsql::Value::Text(filter.to_string()));
         }
-        if let Some(sp) = space {
-            if sp == "uncategorized" {
-                filter_conditions.push("c.space IS NULL".to_string());
-            } else {
-                filter_conditions.push("c.space = ?".to_string());
-                filter_values.push(libsql::Value::Text(sp.to_string()));
-            }
-        }
+        push_read_scope_filter(scope, "c.space", &mut filter_conditions, &mut filter_values);
 
         // Mirror search_memory: hide supersede_mode='hide' targets; archive-mode
         // memories stay visible. Subquery is restricted to memory rows, so
         // documents/webpages are unaffected even when source_filter is None.
-        let supersedes_exclusion = "AND c.pending_revision = 0 AND c.source_id NOT IN (\
-            SELECT supersedes FROM memories \
-            WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' \
-            AND supersede_mode = 'hide' \
-            GROUP BY supersedes\
-        )";
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "c",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory' \
+             AND superseder.supersede_mode = 'hide'",
+        );
+        let supersedes_exclusion = format!("AND c.pending_revision = 0 AND {hidden_by_superseder}");
 
         // --- Vector search ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
@@ -8455,7 +8706,7 @@ impl MemoryDB {
                 format!("AND {}", vec_where_parts.join(" AND "))
             };
 
-            let sql = format!(
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
                         c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
@@ -8464,12 +8715,23 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date, c.content_hash
-                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
-                 JOIN memories c ON c.rowid = vt.id
-                 WHERE 1=1 {} {}",
-                supersedes_exclusion, vec_filter
-            );
+                        c.importance, c.event_date, c.content_hash";
+            let sql = if matches!(scope, ReadScope::Global) {
+                format!(
+                    "{projection}
+                     FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
+                     JOIN memories c ON c.rowid = vt.id
+                     WHERE 1=1 {supersedes_exclusion} {vec_filter}"
+                )
+            } else {
+                format!(
+                    "{projection}
+                     FROM memories c
+                     WHERE c.embedding IS NOT NULL {supersedes_exclusion} {vec_filter}
+                     ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC
+                     LIMIT ?2"
+                )
+            };
 
             let mut params: Vec<libsql::Value> = vec![
                 libsql::Value::Text(vec_str.clone()),
@@ -8651,7 +8913,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         confirmation_boost: Option<f32>,
         recap_penalty: Option<f32>,
@@ -8661,7 +8923,7 @@ impl MemoryDB {
             query,
             limit,
             memory_type,
-            space,
+            scope,
             source_agent,
             None, // temporal_cue: None -> no temporal hard filter
             confirmation_boost,
@@ -8688,7 +8950,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         temporal_cue: Option<crate::temporal_query::DateRange>,
         confirmation_boost: Option<f32>,
@@ -8738,14 +9000,7 @@ impl MemoryDB {
                 }
             }
         }
-        if let Some(d) = space {
-            if d == "uncategorized" {
-                filter_conditions.push("c.space IS NULL".to_string());
-            } else {
-                filter_conditions.push("c.space = ?".to_string());
-                filter_values.push(libsql::Value::Text(d.to_string()));
-            }
-        }
+        push_read_scope_filter(scope, "c.space", &mut filter_conditions, &mut filter_values);
         if let Some(sa) = source_agent {
             filter_conditions.push("c.source_agent = ?".to_string());
             filter_values.push(libsql::Value::Text(sa.to_string()));
@@ -8785,14 +9040,17 @@ impl MemoryDB {
         // T21: 'evicted' rows are soft-evicted by the refinery and must NOT surface
         // in default retrieval (recoverable by clearing supersede_mode). 'archive'
         // decisions stay visible — only 'evicted' is self-excluded here.
-        let supersedes_exclusion = "AND c.pending_revision = 0 \
-            AND (c.supersede_mode IS NULL OR c.supersede_mode != 'evicted') \
-            AND c.source_id NOT IN (\
-            SELECT supersedes FROM memories \
-            WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' \
-            AND supersede_mode = 'hide' \
-            GROUP BY supersedes\
-        )";
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "c",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory' \
+             AND superseder.supersede_mode = 'hide'",
+        );
+        let supersedes_exclusion = format!(
+            "AND c.pending_revision = 0 \
+             AND (c.supersede_mode IS NULL OR c.supersede_mode != 'evicted') \
+             AND {hidden_by_superseder}"
+        );
 
         // --- Vector search ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
@@ -8819,7 +9077,7 @@ impl MemoryDB {
                 format!("AND {}", vec_where_parts.join(" AND "))
             };
 
-            let sql = format!(
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
                         c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
@@ -8828,12 +9086,23 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date, c.content_hash
-                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
-                 JOIN memories c ON c.rowid = vt.id
-                 WHERE 1=1 {} {}",
-                supersedes_exclusion, vec_filter
-            );
+                        c.importance, c.event_date, c.content_hash";
+            let sql = if matches!(scope, ReadScope::Global) {
+                format!(
+                    "{projection}
+                     FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
+                     JOIN memories c ON c.rowid = vt.id
+                     WHERE 1=1 {supersedes_exclusion} {vec_filter}"
+                )
+            } else {
+                format!(
+                    "{projection}
+                     FROM memories c
+                     WHERE c.embedding IS NOT NULL {supersedes_exclusion} {vec_filter}
+                     ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC
+                     LIMIT ?2"
+                )
+            };
 
             let mut params: Vec<libsql::Value> = vec![
                 libsql::Value::Text(vec_str),
@@ -9006,10 +9275,22 @@ impl MemoryDB {
         // Collect source_ids that are superseded by archive-mode memories
         let archived_ids: HashSet<String> = {
             let mut ids = HashSet::new();
-            let mut rows = conn.query(
-                "SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' AND supersede_mode = 'archive'",
-                libsql::params![],
-            ).await.map_err(|e| WenlanError::VectorDb(format!("archived_ids query: {}", e)))?;
+            let (scope_sql, scope_values) = match scope {
+                ReadScope::Global => ("", Vec::new()),
+                ReadScope::Space(space) => {
+                    ("AND space = ?1", vec![libsql::Value::Text(space.clone())])
+                }
+                ReadScope::Uncategorized => ("AND space IS NULL", Vec::new()),
+            };
+            let sql = format!(
+                "SELECT supersedes FROM memories \
+                 WHERE supersedes IS NOT NULL AND pending_revision = 0 \
+                   AND source = 'memory' AND supersede_mode = 'archive' {scope_sql}"
+            );
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(scope_values))
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("archived_ids query: {e}")))?;
             while let Ok(Some(row)) = rows.next().await {
                 if let Ok(sid) = row.get::<String>(0) {
                     ids.insert(sid);
@@ -9195,7 +9476,13 @@ impl MemoryDB {
                 && !(allow_graph_stream && graph_memory_stream_enabled())
             {
                 let seeded_result = self
-                    .augment_with_graph_seeded(query, final_results, &pool_entity_ids, limit)
+                    .augment_with_graph_seeded_scoped(
+                        query,
+                        final_results,
+                        &pool_entity_ids,
+                        limit,
+                        scope,
+                    )
                     .await;
                 match seeded_result {
                     Ok(augmented) => {
@@ -9209,13 +9496,25 @@ impl MemoryDB {
                         // final_results was moved; augment_with_graph with empty results
                         // so score boosts still flow (query-anchor picks up entities).
                         final_results = self
-                            .augment_with_graph_gated(query, vec![], limit, allow_graph_stream)
+                            .augment_with_graph_gated(
+                                query,
+                                vec![],
+                                limit,
+                                allow_graph_stream,
+                                scope,
+                            )
                             .await?;
                     }
                 }
             } else {
                 final_results = self
-                    .augment_with_graph_gated(query, final_results, limit, allow_graph_stream)
+                    .augment_with_graph_gated(
+                        query,
+                        final_results,
+                        limit,
+                        allow_graph_stream,
+                        scope,
+                    )
                     .await?;
             }
         }
@@ -9424,7 +9723,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -9438,7 +9737,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -9461,7 +9760,7 @@ impl MemoryDB {
             query,
             limit,
             memory_type,
-            space,
+            scope,
             source_agent,
             high_conf_cue,
             None, // confirmation_boost
@@ -9535,6 +9834,16 @@ impl MemoryDB {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>, WenlanError> {
+        self.search_episodes_scoped(query, limit, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn search_episodes_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SearchResult>, WenlanError> {
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
         let fetch_limit = (limit * 3) as i64;
@@ -9544,17 +9853,46 @@ impl MemoryDB {
         // --- Vector search (episode-scoped) ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
         {
-            let sql =
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date, c.content_hash
-                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
-                 JOIN memories c ON c.rowid = vt.id
-                 WHERE c.source = 'episode'";
-            match conn
-                .query(sql, libsql::params![vec_str.clone(), fetch_limit])
-                .await
-            {
+                        c.importance, c.event_date, c.content_hash";
+            let (sql, params) = match scope {
+                ReadScope::Global => (
+                    format!(
+                        "{projection} FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt \
+                         JOIN memories c ON c.rowid = vt.id WHERE c.source = 'episode'"
+                    ),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+                ReadScope::Space(space) => (
+                    format!(
+                        "{projection} FROM memories c WHERE c.source = 'episode' \
+                         AND c.embedding IS NOT NULL AND c.space = ?3 \
+                         ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC LIMIT ?2"
+                    ),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                        libsql::Value::Text(space.clone()),
+                    ],
+                ),
+                ReadScope::Uncategorized => (
+                    format!(
+                        "{projection} FROM memories c WHERE c.source = 'episode' \
+                         AND c.embedding IS NOT NULL AND c.space IS NULL \
+                         ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC LIMIT ?2"
+                    ),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+            };
+            match conn.query(&sql, params).await {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
                         let distance: f64 = row.get(30).unwrap_or(1.0);
@@ -9572,21 +9910,33 @@ impl MemoryDB {
         // --- FTS search (episode-scoped) ---
         let mut fts_results: Vec<SearchResult> = Vec::new();
         {
-            let fts_sql =
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         fts.rank,
-                        c.importance, c.event_date, c.content_hash
-                 FROM memories_fts fts
-                 JOIN memories c ON fts.rowid = c.rowid
-                 WHERE memories_fts MATCH ?1 AND c.source = 'episode'
-                 ORDER BY fts.rank
-                 LIMIT ?2";
+                        c.importance, c.event_date, c.content_hash";
+            let (scope_sql, scope_value) = match scope {
+                ReadScope::Global => ("", None),
+                ReadScope::Space(space) => {
+                    ("AND c.space = ?3", Some(libsql::Value::Text(space.clone())))
+                }
+                ReadScope::Uncategorized => ("AND c.space IS NULL", None),
+            };
+            let fts_sql = format!(
+                "{projection} FROM memories_fts fts \
+                 JOIN memories c ON fts.rowid = c.rowid \
+                 WHERE memories_fts MATCH ?1 AND c.source = 'episode' {scope_sql} \
+                 ORDER BY fts.rank LIMIT ?2"
+            );
             let fts_queries: Vec<String> = vec![query.to_string(), Self::fts_or_query(query)];
             for fts_query in &fts_queries {
-                match conn
-                    .query(fts_sql, libsql::params![fts_query.clone(), fetch_limit])
-                    .await
-                {
+                let mut params = vec![
+                    libsql::Value::Text(fts_query.clone()),
+                    libsql::Value::Integer(fetch_limit),
+                ];
+                if let Some(value) = &scope_value {
+                    params.push(value.clone());
+                }
+                match conn.query(&fts_sql, params).await {
                     Ok(mut rows) => {
                         while let Ok(Some(row)) = rows.next().await {
                             let rank: f64 = row.get(30).unwrap_or(0.0);
@@ -9653,6 +10003,7 @@ impl MemoryDB {
         &self,
         query: &str,
         pool: usize,
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
         use crate::retrieval::fact_channel::{max_pool_by_parent, ChildHit};
 
@@ -9665,14 +10016,54 @@ impl MemoryDB {
         // --- Child vector search (distance-ordered) ---
         let mut child_hits: Vec<ChildHit> = Vec::new();
         {
-            let sql = "SELECT cv.parent_id,
+            let (sql, params) = match scope {
+                ReadScope::Global => (
+                    "SELECT cv.parent_id,
                               vector_distance_cos(cv.embedding, vector32(?1)) AS dist
                        FROM vector_top_k('child_vectors_vec_idx', vector32(?1), ?2) AS vt
                        JOIN child_vectors cv ON cv.rowid = vt.id
                        WHERE cv.parent_kind = 'memory'
-                       ORDER BY dist ASC";
+                       ORDER BY dist ASC"
+                        .to_string(),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+                ReadScope::Space(space) => (
+                    "SELECT cv.parent_id,
+                              vector_distance_cos(cv.embedding, vector32(?1)) AS dist
+                       FROM child_vectors cv
+                       JOIN memories m ON m.source_id = cv.parent_id
+                                      AND m.source = 'memory' AND m.chunk_index = 0
+                       WHERE cv.parent_kind = 'memory' AND cv.embedding IS NOT NULL
+                         AND m.space = ?3
+                       ORDER BY dist ASC LIMIT ?2"
+                        .to_string(),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                        libsql::Value::Text(space.clone()),
+                    ],
+                ),
+                ReadScope::Uncategorized => (
+                    "SELECT cv.parent_id,
+                              vector_distance_cos(cv.embedding, vector32(?1)) AS dist
+                       FROM child_vectors cv
+                       JOIN memories m ON m.source_id = cv.parent_id
+                                      AND m.source = 'memory' AND m.chunk_index = 0
+                       WHERE cv.parent_kind = 'memory' AND cv.embedding IS NOT NULL
+                         AND m.space IS NULL
+                       ORDER BY dist ASC LIMIT ?2"
+                        .to_string(),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+            };
             let mut rows = conn
-                .query(sql, libsql::params![vec_str.clone(), fetch_limit])
+                .query(&sql, params)
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("fact channel query: {e}")))?;
             let mut rank = 0usize;
@@ -9698,6 +10089,14 @@ impl MemoryDB {
             .map(|i| format!("?{i}"))
             .collect::<Vec<_>>()
             .join(", ");
+        let (scope_sql, scope_value) = match scope {
+            ReadScope::Global => (String::new(), None),
+            ReadScope::Space(space) => (
+                format!("AND c.space = ?{}", parent_ids.len() + 1),
+                Some(libsql::Value::Text(space.clone())),
+            ),
+            ReadScope::Uncategorized => ("AND c.space IS NULL".to_string(), None),
+        };
         let sql = format!(
             "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                     c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
@@ -9708,13 +10107,17 @@ impl MemoryDB {
                     c.version, c.pending_revision,
                     0.0, c.importance, c.event_date, c.content_hash
              FROM memories c
-             WHERE c.source = 'memory' AND c.chunk_index = 0 AND c.source_id IN ({placeholders})",
+             WHERE c.source = 'memory' AND c.chunk_index = 0 \
+               AND c.source_id IN ({placeholders}) {scope_sql}",
             placeholders = placeholders
         );
-        let params: Vec<libsql::Value> = parent_ids
+        let mut params: Vec<libsql::Value> = parent_ids
             .iter()
             .map(|id| libsql::Value::Text(id.clone()))
             .collect();
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
         let mut by_source: HashMap<String, SearchResult> = HashMap::new();
         match conn.query(&sql, params).await {
             Ok(mut rows) => {
@@ -9765,7 +10168,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -9773,7 +10176,7 @@ impl MemoryDB {
             query,
             limit,
             memory_type,
-            space,
+            scope,
             source_agent,
             None,
             reranker,
@@ -9793,7 +10196,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         temporal_cue: Option<crate::temporal_query::DateRange>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
@@ -9808,7 +10211,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     temporal_cue,
                     None,
@@ -9835,7 +10238,7 @@ impl MemoryDB {
                 query,
                 fetch_pool,
                 memory_type,
-                space,
+                scope,
                 source_agent,
                 temporal_cue,
                 None,
@@ -9855,7 +10258,7 @@ impl MemoryDB {
             // Log-and-degrade on page-channel failure (mirrors augment_with_graph's
             // silent fallback pattern at db.rs:7605-7608).
             match self
-                .search_pages(query, Self::page_channel_limit(), None)
+                .search_pages_scoped(query, Self::page_channel_limit(), None, scope)
                 .await
             {
                 Ok(pages) => pages,
@@ -9881,24 +10284,12 @@ impl MemoryDB {
         // Without this gate, a `space="work"`-scoped recall could leak pages from
         // `space="personal"` whose only sources are personal memories — cross-
         // workspace information disclosure (HIGH per 2026-05-28 adversarial review).
-        let filters_active = memory_type.is_some() || space.is_some() || source_agent.is_some();
-        let page_results: Vec<Page> = if filters_active && !page_results.is_empty() {
+        let source_filters_active = memory_type.is_some() || source_agent.is_some();
+        let page_results: Vec<Page> = if source_filters_active && !page_results.is_empty() {
             let allowed_memory_ids: std::collections::HashSet<String> =
                 memory_results.iter().map(|r| r.source_id.clone()).collect();
             let mut filtered = Vec::with_capacity(page_results.len());
             for page in page_results {
-                // P3 workspace axis: a page passes the scoped gate if its dedicated
-                // `workspace` matches the active `space` filter (NOT the overloaded
-                // `space` category column) OR — unchanged — if a source memory survived
-                // the memory-side filter. NULL workspace never matches any filter.
-                let workspace_match = match (space, page.workspace.as_deref()) {
-                    (Some(filter), Some(ws)) => filter == ws,
-                    _ => false,
-                };
-                if workspace_match {
-                    filtered.push(page);
-                    continue;
-                }
                 let sources = match self.get_page_sources(&page.id).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -9930,7 +10321,7 @@ impl MemoryDB {
         // Log-and-degrade on failure (never silent-zero the memory pool).
         let summary_nodes: Vec<SummaryNode> = if global_prelude_enabled {
             match self
-                .search_summary_nodes(query, crate::refinery::summary::bucket_k())
+                .search_summary_nodes_scoped(query, crate::refinery::summary::bucket_k(), scope)
                 .await
             {
                 Ok(v) => v,
@@ -9946,7 +10337,8 @@ impl MemoryDB {
         // node surfaces iff >=1 of its provenance memories survived the
         // memory-side filter. Without this, a root spanning all buckets could
         // leak cross-space when filters are active.
-        let summary_nodes: Vec<SummaryNode> = if filters_active && !summary_nodes.is_empty() {
+        let summary_nodes: Vec<SummaryNode> = if source_filters_active && !summary_nodes.is_empty()
+        {
             let allowed_memory_ids: std::collections::HashSet<String> =
                 memory_results.iter().map(|r| r.source_id.clone()).collect();
             let mut filtered = Vec::with_capacity(summary_nodes.len());
@@ -9974,7 +10366,7 @@ impl MemoryDB {
         // failure, mirroring the page-channel fallback above.
         let episode_results: Vec<SearchResult> = if episode_channel_enabled() {
             match self
-                .search_episodes(query, Self::episode_channel_limit())
+                .search_episodes_scoped(query, Self::episode_channel_limit(), scope)
                 .await
             {
                 Ok(v) => v,
@@ -9991,16 +10383,17 @@ impl MemoryDB {
         // explicit gate is required: under option A an episode shares its parent
         // fact's source_id, so it surfaces iff that source_id survived the
         // memory-side filter. Prevents cross-space episode disclosure.
-        let episode_results: Vec<SearchResult> = if filters_active && !episode_results.is_empty() {
-            let allowed_memory_ids: std::collections::HashSet<String> =
-                memory_results.iter().map(|r| r.source_id.clone()).collect();
-            episode_results
-                .into_iter()
-                .filter(|r| allowed_memory_ids.contains(&r.source_id))
-                .collect()
-        } else {
-            episode_results
-        };
+        let episode_results: Vec<SearchResult> =
+            if source_filters_active && !episode_results.is_empty() {
+                let allowed_memory_ids: std::collections::HashSet<String> =
+                    memory_results.iter().map(|r| r.source_id.clone()).collect();
+                episode_results
+                    .into_iter()
+                    .filter(|r| allowed_memory_ids.contains(&r.source_id))
+                    .collect()
+            } else {
+                episode_results
+            };
 
         // T15a fact-channel (opt-in RRF stream). Vector-search per-fact child
         // vectors, rehydrate the matched PARENT memories (source="memory"), and
@@ -10013,6 +10406,7 @@ impl MemoryDB {
                     .search_facts_channel(
                         query,
                         crate::retrieval::fact_channel::fact_channel_limit(),
+                        scope,
                     )
                     .await
                 {
@@ -10030,12 +10424,11 @@ impl MemoryDB {
         // construction, so a buried fact in a `space="personal"` memory must not
         // leak into a `space="work"` recall. The rehydrated row carries the
         // parent's own field values, so we filter on them directly.
-        let fact_results: Vec<SearchResult> = if filters_active && !fact_results.is_empty() {
+        let fact_results: Vec<SearchResult> = if source_filters_active && !fact_results.is_empty() {
             fact_results
                 .into_iter()
                 .filter(|r| {
                     memory_type.is_none_or(|mt| r.memory_type.as_deref() == Some(mt))
-                        && space.is_none_or(|sp| r.space.as_deref() == Some(sp))
                         && source_agent.is_none_or(|sa| r.source_agent.as_deref() == Some(sa))
                 })
                 .collect()
@@ -10272,7 +10665,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -10366,7 +10759,7 @@ impl MemoryDB {
                     q,
                     fetch_pool,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None, // temporal_cue
                     None, // confirmation_boost
@@ -10391,7 +10784,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None, // temporal_cue
                     None, // confirmation_boost
@@ -10458,7 +10851,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -10473,7 +10866,7 @@ impl MemoryDB {
                 query,
                 fetch_pool,
                 memory_type,
-                space,
+                scope,
                 source_agent,
                 None,
                 None,
@@ -10523,7 +10916,7 @@ impl MemoryDB {
                             &draft,
                             fetch_pool,
                             memory_type,
-                            space,
+                            scope,
                             source_agent,
                             None,
                             None,
@@ -10556,7 +10949,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -10612,7 +11005,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -10631,7 +11024,7 @@ impl MemoryDB {
                     q,
                     fetch_pool,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -10653,7 +11046,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -10706,6 +11099,7 @@ impl MemoryDB {
     async fn expand_anchor_entities_khop(
         &self,
         anchor_entity_ids: &[String],
+        scope: &ReadScope,
     ) -> Result<Vec<String>, WenlanError> {
         use crate::retrieval::traversal::{
             bfs_khop, build_adjacency, parse_khop_depth, parse_khop_max_nodes,
@@ -10719,16 +11113,22 @@ impl MemoryDB {
         let max_nodes =
             parse_khop_max_nodes(std::env::var("WENLAN_GRAPH_KHOP_MAX_NODES").ok().as_deref());
 
+        let anchor_entity_ids = self
+            .filter_entity_ids_scoped(anchor_entity_ids, scope)
+            .await?;
+        if anchor_entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
         // depth 0 -> no expansion; return deduped seeds via the pure fn (no SQL).
         if max_hops == 0 {
             return Ok(bfs_khop(
                 &Default::default(),
-                anchor_entity_ids,
+                &anchor_entity_ids,
                 0,
                 max_nodes,
             ));
         }
-
         let conn = self.conn.lock().await;
 
         // Collect edges incident to the bounded frontier, hop by hop. A fetch-side
@@ -10756,17 +11156,38 @@ impl MemoryDB {
             // cap trims mid-fanout, WHICH neighbours survive must not depend on DB
             // row order (the eval path is wired, so non-determinism would be a
             // reproducibility bug).
+            let scope_parameter = frontier.len() + 1;
+            let (endpoint_scope, scope_value) = match scope {
+                ReadScope::Global => (String::new(), None),
+                ReadScope::Space(space) => (
+                    format!("AND ef.space = ?{scope_parameter} AND et.space = ?{scope_parameter}"),
+                    Some(libsql::Value::Text(space.clone())),
+                ),
+                ReadScope::Uncategorized => (
+                    "AND ef.space IS NULL AND et.space IS NULL".to_string(),
+                    None,
+                ),
+            };
             let sql = format!(
-                "SELECT from_entity, to_entity FROM relations WHERE from_entity IN ({ph})
+                "SELECT r.from_entity, r.to_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.from_entity IN ({ph}) {endpoint_scope}
                  UNION
-                 SELECT from_entity, to_entity FROM relations WHERE to_entity IN ({ph})
+                 SELECT r.from_entity, r.to_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.to_entity IN ({ph}) {endpoint_scope}
                  ORDER BY from_entity, to_entity",
                 ph = ph
             );
-            let params: Vec<libsql::Value> = frontier
+            let mut params: Vec<libsql::Value> = frontier
                 .iter()
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
+            if let Some(value) = scope_value {
+                params.push(value);
+            }
 
             let mut rows = conn
                 .query(&sql, libsql::params_from_iter(params))
@@ -10804,7 +11225,12 @@ impl MemoryDB {
         drop(conn);
 
         let adjacency = build_adjacency(&edges);
-        Ok(bfs_khop(&adjacency, anchor_entity_ids, max_hops, max_nodes))
+        Ok(bfs_khop(
+            &adjacency,
+            &anchor_entity_ids,
+            max_hops,
+            max_nodes,
+        ))
     }
 
     /// Augment search results with knowledge graph observations via RRF merge.
@@ -10822,7 +11248,7 @@ impl MemoryDB {
         results: Vec<SearchResult>,
         limit: usize,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        self.augment_with_graph_gated(query, results, limit, true)
+        self.augment_with_graph_gated(query, results, limit, true, &ReadScope::Global)
             .await
     }
 
@@ -10839,8 +11265,9 @@ impl MemoryDB {
         results: Vec<SearchResult>,
         limit: usize,
         allow_stream: bool,
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        let entity_hits = match self.search_entities_by_vector(query, 5).await {
+        let entity_hits = match self.search_entities_by_vector_scoped(query, 5, scope).await {
             Ok(hits) if !hits.is_empty() => hits,
             _ => return Ok(results),
         };
@@ -10851,7 +11278,7 @@ impl MemoryDB {
         // real linked memories that survive the strip. See augment_with_memory_stream.
         if allow_stream && graph_memory_stream_enabled() {
             return self
-                .augment_with_memory_stream(results, limit, &entity_hits)
+                .augment_with_memory_stream(results, limit, &entity_hits, scope)
                 .await;
         }
 
@@ -10864,7 +11291,7 @@ impl MemoryDB {
         // When OFF, use entity_ids verbatim -> byte-identical single-hop path.
         // Log-and-degrade: a traversal Err falls back to the anchor set.
         let observation_seed_ids: Vec<String> = if khop_traversal_enabled() {
-            match self.expand_anchor_entities_khop(&entity_ids).await {
+            match self.expand_anchor_entities_khop(&entity_ids, scope).await {
                 Ok(expanded) if !expanded.is_empty() => expanded,
                 Ok(_) => entity_ids.clone(),
                 Err(e) => {
@@ -10880,7 +11307,7 @@ impl MemoryDB {
         };
 
         let graph_results = match self
-            .get_observations_for_entities(&observation_seed_ids, limit)
+            .get_observations_for_entities_scoped(&observation_seed_ids, limit, scope)
             .await
         {
             Ok(r) if !r.is_empty() => r,
@@ -10925,6 +11352,7 @@ impl MemoryDB {
     async fn stream_anchor_ids(
         &self,
         entity_hits: &[EntitySearchResult],
+        scope: &ReadScope,
     ) -> Result<Vec<String>, WenlanError> {
         // Type filter (cheap, in-memory) then degree filter (one query).
         let typed: Vec<String> = entity_hits
@@ -10935,7 +11363,7 @@ impl MemoryDB {
         if typed.is_empty() {
             return Ok(vec![]);
         }
-        let degrees = self.entity_degrees(&typed).await?;
+        let degrees = self.entity_degrees(&typed, scope).await?;
         let cap = graph_hub_cap();
         Ok(typed
             .into_iter()
@@ -10967,10 +11395,11 @@ impl MemoryDB {
         results: Vec<SearchResult>,
         limit: usize,
         entity_hits: &[EntitySearchResult],
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
         // 1. Shared anchor eligibility (type + degree). One source of truth
         //    with the G3 touch probe so the two can never drift.
-        let ranked_anchor_ids = self.stream_anchor_ids(entity_hits).await?;
+        let ranked_anchor_ids = self.stream_anchor_ids(entity_hits, scope).await?;
         if ranked_anchor_ids.is_empty() {
             log::info!(
                 "[graph_stream] no eligible anchors after type+degree filter (cap={}); graph contributes nothing",
@@ -10981,7 +11410,7 @@ impl MemoryDB {
 
         // 2. Linked memories, one per source_id, best anchor rank.
         let graph_memories = self
-            .get_memories_for_entities(&ranked_anchor_ids, limit)
+            .get_memories_for_entities_scoped(&ranked_anchor_ids, limit, scope)
             .await?;
         if graph_memories.is_empty() {
             return Ok(results);
@@ -11062,7 +11491,7 @@ impl MemoryDB {
             Ok(h) if !h.is_empty() => h,
             _ => return Ok(false),
         };
-        let anchors = self.stream_anchor_ids(&hits).await?;
+        let anchors = self.stream_anchor_ids(&hits, &ReadScope::Global).await?;
         if anchors.is_empty() {
             return Ok(false);
         }
@@ -11077,20 +11506,39 @@ impl MemoryDB {
     async fn entity_degrees(
         &self,
         entity_ids: &[String],
+        scope: &ReadScope,
     ) -> Result<HashMap<String, usize>, WenlanError> {
         if entity_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let conn = self.conn.lock().await;
         let placeholders: Vec<String> = (1..=entity_ids.len()).map(|i| format!("?{i}")).collect();
+        let scope_parameter = entity_ids.len() + 1;
+        let (join, scope_sql, scope_value) = match scope {
+            ReadScope::Global => ("", String::new(), None),
+            ReadScope::Space(space) => (
+                "JOIN memories m ON m.source_id = me.memory_id AND m.source = 'memory' AND m.chunk_index = 0",
+                format!("AND m.space = ?{scope_parameter}"),
+                Some(libsql::Value::Text(space.clone())),
+            ),
+            ReadScope::Uncategorized => (
+                "JOIN memories m ON m.source_id = me.memory_id AND m.source = 'memory' AND m.chunk_index = 0",
+                "AND m.space IS NULL".to_string(),
+                None,
+            ),
+        };
         let sql = format!(
-            "SELECT entity_id, COUNT(*) FROM memory_entities WHERE entity_id IN ({}) GROUP BY entity_id",
+            "SELECT me.entity_id, COUNT(*) FROM memory_entities me {join} \
+             WHERE me.entity_id IN ({}) {scope_sql} GROUP BY me.entity_id",
             placeholders.join(",")
         );
-        let params: Vec<libsql::Value> = entity_ids
+        let mut params: Vec<libsql::Value> = entity_ids
             .iter()
             .map(|id| libsql::Value::Text(id.clone()))
             .collect();
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
         let mut rows = conn
             .query(&sql, libsql::params_from_iter(params))
             .await
@@ -11193,12 +11641,29 @@ impl MemoryDB {
     ///
     /// Single conn lock is held across the bounded BFS loop (depth ≤ 3, small).
     /// No non-libsql `.await` is called inside the lock.
+    #[cfg(test)]
     async fn expand_entities_khop(
         &self,
         seed_ids: &[String],
         depth: usize,
         frontier_cap: usize,
     ) -> Result<Vec<String>, WenlanError> {
+        self.expand_entities_khop_scoped(seed_ids, depth, frontier_cap, &ReadScope::Global)
+            .await
+    }
+
+    async fn expand_entities_khop_scoped(
+        &self,
+        seed_ids: &[String],
+        depth: usize,
+        frontier_cap: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<String>, WenlanError> {
+        if seed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let seed_ids = self.filter_entity_ids_scoped(seed_ids, scope).await?;
         if seed_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -11225,17 +11690,38 @@ impl MemoryDB {
             let ph = placeholders.join(",");
 
             // Bidirectional: outgoing (from_entity IN frontier) + incoming (to_entity IN frontier)
+            let scope_parameter = frontier.len() + 1;
+            let (endpoint_scope, scope_value) = match scope {
+                ReadScope::Global => (String::new(), None),
+                ReadScope::Space(space) => (
+                    format!("AND ef.space = ?{scope_parameter} AND et.space = ?{scope_parameter}"),
+                    Some(libsql::Value::Text(space.clone())),
+                ),
+                ReadScope::Uncategorized => (
+                    "AND ef.space IS NULL AND et.space IS NULL".to_string(),
+                    None,
+                ),
+            };
             let sql = format!(
-                "SELECT to_entity FROM relations WHERE from_entity IN ({ph})
+                "SELECT r.to_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.from_entity IN ({ph}) {endpoint_scope}
                  UNION
-                 SELECT from_entity FROM relations WHERE to_entity IN ({ph})",
+                 SELECT r.from_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.to_entity IN ({ph}) {endpoint_scope}",
                 ph = ph
             );
 
-            let params: Vec<libsql::Value> = frontier
+            let mut params: Vec<libsql::Value> = frontier
                 .iter()
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
+            if let Some(value) = scope_value {
+                params.push(value);
+            }
 
             let mut rows = conn
                 .query(&sql, libsql::params_from_iter(params))
@@ -11296,9 +11782,29 @@ impl MemoryDB {
         seed_entity_ids: &[String],
         limit: usize,
     ) -> Result<Vec<SearchResult>, WenlanError> {
+        self.augment_with_graph_seeded_scoped(
+            query,
+            results,
+            seed_entity_ids,
+            limit,
+            &ReadScope::Global,
+        )
+        .await
+    }
+
+    async fn augment_with_graph_seeded_scoped(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+        seed_entity_ids: &[String],
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SearchResult>, WenlanError> {
         // Empty seeds → fall back to existing query-anchor path
         if seed_entity_ids.is_empty() {
-            return self.augment_with_graph(query, results, limit).await;
+            return self
+                .augment_with_graph_gated(query, results, limit, true, scope)
+                .await;
         }
 
         // Read tuning env vars
@@ -11319,9 +11825,13 @@ impl MemoryDB {
             .map(|(rank, id)| (id.clone(), rank))
             .collect();
         let seeds = crate::retrieval::signals::seed_entities_by_rank(&pool_pairs, top_k);
+        let seeds = self.filter_entity_ids_scoped(&seeds, scope).await?;
 
         // BFS to expand seed set
-        let expanded = match self.expand_entities_khop(&seeds, depth, frontier_cap).await {
+        let expanded = match self
+            .expand_entities_khop_scoped(&seeds, depth, frontier_cap, scope)
+            .await
+        {
             Ok(ids) => ids,
             Err(e) => {
                 log::warn!(
@@ -11333,7 +11843,10 @@ impl MemoryDB {
         };
 
         // Fetch observations for expanded entity set
-        let graph_results = match self.get_observations_for_entities(&expanded, limit).await {
+        let graph_results = match self
+            .get_observations_for_entities_scoped(&expanded, limit, scope)
+            .await
+        {
             Ok(r) if !r.is_empty() => r,
             _ => return Ok(results),
         };
@@ -12043,6 +12556,16 @@ impl MemoryDB {
         query: &str,
         k: usize,
     ) -> Result<Vec<SummaryNode>, WenlanError> {
+        self.search_summary_nodes_scoped(query, k, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn search_summary_nodes_scoped(
+        &self,
+        query: &str,
+        k: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SummaryNode>, WenlanError> {
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
         let fetch_limit = (k.max(1) * 3) as i64;
@@ -12053,16 +12576,42 @@ impl MemoryDB {
 
         // Root node (always included, not vector-gated).
         let mut root: Option<SummaryNode> = None;
-        if let Ok(mut rows) = conn
-            .query(
-                &format!(
-                    "SELECT {select} FROM summary_nodes s \
-                     WHERE s.level = 1 AND s.status = 'active' LIMIT 1"
-                ),
-                (),
-            )
-            .await
-        {
+        let summary_source_guard = |parameter: usize| match scope {
+            ReadScope::Global => String::new(),
+            ReadScope::Space(_) => format!(
+                "AND EXISTS (SELECT 1 FROM summary_node_sources sns WHERE sns.node_id = s.id) \
+                 AND NOT EXISTS ( \
+                     SELECT 1 FROM summary_node_sources sns \
+                     WHERE sns.node_id = s.id AND NOT EXISTS ( \
+                         SELECT 1 FROM memories m \
+                         WHERE m.source_id = sns.memory_source_id \
+                           AND m.source = 'memory' AND m.space = ?{parameter} \
+                     ) \
+                 )"
+            ),
+            ReadScope::Uncategorized => {
+                "AND EXISTS (SELECT 1 FROM summary_node_sources sns WHERE sns.node_id = s.id) \
+                 AND NOT EXISTS ( \
+                     SELECT 1 FROM summary_node_sources sns \
+                     WHERE sns.node_id = s.id AND NOT EXISTS ( \
+                         SELECT 1 FROM memories m \
+                         WHERE m.source_id = sns.memory_source_id \
+                           AND m.source = 'memory' AND m.space IS NULL \
+                     ) \
+                 )"
+                .to_string()
+            }
+        };
+        let root_guard = summary_source_guard(1);
+        let root_sql = format!(
+            "SELECT {select} FROM summary_nodes s \
+             WHERE s.level = 1 AND s.status = 'active' {root_guard} LIMIT 1"
+        );
+        let root_params = match scope {
+            ReadScope::Space(space) => vec![libsql::Value::Text(space.clone())],
+            ReadScope::Global | ReadScope::Uncategorized => Vec::new(),
+        };
+        if let Ok(mut rows) = conn.query(&root_sql, root_params).await {
             if let Ok(Some(row)) = rows.next().await {
                 root = Self::row_to_summary_node(&row).ok();
             }
@@ -12071,16 +12620,31 @@ impl MemoryDB {
         // Vector-matched bucket nodes.
         let mut ranked: std::collections::HashMap<String, (f32, SummaryNode)> =
             std::collections::HashMap::new();
-        let vec_sql = format!(
-            "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
-             FROM vector_top_k('idx_summary_nodes_embedding', vector32(?1), ?2) AS vt \
-             JOIN summary_nodes s ON s.rowid = vt.id \
-             WHERE s.level = 0 AND s.status = 'active'"
-        );
-        if let Ok(mut rows) = conn
-            .query(&vec_sql, libsql::params![vec_str.clone(), fetch_limit])
-            .await
-        {
+        let vector_guard = summary_source_guard(3);
+        let vec_sql = if matches!(scope, ReadScope::Global) {
+            format!(
+                "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
+                 FROM vector_top_k('idx_summary_nodes_embedding', vector32(?1), ?2) AS vt \
+                 JOIN summary_nodes s ON s.rowid = vt.id \
+                 WHERE s.level = 0 AND s.status = 'active'"
+            )
+        } else {
+            format!(
+                "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
+                 FROM summary_nodes s \
+                 WHERE s.level = 0 AND s.status = 'active' AND s.embedding IS NOT NULL \
+                   {vector_guard} \
+                 ORDER BY dist ASC LIMIT ?2"
+            )
+        };
+        let mut vector_params = vec![
+            libsql::Value::Text(vec_str.clone()),
+            libsql::Value::Integer(fetch_limit),
+        ];
+        if let ReadScope::Space(space) = scope {
+            vector_params.push(libsql::Value::Text(space.clone()));
+        }
+        if let Ok(mut rows) = conn.query(&vec_sql, vector_params).await {
             let mut rank = 0usize;
             while let Ok(Some(row)) = rows.next().await {
                 if let Ok(node) = Self::row_to_summary_node(&row) {
@@ -12094,16 +12658,21 @@ impl MemoryDB {
         // FTS-matched bucket nodes (RRF-merged with vector).
         use crate::retrieval::fts_query::sanitize_fts_query;
         let fts_q = sanitize_fts_query(query);
+        let fts_guard = summary_source_guard(3);
         let fts_sql = format!(
             "SELECT {select} FROM summary_nodes s \
              JOIN summary_nodes_fts f ON s.rowid = f.rowid \
-             WHERE summary_nodes_fts MATCH ?1 AND s.level = 0 AND s.status = 'active' \
+             WHERE summary_nodes_fts MATCH ?1 AND s.level = 0 AND s.status = 'active' {fts_guard} \
              ORDER BY rank LIMIT ?2"
         );
-        if let Ok(mut rows) = conn
-            .query(&fts_sql, libsql::params![fts_q, fetch_limit])
-            .await
-        {
+        let mut fts_params = vec![
+            libsql::Value::Text(fts_q),
+            libsql::Value::Integer(fetch_limit),
+        ];
+        if let ReadScope::Space(space) = scope {
+            fts_params.push(libsql::Value::Text(space.clone()));
+        }
+        if let Ok(mut rows) = conn.query(&fts_sql, fts_params).await {
             let mut rank = 0usize;
             while let Ok(Some(row)) = rows.next().await {
                 if let Ok(node) = Self::row_to_summary_node(&row) {
@@ -12444,25 +13013,40 @@ impl MemoryDB {
 
     /// List all indexed files (grouped by source_id).
     pub async fn list_indexed_files(&self) -> Result<Vec<IndexedFileInfo>, WenlanError> {
+        self.list_indexed_files_scoped(&ReadScope::Global).await
+    }
+
+    pub async fn list_indexed_files_scoped(
+        &self,
+        scope: &ReadScope,
+    ) -> Result<Vec<IndexedFileInfo>, WenlanError> {
+        let mut conditions = vec!["source != 'episode'".to_string()];
+        let mut values = Vec::new();
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT source_id, MAX(title) as title, MAX(source) as source,
+                    MAX(url) as url, COUNT(*) as chunk_count,
+                    MAX(last_modified) as last_modified, MAX(summary) as summary,
+                    MAX(memory_type), MAX(space), MAX(source_agent),
+                    MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned)
+             FROM memories
+             WHERE {}
+             GROUP BY source_id
+             ORDER BY MAX(last_modified) DESC",
+            conditions.join(" AND ")
+        );
         let conn = self.conn.lock().await;
         let mut rows = conn
-            .query(
-                "SELECT source_id, MAX(title) as title, MAX(source) as source,
-                        MAX(url) as url, COUNT(*) as chunk_count,
-                        MAX(last_modified) as last_modified, MAX(summary) as summary,
-                        MAX(memory_type), MAX(space), MAX(source_agent),
-                        MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned)
-                 FROM memories
-                 WHERE source != 'episode'
-                 GROUP BY source_id
-                 ORDER BY MAX(last_modified) DESC",
-                (),
-            )
+            .query(&sql, libsql::params_from_iter(values))
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_indexed: {}", e)))?;
 
         let mut files = Vec::new();
-        while let Ok(Some(row)) = rows.next().await {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_indexed row: {e}")))?
+        {
             files.push(IndexedFileInfo {
                 source_id: row.get::<String>(0).unwrap_or_default(),
                 title: row.get::<String>(1).unwrap_or_default(),
@@ -12522,6 +13106,135 @@ impl MemoryDB {
             });
         }
         Ok(results)
+    }
+
+    pub async fn get_chunks_scoped(
+        &self,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<Vec<MemoryDetail>>, WenlanError> {
+        let mut conditions = vec![
+            "source_id = ?".to_string(),
+            "source IN ('memory', 'file')".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Text(source_id.to_string())];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "WITH scoped AS (
+                SELECT source, id, content, title, source_id, chunk_index, chunk_type,
+                       language, semantic_unit, byte_start, byte_end, summary
+                FROM memories
+                WHERE {}
+             )
+             SELECT id, content, title, source_id, chunk_index, chunk_type, language,
+                    semantic_unit, byte_start, byte_end, summary
+             FROM scoped
+             WHERE source = (
+                 SELECT source
+                 FROM scoped
+                 ORDER BY CASE source WHEN 'memory' THEN 0 ELSE 1 END
+                 LIMIT 1
+             )
+             ORDER BY chunk_index ASC
+             LIMIT 10000",
+            conditions.join(" AND ")
+        );
+
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_chunks_scoped: {e}")))?;
+        let mut chunks = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_chunks_scoped row: {e}")))?
+        {
+            chunks.push(MemoryDetail {
+                id: row.get::<String>(0).unwrap_or_default(),
+                content: row.get::<String>(1).unwrap_or_default(),
+                title: row.get::<String>(2).unwrap_or_default(),
+                source_id: row.get::<String>(3).unwrap_or_default(),
+                chunk_index: row.get::<i32>(4).unwrap_or(0),
+                chunk_type: row.get::<Option<String>>(5).unwrap_or(None),
+                language: row.get::<Option<String>>(6).unwrap_or(None),
+                semantic_unit: row.get::<Option<String>>(7).unwrap_or(None),
+                byte_start: row.get::<Option<i64>>(8).unwrap_or(None),
+                byte_end: row.get::<Option<i64>>(9).unwrap_or(None),
+                summary: row.get::<Option<String>>(10).unwrap_or(None),
+            });
+        }
+        Ok((!chunks.is_empty()).then_some(chunks))
+    }
+
+    pub async fn get_tag_suggestion_inputs_scoped(
+        &self,
+        source: &str,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<(Vec<String>, Vec<MemoryDetail>)>, WenlanError> {
+        let mut conditions = vec!["source = ?".to_string(), "source_id = ?".to_string()];
+        let mut values = vec![
+            libsql::Value::Text(source.to_string()),
+            libsql::Value::Text(source_id.to_string()),
+        ];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT id, content, title, source_id, chunk_index, chunk_type, language,
+                    semantic_unit, byte_start, byte_end, summary
+             FROM memories
+             WHERE {}
+             ORDER BY chunk_index ASC",
+            conditions.join(" AND ")
+        );
+
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_tag_suggestion_inputs_scoped: {e}")))?;
+        let mut chunks = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("get_tag_suggestion_inputs_scoped row: {e}"))
+        })? {
+            chunks.push(MemoryDetail {
+                id: row.get::<String>(0).unwrap_or_default(),
+                content: row.get::<String>(1).unwrap_or_default(),
+                title: row.get::<String>(2).unwrap_or_default(),
+                source_id: row.get::<String>(3).unwrap_or_default(),
+                chunk_index: row.get::<i32>(4).unwrap_or(0),
+                chunk_type: row.get::<Option<String>>(5).unwrap_or(None),
+                language: row.get::<Option<String>>(6).unwrap_or(None),
+                semantic_unit: row.get::<Option<String>>(7).unwrap_or(None),
+                byte_start: row.get::<Option<i64>>(8).unwrap_or(None),
+                byte_end: row.get::<Option<i64>>(9).unwrap_or(None),
+                summary: row.get::<Option<String>>(10).unwrap_or(None),
+            });
+        }
+        if chunks.is_empty() {
+            return Ok(None);
+        }
+
+        let mut tag_rows = conn
+            .query(
+                "SELECT tag FROM document_tags WHERE source = ?1 AND source_id = ?2 ORDER BY tag",
+                libsql::params![source, source_id],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("get_tag_suggestion_inputs_scoped tags: {e}"))
+            })?;
+        let mut tags = Vec::new();
+        while let Some(row) = tag_rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("get_tag_suggestion_inputs_scoped tag row: {e}"))
+        })? {
+            tags.push(
+                row.get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("tag col 0: {e}")))?,
+            );
+        }
+        Ok(Some((tags, chunks)))
     }
 
     /// Count chunks under `(source, source_id)` whose vector `embedding` column
@@ -13229,9 +13942,27 @@ impl MemoryDB {
         pinned: Option<bool>,
         limit: usize,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
+        let scope = legacy_read_scope(space);
+        self.list_memories_scoped(&scope, memory_type, confirmed, pinned, limit)
+            .await
+    }
+
+    pub async fn list_memories_scoped(
+        &self,
+        scope: &ReadScope,
+        memory_type: Option<&str>,
+        confirmed: Option<bool>,
+        pinned: Option<bool>,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
 
-        let mut sql = String::from(
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "memories",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory'",
+        );
+        let mut sql = format!(
             "SELECT source_id, title,
                     GROUP_CONCAT(content, '\n') as content,
                     MAX(summary) as summary,
@@ -13264,17 +13995,17 @@ impl MemoryDB {
              FROM memories
              WHERE source = 'memory'
                AND pending_revision = 0
-               AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)"
+               AND {hidden_by_superseder}"
         );
         let mut params: Vec<libsql::Value> = Vec::new();
 
-        if let Some(d) = space {
-            if d == "uncategorized" {
-                sql.push_str(" AND space IS NULL");
-            } else {
-                params.push(d.into());
+        match scope {
+            ReadScope::Global => {}
+            ReadScope::Space(space) => {
+                params.push(space.clone().into());
                 sql.push_str(&format!(" AND space = ?{}", params.len()));
             }
+            ReadScope::Uncategorized => sql.push_str(" AND space IS NULL"),
         }
         if let Some(mt) = memory_type {
             params.push(mt.into());
@@ -13528,6 +14259,124 @@ impl MemoryDB {
         Ok(items)
     }
 
+    pub async fn get_memory_detail_scoped(
+        &self,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<MemoryItem>, WenlanError> {
+        let mut items = self
+            .get_memories_by_source_ids_scoped(&[source_id.to_string()], scope)
+            .await?;
+        Ok(items.pop())
+    }
+
+    pub async fn get_memories_by_source_ids_scoped(
+        &self,
+        source_ids: &[String],
+        scope: &ReadScope,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
+        if source_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = std::iter::repeat_n("?", source_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut conditions = vec![
+            "pending_revision = 0".to_string(),
+            "source = 'memory'".to_string(),
+            format!("source_id IN ({placeholders})"),
+        ];
+        let mut values = source_ids
+            .iter()
+            .cloned()
+            .map(libsql::Value::Text)
+            .collect::<Vec<_>>();
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT source_id, title,
+                GROUP_CONCAT(content, '\n') as content,
+                MAX(summary) as summary,
+                MAX(memory_type) as memory_type,
+                MAX(space) as space,
+                MAX(source_agent) as source_agent,
+                MAX(confidence) as confidence,
+                MAX(confirmed) as confirmed,
+                MAX(stability) as stability,
+                MAX(pinned) as pinned,
+                MAX(supersedes) as supersedes,
+                MAX(last_modified) as last_modified,
+                COUNT(*) as chunk_count,
+                MAX(entity_id) as entity_id,
+                MAX(quality) as quality,
+                MAX(is_recap) as is_recap,
+                (SELECT CASE
+                    WHEN COUNT(es.source_id) = 0 THEN 'raw'
+                    WHEN SUM(CASE WHEN es.status = 'failed' OR es.status = 'abandoned' THEN 1 ELSE 0 END) = 0 THEN 'enriched'
+                    WHEN SUM(CASE WHEN es.status IN ('ok','skipped') THEN 1 ELSE 0 END) = 0 THEN 'enrichment_failed'
+                    ELSE 'enrichment_partial'
+                END FROM enrichment_steps es WHERE es.source_id = memories.source_id) AS enrichment_status,
+                MAX(supersede_mode) as supersede_mode,
+                MAX(structured_fields) as structured_fields,
+                MAX(retrieval_cue) as retrieval_cue,
+                SUM(access_count) as access_count,
+                MAX(source_text) as source_text,
+                MAX(version) as version,
+                MAX(changelog) as changelog
+             FROM memories
+             WHERE {}
+             GROUP BY source_id",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("get_memories_by_source_ids_scoped: {e}"))
+            })?;
+
+        let mut map = std::collections::HashMap::<String, MemoryItem>::new();
+        while let Some(row) = rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("get_memories_by_source_ids_scoped row: {e}"))
+        })? {
+            let item = MemoryItem {
+                source_id: row.get::<String>(0).unwrap_or_default(),
+                title: row.get::<String>(1).unwrap_or_default(),
+                content: row.get::<String>(2).unwrap_or_default(),
+                summary: row.get::<Option<String>>(3).unwrap_or(None),
+                memory_type: row.get::<Option<String>>(4).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
+                source_agent: row.get::<Option<String>>(6).unwrap_or(None),
+                confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
+                confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
+                stability: row.get::<Option<String>>(9).unwrap_or(None),
+                pinned: row.get::<i64>(10).unwrap_or(0) != 0,
+                supersedes: row.get::<Option<String>>(11).unwrap_or(None),
+                last_modified: row.get::<i64>(12).unwrap_or(0),
+                chunk_count: row.get::<u64>(13).unwrap_or(0),
+                entity_id: row.get::<Option<String>>(14).unwrap_or(None),
+                quality: row.get::<Option<String>>(15).unwrap_or(None),
+                is_recap: row.get::<i64>(16).unwrap_or(0) != 0,
+                enrichment_status: row.get::<String>(17).unwrap_or_else(|_| "raw".to_string()),
+                supersede_mode: row.get::<String>(18).unwrap_or_else(|_| "hide".to_string()),
+                structured_fields: row.get::<Option<String>>(19).unwrap_or(None),
+                retrieval_cue: row.get::<Option<String>>(20).unwrap_or(None),
+                access_count: row.get::<u64>(21).unwrap_or(0),
+                source_text: row.get::<Option<String>>(22).unwrap_or(None),
+                version: row.get::<i64>(23).unwrap_or(1),
+                changelog: row.get::<Option<String>>(24).unwrap_or(None),
+                pending_revision: false,
+                merged_from: None,
+            };
+            map.insert(item.source_id.clone(), item);
+        }
+
+        Ok(source_ids
+            .iter()
+            .filter_map(|id| map.get(id).cloned())
+            .collect())
+    }
+
     /// Load confirmed memories of a specific type, excluding superseded ones.
     /// Optionally filter by space when `space_filter` is `Some`.
     pub async fn load_memories_by_type(
@@ -13536,13 +14385,29 @@ impl MemoryDB {
         limit: usize,
         space_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
-        let conn = self.conn.lock().await;
-        let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
+        let scope = legacy_read_scope(space_filter);
+        self.load_memories_by_type_scoped(memory_type, limit, &scope)
+            .await
+    }
 
-        let space_clause = match space_filter {
-            Some("uncategorized") => "AND space IS NULL",
-            Some(_) => "AND space = ?3",
-            None => "",
+    pub async fn load_memories_by_type_scoped(
+        &self,
+        memory_type: &str,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let hidden_by_superseder = superseder_not_exists(
+            scope,
+            "memories",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory'",
+        );
+        let supersedes_exclusion = format!("AND pending_revision = 0 AND {hidden_by_superseder}");
+
+        let space_clause = match scope {
+            ReadScope::Global => "",
+            ReadScope::Space(_) => "AND space = ?3",
+            ReadScope::Uncategorized => "AND space IS NULL",
         };
 
         let sql = format!(
@@ -13584,15 +14449,15 @@ impl MemoryDB {
             supersedes_exclusion, space_clause
         );
 
-        let mut rows = match space_filter {
-            Some("uncategorized") | None => {
+        let mut rows = match scope {
+            ReadScope::Global | ReadScope::Uncategorized => {
                 conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
                     .await
             }
-            Some(space) => {
+            ReadScope::Space(space) => {
                 conn.query(
                     &sql,
-                    libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
+                    libsql::params![memory_type.to_string(), limit as i64, space.clone()],
                 )
                 .await
             }
@@ -13776,12 +14641,36 @@ impl MemoryDB {
             .await
     }
 
+    pub async fn list_filtered_scoped(
+        &self,
+        source: Option<&str>,
+        memory_type: Option<&str>,
+        scope: &ReadScope,
+        limit: usize,
+    ) -> Result<Vec<IndexedFileInfo>, WenlanError> {
+        self.list_filtered_confirmed_scoped(source, memory_type, scope, None, limit)
+            .await
+    }
+
     /// Like `list_filtered` but with an optional `confirmed` predicate.
     pub async fn list_filtered_confirmed(
         &self,
         source: Option<&str>,
         memory_type: Option<&str>,
         space: Option<&str>,
+        confirmed: Option<bool>,
+        limit: usize,
+    ) -> Result<Vec<IndexedFileInfo>, WenlanError> {
+        let scope = legacy_read_scope(space);
+        self.list_filtered_confirmed_scoped(source, memory_type, &scope, confirmed, limit)
+            .await
+    }
+
+    pub async fn list_filtered_confirmed_scoped(
+        &self,
+        source: Option<&str>,
+        memory_type: Option<&str>,
+        scope: &ReadScope,
         confirmed: Option<bool>,
         limit: usize,
     ) -> Result<Vec<IndexedFileInfo>, WenlanError> {
@@ -13801,14 +14690,14 @@ impl MemoryDB {
             params.push(mt.to_string().into());
             idx += 1;
         }
-        if let Some(d) = space {
-            if d == "uncategorized" {
-                conditions.push("space IS NULL".to_string());
-            } else {
+        match scope {
+            ReadScope::Global => {}
+            ReadScope::Space(space) => {
                 conditions.push(format!("space = ?{}", idx));
-                params.push(d.to_string().into());
+                params.push(space.clone().into());
                 idx += 1;
             }
+            ReadScope::Uncategorized => conditions.push("space IS NULL".to_string()),
         }
         if let Some(c) = confirmed {
             if c {
@@ -13832,7 +14721,11 @@ impl MemoryDB {
         conditions.push("pending_revision = 0".to_string());
         // T2: never list verbatim episode rows in the filtered file view.
         conditions.push("source != 'episode'".to_string());
-        conditions.push("source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)".to_string());
+        conditions.push(superseder_not_exists(
+            scope,
+            "memories",
+            "superseder.pending_revision = 0 AND superseder.source = 'memory'",
+        ));
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -14906,10 +15799,7 @@ impl MemoryDB {
                 updated_at: row.get::<i64>(8).unwrap_or(0),
             }
         } else {
-            return Err(WenlanError::VectorDb(format!(
-                "Entity not found: {}",
-                entity_id
-            )));
+            return Err(WenlanError::NotFound("entity not found".to_string()));
         };
 
         // Fetch observations
@@ -15507,6 +16397,48 @@ impl MemoryDB {
         Ok(Some(summary))
     }
 
+    pub async fn get_enrichment_status_scoped(
+        &self,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<wenlan_types::EnrichmentStatusResponse>, WenlanError> {
+        let exists = {
+            let mut conditions = vec![
+                "source = 'memory'".to_string(),
+                "source_id = ?".to_string(),
+                "chunk_index = 0".to_string(),
+            ];
+            let mut values = vec![libsql::Value::Text(source_id.to_string())];
+            push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+            let sql = format!(
+                "SELECT 1 FROM memories WHERE {} LIMIT 1",
+                conditions.join(" AND ")
+            );
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(values))
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("get_enrichment_status_scoped: {e}")))?;
+            rows.next()
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("get_enrichment_status_scoped row: {e}"))
+                })?
+                .is_some()
+        };
+        if !exists {
+            return Ok(None);
+        }
+
+        let steps = self.get_enrichment_steps(source_id).await?;
+        let summary = self.get_enrichment_summary(source_id).await?;
+        Ok(Some(wenlan_types::EnrichmentStatusResponse {
+            source_id: source_id.to_string(),
+            summary,
+            steps,
+        }))
+    }
+
     /// Record (or upsert) a single enrichment step outcome for a memory.
     /// If a row for (source_id, step_name) already exists, increments attempts and updates status/error.
     pub async fn record_enrichment_step(
@@ -15959,7 +16891,15 @@ impl MemoryDB {
 
     /// List all pinned memories.
     pub async fn list_pinned_memories(&self) -> Result<Vec<MemoryItem>, WenlanError> {
-        self.list_memories(None, None, None, Some(true), 100).await
+        self.list_pinned_memories_scoped(&ReadScope::Global).await
+    }
+
+    pub async fn list_pinned_memories_scoped(
+        &self,
+        scope: &ReadScope,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
+        self.list_memories_scoped(scope, None, None, Some(true), 100)
+            .await
     }
 
     /// Hybrid search filtered to fact-type memories (formerly corrections).
@@ -15970,7 +16910,18 @@ impl MemoryDB {
         limit: usize,
         space: Option<&str>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        self.search_memory(query, limit, Some("fact"), space, None, None, None, None)
+        let scope = legacy_read_scope(space);
+        self.search_corrections_by_topic_scoped(query, limit, &scope)
+            .await
+    }
+
+    pub async fn search_corrections_by_topic_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SearchResult>, WenlanError> {
+        self.search_memory(query, limit, Some("fact"), scope, None, None, None, None)
             .await
     }
 
@@ -16482,6 +17433,196 @@ impl MemoryDB {
         })
     }
 
+    pub async fn get_home_stats_scoped(&self, scope: &ReadScope) -> Result<HomeStats, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.get_home_stats().await;
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        let today_start = now - 86400;
+        let week_start = now - 7 * 86400;
+        let mut conditions = vec!["source = 'memory'".to_string()];
+        let mut values = Vec::new();
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        values.extend([
+            libsql::Value::Integer(today_start),
+            libsql::Value::Integer(today_start),
+            libsql::Value::Integer(today_start),
+            libsql::Value::Integer(today_start),
+            libsql::Value::Integer(week_start),
+            libsql::Value::Integer(week_start),
+        ]);
+        let sql = format!(
+            "WITH scoped AS (
+                 SELECT source_id, last_modified, confirmed, supersedes, supersede_mode,
+                        memory_type, chunk_index, word_count, content, space, access_count
+                   FROM memories WHERE {}
+             )
+             SELECT
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped),
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped
+                   WHERE last_modified > ? AND source_id NOT LIKE 'merged_%'),
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped WHERE confirmed = 1),
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped),
+                 (SELECT COUNT(DISTINCT c.source_id) FROM scoped c
+                    INNER JOIN scoped s ON s.supersedes = c.source_id),
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped
+                   WHERE source_id LIKE 'merged_%' AND supersede_mode <> 'archive'
+                     AND last_modified > ?),
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped
+                   WHERE source_id LIKE 'merged_%' AND supersede_mode <> 'archive'),
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped
+                   WHERE supersede_mode = 'archive'
+                     AND source_id NOT LIKE 'merged_%' AND source_id NOT LIKE 'recap_%'
+                     AND memory_type <> 'decision'),
+                 (SELECT COUNT(*) FROM access_log a
+                    JOIN scoped c ON c.source_id = a.source_id AND c.chunk_index = 0
+                   WHERE a.accessed_at > ?),
+                 (SELECT COALESCE(SUM(c.word_count), 0) FROM access_log a
+                    JOIN scoped c ON c.source_id = a.source_id AND c.chunk_index = 0
+                   WHERE a.accessed_at > ?),
+                 (SELECT COUNT(*) FROM access_log a
+                    JOIN scoped c ON c.source_id = a.source_id AND c.chunk_index = 0
+                   WHERE a.accessed_at > ?),
+                 (SELECT COALESCE(SUM(c.word_count), 0) FROM access_log a
+                    JOIN scoped c ON c.source_id = a.source_id AND c.chunk_index = 0
+                   WHERE a.accessed_at > ?),
+                 (SELECT COUNT(*) FROM access_log a
+                    JOIN scoped c ON c.source_id = a.source_id AND c.chunk_index = 0),
+                 (SELECT COALESCE(SUM(c.word_count), 0) FROM access_log a
+                    JOIN scoped c ON c.source_id = a.source_id AND c.chunk_index = 0),
+                 (SELECT COUNT(DISTINCT source_id) FROM scoped
+                   WHERE confirmed = 1
+                     AND memory_type IN ('identity', 'preference', 'decision', 'lesson', 'gotcha', 'fact'))",
+            conditions.join(" AND ")
+        );
+
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("home_stats scoped: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("home_stats scoped row: {e}")))?
+            .ok_or_else(|| WenlanError::VectorDb("home_stats scoped row missing".to_string()))?;
+        let total = row.get::<u64>(0).unwrap_or(0);
+        let new_today = row.get::<u64>(1).unwrap_or(0);
+        let confirmed = row.get::<u64>(2).unwrap_or(0);
+        let total_ingested = row.get::<u64>(3).unwrap_or(0);
+        let superseded_count = row.get::<u64>(4).unwrap_or(0);
+        let distilled_today = row.get::<u64>(5).unwrap_or(0);
+        let distilled_all = row.get::<u64>(6).unwrap_or(0);
+        let sources_archived = row.get::<u64>(7).unwrap_or(0);
+        let times_served_today = row.get::<u64>(8).unwrap_or(0);
+        let words_saved_today = row.get::<u64>(9).unwrap_or(0);
+        let times_served_week = row.get::<u64>(10).unwrap_or(0);
+        let words_saved_week = row.get::<u64>(11).unwrap_or(0);
+        let times_served_all = row.get::<u64>(12).unwrap_or(0);
+        let words_saved_all = row.get::<u64>(13).unwrap_or(0);
+        let corrections_active = row.get::<u64>(14).unwrap_or(0);
+        drop(rows);
+
+        let mut top_conditions = vec!["source = 'memory'".to_string()];
+        let mut top_values = Vec::new();
+        push_read_scope_filter(scope, "space", &mut top_conditions, &mut top_values);
+        top_values.push(libsql::Value::Integer(week_start));
+        let top_sql = format!(
+            "WITH scoped AS (
+                 SELECT source_id, chunk_index, content, memory_type, space
+                   FROM memories WHERE {}
+             )
+             SELECT a.source_id, SUBSTR(c.content, 1, 200), c.memory_type, c.space,
+                    COUNT(*) AS cnt
+               FROM access_log a
+               JOIN scoped c ON c.source_id = a.source_id AND c.chunk_index = 0
+              WHERE a.accessed_at > ?
+              GROUP BY a.source_id
+              ORDER BY cnt DESC
+              LIMIT 3",
+            top_conditions.join(" AND ")
+        );
+        let mut top_rows = conn
+            .query(&top_sql, libsql::params_from_iter(top_values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("home_stats scoped top_week: {e}")))?;
+        let mut top_memories = Vec::new();
+        while let Some(row) = top_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("home_stats scoped top row: {e}")))?
+        {
+            top_memories.push(TopMemory {
+                source_id: row.get::<String>(0).unwrap_or_default(),
+                content: row.get::<String>(1).unwrap_or_default(),
+                memory_type: row.get::<Option<String>>(2).unwrap_or(None),
+                space: row.get::<Option<String>>(3).unwrap_or(None),
+                times_retrieved: row.get::<u64>(4).unwrap_or(0),
+            });
+        }
+        drop(top_rows);
+
+        if top_memories.is_empty() {
+            let mut fallback_conditions = vec![
+                "source = 'memory'".to_string(),
+                "access_count > 0".to_string(),
+                "chunk_index = 0".to_string(),
+            ];
+            let mut fallback_values = Vec::new();
+            push_read_scope_filter(
+                scope,
+                "space",
+                &mut fallback_conditions,
+                &mut fallback_values,
+            );
+            let fallback_sql = format!(
+                "SELECT source_id, SUBSTR(content, 1, 200), memory_type, space, access_count
+                   FROM memories
+                  WHERE {}
+                  ORDER BY access_count DESC
+                  LIMIT 3",
+                fallback_conditions.join(" AND ")
+            );
+            let mut fallback_rows = conn
+                .query(&fallback_sql, libsql::params_from_iter(fallback_values))
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("home_stats scoped top_alltime: {e}"))
+                })?;
+            while let Some(row) = fallback_rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("home_stats scoped fallback row: {e}"))
+            })? {
+                top_memories.push(TopMemory {
+                    source_id: row.get::<String>(0).unwrap_or_default(),
+                    content: row.get::<String>(1).unwrap_or_default(),
+                    memory_type: row.get::<Option<String>>(2).unwrap_or(None),
+                    space: row.get::<Option<String>>(3).unwrap_or(None),
+                    times_retrieved: row.get::<u64>(4).unwrap_or(0),
+                });
+            }
+        }
+
+        Ok(HomeStats {
+            total,
+            new_today,
+            confirmed,
+            total_ingested,
+            active_insights: total_ingested.saturating_sub(superseded_count),
+            distilled_today,
+            distilled_all,
+            sources_archived,
+            times_served_today,
+            words_saved_today,
+            times_served_week,
+            words_saved_week,
+            times_served_all,
+            words_saved_all,
+            corrections_active,
+            top_memories,
+        })
+    }
+
     // ==================== Version Chain ====================
 
     /// Walk the version chain for a memory, returning all versions ordered oldest->newest.
@@ -16587,6 +17728,153 @@ impl MemoryDB {
         }
 
         Ok(chain)
+    }
+
+    pub async fn get_version_chain_scoped(
+        &self,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<Vec<MemoryVersionItem>>, WenlanError> {
+        let (scope_sql, scope_value) = match scope {
+            ReadScope::Global => ("", None),
+            ReadScope::Space(space) => ("AND space = ?2", Some(libsql::Value::Text(space.clone()))),
+            ReadScope::Uncategorized => ("AND space IS NULL", None),
+        };
+        let conn = self.conn.lock().await;
+
+        let mut current = source_id.to_string();
+        let mut root = current.clone();
+        let mut found_start = false;
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if !visited.insert(current.clone()) {
+                break;
+            }
+            let sql = format!(
+                "SELECT supersedes FROM memories
+                 WHERE source_id = ?1 AND source = 'memory' AND chunk_index = 0 {scope_sql}
+                 LIMIT 1"
+            );
+            let params = match &scope_value {
+                Some(value) => vec![libsql::Value::Text(current.clone()), value.clone()],
+                None => vec![libsql::Value::Text(current.clone())],
+            };
+            let predecessor = {
+                let mut rows = conn.query(&sql, params).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("version_chain_scoped backward: {e}"))
+                })?;
+                rows.next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("version_chain_scoped row: {e}")))?
+                    .map(|row| row.get::<Option<String>>(0).unwrap_or(None))
+            };
+            let Some(predecessor) = predecessor else {
+                if !found_start {
+                    return Ok(None);
+                }
+                break;
+            };
+            found_start = true;
+            root = current.clone();
+            match predecessor.filter(|value| !value.is_empty()) {
+                Some(previous) => current = previous,
+                None => break,
+            }
+        }
+
+        let mut chain = Vec::new();
+        let mut current = root;
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if !visited.insert(current.clone()) {
+                break;
+            }
+            let item_sql = format!(
+                "SELECT source_id, MAX(title), MAX(content), MAX(memory_type),
+                        MAX(CAST(confirmed AS INTEGER)), MAX(supersedes), MAX(last_modified)
+                 FROM memories
+                 WHERE source_id = ?1 AND source = 'memory' {scope_sql}
+                 GROUP BY source_id"
+            );
+            let params = match &scope_value {
+                Some(value) => vec![libsql::Value::Text(current.clone()), value.clone()],
+                None => vec![libsql::Value::Text(current.clone())],
+            };
+            let item = {
+                let mut rows = conn.query(&item_sql, params).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("version_chain_scoped forward: {e}"))
+                })?;
+                rows.next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("version_chain_scoped row: {e}")))?
+                    .map(|row| MemoryVersionItem {
+                        source_id: row.get::<String>(0).unwrap_or_default(),
+                        title: row.get::<String>(1).unwrap_or_default(),
+                        content: row.get::<String>(2).unwrap_or_default(),
+                        memory_type: row.get::<Option<String>>(3).unwrap_or(None),
+                        confirmed: row.get::<i64>(4).unwrap_or(0) != 0,
+                        supersedes: row.get::<Option<String>>(5).unwrap_or(None),
+                        last_modified: row.get::<i64>(6).unwrap_or(0),
+                    })
+            };
+            let Some(mut item) = item else {
+                break;
+            };
+            if let Some(predecessor) = item.supersedes.clone() {
+                let predecessor_sql = format!(
+                    "SELECT 1 FROM memories
+                     WHERE source_id = ?1 AND source = 'memory' AND chunk_index = 0 {scope_sql}
+                     LIMIT 1"
+                );
+                let params = match &scope_value {
+                    Some(value) => {
+                        vec![libsql::Value::Text(predecessor), value.clone()]
+                    }
+                    None => vec![libsql::Value::Text(predecessor)],
+                };
+                let mut rows = conn.query(&predecessor_sql, params).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("version_chain_scoped predecessor: {e}"))
+                })?;
+                if rows
+                    .next()
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("version_chain_scoped predecessor row: {e}"))
+                    })?
+                    .is_none()
+                {
+                    item.supersedes = None;
+                }
+            }
+            chain.push(item);
+
+            let next_sql = format!(
+                "SELECT source_id FROM memories
+                 WHERE supersedes = ?1 AND source = 'memory' AND chunk_index = 0 {scope_sql}
+                 GROUP BY source_id LIMIT 1"
+            );
+            let params = match &scope_value {
+                Some(value) => vec![libsql::Value::Text(current.clone()), value.clone()],
+                None => vec![libsql::Value::Text(current.clone())],
+            };
+            let next = {
+                let mut rows = conn.query(&next_sql, params).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("version_chain_scoped next: {e}"))
+                })?;
+                rows.next()
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("version_chain_scoped next row: {e}"))
+                    })?
+                    .map(|row| row.get::<String>(0).unwrap_or_default())
+            };
+            match next.filter(|value| !value.is_empty()) {
+                Some(next) => current = next,
+                None => break,
+            }
+        }
+
+        Ok(Some(chain))
     }
 
     // ==================== Profile CRUD ====================
@@ -17547,12 +18835,23 @@ impl MemoryDB {
         limit: usize,
         domain_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
+        let scope = legacy_read_scope(domain_filter);
+        self.get_nurture_cards_scoped(limit, &scope).await
+    }
+
+    pub async fn get_nurture_cards_scoped(
+        &self,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
-        let space_clause = match domain_filter {
-            Some("uncategorized") => "AND c.space IS NULL",
-            Some(_) => "AND c.space = ?2",
-            None => "",
+        let space_clause = match scope {
+            ReadScope::Global => "",
+            ReadScope::Space(_) => "AND c.space = ?2",
+            ReadScope::Uncategorized => "AND c.space IS NULL",
         };
+        let hidden_by_superseder =
+            superseder_not_exists(scope, "c", "superseder.source = 'memory'");
         let sql = format!(
             "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.space,
                     c.source_agent, c.confidence, c.confirmed, c.stability,
@@ -17570,9 +18869,7 @@ impl MemoryDB {
              WHERE c.source = 'memory'
                AND c.stability = 'new'
                AND COALESCE(c.is_recap, 0) = 0
-               AND c.source_id NOT IN (
-                   SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND source = 'memory'
-               )
+               AND {hidden_by_superseder}
                {}
              ORDER BY
                c.pending_revision DESC,
@@ -17583,10 +18880,12 @@ impl MemoryDB {
             space_clause
         );
 
-        let mut rows = match domain_filter {
-            Some("uncategorized") | None => conn.query(&sql, libsql::params![limit as i64]).await,
-            Some(space) => {
-                conn.query(&sql, libsql::params![limit as i64, space.to_string()])
+        let mut rows = match scope {
+            ReadScope::Global | ReadScope::Uncategorized => {
+                conn.query(&sql, libsql::params![limit as i64]).await
+            }
+            ReadScope::Space(space) => {
+                conn.query(&sql, libsql::params![limit as i64, space.clone()])
                     .await
             }
         }
@@ -17834,6 +19133,80 @@ impl MemoryDB {
         }
     }
 
+    pub async fn get_pending_revision_for_scoped(
+        &self,
+        target_source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<PendingRevision>, WenlanError> {
+        let (scope_sql, values) = match scope {
+            ReadScope::Global => (
+                "AND EXISTS (
+                     SELECT 1 FROM memories target
+                     WHERE target.source_id = r.supersedes
+                       AND target.source = 'memory'
+                       AND target.chunk_index = 0
+                 )",
+                vec![libsql::Value::Text(target_source_id.to_string())],
+            ),
+            ReadScope::Space(space) => (
+                "AND r.space = ?2
+                 AND EXISTS (
+                     SELECT 1 FROM memories target
+                     WHERE target.source_id = r.supersedes
+                       AND target.source = 'memory'
+                       AND target.chunk_index = 0
+                       AND target.space = ?3
+                 )",
+                vec![
+                    libsql::Value::Text(target_source_id.to_string()),
+                    libsql::Value::Text(space.clone()),
+                    libsql::Value::Text(space.clone()),
+                ],
+            ),
+            ReadScope::Uncategorized => (
+                "AND r.space IS NULL
+                 AND EXISTS (
+                     SELECT 1 FROM memories target
+                     WHERE target.source_id = r.supersedes
+                       AND target.source = 'memory'
+                       AND target.chunk_index = 0
+                       AND target.space IS NULL
+                 )",
+                vec![libsql::Value::Text(target_source_id.to_string())],
+            ),
+        };
+        let sql = format!(
+            "SELECT r.source_id, r.content, r.source_agent
+             FROM memories r
+             WHERE r.supersedes = ?1
+               AND r.pending_revision = 1
+               AND r.source = 'memory'
+               AND r.chunk_index = 0
+               {scope_sql}
+             LIMIT 1"
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_pending_revision_for_scoped: {e}")))?;
+        let Some(row) = rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("get_pending_revision_for_scoped row: {e}"))
+        })?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(PendingRevision {
+            source_id: row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+            content: row
+                .get::<String>(1)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+            source_agent: row.get::<Option<String>>(2).unwrap_or(None),
+        }))
+    }
+
     /// List staged revisions awaiting human accept/dismiss.
     ///
     /// Returns `(target_source_id, revision_source_id, revision_content,
@@ -17879,6 +19252,102 @@ impl MemoryDB {
                 .and_then(|v| {
                     v.get("grounded_in")
                         .and_then(|g| g.as_str())
+                        .map(str::to_string)
+                });
+            out.push(wenlan_types::responses::PendingRevisionItem {
+                target_source_id: row
+                    .get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("col 0: {e}")))?,
+                revision_source_id: row
+                    .get::<String>(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("col 1: {e}")))?,
+                revision_content: row
+                    .get::<String>(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("col 2: {e}")))?,
+                source_agent: row.get::<Option<String>>(3).unwrap_or(None),
+                last_modified: row
+                    .get::<i64>(4)
+                    .map_err(|e| WenlanError::VectorDb(format!("col 4: {e}")))?,
+                grounded_in,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn list_pending_revisions_scoped(
+        &self,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::responses::PendingRevisionItem>, WenlanError> {
+        let (scope_sql, values) = match scope {
+            ReadScope::Global => (
+                "AND EXISTS (
+                     SELECT 1 FROM memories target
+                     WHERE target.source_id = revision.supersedes
+                       AND target.source = 'memory'
+                       AND target.chunk_index = 0
+                 )",
+                vec![libsql::Value::Integer(limit as i64)],
+            ),
+            ReadScope::Space(space) => (
+                "AND revision.space = ?1
+                 AND EXISTS (
+                     SELECT 1 FROM memories target
+                     WHERE target.source_id = revision.supersedes
+                       AND target.source = 'memory'
+                       AND target.chunk_index = 0
+                       AND target.space = ?2
+                 )",
+                vec![
+                    libsql::Value::Text(space.clone()),
+                    libsql::Value::Text(space.clone()),
+                    libsql::Value::Integer(limit as i64),
+                ],
+            ),
+            ReadScope::Uncategorized => (
+                "AND revision.space IS NULL
+                 AND EXISTS (
+                     SELECT 1 FROM memories target
+                     WHERE target.source_id = revision.supersedes
+                       AND target.source = 'memory'
+                       AND target.chunk_index = 0
+                       AND target.space IS NULL
+                 )",
+                vec![libsql::Value::Integer(limit as i64)],
+            ),
+        };
+        let limit_param = values.len();
+        let sql = format!(
+            "SELECT revision.supersedes, revision.source_id, revision.content,
+                    revision.source_agent, revision.last_modified, revision.structured_fields
+             FROM memories revision
+             WHERE revision.pending_revision = 1
+               AND revision.supersedes IS NOT NULL
+               AND revision.source = 'memory'
+               AND revision.chunk_index = 0
+               {scope_sql}
+             ORDER BY revision.last_modified DESC
+             LIMIT ?{limit_param}"
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_pending_revisions_scoped: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_pending_revisions_scoped row: {e}")))?
+        {
+            let grounded_in = row
+                .get::<Option<String>>(5)
+                .unwrap_or(None)
+                .and_then(|sf| serde_json::from_str::<serde_json::Value>(&sf).ok())
+                .and_then(|value| {
+                    value
+                        .get("grounded_in")
+                        .and_then(|ground| ground.as_str())
                         .map(str::to_string)
                 });
             out.push(wenlan_types::responses::PendingRevisionItem {
@@ -18353,6 +19822,180 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Get snapshot captures whose current Memory owner belongs to `scope`.
+    pub async fn get_captures_for_snapshot_scoped(
+        &self,
+        snapshot_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Vec<CaptureRefRow>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.get_captures_for_snapshot(snapshot_id).await;
+        }
+
+        let mut conditions = vec!["cr.snapshot_id = ?".to_string()];
+        let mut values = vec![libsql::Value::Text(snapshot_id.to_string())];
+        push_read_scope_filter(scope, "m.space", &mut conditions, &mut values);
+        match scope {
+            ReadScope::Space(space) => {
+                conditions.push(
+                    "NOT EXISTS (
+                         SELECT 1 FROM memories other
+                          WHERE other.source = m.source
+                            AND other.source_id = m.source_id
+                            AND (other.space IS NULL OR other.space <> ?)
+                     )"
+                    .to_string(),
+                );
+                values.push(libsql::Value::Text(space.clone()));
+            }
+            ReadScope::Uncategorized => conditions.push(
+                "NOT EXISTS (
+                     SELECT 1 FROM memories other
+                      WHERE other.source = m.source
+                        AND other.source_id = m.source_id
+                        AND other.space IS NOT NULL
+                 )"
+                .to_string(),
+            ),
+            ReadScope::Global => unreachable!(),
+        }
+        let sql = format!(
+            "SELECT cr.source_id, cr.activity_id, cr.snapshot_id, cr.app_name,
+                    cr.window_title, cr.timestamp, cr.source
+               FROM capture_refs cr
+               JOIN memories m
+                 ON m.source_id = cr.source_id
+                AND m.chunk_index = 0
+                AND m.source = CASE cr.source
+                    WHEN 'focus' THEN 'focus_capture'
+                    WHEN 'hotkey' THEN 'hotkey_capture'
+                    WHEN 'snip' THEN 'snip_capture'
+                    WHEN 'thought' THEN 'quick_thought'
+                    ELSE cr.source
+                END
+              WHERE {}
+              ORDER BY cr.timestamp",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_captures_for_snapshot_scoped: {e}")))?;
+        let mut results = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("snapshot capture row: {e}")))?
+        {
+            results.push(CaptureRefRow {
+                source_id: row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot source_id: {e}")))?,
+                activity_id: row
+                    .get(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot activity_id: {e}")))?,
+                snapshot_id: row
+                    .get(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot id: {e}")))?,
+                app_name: row
+                    .get(3)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot app_name: {e}")))?,
+                window_title: row
+                    .get(4)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot window_title: {e}")))?,
+                timestamp: row
+                    .get(5)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot timestamp: {e}")))?,
+                source: row
+                    .get(6)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot source: {e}")))?,
+            });
+        }
+
+        if results.is_empty() {
+            Err(WenlanError::NotFound("snapshot not found".to_string()))
+        } else {
+            Ok(results)
+        }
+    }
+
+    async fn get_snapshot_capture_content(
+        &self,
+        source: &str,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<String, WenlanError> {
+        let mut conditions = vec!["source = ?".to_string(), "source_id = ?".to_string()];
+        let mut values = vec![
+            libsql::Value::Text(source.to_string()),
+            libsql::Value::Text(source_id.to_string()),
+        ];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT content FROM memories WHERE {} ORDER BY chunk_index ASC LIMIT 10000",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("snapshot capture content: {e}")))?;
+        let mut chunks = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("snapshot content row: {e}")))?
+        {
+            chunks.push(
+                row.get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot content: {e}")))?,
+            );
+        }
+        if chunks.is_empty() {
+            return Err(WenlanError::VectorDb(format!(
+                "snapshot capture content missing: {source_id}"
+            )));
+        }
+        Ok(chunks.join("\n"))
+    }
+
+    /// Get scoped snapshot captures with required content and summary loads.
+    pub async fn get_snapshot_captures_with_content_scoped(
+        &self,
+        snapshot_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::SnapshotCaptureWithContent>, WenlanError> {
+        let captures = self
+            .get_captures_for_snapshot_scoped(snapshot_id, scope)
+            .await?;
+        let indexed_files = self.list_indexed_files_scoped(scope).await?;
+        let mut results = Vec::with_capacity(captures.len());
+
+        for capture in captures {
+            let memory_source = capture_memory_source(&capture.source);
+            let content = self
+                .get_snapshot_capture_content(memory_source, &capture.source_id, scope)
+                .await?;
+            let summary = indexed_files
+                .iter()
+                .find(|file| file.source == memory_source && file.source_id == capture.source_id)
+                .and_then(|file| file.summary.clone());
+
+            results.push(wenlan_types::SnapshotCaptureWithContent {
+                source_id: capture.source_id,
+                app_name: capture.app_name,
+                window_title: capture.window_title,
+                timestamp: capture.timestamp,
+                source: capture.source,
+                content,
+                summary,
+            });
+        }
+
+        Ok(results)
+    }
+
     // ==================== Session Snapshots ====================
 
     /// Insert a session snapshot.
@@ -18762,6 +20405,118 @@ impl MemoryDB {
         })
     }
 
+    /// Get briefing stats from the selected Memory population.
+    pub async fn get_briefing_stats_scoped(
+        &self,
+        cutoff: i64,
+        scope: &ReadScope,
+    ) -> Result<crate::briefing::BriefingStats, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.get_briefing_stats(cutoff).await;
+        }
+
+        let today_start = chrono::Utc::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "last_modified > ?".to_string(),
+            "chunk_index = 0".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(today_start)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT COUNT(DISTINCT source_id) FROM memories WHERE {}",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing_stats_scoped new_today: {e}")))?;
+        let new_today = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<u64>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("briefing_stats_scoped new_today row: {e}"))
+            })?
+        } else {
+            0
+        };
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "last_modified > ?".to_string(),
+            "chunk_index = 0".to_string(),
+            "space IS NOT NULL".to_string(),
+            "space != ''".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(cutoff)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT space, COUNT(*) AS cnt FROM memories WHERE {} \
+             GROUP BY space ORDER BY cnt DESC LIMIT 1",
+            conditions.join(" AND ")
+        );
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing_stats_scoped domain: {e}")))?;
+        let dominant_domain = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row.get::<String>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("briefing_stats_scoped domain row: {e}"))
+            })?)
+        } else {
+            None
+        };
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "last_modified > ?".to_string(),
+            "chunk_index = 0".to_string(),
+            "source_agent IS NOT NULL".to_string(),
+            "source_agent != ''".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(cutoff)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT source_agent, COUNT(*) AS cnt FROM memories WHERE {} \
+             GROUP BY source_agent ORDER BY cnt DESC LIMIT 1",
+            conditions.join(" AND ")
+        );
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing_stats_scoped agent: {e}")))?;
+        let primary_agent = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row.get::<String>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("briefing_stats_scoped agent row: {e}"))
+            })?)
+        } else {
+            None
+        };
+
+        Ok(crate::briefing::BriefingStats {
+            dominant_domain,
+            primary_agent,
+            new_today,
+        })
+    }
+
     /// Get recent memories for briefing generation (all types, sorted by recency).
     pub async fn get_recent_memories_for_briefing(
         &self,
@@ -18796,6 +20551,69 @@ impl MemoryDB {
                 memory_type: row.get(2).unwrap_or_else(|_| "observation".to_string()),
                 space: row.get::<Option<String>>(3).unwrap_or(None),
                 last_modified: row.get(4).unwrap_or(0),
+            });
+        }
+        Ok(results)
+    }
+
+    /// Get recent briefing inputs from the selected Memory population.
+    pub async fn get_recent_memories_for_briefing_scoped(
+        &self,
+        cutoff: i64,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<crate::briefing::BriefingMemory>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.get_recent_memories_for_briefing(cutoff, limit).await;
+        }
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "chunk_index = 0".to_string(),
+            "last_modified > ?".to_string(),
+            "is_recap = 0".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(cutoff)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        values.push(libsql::Value::Integer(limit as i64));
+        let sql = format!(
+            "SELECT title, content, COALESCE(memory_type, 'observation'), space, last_modified
+             FROM memories
+             WHERE {}
+             ORDER BY last_modified DESC
+             LIMIT ?",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("get_recent_memories_for_briefing_scoped: {e}"))
+            })?;
+
+        let mut results = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing scoped row: {e}")))?
+        {
+            results.push(crate::briefing::BriefingMemory {
+                title: row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing title: {e}")))?,
+                content: row
+                    .get(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing content: {e}")))?,
+                memory_type: row
+                    .get(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing memory_type: {e}")))?,
+                space: row
+                    .get(3)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing space: {e}")))?,
+                last_modified: row
+                    .get(4)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing timestamp: {e}")))?,
             });
         }
         Ok(results)
@@ -20624,6 +22442,195 @@ impl MemoryDB {
         Ok(events)
     }
 
+    pub async fn list_recent_retrievals_scoped(
+        &self,
+        limit: i64,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::RetrievalEvent>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.list_recent_retrievals(limit).await;
+        }
+
+        let target_limit = usize::try_from(limit.max(0)).unwrap_or(usize::MAX);
+        if target_limit == 0 {
+            return Ok(Vec::new());
+        }
+        let batch_limit = scoped_activity_batch_size(target_limit);
+        let conn = self.conn.lock().await;
+        let mut events = Vec::new();
+        let mut offset = 0i64;
+        loop {
+            let mut rows = conn
+                .query(
+                    "SELECT timestamp, agent_name, query, memory_ids
+                       FROM agent_activity
+                      WHERE action IN ('search','read') AND memory_ids != ''
+                      ORDER BY timestamp DESC, id DESC
+                      LIMIT ?1 OFFSET ?2",
+                    libsql::params![batch_limit, offset],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("list_recent_retrievals_scoped scan: {e}"))
+                })?;
+            let mut raw = Vec::new();
+            let mut all_ids = Vec::new();
+            let mut seen_ids = HashSet::new();
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("list_recent_retrievals_scoped row: {e}"))
+            })? {
+                let timestamp = row.get::<i64>(0).unwrap_or(0);
+                let agent = row.get::<String>(1).unwrap_or_default();
+                let query = row.get::<String>(2).ok().filter(|query| !query.is_empty());
+                let ids = parse_activity_ids(&row.get::<String>(3).unwrap_or_default());
+                for id in &ids {
+                    if seen_ids.insert(id.clone()) {
+                        all_ids.push(id.clone());
+                    }
+                }
+                raw.push((timestamp, agent, query, ids));
+            }
+            drop(rows);
+            let batch_len = raw.len();
+            if batch_len == 0 {
+                break;
+            }
+            let owners = activity_owners(&conn, &all_ids).await?;
+
+            for (timestamp, agent_name, query, ids) in raw {
+                if events.len() >= target_limit {
+                    break;
+                }
+                if !all_ids_match_scope(&ids, &owners, scope) {
+                    continue;
+                }
+
+                let mut page_titles = Vec::new();
+                let mut page_ids = Vec::new();
+                let mut seen_page_ids = HashSet::new();
+                for id in &ids {
+                    let pattern = format!("%\"{}\"%", id);
+                    let (page_sql, page_values) = match scope {
+                        ReadScope::Space(space) => (
+                            "SELECT id, title FROM pages
+                          WHERE status = 'active' AND source_memory_ids LIKE ?1
+                            AND workspace = ?2
+                          LIMIT 5",
+                            vec![
+                                libsql::Value::Text(pattern),
+                                libsql::Value::Text(space.clone()),
+                            ],
+                        ),
+                        ReadScope::Uncategorized => (
+                            "SELECT id, title FROM pages
+                          WHERE status = 'active' AND source_memory_ids LIKE ?1
+                            AND workspace IS NULL
+                          LIMIT 5",
+                            vec![libsql::Value::Text(pattern)],
+                        ),
+                        ReadScope::Global => unreachable!(),
+                    };
+                    let mut page_rows = conn
+                        .query(page_sql, libsql::params_from_iter(page_values))
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!(
+                                "list_recent_retrievals_scoped pages: {e}"
+                            ))
+                        })?;
+                    while let Some(row) = page_rows.next().await.map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "list_recent_retrievals_scoped page row: {e}"
+                        ))
+                    })? {
+                        let page_id = row.get::<String>(0).unwrap_or_default();
+                        let title = row.get::<String>(1).unwrap_or_default();
+                        if !page_id.is_empty()
+                            && !title.is_empty()
+                            && seen_page_ids.insert(page_id.clone())
+                        {
+                            page_ids.push(page_id);
+                            page_titles.push(title);
+                        }
+                    }
+                }
+
+                let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let (snippet_scope, snippet_scope_value) = match scope {
+                    ReadScope::Space(space) => {
+                        ("AND m.space = ?", Some(libsql::Value::Text(space.clone())))
+                    }
+                    ReadScope::Uncategorized => ("AND m.space IS NULL", None),
+                    ReadScope::Global => unreachable!(),
+                };
+                let snippet_sql = format!(
+                    "SELECT m.source_id, COALESCE(m.title, ''), COALESCE(m.content, '')
+                   FROM memories m
+                  WHERE m.source != 'episode' AND m.source_id IN ({placeholders})
+                    {snippet_scope}
+                    AND m.chunk_index = (
+                        SELECT MIN(m2.chunk_index) FROM memories m2
+                         WHERE m2.source != 'episode' AND m2.source_id = m.source_id
+                    )"
+                );
+                let mut snippet_values = ids
+                    .iter()
+                    .cloned()
+                    .map(libsql::Value::Text)
+                    .collect::<Vec<_>>();
+                if let Some(value) = snippet_scope_value {
+                    snippet_values.push(value);
+                }
+                let mut snippet_rows = conn
+                    .query(&snippet_sql, libsql::params_from_iter(snippet_values))
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "list_recent_retrievals_scoped snippets: {e}"
+                        ))
+                    })?;
+                let mut snippet_map = HashMap::new();
+                while let Some(row) = snippet_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("list_recent_retrievals_scoped snippet row: {e}"))
+                })? {
+                    let source_id = row.get::<String>(0).unwrap_or_default();
+                    let title = row.get::<String>(1).unwrap_or_default();
+                    let content = row.get::<String>(2).unwrap_or_default();
+                    let snippet = if !title.is_empty() && !title_looks_garbage(&title) {
+                        title.chars().take(80).collect::<String>()
+                    } else if !content.is_empty() {
+                        content.chars().take(100).collect::<String>()
+                    } else if !title.is_empty() {
+                        title.chars().take(80).collect::<String>()
+                    } else {
+                        continue;
+                    };
+                    snippet_map.insert(source_id, snippet);
+                }
+                let memory_snippets = ids
+                    .iter()
+                    .filter_map(|id| snippet_map.remove(id))
+                    .collect::<Vec<_>>();
+                if page_titles.is_empty() && memory_snippets.is_empty() {
+                    continue;
+                }
+                events.push(wenlan_types::RetrievalEvent {
+                    timestamp_ms: timestamp.saturating_mul(1000),
+                    agent_name,
+                    query,
+                    page_titles,
+                    page_ids,
+                    memory_snippets,
+                });
+            }
+            if events.len() >= target_limit || batch_len < batch_limit as usize {
+                break;
+            }
+            offset = offset.saturating_add(batch_len as i64);
+        }
+        Ok(events)
+    }
+
     /// Return up to `limit` most recent page changes (created or revised),
     /// ordered by `last_modified` DESC. Only `status = 'active'` rows — archived
     /// or otherwise non-active pages are excluded.
@@ -20695,6 +22702,16 @@ impl MemoryDB {
         limit: i64,
         since_ms: Option<i64>,
     ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
+        self.list_recent_memories_scoped(limit, since_ms, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn list_recent_memories_scoped(
+        &self,
+        limit: i64,
+        since_ms: Option<i64>,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
         use wenlan_types::{ActivityKind, RecentActivityItem};
 
         // --- Phase A: fetch rows (drop conn guard before second async call) ---
@@ -20710,8 +22727,14 @@ impl MemoryDB {
             Option<String>,
         )> = {
             let conn = self.conn.lock().await;
-            let mut rows = conn
-                .query(
+            let (scope_sql, scope_value) = match scope {
+                ReadScope::Global => ("", None),
+                ReadScope::Space(space) => {
+                    ("AND space = ?2", Some(libsql::Value::Text(space.clone())))
+                }
+                ReadScope::Uncategorized => ("AND space IS NULL", None),
+            };
+            let sql = format!(
                     "SELECT source_id, title, summary, content, \
                             created_at, last_modified, \
                             (SELECT CASE \
@@ -20724,10 +22747,16 @@ impl MemoryDB {
                      FROM memories \
                      WHERE source = 'memory' AND chunk_index = 0 \
                        AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
+                       {scope_sql} \
                      ORDER BY COALESCE(last_modified, created_at) DESC \
-                     LIMIT ?1",
-                    libsql::params![limit],
-                )
+                     LIMIT ?1"
+            );
+            let params = match scope_value {
+                Some(value) => vec![libsql::Value::Integer(limit), value],
+                None => vec![libsql::Value::Integer(limit)],
+            };
+            let mut rows = conn
+                .query(&sql, params)
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("list_recent_memories scan: {e}")))?;
             let mut out = Vec::new();
@@ -20830,22 +22859,41 @@ impl MemoryDB {
         &self,
         limit: i64,
     ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
+        self.list_unconfirmed_memories_scoped(limit, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn list_unconfirmed_memories_scoped(
+        &self,
+        limit: i64,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
         use wenlan_types::{ActivityBadge, ActivityKind, RecentActivityItem};
 
         let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT source_id, title, summary, content, \
+        let (scope_sql, scope_value) = match scope {
+            ReadScope::Global => ("", None),
+            ReadScope::Space(space) => ("AND space = ?2", Some(libsql::Value::Text(space.clone()))),
+            ReadScope::Uncategorized => ("AND space IS NULL", None),
+        };
+        let sql = format!(
+            "SELECT source_id, title, summary, content, \
                         created_at, last_modified \
                  FROM memories \
                  WHERE source = 'memory' AND chunk_index = 0 \
                    AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
                    AND (confirmed = 0 OR confirmed IS NULL) \
                    AND (is_recap IS NULL OR is_recap != 1) \
+                   {scope_sql} \
                  ORDER BY COALESCE(last_modified, created_at) DESC \
-                 LIMIT ?1",
-                libsql::params![limit],
-            )
+                 LIMIT ?1"
+        );
+        let params = match scope_value {
+            Some(value) => vec![libsql::Value::Integer(limit), value],
+            None => vec![libsql::Value::Integer(limit)],
+        };
+        let mut rows = conn
+            .query(&sql, params)
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_unconfirmed_memories scan: {e}")))?;
 
@@ -21281,6 +23329,138 @@ impl MemoryDB {
             }
         }
 
+        Ok(activities)
+    }
+
+    pub async fn list_agent_activity_scoped(
+        &self,
+        limit: usize,
+        agent_name: Option<&str>,
+        since: Option<i64>,
+        scope: &ReadScope,
+    ) -> Result<Vec<AgentActivityRow>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.list_agent_activity(limit, agent_name, since).await;
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.conn.lock().await;
+        let mut sql = String::from(
+            "SELECT id, timestamp, agent_name, action, memory_ids, query, detail
+               FROM agent_activity
+              WHERE 1=1",
+        );
+        let mut values = Vec::new();
+        if let Some(agent) = agent_name {
+            sql.push_str(" AND agent_name = ?");
+            values.push(libsql::Value::Text(agent.to_string()));
+        }
+        if let Some(timestamp) = since {
+            sql.push_str(" AND timestamp >= ?");
+            values.push(libsql::Value::Integer(timestamp));
+        }
+        sql.push_str(" ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?");
+        let batch_limit = scoped_activity_batch_size(limit);
+        let mut activities = Vec::new();
+        let mut offset = 0i64;
+        loop {
+            let mut query_values = values.clone();
+            query_values.push(libsql::Value::Integer(batch_limit));
+            query_values.push(libsql::Value::Integer(offset));
+            let mut rows = conn
+                .query(&sql, libsql::params_from_iter(query_values))
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("list_agent_activity_scoped: {e}")))?;
+            let mut raw = Vec::new();
+            let mut all_ids = Vec::new();
+            let mut seen_ids = HashSet::new();
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("list_agent_activity_scoped row: {e}"))
+            })? {
+                let memory_ids = row.get::<String>(4).ok().filter(|ids| !ids.is_empty());
+                let ids = memory_ids
+                    .as_deref()
+                    .map(parse_activity_ids)
+                    .unwrap_or_default();
+                for id in &ids {
+                    if seen_ids.insert(id.clone()) {
+                        all_ids.push(id.clone());
+                    }
+                }
+                raw.push((
+                    AgentActivityRow {
+                        id: row.get::<i64>(0).unwrap_or(0),
+                        timestamp: row.get::<i64>(1).unwrap_or(0),
+                        agent_name: row.get::<String>(2).unwrap_or_default(),
+                        action: row.get::<String>(3).unwrap_or_default(),
+                        memory_ids,
+                        query: row.get::<String>(5).ok().filter(|value| !value.is_empty()),
+                        detail: row.get::<String>(6).ok().filter(|value| !value.is_empty()),
+                        memory_titles: Vec::new(),
+                    },
+                    ids,
+                ));
+            }
+            drop(rows);
+            let batch_len = raw.len();
+            if batch_len == 0 {
+                break;
+            }
+            let owners = activity_owners(&conn, &all_ids).await?;
+
+            for (mut activity, ids) in raw {
+                if activities.len() >= limit {
+                    break;
+                }
+                if !all_ids_match_scope(&ids, &owners, scope) {
+                    continue;
+                }
+
+                let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let (scope_sql, scope_value) = match scope {
+                    ReadScope::Space(space) => {
+                        ("AND space = ?", Some(libsql::Value::Text(space.clone())))
+                    }
+                    ReadScope::Uncategorized => ("AND space IS NULL", None),
+                    ReadScope::Global => unreachable!(),
+                };
+                let title_sql = format!(
+                    "SELECT DISTINCT title FROM memories
+                  WHERE source != 'episode' AND source_id IN ({placeholders}) {scope_sql}
+                  GROUP BY source_id"
+                );
+                let mut title_values = ids
+                    .iter()
+                    .cloned()
+                    .map(libsql::Value::Text)
+                    .collect::<Vec<_>>();
+                if let Some(value) = scope_value {
+                    title_values.push(value);
+                }
+                let mut title_rows = conn
+                    .query(&title_sql, libsql::params_from_iter(title_values))
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("list_agent_activity_scoped titles: {e}"))
+                    })?;
+                while let Some(row) = title_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("list_agent_activity_scoped title row: {e}"))
+                })? {
+                    if let Ok(title) = row.get::<String>(0) {
+                        if !title.is_empty() {
+                            activity.memory_titles.push(title);
+                        }
+                    }
+                }
+                activities.push(activity);
+            }
+            if activities.len() >= limit || batch_len < batch_limit as usize {
+                break;
+            }
+            offset = offset.saturating_add(batch_len as i64);
+        }
         Ok(activities)
     }
 
@@ -26567,6 +28747,167 @@ impl MemoryDB {
 
         Ok(entries)
     }
+
+    pub async fn walk_supersede_chain_scoped(
+        &self,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<Vec<MemoryRevisionEntry>>, WenlanError> {
+        const MAX_DEPTH: i64 = 50;
+        let (anchor_scope, current_scope, predecessor_scope, result_scope, params) = match scope {
+            ReadScope::Global => (
+                "",
+                "",
+                "",
+                "",
+                vec![
+                    libsql::Value::Text(source_id.to_string()),
+                    libsql::Value::Integer(MAX_DEPTH),
+                ],
+            ),
+            ReadScope::Space(space) => (
+                "AND anchor.space = ?3",
+                "AND current.space = ?3",
+                "AND predecessor.space = ?3",
+                "AND memory.space = ?3",
+                vec![
+                    libsql::Value::Text(source_id.to_string()),
+                    libsql::Value::Integer(MAX_DEPTH),
+                    libsql::Value::Text(space.clone()),
+                ],
+            ),
+            ReadScope::Uncategorized => (
+                "AND anchor.space IS NULL",
+                "AND current.space IS NULL",
+                "AND predecessor.space IS NULL",
+                "AND memory.space IS NULL",
+                vec![
+                    libsql::Value::Text(source_id.to_string()),
+                    libsql::Value::Integer(MAX_DEPTH),
+                ],
+            ),
+        };
+        let sql = format!(
+            "WITH RECURSIVE chain(source_id, depth) AS (
+                SELECT anchor.source_id, 0
+                FROM memories anchor
+                WHERE anchor.source = 'memory'
+                  AND anchor.source_id = ?1
+                  AND anchor.chunk_index = 0
+                  {anchor_scope}
+                UNION ALL
+                SELECT predecessor.source_id, chain.depth + 1
+                FROM chain
+                JOIN memories current
+                  ON current.source_id = chain.source_id
+                 AND current.source = 'memory'
+                 AND current.chunk_index = 0
+                 {current_scope}
+                JOIN memories predecessor
+                  ON predecessor.source_id = current.supersedes
+                 AND predecessor.source = 'memory'
+                 AND predecessor.chunk_index = 0
+                 {predecessor_scope}
+                WHERE chain.depth < ?2
+            )
+            SELECT memory.source_id, chain.depth, memory.title,
+                   substr(memory.content, 1, 200), memory.last_modified,
+                   memory.source_agent, memory.supersede_mode
+            FROM chain
+             JOIN memories memory
+              ON memory.source_id = chain.source_id
+             AND memory.source = 'memory'
+             AND memory.chunk_index = 0
+             {result_scope}
+            ORDER BY chain.depth ASC"
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("walk_supersede_chain_scoped query: {e}"))
+            })?;
+        #[allow(clippy::type_complexity)]
+        let mut raw = Vec::<(
+            String,
+            i64,
+            String,
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+        )>::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("walk_supersede_chain_scoped row: {e}")))?
+        {
+            raw.push((
+                row.get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("walk_chain col0: {e}")))?,
+                row.get::<i64>(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("walk_chain col1: {e}")))?,
+                row.get::<String>(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("walk_chain col2: {e}")))?,
+                row.get::<String>(3)
+                    .map_err(|e| WenlanError::VectorDb(format!("walk_chain col3: {e}")))?
+                    .chars()
+                    .take(200)
+                    .collect(),
+                row.get::<i64>(4)
+                    .map_err(|e| WenlanError::VectorDb(format!("walk_chain col4: {e}")))?,
+                row.get::<Option<String>>(5).ok().flatten(),
+                row.get::<Option<String>>(6).ok().flatten(),
+            ));
+        }
+        drop(conn);
+        if raw.is_empty() {
+            return Ok(None);
+        }
+
+        let len = raw.len();
+        let mut entries = raw
+            .into_iter()
+            .map(
+                |(
+                    source_id,
+                    depth,
+                    title,
+                    content_preview,
+                    last_modified,
+                    source_agent,
+                    supersede_mode,
+                )| MemoryRevisionEntry {
+                    source_id,
+                    depth,
+                    title,
+                    content_preview,
+                    last_modified,
+                    source_agent,
+                    supersede_mode,
+                    delta_summary: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        for index in 0..len.saturating_sub(1) {
+            let (current_preview, predecessor_preview, mode) = {
+                let current = &entries[index];
+                let predecessor = &entries[index + 1];
+                (
+                    current.content_preview.clone(),
+                    predecessor.content_preview.clone(),
+                    current.supersede_mode.clone(),
+                )
+            };
+            entries[index].delta_summary = compute_memory_delta_summary(
+                &predecessor_preview,
+                &current_preview,
+                mode.as_deref(),
+            );
+        }
+        Ok(Some(entries))
+    }
 }
 
 /// Derive the activity badge for a single memory row.
@@ -27714,7 +30055,10 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let results = db.search("Rust programming", 10, None, None).await.unwrap();
+        let results = db
+            .search("Rust programming", 10, None, &ReadScope::Global)
+            .await
+            .unwrap();
         // Should find at least the Rust document (via FTS even if vector index is absent)
         assert!(!results.is_empty(), "search should return results");
     }
@@ -27740,7 +30084,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let results = db
-            .search("pets animals", 10, Some("local_files"), None)
+            .search("pets animals", 10, Some("local_files"), &ReadScope::Global)
             .await
             .unwrap();
         for r in &results {
@@ -27760,7 +30104,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         // Empty or very short query — should not panic
-        let results = db.search("", 10, None, None).await;
+        let results = db.search("", 10, None, &ReadScope::Global).await;
         // May return results or error, but should not panic
         assert!(results.is_ok() || results.is_err());
     }
@@ -27783,7 +30127,7 @@ pub(crate) mod tests {
         db.upsert_documents(docs).await.unwrap();
 
         let results = db
-            .search("programming language", 3, None, None)
+            .search("programming language", 3, None, &ReadScope::Global)
             .await
             .unwrap();
         assert!(results.len() <= 3, "should respect limit");
@@ -27815,7 +30159,16 @@ pub(crate) mod tests {
 
         // Hybrid search (vector + FTS) should find results via at least FTS
         let results = db
-            .search_memory("color blue", 10, None, None, None, None, None, None)
+            .search_memory(
+                "color blue",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -27856,7 +30209,7 @@ pub(crate) mod tests {
                 "deadline Friday",
                 10,
                 Some("fact"),
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -27878,7 +30231,7 @@ pub(crate) mod tests {
                 "color blue",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 Some("claude-code"),
                 None,
                 None,
@@ -27950,7 +30303,7 @@ pub(crate) mod tests {
                     "astronomy telescope galaxies",
                     lim,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -27969,7 +30322,7 @@ pub(crate) mod tests {
                 "photosynthesis chloroplast biology cellular respiration enzyme",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28029,11 +30382,27 @@ pub(crate) mod tests {
         let (prf, plain) =
             temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", None::<&str>)], async {
                 let prf = db
-                    .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                    .search_memory_prf(
+                        "color blue",
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        Some(llm.clone()),
+                    )
                     .await
                     .unwrap();
                 let plain = db
-                    .search_memory("color blue", 10, None, None, None, None, None, None)
+                    .search_memory(
+                        "color blue",
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                     .await
                     .unwrap();
                 (prf, plain)
@@ -28073,11 +30442,20 @@ pub(crate) mod tests {
 
         let (prf, plain) = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("2"))], async {
             let prf = db
-                .search_memory_prf("color blue", 10, None, None, None, None)
+                .search_memory_prf("color blue", 10, None, &ReadScope::Global, None, None)
                 .await
                 .unwrap();
             let plain = db
-                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .search_memory(
+                    "color blue",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
             (prf, plain)
@@ -28120,11 +30498,27 @@ pub(crate) mod tests {
 
         let (prf, plain) = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("2"))], async {
             let prf = db
-                .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .search_memory_prf(
+                    "color blue",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    Some(llm.clone()),
+                )
                 .await
                 .unwrap();
             let plain = db
-                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .search_memory(
+                    "color blue",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
             (prf, plain)
@@ -28182,7 +30576,7 @@ pub(crate) mod tests {
                 "quantum entanglement physics",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(llm.clone()),
             )
@@ -28238,15 +30632,29 @@ pub(crate) mod tests {
         );
 
         let three = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("3"))], async {
-            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
-                .await
-                .unwrap()
+            db.search_memory_prf(
+                "color blue",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(llm.clone()),
+            )
+            .await
+            .unwrap()
         })
         .await;
         let one = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("1"))], async {
-            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
-                .await
-                .unwrap()
+            db.search_memory_prf(
+                "color blue",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(llm.clone()),
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -28330,7 +30738,7 @@ pub(crate) mod tests {
                     "astronomy telescope galaxies",
                     4,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     Some(llm.clone()),
                 )
@@ -28341,7 +30749,7 @@ pub(crate) mod tests {
                     "astronomy telescope galaxies",
                     4,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -28396,7 +30804,16 @@ pub(crate) mod tests {
 
         // Both decisions should still appear in search (archive-visible mode for decisions)
         let results = db
-            .search_memory("database system", 10, None, None, None, None, None, None)
+            .search_memory(
+                "database system",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let source_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -28447,7 +30864,7 @@ pub(crate) mod tests {
                 "favorite color dashboards",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28589,7 +31006,7 @@ pub(crate) mod tests {
                 "Kubernetes container orchestration",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28751,7 +31168,7 @@ pub(crate) mod tests {
                 "Postgres MVCC concurrency control transactional",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28854,7 +31271,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -28919,7 +31336,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -28946,7 +31363,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -29006,7 +31423,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -29021,7 +31438,7 @@ pub(crate) mod tests {
                 "Kubernetes container orchestration",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -29163,7 +31580,7 @@ pub(crate) mod tests {
                 "color blue",
                 10,
                 Some("correction"),
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -31838,7 +34255,7 @@ pub(crate) mod tests {
                 "mode preference coding",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -32369,7 +34786,12 @@ pub(crate) mod tests {
 
         // Search should find original but not the pending revision
         let results = db
-            .search("kubernetes container orchestration", 10, None, None)
+            .search(
+                "kubernetes container orchestration",
+                10,
+                None,
+                &ReadScope::Global,
+            )
             .await
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -32938,7 +35360,10 @@ pub(crate) mod tests {
         )
         .await;
 
-        let results = db.search("pickle", 10, None, None).await.unwrap();
+        let results = db
+            .search("pickle", 10, None, &ReadScope::Global)
+            .await
+            .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
 
         assert!(
@@ -33254,7 +35679,14 @@ pub(crate) mod tests {
 
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         let results = db
-            .search_memory_cross_rerank("Rust programming", 10, None, None, None, Some(reranker))
+            .search_memory_cross_rerank(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(reranker),
+            )
             .await
             .unwrap();
         assert!(
@@ -33316,7 +35748,7 @@ pub(crate) mod tests {
                     "Rust programming language features",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     Some(reranker),
                 )
@@ -33355,7 +35787,14 @@ pub(crate) mod tests {
         .unwrap();
 
         let results = db
-            .search_memory_cross_rerank("Rust programming", 10, None, None, None, None)
+            .search_memory_cross_rerank(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -34135,7 +36574,7 @@ pub(crate) mod tests {
                 "Tauri IPC debugging",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -34786,7 +37225,7 @@ pub(crate) mod tests {
 
         // Pre-condition: both rows are searchable before eviction.
         let pre = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let pre_ids: Vec<&str> = pre.iter().map(|r| r.source_id.as_str()).collect();
@@ -34819,7 +37258,7 @@ pub(crate) mod tests {
 
         // Real search now EXCLUDES the evicted row while the control survives.
         let post = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let post_ids: Vec<&str> = post.iter().map(|r| r.source_id.as_str()).collect();
@@ -34847,7 +37286,7 @@ pub(crate) mod tests {
             .unwrap();
         }
         let recovered = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let rec_ids: Vec<&str> = recovered.iter().map(|r| r.source_id.as_str()).collect();
@@ -35029,7 +37468,7 @@ pub(crate) mod tests {
                 "Rust systems safety",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -36362,15 +38801,31 @@ pub(crate) mod tests {
         cue: Option<crate::temporal_query::DateRange>,
     ) -> (Vec<SearchResult>, Vec<SearchResult>) {
         let off = temp_env::async_with_vars([(flag, off_val)], async {
-            db.search_memory_cross_rerank_cued(query, limit, None, None, None, cue, None)
-                .await
-                .expect("g4_probe OFF arm")
+            db.search_memory_cross_rerank_cued(
+                query,
+                limit,
+                None,
+                &ReadScope::Global,
+                None,
+                cue,
+                None,
+            )
+            .await
+            .expect("g4_probe OFF arm")
         })
         .await;
         let on = temp_env::async_with_vars([(flag, Some("1"))], async {
-            db.search_memory_cross_rerank_cued(query, limit, None, None, None, cue, None)
-                .await
-                .expect("g4_probe ON arm")
+            db.search_memory_cross_rerank_cued(
+                query,
+                limit,
+                None,
+                &ReadScope::Global,
+                None,
+                cue,
+                None,
+            )
+            .await
+            .expect("g4_probe ON arm")
         })
         .await;
         (off, on)
@@ -36527,9 +38982,17 @@ pub(crate) mod tests {
         // Legacy path = stream explicitly OFF ("0"; unset is now default ON). Run
         // the shipped public path directly.
         let out = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
-            db.search_memory_cross_rerank_cued("photosynthesis", 5, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank_cued(
+                "photosynthesis",
+                5,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -36583,15 +39046,33 @@ pub(crate) mod tests {
 
         // Quick path, OFF = "0" (opt-out the default-ON stream) vs ON = "1".
         let off = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
-            db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
-                .await
-                .expect("g4 graph-stream OFF arm")
+            db.search_memory(
+                "photosynthesis",
+                5,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("g4 graph-stream OFF arm")
         })
         .await;
         let on = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("1"))], async {
-            db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
-                .await
-                .expect("g4 graph-stream ON arm")
+            db.search_memory(
+                "photosynthesis",
+                5,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("g4 graph-stream ON arm")
         })
         .await;
 
@@ -36714,11 +39195,11 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             async {
                 let quick = db
-                    .search_memory(QUERY, 10, None, None, None, None, None, None)
+                    .search_memory(QUERY, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap();
                 let ce_pool = db
-                    .search_memory_cross_rerank(QUERY, 10, None, None, None, None)
+                    .search_memory_cross_rerank(QUERY, 10, None, &ReadScope::Global, None, None)
                     .await
                     .unwrap();
                 (quick, ce_pool)
@@ -36735,12 +39216,19 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             async {
                 let quick = db
-                    .search_memory(QUERY, 10, None, None, None, None, None, None)
+                    .search_memory(QUERY, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap();
                 let reranker: Arc<dyn Reranker> = Arc::new(OrderPreservingReranker);
                 let ce_pool = db
-                    .search_memory_cross_rerank(QUERY, 10, None, None, None, Some(reranker))
+                    .search_memory_cross_rerank(
+                        QUERY,
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        Some(reranker),
+                    )
                     .await
                     .unwrap();
                 (quick, ce_pool)
@@ -36800,7 +39288,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("2"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -36835,7 +39323,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("1"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -36865,7 +39353,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("3"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -36903,7 +39391,7 @@ pub(crate) mod tests {
                 ("WENLAN_GRAPH_KHOP_MAX_NODES", Some("10")),
             ],
             async {
-                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub), &ReadScope::Global)
                     .await
                     .unwrap()
             },
@@ -36943,7 +39431,7 @@ pub(crate) mod tests {
                 ("WENLAN_GRAPH_KHOP_MAX_NODES", Some("10")),
             ],
             async {
-                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub), &ReadScope::Global)
                     .await
                     .unwrap()
             },
@@ -36964,7 +39452,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_khop_expand_empty_anchor_is_empty() {
         let (db, _dir) = test_db().await;
-        let expanded = db.expand_anchor_entities_khop(&[]).await.unwrap();
+        let expanded = db
+            .expand_anchor_entities_khop(&[], &ReadScope::Global)
+            .await
+            .unwrap();
         assert!(expanded.is_empty());
     }
 
@@ -37057,7 +39548,7 @@ pub(crate) mod tests {
         // Anchor on the 2-hop entity directly so the traversal target is deterministic,
         // independent of how vector-anchor ranking orders a tiny test corpus.
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("2"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -37392,7 +39883,16 @@ pub(crate) mod tests {
         // With flag OFF, output must be identical to pre-T9 path
         std::env::remove_var("WENLAN_ENABLE_GRAPH_SEED");
         let results = db
-            .search_memory("Rust programming", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -37437,7 +39937,16 @@ pub(crate) mod tests {
 
         // Search — KG observations boost scores via RRF but are stripped from output
         let results = db
-            .search_memory("Rust programming", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -37464,7 +39973,16 @@ pub(crate) mod tests {
         db.upsert_documents(vec![doc]).await.unwrap();
 
         let results = db
-            .search_memory("Python scripting", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Python scripting",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -37745,7 +40263,16 @@ pub(crate) mod tests {
         drop(conn);
 
         let results = db
-            .search_memory("Redis caching", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Redis caching",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -42844,7 +45371,7 @@ pub(crate) mod tests {
 
         // Confirm pending_revision=0 in search results by default.
         let results = db
-            .search("pending revision test memory", 5, None, None)
+            .search("pending revision test memory", 5, None, &ReadScope::Global)
             .await
             .unwrap();
         let found = results.iter().find(|r| r.source_id == "pr_test_normal");
@@ -42899,7 +45426,7 @@ pub(crate) mod tests {
 
         // Search for the merged memory.
         let results = db
-            .search("merged A+B combined content", 10, None, None)
+            .search("merged A+B combined content", 10, None, &ReadScope::Global)
             .await
             .unwrap();
         let merged = results.iter().find(|r| r.source_id == merged_id);
@@ -45606,9 +48133,16 @@ pub(crate) mod tests {
         .unwrap();
 
         let hits = temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some("1"))], async {
-            db.search_memory_cross_rerank("pages topic retrieval", 10, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank(
+                "pages topic retrieval",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
         assert!(
@@ -45639,9 +48173,16 @@ pub(crate) mod tests {
 
         let hits =
             temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
-                db.search_memory_cross_rerank("pages disabled", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "pages disabled",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -45672,7 +48213,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let hits = temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some("0"))], async {
-            db.search_memory_cross_rerank("truthy zero", 10, None, None, None, None)
+            db.search_memory_cross_rerank("truthy zero", 10, None, &ReadScope::Global, None, None)
                 .await
                 .unwrap()
         })
@@ -45708,9 +48249,16 @@ pub(crate) mod tests {
         for value in ["true", "YES", "True"] {
             let hits =
                 temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some(value))], async {
-                    db.search_memory_cross_rerank("truthy syn", 10, None, None, None, None)
-                        .await
-                        .unwrap()
+                    db.search_memory_cross_rerank(
+                        "truthy syn",
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap()
                 })
                 .await;
             assert!(
@@ -45934,9 +48482,16 @@ pub(crate) mod tests {
 
         let baseline =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", None::<&str>)], async {
-                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         // No summary rows in the default-OFF output.
@@ -45952,9 +48507,16 @@ pub(crate) mod tests {
         // Run again with flag explicitly "0" — must be byte-identical (id+score).
         let zero =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("0"))], async {
-                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         // Byte-identity = same id ORDER (the load-bearing invariant). Scores
@@ -46017,9 +48579,16 @@ pub(crate) mod tests {
 
         let hits =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
-                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(!hits.is_empty(), "expected hits");
@@ -46096,9 +48665,16 @@ pub(crate) mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let reranker: Arc<dyn Reranker> = Arc::new(RecordingReranker { seen: seen.clone() });
         let _ = temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
-            db.search_memory_cross_rerank("rust programming", 10, None, None, None, Some(reranker))
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank(
+                "rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(reranker),
+            )
+            .await
+            .unwrap()
         })
         .await;
         let candidate_ids = seen.lock().unwrap();
@@ -46168,14 +48744,23 @@ pub(crate) mod tests {
                         pref_query,
                         10,
                         None,
-                        None,
+                        &ReadScope::Global,
                         None,
                         Some(reranker.clone()),
                     )
                     .await
                     .unwrap();
                 let base = db
-                    .search_memory(pref_query, 10, None, None, None, None, None, None)
+                    .search_memory(
+                        pref_query,
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                     .await
                     .unwrap();
                 (bypassed, base)
@@ -46200,7 +48785,7 @@ pub(crate) mod tests {
                 "rust programming",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(reranker.clone()),
             ),
@@ -46216,7 +48801,14 @@ pub(crate) mod tests {
         let before = *calls.lock().unwrap();
         let _ = temp_env::async_with_vars(
             [("WENLAN_RERANK_SKIP_PREFERENCE", None::<&str>)],
-            db.search_memory_cross_rerank(pref_query, 10, None, None, None, Some(reranker.clone())),
+            db.search_memory_cross_rerank(
+                pref_query,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(reranker.clone()),
+            ),
         )
         .await
         .unwrap();
@@ -46263,7 +48855,7 @@ pub(crate) mod tests {
         for value in ["1", "true", "YES", "True"] {
             let hits =
                 temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
-                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                    db.search_memory_cross_rerank("rust", 10, None, &ReadScope::Global, None, None)
                         .await
                         .unwrap()
                 })
@@ -46276,7 +48868,7 @@ pub(crate) mod tests {
         for value in ["0", "false", ""] {
             let hits =
                 temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
-                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                    db.search_memory_cross_rerank("rust", 10, None, &ReadScope::Global, None, None)
                         .await
                         .unwrap()
                 })
@@ -46337,9 +48929,16 @@ pub(crate) mod tests {
         // Query with space="work" filter active: personal-sourced summary must be dropped.
         let hits =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
-                db.search_memory_cross_rerank("rust", 10, None, Some("work"), None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust",
+                    10,
+                    None,
+                    &ReadScope::Space("work".to_string()),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -46370,9 +48969,18 @@ pub(crate) mod tests {
         // Unset flag → legacy path
         let results =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)], async {
-                db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -46388,9 +48996,18 @@ pub(crate) mod tests {
         // Flag ON must also surface the same hit (no regression)
         let results_on =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -46423,7 +49040,7 @@ pub(crate) mod tests {
         // Flag OFF: FTS branch errors, returns Ok but FTS may contribute 0 rows
         let _results_off =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap() // must not panic/error regardless
             })
@@ -46432,7 +49049,7 @@ pub(crate) mod tests {
         // Flag ON: sanitize_fts_query neutralizes parens, FTS channel fires
         let results_on =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             })
@@ -46475,8 +49092,17 @@ pub(crate) mod tests {
 
         let result =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory(&long_query, 10, None, None, None, None, None, None)
-                    .await
+                db.search_memory(
+                    &long_query,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
             })
             .await;
         assert!(
@@ -46529,7 +49155,7 @@ pub(crate) mod tests {
 
         let results =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             })
@@ -46586,17 +49212,35 @@ pub(crate) mod tests {
 
         // Unset flag (default path).
         let unset = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", None::<&str>)], async {
-            db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory(
+                "rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
         // Explicit "0" (falsy → same default path).
         let zero = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("0"))], async {
-            db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory(
+                "rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -46681,13 +49325,13 @@ pub(crate) mod tests {
 
         let query = "obsidian";
         let off = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", None::<&str>)], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
         .await;
         let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -46766,7 +49410,7 @@ pub(crate) mod tests {
 
         let query = "quartzite sandstone metaquartzite orthoquartzite";
         let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -46822,7 +49466,7 @@ pub(crate) mod tests {
                 "qwertyuiop zxcvbnm asdfghjkl",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -46943,9 +49587,18 @@ pub(crate) mod tests {
             .unwrap();
 
         let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
-            db.search_memory("feldspar mineral", 10, None, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory(
+                "feldspar mineral",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -47078,7 +49731,7 @@ pub(crate) mod tests {
                     "what database decision did I make yesterday",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47126,9 +49779,16 @@ pub(crate) mod tests {
 
         let temporal_results =
             temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
-                db.search_memory_temporal("what database did I pick", 10, None, None, None, now)
-                    .await
-                    .unwrap()
+                db.search_memory_temporal(
+                    "what database did I pick",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    now,
+                )
+                .await
+                .unwrap()
             })
             .await;
 
@@ -47137,7 +49797,7 @@ pub(crate) mod tests {
                 "what database did I pick",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -47192,7 +49852,7 @@ pub(crate) mod tests {
                     "what happened last week in sprint planning",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47224,7 +49884,7 @@ pub(crate) mod tests {
                     "what database architecture did I decide yesterday",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47245,7 +49905,7 @@ pub(crate) mod tests {
                     "what database architecture did I decide yesterday",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47268,8 +49928,15 @@ pub(crate) mod tests {
 
         let results =
             temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
-                db.search_memory_temporal("what happened yesterday", 10, None, None, None, now)
-                    .await
+                db.search_memory_temporal(
+                    "what happened yesterday",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    now,
+                )
+                .await
             })
             .await;
         assert!(results.is_ok(), "empty DB must return Ok; got {results:?}");
@@ -47324,7 +49991,7 @@ pub(crate) mod tests {
 
         // Plain baseline (no temporal flags): gold is present; capture its score.
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
@@ -47344,7 +50011,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47424,7 +50091,7 @@ pub(crate) mod tests {
         let query = "what database retrieval plan did I pick yesterday";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_score = plain
@@ -47443,7 +50110,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47491,7 +50158,7 @@ pub(crate) mod tests {
         let query = "what database retrieval config did I note yesterday";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_score = plain
@@ -47502,7 +50169,7 @@ pub(crate) mod tests {
 
         let boosted =
             temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))], async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             })
@@ -47545,7 +50212,7 @@ pub(crate) mod tests {
         let query = "what database retrieval work did I do yesterday";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
@@ -47556,7 +50223,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47598,7 +50265,7 @@ pub(crate) mod tests {
         let query = "what database did I pick";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
@@ -47609,7 +50276,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47688,14 +50355,14 @@ pub(crate) mod tests {
 
         let unset =
             temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", None::<&str>)], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             })
             .await;
 
         let zero = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -47757,7 +50424,7 @@ pub(crate) mod tests {
         let query = "password key"; // short factual query -> Factual intent -> fts boosted
 
         let off = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -47769,7 +50436,7 @@ pub(crate) mod tests {
                 ("WENLAN_QUERY_INTENT_FTS_BOOST", Some("3.0")), // large boost to make effect detectable
             ],
             async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             },
@@ -47849,14 +50516,14 @@ pub(crate) mod tests {
             "summarize my thoughts on the database design tradeoffs and overall system complexity";
 
         let off = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
         .await;
 
         let on = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("1"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -47958,17 +50625,31 @@ pub(crate) mod tests {
 
         let unset =
             temp_env::async_with_vars([("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>)], async {
-                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "diversity flag identity",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
 
         let off =
             temp_env::async_with_vars([("WENLAN_ENABLE_SESSION_DIVERSITY", Some("0"))], async {
-                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "diversity flag identity",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
 
@@ -47987,9 +50668,16 @@ pub(crate) mod tests {
                 ("WENLAN_SESSION_DIVERSITY_MAX", Some("2")),
             ],
             async {
-                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "diversity flag identity",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             },
         )
         .await;
@@ -48026,7 +50714,7 @@ pub(crate) mod tests {
                     "mem session diversity safety test",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48046,7 +50734,7 @@ pub(crate) mod tests {
                     "mem session diversity safety test",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48519,9 +51207,16 @@ pub(crate) mod tests {
         })
         .await;
         let hits = temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
-            db.search_memory_cross_rerank("when is the renewal date", 10, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank(
+                "when is the renewal date",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
         // The rehydrated parent surfaces as source="memory" (metric-honest).
@@ -48559,7 +51254,7 @@ pub(crate) mod tests {
                     "November 3 renewal date specific",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48573,7 +51268,7 @@ pub(crate) mod tests {
                     "November 3 renewal date specific",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48615,7 +51310,7 @@ pub(crate) mod tests {
                 "milestone launch day",
                 10,
                 None,
-                Some("work"),
+                &ReadScope::Space("work".to_string()),
                 None,
                 None,
             )
@@ -48691,22 +51386,36 @@ pub(crate) mod tests {
         .await;
         let unset: Vec<String> =
             temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
-                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
-                    .await
-                    .unwrap()
-                    .into_iter()
-                    .map(|r| r.id)
-                    .collect()
+                db.search_memory_cross_rerank(
+                    "rust python journal",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
             })
             .await;
         let off: Vec<String> =
             temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("0"))], async {
-                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
-                    .await
-                    .unwrap()
-                    .into_iter()
-                    .map(|r| r.id)
-                    .collect()
+                db.search_memory_cross_rerank(
+                    "rust python journal",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
             })
             .await;
         assert_eq!(
@@ -49255,7 +51964,7 @@ pub(crate) mod tests {
                 "kubernetes orchestration",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -49349,7 +52058,7 @@ pub(crate) mod tests {
                     "verbatim episode storage tier",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -49385,7 +52094,7 @@ pub(crate) mod tests {
                     "verbatim episode storage tier",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -49438,7 +52147,7 @@ pub(crate) mod tests {
                     "compose ranking retrieval fusion",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -49478,7 +52187,7 @@ pub(crate) mod tests {
                     "diary passphrase rotated quarter",
                     10,
                     None,
-                    Some("work"),
+                    &ReadScope::Space("work".to_string()),
                     None,
                     None,
                 )
@@ -49741,7 +52450,7 @@ pub(crate) mod tests {
                 "who is Alice",
                 5,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -49758,7 +52467,7 @@ pub(crate) mod tests {
                 "who is Alice",
                 5,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -49821,7 +52530,14 @@ pub(crate) mod tests {
             let llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider> =
                 std::sync::Arc::new(ArrayLlm);
             let r = db
-                .search_memory_expanded("what is libsql", 5, None, None, None, Some(llm))
+                .search_memory_expanded(
+                    "what is libsql",
+                    5,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    Some(llm),
+                )
                 .await
                 .unwrap();
             assert!(!r.is_empty());

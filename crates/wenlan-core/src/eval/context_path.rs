@@ -8,6 +8,7 @@ use crate::eval::shared::{
     run_title_enrichment_for_eval,
 };
 use crate::events::NoopEmitter;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -230,12 +231,13 @@ pub async fn run_context_path_eval(
             }
 
             // --- Recall path: search_memory only ---
+            let scope = ReadScope::Space("conversation".to_string());
             let recall_results = db
                 .search_memory(
                     &qa.question,
                     search_limit,
                     None,
-                    Some("conversation"),
+                    &scope,
                     None,
                     None,
                     None,
@@ -480,12 +482,13 @@ pub async fn run_context_path_eval_longmemeval(
         }
 
         // --- Recall path ---
+        let scope = ReadScope::Space("conversation".to_string());
         let recall_results = db
             .search_memory(
                 &sample.question,
                 search_limit,
                 None,
-                Some("conversation"),
+                &scope,
                 None,
                 None,
                 None,

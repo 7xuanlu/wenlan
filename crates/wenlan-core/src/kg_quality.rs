@@ -4,6 +4,7 @@
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::LlmProvider;
+use crate::read_scope::ReadScope;
 use crate::tuning::RefineryConfig;
 use std::sync::Arc;
 
@@ -56,7 +57,16 @@ pub async fn verify_page(
     let mut warnings = Vec::new();
 
     let self_retrieval_passed = match db
-        .search_memory(page_title, 10, None, None, None, None, None, None)
+        .search_memory(
+            page_title,
+            10,
+            None,
+            &ReadScope::Global,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
     {
         Ok(results) => {

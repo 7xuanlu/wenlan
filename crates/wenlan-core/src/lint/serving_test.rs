@@ -40,7 +40,7 @@ fn disabled_channel_is_expected_empty() {
 }
 
 #[tokio::test]
-async fn runner_reports_known_scope_bypasses_and_preserves_telemetry() {
+async fn runner_reports_clean_scope_contracts_and_preserves_telemetry() {
     let (db, _tmp) = test_db().await;
     let before = telemetry_counts(&db).await;
     let report = run_with_flags(&db, None, false).await.unwrap();
@@ -49,7 +49,11 @@ async fn runner_reports_known_scope_bypasses_and_preserves_telemetry() {
         .iter()
         .find(|check| check.check_id() == ROUTE_SCOPE_ID)
         .unwrap();
-    assert_eq!(route_scope.outcome(), LintOutcome::Finding);
+    assert_eq!(route_scope.outcome(), LintOutcome::Pass);
+    assert!(route_scope.metrics().iter().any(|metric| {
+        metric.code() == LintMetricCode::AffectedRecords
+            && metric.value() == &LintMetricValue::Count { value: 0 }
+    }));
     assert_eq!(before, telemetry_counts(&db).await);
 }
 

@@ -20,6 +20,7 @@ use crate::eval::metrics;
 use crate::eval::runner::seed_to_doc;
 use crate::llm_provider::{LlmError, LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use crate::tuning::{ConfidenceConfig, DistillationConfig, RefineryConfig};
 
@@ -419,8 +420,13 @@ async fn measure_phase(
     let should_search_concepts = phase == LifecyclePhase::PageRetrieval && concept_count > 0;
 
     for (query, grades, relevant, domain) in queries {
+        let scope = match domain.as_deref() {
+            None => ReadScope::Global,
+            Some("uncategorized") => ReadScope::Uncategorized,
+            Some(space) => ReadScope::Space(space.to_string()),
+        };
         let results = db
-            .search_memory(query, 10, None, domain.as_deref(), None, None, None, None)
+            .search_memory(query, 10, None, &scope, None, None, None, None)
             .await?;
 
         let ranked_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -765,7 +771,7 @@ async fn run_lifecycle_phases(
 
             for (sid, content) in &archived {
                 let results = db
-                    .search_memory(content, 5, None, None, None, None, None, None)
+                    .search_memory(content, 5, None, &ReadScope::Global, None, None, None, None)
                     .await?;
                 if results.iter().any(|r| r.source_id == *sid) {
                     leaked_ids.push(sid.clone());
@@ -942,7 +948,16 @@ pub async fn run_lifecycle_fixture(
             .collect();
         if !chains.is_empty() {
             let results = db
-                .search_memory(&case.query, 5, None, None, None, None, None, None)
+                .search_memory(
+                    &case.query,
+                    5,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
             let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
             for (newer_id, older_id) in &chains {

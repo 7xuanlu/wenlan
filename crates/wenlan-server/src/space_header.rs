@@ -8,7 +8,8 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use std::convert::Infallible;
+
+use crate::error::ServerError;
 
 pub const HEADER_NAME: &str = "x-wenlan-space";
 pub const HEADER_NAME_LEGACY: &str = "x-origin-space";
@@ -20,14 +21,20 @@ impl<S> FromRequestParts<S> for SpaceHeader
 where
     S: Send + Sync,
 {
-    type Rejection = Infallible;
+    type Rejection = ServerError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let val = parts
+        let header = parts
             .headers
             .get(HEADER_NAME)
-            .or_else(|| parts.headers.get(HEADER_NAME_LEGACY))
-            .and_then(|h| h.to_str().ok())
+            .or_else(|| parts.headers.get(HEADER_NAME_LEGACY));
+        let val = header
+            .map(|value| {
+                value
+                    .to_str()
+                    .map_err(|_| ServerError::ValidationError("invalid Space header".to_string()))
+            })
+            .transpose()?
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         Ok(SpaceHeader(val))
@@ -90,5 +97,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(val.as_deref(), Some("health"));
+    }
+
+    #[tokio::test]
+    async fn wenlan_header_wins_when_both_names_are_present() {
+        let mut parts = build_parts(&[
+            ("X-Origin-Space", "legacy"),
+            ("X-Wenlan-Space", "preferred"),
+        ]);
+        let SpaceHeader(val) = SpaceHeader::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(val.as_deref(), Some("preferred"));
+    }
+
+    #[tokio::test]
+    async fn malformed_preferred_header_is_rejected_instead_of_falling_back() {
+        let mut parts = build_parts(&[("X-Origin-Space", "legacy")]);
+        parts.headers.insert(
+            HEADER_NAME,
+            axum::http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+
+        let result = SpaceHeader::from_request_parts(&mut parts, &()).await;
+
+        assert!(
+            result.is_err(),
+            "a malformed preferred selector must not become Global or use the legacy selector"
+        );
     }
 }

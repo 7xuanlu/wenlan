@@ -8,6 +8,7 @@ use crate::eval::latency::LatencySummary;
 use crate::eval::metrics;
 use crate::eval::report::{CaseResult, EvalReport};
 use crate::quality_gate::QualityGate;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use crate::tuning::{ConfidenceConfig, GateConfig, SearchScoringConfig};
 use std::collections::{HashMap, HashSet};
@@ -209,13 +210,18 @@ pub async fn run_eval(
         let confirmation_boost = scoring.map(|s| s.confirmation_boost);
         let recap_penalty = scoring.map(|s| s.recap_penalty);
 
+        let scope = match case.space.as_deref() {
+            None => ReadScope::Global,
+            Some("uncategorized") => ReadScope::Uncategorized,
+            Some(space) => ReadScope::Space(space.to_string()),
+        };
         let t0 = Instant::now();
         let results = db
             .search_memory(
                 &case.query,
                 10,
                 None,
-                case.space.as_deref(),
+                &scope,
                 None,
                 confirmation_boost,
                 recap_penalty,

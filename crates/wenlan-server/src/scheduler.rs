@@ -1120,7 +1120,16 @@ mod tests {
         );
 
         let results = db
-            .search_memory("Wenlanborg", 30, None, None, None, None, None, None)
+            .search_memory(
+                "Wenlanborg",
+                30,
+                None,
+                &wenlan_core::read_scope::ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(

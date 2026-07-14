@@ -47,6 +47,7 @@ use wenlan_core::db::MemoryDB;
 use wenlan_core::document_enrichment::{run_document_enrichment, DocumentEnrichmentOutcome};
 use wenlan_core::events::NoopEmitter;
 use wenlan_core::prompts::PromptRegistry;
+use wenlan_core::read_scope::ReadScope;
 use wenlan_core::sources::directory::{document_source_id, scan_directory};
 
 const SOURCE_ID: &str = "directory-fixtures";
@@ -379,7 +380,7 @@ async fn folder_ingest_full_pipeline_e2e() {
             "separated by two millennia engaged in the same bargain",
             30,
             None,
-            None,
+            &ReadScope::Global,
             None,
             None,
             None,
@@ -499,7 +500,7 @@ async fn folder_ingest_full_pipeline_e2e() {
             "Antikythera eclipses bronze gears",
             30,
             None,
-            None,
+            &ReadScope::Global,
             None,
             None,
             None,
@@ -568,7 +569,7 @@ async fn folder_ingest_full_pipeline_e2e() {
 /// Assert `query` returns at least one result whose `source_id` is `doc`.
 async fn assert_hits(db: &MemoryDB, query: &str, doc: &str, label: &str) {
     let results = db
-        .search_memory(query, 30, None, None, None, None, None, None)
+        .search_memory(query, 30, None, &ReadScope::Global, None, None, None, None)
         .await
         .unwrap();
     assert!(

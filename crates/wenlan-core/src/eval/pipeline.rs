@@ -10,6 +10,7 @@ use crate::eval::shared::{
     run_title_enrichment_for_eval,
 };
 use crate::events::NoopEmitter;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -164,9 +165,14 @@ async fn run_strategy_search(
     limit: usize,
     domain: Option<&str>,
 ) -> Result<(Vec<String>, usize), WenlanError> {
+    let scope = match domain {
+        None => ReadScope::Global,
+        Some("uncategorized") => ReadScope::Uncategorized,
+        Some(space) => ReadScope::Space(space.to_string()),
+    };
     let results = match strategy {
         SearchStrategy::Wenlan => {
-            db.search_memory(query, limit, None, domain, None, Some(1.0), Some(1.0), None)
+            db.search_memory(query, limit, None, &scope, None, Some(1.0), Some(1.0), None)
                 .await?
         }
         SearchStrategy::NaiveRag => db.naive_vector_search(query, limit, domain).await?,

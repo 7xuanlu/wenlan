@@ -6,6 +6,7 @@ use std::sync::Arc;
 use wenlan_core::db::{DistillationCluster, MemoryDB};
 use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 use wenlan_core::prompts::PromptRegistry;
+use wenlan_core::read_scope::ReadScope;
 use wenlan_core::refinery::distill_one_cluster;
 use wenlan_core::reranker::Reranker;
 use wenlan_core::sources::RawDocument;
@@ -522,10 +523,10 @@ async fn source_less_page_passes_own_workspace_no_personal_leak() {
         .search_memory_cross_rerank(
             "quarterly planning cadence",
             10,
-            None,         // memory_type filter
-            Some("work"), // space filter = "work"
-            None,         // source_agent filter
-            None,         // reranker (None = no CE model required in CI)
+            None,                                  // memory_type filter
+            &ReadScope::Space("work".to_string()), // space filter = "work"
+            None,                                  // source_agent filter
+            None,                                  // reranker (None = no CE model required in CI)
         )
         .await
         .expect("work-scoped recall must not error");
@@ -545,10 +546,10 @@ async fn source_less_page_passes_own_workspace_no_personal_leak() {
         .search_memory_cross_rerank(
             "quarterly planning cadence",
             10,
-            None,             // memory_type filter
-            Some("personal"), // space filter = "personal"
-            None,             // source_agent filter
-            None,             // reranker
+            None,                                      // memory_type filter
+            &ReadScope::Space("personal".to_string()), // space filter = "personal"
+            None,                                      // source_agent filter
+            None,                                      // reranker
         )
         .await
         .expect("personal-scoped recall must not error");
@@ -707,7 +708,7 @@ async fn distilled_memory_demoted_but_reachable() {
             "rust async runtime tokio executor work-stealing scheduler",
             10,
             None,
-            None,
+            &ReadScope::Global,
             None,
             None, // reranker = None (no CE model in CI)
         )
@@ -846,7 +847,7 @@ async fn demotion_survives_ce_rerank() {
             "rust async runtime tokio executor work-stealing scheduler",
             10,
             None,
-            None,
+            &ReadScope::Global,
             None,
             Some(reranker),
         )
