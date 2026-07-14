@@ -15732,10 +15732,7 @@ impl MemoryDB {
                 updated_at: row.get::<i64>(8).unwrap_or(0),
             }
         } else {
-            return Err(WenlanError::VectorDb(format!(
-                "Entity not found: {}",
-                entity_id
-            )));
+            return Err(WenlanError::NotFound("entity not found".to_string()));
         };
 
         // Fetch observations

@@ -944,7 +944,7 @@ catalog violations are exactly `5`.
   its final argument.
 - Preserves: shared unscoped `search_entities_by_vector` for internal graph/entity resolution.
 
-- [ ] **Step 1: Add RED same-name, relation-endpoint, and proposal cases**
+- [x] **Step 1: Add RED same-name, relation-endpoint, and proposal cases**
 
 Seed same-name Entities in work/personal, a NULL Entity, work-work,
 work-personal, and personal-personal relations, plus suggestion proposals with
@@ -964,7 +964,7 @@ cargo test -p wenlan-server --test space_scoping_e2e wave_4 -- --nocapture
 Expected RED: entity search/detail and relation projections are unscoped, and
 suggestions are filtered only by action/status.
 
-- [ ] **Step 2: Implement route-specific scoped wrappers**
+- [x] **Step 2: Implement route-specific scoped wrappers**
 
 Implement and test the route-only wrappers in `db/scoped_entities.rs` and
 `db/scoped_entities_test.rs`. Use them only in HTTP and retrieval-route call
@@ -995,7 +995,7 @@ The SQL visibility predicate must be equivalent to:
 Global returns the existing proposal population. The suggestion catalog binding
 is `MemorySpace`, although delivery remains in this KG wave.
 
-- [ ] **Step 3: Close the catalog and behavior registry**
+- [x] **Step 3: Close the catalog and behavior registry**
 
 Set the 5 final catalog rows to completed contracts. Assert:
 
@@ -1011,7 +1011,7 @@ assert_eq!(scope_contract_violations().count(), 0);
 Run the core lint runner and assert `serving.route_scope_contracts` is clean
 with affected records `0`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cargo test -p wenlan-core --lib search_entities -- --nocapture
@@ -1089,7 +1089,7 @@ Global-only orphan inventory and keep a hermetic test proving the
 `Uncategorized` selector still means SQL NULL only. The approved design says
 orphan inventory does not block this project. Do not repair orphan values here.
 
-- [ ] **Step 3: Preserve downstream App behavior and wire compatibility**
+- [x] **Step 3: Preserve downstream App behavior and wire compatibility**
 
 Read the current App `AGENTS.md` before editing its separate repo. Re-read the
 three ChunkViewer call sites and confirm the request remains

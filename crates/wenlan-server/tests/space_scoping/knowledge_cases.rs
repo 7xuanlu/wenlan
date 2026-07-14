@@ -244,6 +244,19 @@ pub async fn detail_and_relation_endpoints_are_scoped() {
     assert_eq!(mismatch, missing);
     assert_eq!(mismatch.1, br#"{"error":"entity not found"}"#);
 
+    let global_missing = body_bytes(
+        fixture
+            .send(
+                HttpMethod::GET,
+                "/api/memory/entities/missing-entity",
+                None,
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(global_missing, missing);
+
     let (status, selected) = json_body(
         fixture
             .send(

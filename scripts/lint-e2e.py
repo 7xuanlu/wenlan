@@ -165,19 +165,46 @@ def assert_error(http_path: str, cli_stderr_path: str) -> None:
 def clean_fixture(source: str, destination: str) -> None:
     report = load(source)
     findings = [check for check in report["checks"] if check["outcome"] == "finding"]
-    if [check["check_id"] for check in findings] != ["serving.route_scope_contracts"]:
-        raise SystemExit("clean fixture requires the route-scope finding to be the only finding")
-    if report["totals"]["incomplete"] != 0:
+    if findings:
+        raise SystemExit("clean fixture source unexpectedly contains findings")
+    if not report["complete"] or report["totals"]["incomplete"] != 0:
         raise SystemExit("clean fixture source must be complete")
-    finding = findings[0]
-    finding["outcome"] = "pass"
-    finding["severity"] = "info"
-    finding["summary_code"] = "check_passed"
-    finding["recommendation_code"] = None
-    report["totals"]["passed"] += 1
-    report["totals"]["findings"] = 0
-    report["totals"]["actionable_findings"] -= 1
-    report["complete"] = True
+    validate_report(report)
+    with open(destination, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, separators=(",", ":"), sort_keys=True)
+
+
+def actionable_fixture(source: str, destination: str) -> None:
+    report = load(source)
+    validate_report(report)
+    if not report["complete"] or report["totals"]["findings"] != 0:
+        raise SystemExit("actionable fixture source must be complete and clean")
+    target = next(
+        (
+            check
+            for check in report["checks"]
+            if check["check_id"] == "serving.route_scope_contracts"
+        ),
+        None,
+    )
+    if target is None or target["outcome"] != "pass":
+        raise SystemExit("actionable fixture requires a passing route-scope check")
+
+    target["outcome"] = "finding"
+    target["severity"] = "error"
+    target["summary_code"] = "finding_detected"
+    target["recommendation_code"] = "review_finding"
+    target["coverage"]["authorized_denominator"] = 1
+    target["coverage"]["evaluated"] = 1
+    for metric in target["metrics"]:
+        code = metric["code"]
+        if code == "eligible_records" or code == "affected_records":
+            metric["value"] = {"kind": "count", "value": 1}
+        elif code == "observed_records":
+            metric["value"] = {"kind": "count", "value": 0}
+    report["totals"]["passed"] -= 1
+    report["totals"]["findings"] += 1
+    report["totals"]["actionable_findings"] += 1
     validate_report(report)
     with open(destination, "w", encoding="utf-8") as handle:
         json.dump(report, handle, separators=(",", ":"), sort_keys=True)
@@ -262,6 +289,9 @@ def parser() -> argparse.ArgumentParser:
     clean_cmd = commands.add_parser("clean-fixture")
     clean_cmd.add_argument("source")
     clean_cmd.add_argument("destination")
+    actionable_cmd = commands.add_parser("actionable-fixture")
+    actionable_cmd.add_argument("source")
+    actionable_cmd.add_argument("destination")
     precedence_cmd = commands.add_parser("precedence-fixture")
     precedence_cmd.add_argument("finding_source")
     precedence_cmd.add_argument("incomplete_source")
@@ -286,6 +316,8 @@ def main() -> None:
         assert_error(args.http_path, args.cli_stderr_path)
     elif args.command == "clean-fixture":
         clean_fixture(args.source, args.destination)
+    elif args.command == "actionable-fixture":
+        actionable_fixture(args.source, args.destination)
     elif args.command == "precedence-fixture":
         precedence_fixture(
             args.finding_source, args.incomplete_source, args.destination

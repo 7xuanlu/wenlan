@@ -5,6 +5,7 @@ use super::fixture::ScopeFixture;
 use axum::body::{to_bytes, Body};
 use axum::http::{Method as HttpMethod, Response, StatusCode};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use wenlan_server::sensitive_read_routes::Method;
 
 async fn body_bytes(response: Response<Body>) -> (StatusCode, Vec<u8>) {
@@ -245,6 +246,30 @@ pub async fn collections_and_precedence_are_scoped() {
     .await;
     assert_eq!(status, StatusCode::OK, "{header_fallback}");
     assert_eq!(ids(&header_fallback, "pages"), vec![personal.clone()]);
+
+    let (status, legacy_global) = json_body(
+        fixture
+            .send(
+                HttpMethod::POST,
+                "/api/pages/search",
+                Some(json!({"query":"workspace collection canary","limit":20})),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy_global}");
+    assert_eq!(
+        ids(&legacy_global, "pages")
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            work.clone(),
+            personal.clone(),
+            uncategorized.clone(),
+            literal.clone(),
+        ])
+    );
 
     for uri in [
         "/api/pages/recent?limit=20",

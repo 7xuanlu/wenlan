@@ -297,11 +297,77 @@ Space suite passed `24/24`, the server catalog passed `7/7`, and Clippy,
 workspace check, fmt, and diff gates all passed. Re-review verdict: APPROVED
 with no remaining Critical or Important findings.
 
-Tasks 7-8 pending.
+### Task 7: Entity, relation, and suggestion gates
+
+RED evidence:
+
+- All five Wave 4 HTTP cases initially failed: unknown selectors returned
+  success, Entity search limited before scope isolation, detail exposed a
+  cross-Space relation endpoint, suggestions retained mixed owners, and the
+  catalog still marked all five routes incomplete.
+- The first Sol xhigh review found that a missing Global Entity still returned
+  `500` and included the requested ID. A focused canary reproduced the exact
+  `500`/ID-bearing body before the legacy error was changed to the same static
+  `404 {"error":"entity not found"}` used by selected reads.
+- The review also found that the exact 15 Global keys had only metadata-count
+  coverage. The behavior registry now calls every route with and without an
+  unknown Space header and requires byte-identical status/body plus exact key
+  equality with the canonical Global catalog.
+
+GREEN evidence:
+
+| Contract | Command | Result |
+|---|---|---|
+| Scoped Entity core wrappers | `cargo test -p wenlan-core --lib scoped_entities -- --nocapture` | 10 passed, 0 failed |
+| Five Wave 4 HTTP routes | `cargo test -p wenlan-server --test space_scoping_e2e wave_4 -- --nocapture` | 5 passed, 0 failed |
+| Exact Global behavior registry | `cargo test -p wenlan-server --test space_scoping_e2e global_routes_ignore_space_selectors -- --exact` | 1 passed, 0 failed |
+| Complete cumulative Space HTTP registry | `cargo test -p wenlan-server --test space_scoping_e2e -- --nocapture` | 30 passed, 0 failed |
+| Core catalog and diagnostics | `cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture` | 16 passed, 0 failed |
+| Server catalog and handler contracts | `cargo test -p wenlan-server --lib sensitive_read_routes -- --nocapture` | 7 passed, 0 failed |
+| Entity search compatibility | `cargo test -p wenlan-core --lib search_entities -- --nocapture` | 3 passed, 0 failed |
+| Relation compatibility | `cargo test -p wenlan-core --lib recent_relations -- --nocapture` | 1 passed, 0 failed |
+| Suggestion compatibility | `cargo test -p wenlan-core --lib entity_suggestions -- --nocapture` | 1 passed, 0 failed |
+
+The final catalog is 55 total, 15 Global, 40 scoped, and zero contract
+violations. Selected relations require both Entity endpoints to match;
+suggestions require every nonempty source ID to resolve to a matching Memory
+owner in one guarded SQL query. Global behavior remains unchanged except that
+missing Entity detail now returns the required nondisclosing static 404. The
+Task 7 re-review verdict was APPROVED with no remaining Critical or Important
+findings.
+
+### Task 8: Compatibility and lint harness preparation
+
+The daemon now has a real HTTP compatibility canary using the old App Page
+search JSON shape without `space` or a header. It remains Global and returns
+work, personal, SQL-NULL, and literal `space='uncategorized'` Pages. The lint
+E2E harness now expects real baseline/Global/registered/Uncategorized and
+tarball reports to be clean with exit `0`; a separate typed synthetic report
+with one route-scope defect owns exit `1`, incomplete precedence, and tarball
+producer-receipt assertions. Exact committed-HEAD execution is pending.
 
 ## Downstream App
 
-Pending companion compatibility branch and verifier results.
+Companion worktree:
+`/Users/lucian/Repos/wenlan-app/.worktrees/route-scope-compat`, branch
+`codex/route-scope-compat`, commit `6d42328`.
+
+The three-layer ChunkViewer contract remains unchanged:
+TypeScript `getChunks` -> Tauri `get_chunks` ->
+`GET /api/chunks/{source_id}`, returning `Vec<MemoryDetail>`. A private
+`get_optional_json` helper now maps only HTTP 404 to `Ok(None)`; HTTP 500,
+malformed success, and present typed responses retain strict behavior.
+
+| Contract | Command | Result |
+|---|---|---|
+| Optional detail HTTP cases | `cargo test -q -p wenlan-app --lib optional_get` | 4 passed, 0 failed |
+| Full App library suite | `cargo test -q -p wenlan-app --lib` | 307 passed, 0 failed, 1 ignored |
+| App lint | `cargo clippy -q --workspace --all-targets -- -D warnings` | passed |
+| App formatting | `cargo fmt --check --all` | passed |
+
+The App remains on `wenlan-types` 0.12 and intentionally sends the older Page
+search payload. When that dependency is upgraded, its Rust constructor must add
+`space: None`; this project does not bump the pin.
 
 ## Final Reviews
 

@@ -4,6 +4,11 @@ mod common;
 mod space_scoping;
 
 #[tokio::test]
+async fn global_routes_ignore_space_selectors() {
+    space_scoping::global_cases::global_routes_ignore_space_header().await;
+}
+
+#[tokio::test]
 async fn wave_1_rejects_unknown_selectors() {
     space_scoping::retrieval_cases::unknown_selectors_are_rejected().await;
 }

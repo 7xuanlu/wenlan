@@ -400,3 +400,20 @@ pub fn assert_wave_4_knowledge_executed_keys(
         "executed Wave 4 Knowledge key set drifted"
     );
 }
+
+pub fn assert_global_executed_keys(executed: impl IntoIterator<Item = (Method, &'static str)>) {
+    let expected = wenlan_server::sensitive_read_routes::sensitive_read_routes()
+        .filter(|row| row.scope_binding == ScopeBinding::Global)
+        .map(|row| (row.method, row.path))
+        .collect::<BTreeSet<_>>();
+    let executed = executed.into_iter().collect::<Vec<_>>();
+    let unique = executed.iter().copied().collect::<BTreeSet<_>>();
+
+    assert_eq!(expected.len(), 15, "Global route catalog count drifted");
+    assert_eq!(
+        unique.len(),
+        executed.len(),
+        "duplicate Global behavior key"
+    );
+    assert_eq!(unique, expected, "executed Global behavior key set drifted");
+}
