@@ -184,6 +184,7 @@ jobs:
       # win than rust-cache alone on cold cache.
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
@@ -210,6 +211,16 @@ jobs:
         uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:
           tool: cargo-nextest
+      # Pin FastEmbed's cache independently of its upstream default and restore
+      # it before the first model-consuming test.
+      - name: Cache fastembed model (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.FASTEMBED_CACHE_DIR }}
+          key: fastembed-bge-base-en-v1.5-q-v2
+          restore-keys: |
+            fastembed-bge-base-en-v1.5-q-
       # Workspace lib tests skipped on Windows — Linux + macOS catch the
       # same cross-platform unit logic in ~5-15min vs 25min on Windows.
       # Windows-specific behavior (paths, mcp_add, schtasks) is covered
@@ -275,19 +286,6 @@ jobs:
       # sync/enrich/delete lifecycle in-process).
       - name: Integration tests wenlan-cli + wenlan-server
         run: cargo nextest run -p wenlan -p wenlan-server
-      - name: Cache fastembed model (Linux)
-        if: matrix.os == 'ubuntu-24.04'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          # Wenlan's `resolve_fastembed_cache_dir` writes to
-          # `dirs::data_dir()/wenlan/memorydb/fastembed_cache` on Linux when
-          # no per-DB path or WENLAN_TEST_FASTEMBED_CACHE override is given.
-          # The previous `~/.fastembed_cache` path never matched what tests
-          # actually wrote (Path Validation Error in post-run save).
-          path: ~/.local/share/wenlan/memorydb/fastembed_cache
-          key: fastembed-bge-base-en-v1.5-q-v2
-          restore-keys: |
-            fastembed-bge-base-en-v1.5-q-
       - name: Run integration tests (core) (Linux)
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
@@ -354,9 +352,7 @@ jobs:
       # fastembed model restored above.
       - name: E2E folder ingest over HTTP (Linux)
         if: matrix.os == 'ubuntu-24.04'
-        run: |
-          export WENLAN_TEST_FASTEMBED_CACHE="$HOME/.local/share/wenlan/memorydb/fastembed_cache"
-          bash scripts/smoke-folder-ingest.sh
+        run: bash scripts/smoke-folder-ingest.sh
       # Linux Docker smoke + Windows release-build smoke previously ran here.
       # Both duplicated work that release.yml already does on every tag push
       # (Docker daemon image + Windows release matrix). Dropping them shaves
@@ -435,6 +431,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
@@ -453,12 +450,12 @@ jobs:
         with:
           tool: cargo-nextest
       # real_router.rs boots a real MemoryDB, which loads the FastEmbed ONNX
-      # model (network fetch if uncached). Reuse the cache key the `test`
-      # job's ubuntu leg populates so this job skips the cold HF download.
+      # model (network fetch if uncached). Reuse the cache from any previous
+      # successful Linux consumer so this job normally skips the cold fetch.
       - name: Cache fastembed model (Linux)
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.local/share/wenlan/memorydb/fastembed_cache
+          path: ${{ env.FASTEMBED_CACHE_DIR }}
           key: fastembed-bge-base-en-v1.5-q-v2
           restore-keys: |
             fastembed-bge-base-en-v1.5-q-
