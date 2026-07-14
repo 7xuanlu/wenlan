@@ -221,8 +221,11 @@ reports are complete, rejects any new actionable/incomplete check outside the
 declared assertion set, binds both reports to current DB and Page receipts, and
 confirms the apply receipt contains the in-transaction effect-guard proof.
 Page receipt scans use the same General/Deep time bounds as lint and finish
-before the canonical DB mutex is acquired. It does not require unrelated daemon
-state to remain frozen after the apply transaction. Success writes the immutable verification receipt through
+before the canonical DB mutex is acquired. Once locked, verification rechecks
+the DB receipts, target scope, and target receipt before publishing the receipt,
+closing the gap between freshness proof and publication. It does not require
+unrelated daemon state to remain frozen after the apply transaction. Success
+writes the immutable verification receipt through
 the same per-manifest lock and no-clobber publication rule.
 
 If post-repair lint fails, the canonical mutation remains applied but the run

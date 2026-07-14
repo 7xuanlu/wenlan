@@ -611,14 +611,10 @@ pub async fn record_repair_verification(
         return Ok(receipt);
     }
     validate_verification_reports(&manifest, request.general_report(), request.deep_report())?;
-    validate_current_report_receipts(
-        db,
-        request.general_report(),
-        request.deep_report(),
-        page_root,
-    )
-    .await?;
+    validate_current_page_receipts(request.general_report(), request.deep_report(), page_root)
+        .await?;
     let connection = db.conn.lock().await;
+    validate_current_db_receipts(db, request.general_report(), request.deep_report()).await?;
     validate_target_space_on_connection(
         &connection,
         manifest.target().memory_source_id(),
@@ -707,15 +703,31 @@ fn stable_report_snapshot(report: &LintReport) -> bool {
             == Some(report.snapshots().pages().before_scan_digest())
 }
 
-async fn validate_current_report_receipts(
-    db: &MemoryDB,
+async fn validate_current_page_receipts(
     general: &LintReport,
     deep: &LintReport,
     page_root: Option<&Path>,
 ) -> Result<(), WenlanError> {
-    let snapshot = db.open_lint_snapshot().await.map_err(snapshot_error)?;
     let general_page = current_page_digest(page_root, LintProfile::General).await?;
     let deep_page = current_page_digest(page_root, LintProfile::Deep).await?;
+    for (report, current_page) in [(general, general_page), (deep, deep_page)] {
+        if report.snapshots().pages().before_scan_digest() != &current_page
+            || report.snapshots().pages().after_scan_digest() != Some(&current_page)
+        {
+            return Err(WenlanError::Conflict(
+                "repair_verification_reports_stale".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn validate_current_db_receipts(
+    db: &MemoryDB,
+    general: &LintReport,
+    deep: &LintReport,
+) -> Result<(), WenlanError> {
+    let snapshot = db.open_lint_snapshot().await.map_err(snapshot_error)?;
     let current = snapshot.finish().await.map_err(snapshot_error)?;
     if !current.is_consistent() {
         return Err(WenlanError::Conflict(
@@ -723,11 +735,9 @@ async fn validate_current_report_receipts(
         ));
     }
     let current_db = lint_digest(current.analysis_receipt_digest().as_bytes());
-    for (report, current_page) in [(general, general_page), (deep, deep_page)] {
+    for report in [general, deep] {
         if report.snapshots().db().analysis_digest() != &current_db
             || report.snapshots().db().post_run_digest() != Some(&current_db)
-            || report.snapshots().pages().before_scan_digest() != &current_page
-            || report.snapshots().pages().after_scan_digest() != Some(&current_page)
         {
             return Err(WenlanError::Conflict(
                 "repair_verification_reports_stale".to_string(),

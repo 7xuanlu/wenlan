@@ -485,8 +485,9 @@ and writes `verification-receipt.json` under the per-manifest lock with
 no-clobber publication. The apply receipt proves non-target stability inside
 the CAS transaction; verification does not freeze unrelated daemon state after
 that transaction. Page scans reuse the bounded General/Deep lint budgets and
-finish before acquiring `db.conn`. It does not run lint and cannot mutate
-canonical data.
+finish before acquiring `db.conn`; after locking, revalidate the DB receipts
+before the target check and receipt publication. It does not run lint and
+cannot mutate canonical data.
 
 - [ ] **Step 5: Verify GREEN and route catalog parity**
 
