@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use wenlan_core::db::MemoryDB;
+use wenlan_core::read_scope::ReadScope;
 use wenlan_core::sources::RawDocument;
 use wenlan_core::{EventEmitter, NoopEmitter};
 
@@ -46,7 +47,16 @@ async fn space_scoping_excludes_other_space() {
     .unwrap();
 
     let r = db
-        .search_memory("fact", 10, None, Some("alpha"), None, None, None, None)
+        .search_memory(
+            "fact",
+            10,
+            None,
+            &ReadScope::Space("alpha".to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     let texts: Vec<&str> = r.iter().map(|x| x.content.as_str()).collect();
@@ -77,7 +87,7 @@ async fn space_uncategorized_matches_null() {
             "fact",
             10,
             None,
-            Some("uncategorized"),
+            &ReadScope::Uncategorized,
             None,
             None,
             None,

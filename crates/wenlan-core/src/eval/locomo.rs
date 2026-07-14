@@ -12,6 +12,7 @@ use crate::error::WenlanError;
 use crate::eval::fixtures::{EvalCase, SeedMemory};
 use crate::eval::metrics;
 use crate::quality_gate::QualityGate;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use crate::tuning::GateConfig;
 use serde::{Deserialize, Serialize};
@@ -707,14 +708,23 @@ async fn run_locomo_eval_core(
                     &qa.question,
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     Some(reranker.clone()),
                 )
                 .await?
             } else {
-                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
-                    .await?
+                db.search_memory(
+                    &qa.question,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?
             };
 
             // Build relevance judgments: evidence dia_ids -> source_ids = relevant
@@ -918,7 +928,7 @@ pub async fn run_locomo_eval_cross_rerank_from_db(
                     &qa.question,
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     Some(reranker.clone()),
                 )
@@ -1124,11 +1134,20 @@ async fn run_locomo_eval_from_db_collect_core(
                 gate_on && !crate::retrieval::signals::query_warrants_graph(&qa.question);
 
             let base_ids_owned: Vec<String> = if needs_base_ids {
-                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
-                    .await?
-                    .iter()
-                    .map(|r| r.source_id.clone())
-                    .collect()
+                db.search_memory(
+                    &qa.question,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?
+                .iter()
+                .map(|r| r.source_id.clone())
+                .collect()
             } else {
                 vec![]
             };
@@ -1140,14 +1159,23 @@ async fn run_locomo_eval_from_db_collect_core(
                     &qa.question,
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     Some(reranker.clone()),
                 )
                 .await?
             } else {
-                db.search_memory(&qa.question, 10, None, None, None, None, None, None)
-                    .await?
+                db.search_memory(
+                    &qa.question,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?
             };
             let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -1424,7 +1452,7 @@ pub async fn run_locomo_eval_cross_rerank_temporal_collect(
                     &qa.question,
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     temporal_cue,
                     Some(reranker.clone()),
@@ -1522,7 +1550,16 @@ pub async fn run_locomo_eval_from_db(
                 gate_skipped += 1;
             }
             let results = db
-                .search_memory(&qa.question, 10, None, None, None, None, None, None)
+                .search_memory(
+                    &qa.question,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
 
             let relevant_ids: HashSet<String> = qa
@@ -1713,7 +1750,14 @@ pub async fn run_locomo_eval_expanded_intent_collect(
             };
 
             let results = db
-                .search_memory_expanded(&qa.question, 10, None, None, None, Some(llm.clone()))
+                .search_memory_expanded(
+                    &qa.question,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    Some(llm.clone()),
+                )
                 .await?;
 
             let relevant_ids: HashSet<String> = qa
@@ -1874,7 +1918,16 @@ pub async fn run_locomo_eval_graph_stream_collect(
                 continue;
             }
             let results = db
-                .search_memory(&qa.question, 10, None, None, None, None, None, None)
+                .search_memory(
+                    &qa.question,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
 
             // Per-sample DB handle: feature contains graph_stream, probe fires.
@@ -2150,7 +2203,16 @@ pub async fn run_locomo_eval_with_gate(
             }
 
             let results = db
-                .search_memory(&qa.question, 10, None, None, None, None, None, None)
+                .search_memory(
+                    &qa.question,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
 
             // Build relevance judgments: evidence dia_ids -> source_ids = relevant

@@ -81,7 +81,7 @@ fn post(uri: &str, header: &str, body: &str) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn list_body_precedes_header_and_unknown_body_falls_back_unscoped() {
+async fn list_body_precedes_header_and_unknown_body_is_rejected() {
     let (app, _tmp) = fixture().await;
     let scoped = json(
         app.clone(),
@@ -95,18 +95,17 @@ async fn list_body_precedes_header_and_unknown_body_falls_back_unscoped() {
     let scoped_ids = source_ids(&scoped["memories"]);
     assert_eq!(scoped_ids, vec!["work-memory"]);
 
-    let fallback = json(
-        app,
-        post(
+    let rejected = app
+        .oneshot(post(
             "/api/memory/list",
             "work",
             r#"{"space":"missing","limit":20}"#,
-        ),
-    )
-    .await;
+        ))
+        .await
+        .expect("response");
     assert_eq!(
-        source_ids(&fallback["memories"]),
-        vec!["personal-memory", "work-memory"]
+        rejected.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
     );
 }
 

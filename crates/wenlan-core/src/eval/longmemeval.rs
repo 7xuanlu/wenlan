@@ -24,6 +24,7 @@ use crate::error::WenlanError;
 use crate::eval::fixtures::{EvalCase, SeedMemory};
 use crate::eval::metrics;
 use crate::quality_gate::QualityGate;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use crate::tuning::GateConfig;
 use serde::{Deserialize, Serialize};
@@ -707,14 +708,23 @@ async fn run_longmemeval_eval_core(
                 &sample.question,
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(reranker.clone()),
             )
             .await?
         } else {
-            db.search_memory(&sample.question, 10, None, None, None, None, None, None)
-                .await?
+            db.search_memory(
+                &sample.question,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?
         };
 
         let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -894,7 +904,7 @@ pub async fn run_longmemeval_eval_cross_rerank_from_db(
                 &sample.question,
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(reranker.clone()),
             )
@@ -1055,7 +1065,16 @@ pub async fn run_longmemeval_eval_from_db(
             gate_skipped += 1;
         }
         let results = db
-            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .search_memory(
+                &sample.question,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await?;
 
         let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -1203,11 +1222,20 @@ async fn run_longmemeval_eval_from_db_collect_core(
             gate_on && !crate::retrieval::signals::query_warrants_graph(&sample.question);
 
         let base_ids_owned: Vec<String> = if needs_base_ids {
-            db.search_memory(&sample.question, 10, None, None, None, None, None, None)
-                .await?
-                .iter()
-                .map(|r| r.source_id.clone())
-                .collect()
+            db.search_memory(
+                &sample.question,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?
+            .iter()
+            .map(|r| r.source_id.clone())
+            .collect()
         } else {
             vec![]
         };
@@ -1219,14 +1247,23 @@ async fn run_longmemeval_eval_from_db_collect_core(
                 &sample.question,
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(reranker.clone()),
             )
             .await?
         } else {
-            db.search_memory(&sample.question, 10, None, None, None, None, None, None)
-                .await?
+            db.search_memory(
+                &sample.question,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?
         };
         let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -1391,7 +1428,16 @@ pub async fn run_longmemeval_headroom_probe_from_db(
         let mut deep_ranks: Vec<i64> = Vec::new();
         for (i, &k) in LIMITS.iter().enumerate() {
             let results = db
-                .search_memory(&sample.question, k, None, None, None, None, None, None)
+                .search_memory(
+                    &sample.question,
+                    k,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
             let ranks: Vec<i64> = relevant_source_ids
                 .iter()
@@ -1472,7 +1518,16 @@ pub async fn run_longmemeval_headroom_probe_per_question(
         let mut deep_ranks: Vec<i64> = Vec::new();
         for (i, &k) in LIMITS.iter().enumerate() {
             let results = db
-                .search_memory(&sample.question, k, None, None, None, None, None, None)
+                .search_memory(
+                    &sample.question,
+                    k,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
             let ranks: Vec<i64> = relevant_source_ids
                 .iter()
@@ -1628,14 +1683,23 @@ pub async fn run_longmemeval_decompose_recall_probe_from_db(
         let mut streams: Vec<Vec<String>> = Vec::with_capacity(1 + subqueries.len());
         for q in std::iter::once(&sample.question).chain(subqueries.iter()) {
             let results = db
-                .search_memory(q, K, None, None, None, None, None, None)
+                .search_memory(q, K, None, &ReadScope::Global, None, None, None, None)
                 .await?;
             streams.push(results.into_iter().map(|r| r.source_id).collect());
         }
 
         let date_query = format!("(date: {}) {}", sample.question_date, sample.question);
         let date_results = db
-            .search_memory(&date_query, K, None, None, None, None, None, None)
+            .search_memory(
+                &date_query,
+                K,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await?;
         let date_ids: Vec<String> = date_results.into_iter().map(|r| r.source_id).collect();
 
@@ -1751,7 +1815,7 @@ pub async fn run_longmemeval_rerank_pool_probe(
                 &sample.question,
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 reranker.clone(),
@@ -1905,7 +1969,7 @@ pub async fn run_longmemeval_decompose_ce_probe_from_db(
         let mut content_by_id: HashMap<String, String> = HashMap::new();
         for q in std::iter::once(&sample.question).chain(subqueries.iter()) {
             let results = db
-                .search_memory(q, K, None, None, None, None, None, None)
+                .search_memory(q, K, None, &ReadScope::Global, None, None, None, None)
                 .await?;
             let mut ids = Vec::with_capacity(results.len());
             let mut seen: HashSet<&str> = HashSet::new();
@@ -2128,7 +2192,7 @@ pub async fn run_longmemeval_eval_temporal(path: &Path) -> Result<LongMemEvalRep
 
         // T4a: use search_memory_temporal with WENLAN_ENABLE_TEMPORAL_FILTER=1
         let results = db
-            .search_memory_temporal(&sample.question, 10, None, None, None, now)
+            .search_memory_temporal(&sample.question, 10, None, &ReadScope::Global, None, now)
             .await?;
 
         let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -2280,7 +2344,7 @@ pub async fn run_longmemeval_eval_temporal_collect(
 
         let t0 = Instant::now();
         let results = db
-            .search_memory_temporal(&sample.question, 10, None, None, None, now)
+            .search_memory_temporal(&sample.question, 10, None, &ReadScope::Global, None, now)
             .await?;
         let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -2382,7 +2446,16 @@ pub async fn run_longmemeval_eval_graph_stream_collect(
         }
 
         let results = db
-            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .search_memory(
+                &sample.question,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await?;
         // Per-sample DB handle: feature contains graph_stream, probe fires.
         let channel_touched =
@@ -2620,7 +2693,16 @@ pub async fn run_longmemeval_eval_with_gate(
 
         // Search
         let results = db
-            .search_memory(&sample.question, 10, None, None, None, None, None, None)
+            .search_memory(
+                &sample.question,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await?;
 
         let result_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();

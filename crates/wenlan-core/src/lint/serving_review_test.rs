@@ -21,7 +21,8 @@ fn route_contract_records_observed_scope_and_trust_semantics() {
         SelectorPrecedence::BodyThenHeader
     );
     assert_eq!(search.capability, Capability::CallerAssertedAgentTrust);
-    assert_eq!(search.unknown_scope, UnknownScopePolicy::FallsBackUnscoped);
+    assert_eq!(search.unknown_scope, UnknownScopePolicy::Rejected);
+    assert!(!search.scope_contract_violation());
 
     let page_search = route(Method::Post, "/api/pages/search").expect("page search row");
     assert_eq!(page_search.selector_precedence, SelectorPrecedence::Missing);
@@ -135,7 +136,7 @@ async fn route_scope_result_is_derived_from_canonical_contract() {
     let report = run(&db, None).await;
     let result = check(&report, ROUTE_SCOPE_ID);
     let defects = super::super::routes::scope_contract_violations().count() as u64;
-    assert_eq!(defects, 40);
+    assert_eq!(defects, 32);
     assert_eq!(metric(result, LintMetricCode::AffectedRecords), defects);
 }
 

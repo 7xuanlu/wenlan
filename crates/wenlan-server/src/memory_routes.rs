@@ -897,11 +897,8 @@ pub async fn handle_search_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<SearchMemoryRequest>,
+    Json(req): Json<SearchMemoryRequest>,
 ) -> Result<Json<SearchMemoryResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let start = std::time::Instant::now();
     let (db, reranker) = {
         // Snapshot the Arcs we need before any await so we never hold the
@@ -912,7 +909,9 @@ pub async fn handle_search_memory(
         let reranker = s.reranker.clone();
         (db, reranker)
     };
-    req.space = registered_read_space(&db, &req.space, "search_memory").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
 
     let results = {
         if req.rerank {
@@ -925,7 +924,7 @@ pub async fn handle_search_memory(
                 &req.query,
                 req.limit,
                 req.memory_type.as_deref(),
-                req.space.as_deref(),
+                &scope,
                 req.source_agent.as_deref(),
                 reranker,
             )
@@ -936,7 +935,7 @@ pub async fn handle_search_memory(
                 &req.query,
                 req.limit,
                 req.memory_type.as_deref(),
-                req.space.as_deref(),
+                &scope,
                 req.source_agent.as_deref(),
                 None,
                 None,
@@ -1032,13 +1031,13 @@ pub async fn handle_search_memory(
                         .unwrap_or_else(|| "unknown".to_string())
                 };
                 let raw = db
-                    .search_pages(&req.query, 3, None)
+                    .search_pages_scoped(&req.query, 3, None, &scope)
                     .await
                     .unwrap_or_default();
                 let ids: std::collections::HashSet<String> =
                     results.iter().map(|r| r.source_id.clone()).collect();
                 let visible = db
-                    .select_visible_pages(raw, req.space.as_deref(), &ids, &trust_level, 3)
+                    .select_visible_pages_scoped(raw, &scope, &ids, &trust_level, 3)
                     .await;
                 if visible.is_empty() {
                     None
@@ -1087,21 +1086,20 @@ pub async fn handle_confirm_memory(
 pub async fn handle_list_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<ListMemoriesRequest>,
+    Json(req): Json<ListMemoriesRequest>,
 ) -> Result<Json<ListMemoriesResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     }; // guard dropped here
-    req.space = registered_read_space(&db, &req.space, "list_memories").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let memories = db
-        .list_filtered_confirmed(
+        .list_filtered_confirmed_scoped(
             Some("memory"),
             req.memory_type.as_deref(),
-            req.space.as_deref(),
+            &scope,
             req.confirmed,
             req.limit,
         )
@@ -1828,15 +1826,21 @@ pub struct NurtureCardsResponse {
 
 pub async fn handle_get_nurture_cards(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(query): axum::extract::Query<NurtureCardsQuery>,
 ) -> Result<Json<NurtureCardsResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let space = registered_read_space(&db, &query.space, "nurture").await?;
+    let scope = crate::read_scope::effective_read_scope(
+        &db,
+        query.space.as_deref(),
+        header_space.as_deref(),
+    )
+    .await?;
     let cards = db
-        .get_nurture_cards(query.limit, space.as_deref())
+        .get_nurture_cards_scoped(query.limit, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(NurtureCardsResponse { cards }))
@@ -3090,13 +3094,15 @@ pub async fn handle_regenerate_narrative(
 /// GET /api/memory/pinned
 pub async fn handle_list_pinned_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_types::responses::PinnedMemoriesResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let memories = db
-        .list_pinned_memories()
+        .list_pinned_memories_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::PinnedMemoriesResponse {
@@ -3634,6 +3640,7 @@ pub struct RecentActivityQuery {
 /// `since_ms` scopes badge derivation only; the feed is always top-N by recency.
 pub async fn handle_recent_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<RecentActivityQuery>,
 ) -> Result<Json<Vec<wenlan_types::RecentActivityItem>>, ServerError> {
     let db = {
@@ -3641,8 +3648,9 @@ pub async fn handle_recent_memories(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let items = db
-        .list_recent_memories(q.limit.unwrap_or(10), q.since_ms)
+        .list_recent_memories_scoped(q.limit.unwrap_or(10), q.since_ms, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(items))
@@ -3655,6 +3663,7 @@ pub async fn handle_recent_memories(
 /// when the `lastVisitMs` delta window is too tight to produce a `new` badge.
 pub async fn handle_list_unconfirmed_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<RecentActivityQuery>,
 ) -> Result<Json<Vec<wenlan_types::RecentActivityItem>>, ServerError> {
     let db = {
@@ -3662,8 +3671,9 @@ pub async fn handle_list_unconfirmed_memories(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let items = db
-        .list_unconfirmed_memories(q.limit.unwrap_or(6))
+        .list_unconfirmed_memories_scoped(q.limit.unwrap_or(6), &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(items))

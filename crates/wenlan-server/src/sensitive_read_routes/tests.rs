@@ -19,7 +19,8 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
         SelectorPrecedence::BodyThenHeader
     );
     assert_eq!(search.capability, Capability::CallerAssertedAgentTrust);
-    assert_eq!(search.unknown_scope, UnknownScopePolicy::FallsBackUnscoped);
+    assert_eq!(search.unknown_scope, UnknownScopePolicy::Rejected);
+    assert!(!search.scope_contract_violation());
 
     let page_search = route(Method::Post, "/api/pages/search").expect("page search");
     assert_eq!(page_search.selector_precedence, SelectorPrecedence::Missing);
@@ -139,7 +140,7 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         rows.iter()
             .filter(|row| row.scope_contract_violation())
             .count(),
-        40
+        32
     );
 }
 

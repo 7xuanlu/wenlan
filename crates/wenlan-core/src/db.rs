@@ -5,6 +5,7 @@ use crate::error::WenlanError;
 use crate::events::EventEmitter;
 use crate::pages::Page;
 use crate::privacy::redact_pii;
+use crate::read_scope::ReadScope;
 use crate::retrieval::document_cap::{cap_per_document, DEFAULT_PER_DOCUMENT_CAP};
 use crate::sources::{stability_tier, RawDocument};
 
@@ -17,6 +18,37 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 mod count;
+mod scoped_entities;
+mod scoped_pages;
+
+#[cfg(test)]
+mod scoped_entities_test;
+#[cfg(test)]
+mod scoped_pages_test;
+
+fn push_read_scope_filter(
+    scope: &ReadScope,
+    column: &str,
+    conditions: &mut Vec<String>,
+    values: &mut Vec<libsql::Value>,
+) {
+    match scope {
+        ReadScope::Global => {}
+        ReadScope::Space(space) => {
+            conditions.push(format!("{column} = ?"));
+            values.push(libsql::Value::Text(space.clone()));
+        }
+        ReadScope::Uncategorized => conditions.push(format!("{column} IS NULL")),
+    }
+}
+
+fn legacy_read_scope(space: Option<&str>) -> ReadScope {
+    match space {
+        None => ReadScope::Global,
+        Some("uncategorized") => ReadScope::Uncategorized,
+        Some(space) => ReadScope::Space(space.to_string()),
+    }
+}
 
 #[derive(Clone, serde::Serialize)]
 pub struct MigrationProgress {
@@ -8395,7 +8427,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         source_filter: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
@@ -8412,14 +8444,7 @@ impl MemoryDB {
             filter_conditions.push("c.source = ?".to_string());
             filter_values.push(libsql::Value::Text(filter.to_string()));
         }
-        if let Some(sp) = space {
-            if sp == "uncategorized" {
-                filter_conditions.push("c.space IS NULL".to_string());
-            } else {
-                filter_conditions.push("c.space = ?".to_string());
-                filter_values.push(libsql::Value::Text(sp.to_string()));
-            }
-        }
+        push_read_scope_filter(scope, "c.space", &mut filter_conditions, &mut filter_values);
 
         // Mirror search_memory: hide supersede_mode='hide' targets; archive-mode
         // memories stay visible. Subquery is restricted to memory rows, so
@@ -8455,7 +8480,7 @@ impl MemoryDB {
                 format!("AND {}", vec_where_parts.join(" AND "))
             };
 
-            let sql = format!(
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
                         c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
@@ -8464,12 +8489,23 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date, c.content_hash
-                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
-                 JOIN memories c ON c.rowid = vt.id
-                 WHERE 1=1 {} {}",
-                supersedes_exclusion, vec_filter
-            );
+                        c.importance, c.event_date, c.content_hash";
+            let sql = if matches!(scope, ReadScope::Global) {
+                format!(
+                    "{projection}
+                     FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
+                     JOIN memories c ON c.rowid = vt.id
+                     WHERE 1=1 {supersedes_exclusion} {vec_filter}"
+                )
+            } else {
+                format!(
+                    "{projection}
+                     FROM memories c
+                     WHERE c.embedding IS NOT NULL {supersedes_exclusion} {vec_filter}
+                     ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC
+                     LIMIT ?2"
+                )
+            };
 
             let mut params: Vec<libsql::Value> = vec![
                 libsql::Value::Text(vec_str.clone()),
@@ -8651,7 +8687,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         confirmation_boost: Option<f32>,
         recap_penalty: Option<f32>,
@@ -8661,7 +8697,7 @@ impl MemoryDB {
             query,
             limit,
             memory_type,
-            space,
+            scope,
             source_agent,
             None, // temporal_cue: None -> no temporal hard filter
             confirmation_boost,
@@ -8688,7 +8724,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         temporal_cue: Option<crate::temporal_query::DateRange>,
         confirmation_boost: Option<f32>,
@@ -8738,14 +8774,7 @@ impl MemoryDB {
                 }
             }
         }
-        if let Some(d) = space {
-            if d == "uncategorized" {
-                filter_conditions.push("c.space IS NULL".to_string());
-            } else {
-                filter_conditions.push("c.space = ?".to_string());
-                filter_values.push(libsql::Value::Text(d.to_string()));
-            }
-        }
+        push_read_scope_filter(scope, "c.space", &mut filter_conditions, &mut filter_values);
         if let Some(sa) = source_agent {
             filter_conditions.push("c.source_agent = ?".to_string());
             filter_values.push(libsql::Value::Text(sa.to_string()));
@@ -8819,7 +8848,7 @@ impl MemoryDB {
                 format!("AND {}", vec_where_parts.join(" AND "))
             };
 
-            let sql = format!(
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                         c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
                         c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent,
@@ -8828,12 +8857,23 @@ impl MemoryDB {
                         c.structured_fields, c.retrieval_cue, c.source_text,
                         c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date, c.content_hash
-                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
-                 JOIN memories c ON c.rowid = vt.id
-                 WHERE 1=1 {} {}",
-                supersedes_exclusion, vec_filter
-            );
+                        c.importance, c.event_date, c.content_hash";
+            let sql = if matches!(scope, ReadScope::Global) {
+                format!(
+                    "{projection}
+                     FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
+                     JOIN memories c ON c.rowid = vt.id
+                     WHERE 1=1 {supersedes_exclusion} {vec_filter}"
+                )
+            } else {
+                format!(
+                    "{projection}
+                     FROM memories c
+                     WHERE c.embedding IS NOT NULL {supersedes_exclusion} {vec_filter}
+                     ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC
+                     LIMIT ?2"
+                )
+            };
 
             let mut params: Vec<libsql::Value> = vec![
                 libsql::Value::Text(vec_str),
@@ -9195,7 +9235,13 @@ impl MemoryDB {
                 && !(allow_graph_stream && graph_memory_stream_enabled())
             {
                 let seeded_result = self
-                    .augment_with_graph_seeded(query, final_results, &pool_entity_ids, limit)
+                    .augment_with_graph_seeded_scoped(
+                        query,
+                        final_results,
+                        &pool_entity_ids,
+                        limit,
+                        scope,
+                    )
                     .await;
                 match seeded_result {
                     Ok(augmented) => {
@@ -9209,13 +9255,25 @@ impl MemoryDB {
                         // final_results was moved; augment_with_graph with empty results
                         // so score boosts still flow (query-anchor picks up entities).
                         final_results = self
-                            .augment_with_graph_gated(query, vec![], limit, allow_graph_stream)
+                            .augment_with_graph_gated(
+                                query,
+                                vec![],
+                                limit,
+                                allow_graph_stream,
+                                scope,
+                            )
                             .await?;
                     }
                 }
             } else {
                 final_results = self
-                    .augment_with_graph_gated(query, final_results, limit, allow_graph_stream)
+                    .augment_with_graph_gated(
+                        query,
+                        final_results,
+                        limit,
+                        allow_graph_stream,
+                        scope,
+                    )
                     .await?;
             }
         }
@@ -9424,7 +9482,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -9438,7 +9496,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -9461,7 +9519,7 @@ impl MemoryDB {
             query,
             limit,
             memory_type,
-            space,
+            scope,
             source_agent,
             high_conf_cue,
             None, // confirmation_boost
@@ -9535,6 +9593,16 @@ impl MemoryDB {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>, WenlanError> {
+        self.search_episodes_scoped(query, limit, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn search_episodes_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SearchResult>, WenlanError> {
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
         let fetch_limit = (limit * 3) as i64;
@@ -9544,17 +9612,46 @@ impl MemoryDB {
         // --- Vector search (episode-scoped) ---
         let mut vector_results: Vec<SearchResult> = Vec::new();
         {
-            let sql =
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         vector_distance_cos(c.embedding, vector32(?1)),
-                        c.importance, c.event_date, c.content_hash
-                 FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt
-                 JOIN memories c ON c.rowid = vt.id
-                 WHERE c.source = 'episode'";
-            match conn
-                .query(sql, libsql::params![vec_str.clone(), fetch_limit])
-                .await
-            {
+                        c.importance, c.event_date, c.content_hash";
+            let (sql, params) = match scope {
+                ReadScope::Global => (
+                    format!(
+                        "{projection} FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt \
+                         JOIN memories c ON c.rowid = vt.id WHERE c.source = 'episode'"
+                    ),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+                ReadScope::Space(space) => (
+                    format!(
+                        "{projection} FROM memories c WHERE c.source = 'episode' \
+                         AND c.embedding IS NOT NULL AND c.space = ?3 \
+                         ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC LIMIT ?2"
+                    ),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                        libsql::Value::Text(space.clone()),
+                    ],
+                ),
+                ReadScope::Uncategorized => (
+                    format!(
+                        "{projection} FROM memories c WHERE c.source = 'episode' \
+                         AND c.embedding IS NOT NULL AND c.space IS NULL \
+                         ORDER BY vector_distance_cos(c.embedding, vector32(?1)) ASC LIMIT ?2"
+                    ),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+            };
+            match conn.query(&sql, params).await {
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next().await {
                         let distance: f64 = row.get(30).unwrap_or(1.0);
@@ -9572,21 +9669,33 @@ impl MemoryDB {
         // --- FTS search (episode-scoped) ---
         let mut fts_results: Vec<SearchResult> = Vec::new();
         {
-            let fts_sql =
+            let projection =
                 "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url, c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start, c.byte_end, c.semantic_unit, c.memory_type, c.space, c.source_agent, c.confidence, c.confirmed, c.stability, c.supersedes, c.entity_id, c.quality, c.is_recap, c.supersede_mode, c.structured_fields, c.retrieval_cue, c.source_text, c.version, c.pending_revision,
                         fts.rank,
-                        c.importance, c.event_date, c.content_hash
-                 FROM memories_fts fts
-                 JOIN memories c ON fts.rowid = c.rowid
-                 WHERE memories_fts MATCH ?1 AND c.source = 'episode'
-                 ORDER BY fts.rank
-                 LIMIT ?2";
+                        c.importance, c.event_date, c.content_hash";
+            let (scope_sql, scope_value) = match scope {
+                ReadScope::Global => ("", None),
+                ReadScope::Space(space) => {
+                    ("AND c.space = ?3", Some(libsql::Value::Text(space.clone())))
+                }
+                ReadScope::Uncategorized => ("AND c.space IS NULL", None),
+            };
+            let fts_sql = format!(
+                "{projection} FROM memories_fts fts \
+                 JOIN memories c ON fts.rowid = c.rowid \
+                 WHERE memories_fts MATCH ?1 AND c.source = 'episode' {scope_sql} \
+                 ORDER BY fts.rank LIMIT ?2"
+            );
             let fts_queries: Vec<String> = vec![query.to_string(), Self::fts_or_query(query)];
             for fts_query in &fts_queries {
-                match conn
-                    .query(fts_sql, libsql::params![fts_query.clone(), fetch_limit])
-                    .await
-                {
+                let mut params = vec![
+                    libsql::Value::Text(fts_query.clone()),
+                    libsql::Value::Integer(fetch_limit),
+                ];
+                if let Some(value) = &scope_value {
+                    params.push(value.clone());
+                }
+                match conn.query(&fts_sql, params).await {
                     Ok(mut rows) => {
                         while let Ok(Some(row)) = rows.next().await {
                             let rank: f64 = row.get(30).unwrap_or(0.0);
@@ -9653,6 +9762,7 @@ impl MemoryDB {
         &self,
         query: &str,
         pool: usize,
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
         use crate::retrieval::fact_channel::{max_pool_by_parent, ChildHit};
 
@@ -9665,14 +9775,54 @@ impl MemoryDB {
         // --- Child vector search (distance-ordered) ---
         let mut child_hits: Vec<ChildHit> = Vec::new();
         {
-            let sql = "SELECT cv.parent_id,
+            let (sql, params) = match scope {
+                ReadScope::Global => (
+                    "SELECT cv.parent_id,
                               vector_distance_cos(cv.embedding, vector32(?1)) AS dist
                        FROM vector_top_k('child_vectors_vec_idx', vector32(?1), ?2) AS vt
                        JOIN child_vectors cv ON cv.rowid = vt.id
                        WHERE cv.parent_kind = 'memory'
-                       ORDER BY dist ASC";
+                       ORDER BY dist ASC"
+                        .to_string(),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+                ReadScope::Space(space) => (
+                    "SELECT cv.parent_id,
+                              vector_distance_cos(cv.embedding, vector32(?1)) AS dist
+                       FROM child_vectors cv
+                       JOIN memories m ON m.source_id = cv.parent_id
+                                      AND m.source = 'memory' AND m.chunk_index = 0
+                       WHERE cv.parent_kind = 'memory' AND cv.embedding IS NOT NULL
+                         AND m.space = ?3
+                       ORDER BY dist ASC LIMIT ?2"
+                        .to_string(),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                        libsql::Value::Text(space.clone()),
+                    ],
+                ),
+                ReadScope::Uncategorized => (
+                    "SELECT cv.parent_id,
+                              vector_distance_cos(cv.embedding, vector32(?1)) AS dist
+                       FROM child_vectors cv
+                       JOIN memories m ON m.source_id = cv.parent_id
+                                      AND m.source = 'memory' AND m.chunk_index = 0
+                       WHERE cv.parent_kind = 'memory' AND cv.embedding IS NOT NULL
+                         AND m.space IS NULL
+                       ORDER BY dist ASC LIMIT ?2"
+                        .to_string(),
+                    vec![
+                        libsql::Value::Text(vec_str.clone()),
+                        libsql::Value::Integer(fetch_limit),
+                    ],
+                ),
+            };
             let mut rows = conn
-                .query(sql, libsql::params![vec_str.clone(), fetch_limit])
+                .query(&sql, params)
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("fact channel query: {e}")))?;
             let mut rank = 0usize;
@@ -9698,6 +9848,14 @@ impl MemoryDB {
             .map(|i| format!("?{i}"))
             .collect::<Vec<_>>()
             .join(", ");
+        let (scope_sql, scope_value) = match scope {
+            ReadScope::Global => (String::new(), None),
+            ReadScope::Space(space) => (
+                format!("AND c.space = ?{}", parent_ids.len() + 1),
+                Some(libsql::Value::Text(space.clone())),
+            ),
+            ReadScope::Uncategorized => ("AND c.space IS NULL".to_string(), None),
+        };
         let sql = format!(
             "SELECT c.id, c.content, c.source, c.source_id, c.title, c.summary, c.url,
                     c.chunk_index, c.last_modified, c.chunk_type, c.language, c.byte_start,
@@ -9708,13 +9866,17 @@ impl MemoryDB {
                     c.version, c.pending_revision,
                     0.0, c.importance, c.event_date, c.content_hash
              FROM memories c
-             WHERE c.source = 'memory' AND c.chunk_index = 0 AND c.source_id IN ({placeholders})",
+             WHERE c.source = 'memory' AND c.chunk_index = 0 \
+               AND c.source_id IN ({placeholders}) {scope_sql}",
             placeholders = placeholders
         );
-        let params: Vec<libsql::Value> = parent_ids
+        let mut params: Vec<libsql::Value> = parent_ids
             .iter()
             .map(|id| libsql::Value::Text(id.clone()))
             .collect();
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
         let mut by_source: HashMap<String, SearchResult> = HashMap::new();
         match conn.query(&sql, params).await {
             Ok(mut rows) => {
@@ -9765,7 +9927,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -9773,7 +9935,7 @@ impl MemoryDB {
             query,
             limit,
             memory_type,
-            space,
+            scope,
             source_agent,
             None,
             reranker,
@@ -9793,7 +9955,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         temporal_cue: Option<crate::temporal_query::DateRange>,
         reranker: Option<Arc<dyn crate::reranker::Reranker>>,
@@ -9808,7 +9970,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     temporal_cue,
                     None,
@@ -9835,7 +9997,7 @@ impl MemoryDB {
                 query,
                 fetch_pool,
                 memory_type,
-                space,
+                scope,
                 source_agent,
                 temporal_cue,
                 None,
@@ -9855,7 +10017,7 @@ impl MemoryDB {
             // Log-and-degrade on page-channel failure (mirrors augment_with_graph's
             // silent fallback pattern at db.rs:7605-7608).
             match self
-                .search_pages(query, Self::page_channel_limit(), None)
+                .search_pages_scoped(query, Self::page_channel_limit(), None, scope)
                 .await
             {
                 Ok(pages) => pages,
@@ -9881,24 +10043,12 @@ impl MemoryDB {
         // Without this gate, a `space="work"`-scoped recall could leak pages from
         // `space="personal"` whose only sources are personal memories — cross-
         // workspace information disclosure (HIGH per 2026-05-28 adversarial review).
-        let filters_active = memory_type.is_some() || space.is_some() || source_agent.is_some();
-        let page_results: Vec<Page> = if filters_active && !page_results.is_empty() {
+        let source_filters_active = memory_type.is_some() || source_agent.is_some();
+        let page_results: Vec<Page> = if source_filters_active && !page_results.is_empty() {
             let allowed_memory_ids: std::collections::HashSet<String> =
                 memory_results.iter().map(|r| r.source_id.clone()).collect();
             let mut filtered = Vec::with_capacity(page_results.len());
             for page in page_results {
-                // P3 workspace axis: a page passes the scoped gate if its dedicated
-                // `workspace` matches the active `space` filter (NOT the overloaded
-                // `space` category column) OR — unchanged — if a source memory survived
-                // the memory-side filter. NULL workspace never matches any filter.
-                let workspace_match = match (space, page.workspace.as_deref()) {
-                    (Some(filter), Some(ws)) => filter == ws,
-                    _ => false,
-                };
-                if workspace_match {
-                    filtered.push(page);
-                    continue;
-                }
                 let sources = match self.get_page_sources(&page.id).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -9930,7 +10080,7 @@ impl MemoryDB {
         // Log-and-degrade on failure (never silent-zero the memory pool).
         let summary_nodes: Vec<SummaryNode> = if global_prelude_enabled {
             match self
-                .search_summary_nodes(query, crate::refinery::summary::bucket_k())
+                .search_summary_nodes_scoped(query, crate::refinery::summary::bucket_k(), scope)
                 .await
             {
                 Ok(v) => v,
@@ -9946,7 +10096,8 @@ impl MemoryDB {
         // node surfaces iff >=1 of its provenance memories survived the
         // memory-side filter. Without this, a root spanning all buckets could
         // leak cross-space when filters are active.
-        let summary_nodes: Vec<SummaryNode> = if filters_active && !summary_nodes.is_empty() {
+        let summary_nodes: Vec<SummaryNode> = if source_filters_active && !summary_nodes.is_empty()
+        {
             let allowed_memory_ids: std::collections::HashSet<String> =
                 memory_results.iter().map(|r| r.source_id.clone()).collect();
             let mut filtered = Vec::with_capacity(summary_nodes.len());
@@ -9974,7 +10125,7 @@ impl MemoryDB {
         // failure, mirroring the page-channel fallback above.
         let episode_results: Vec<SearchResult> = if episode_channel_enabled() {
             match self
-                .search_episodes(query, Self::episode_channel_limit())
+                .search_episodes_scoped(query, Self::episode_channel_limit(), scope)
                 .await
             {
                 Ok(v) => v,
@@ -9991,16 +10142,17 @@ impl MemoryDB {
         // explicit gate is required: under option A an episode shares its parent
         // fact's source_id, so it surfaces iff that source_id survived the
         // memory-side filter. Prevents cross-space episode disclosure.
-        let episode_results: Vec<SearchResult> = if filters_active && !episode_results.is_empty() {
-            let allowed_memory_ids: std::collections::HashSet<String> =
-                memory_results.iter().map(|r| r.source_id.clone()).collect();
-            episode_results
-                .into_iter()
-                .filter(|r| allowed_memory_ids.contains(&r.source_id))
-                .collect()
-        } else {
-            episode_results
-        };
+        let episode_results: Vec<SearchResult> =
+            if source_filters_active && !episode_results.is_empty() {
+                let allowed_memory_ids: std::collections::HashSet<String> =
+                    memory_results.iter().map(|r| r.source_id.clone()).collect();
+                episode_results
+                    .into_iter()
+                    .filter(|r| allowed_memory_ids.contains(&r.source_id))
+                    .collect()
+            } else {
+                episode_results
+            };
 
         // T15a fact-channel (opt-in RRF stream). Vector-search per-fact child
         // vectors, rehydrate the matched PARENT memories (source="memory"), and
@@ -10013,6 +10165,7 @@ impl MemoryDB {
                     .search_facts_channel(
                         query,
                         crate::retrieval::fact_channel::fact_channel_limit(),
+                        scope,
                     )
                     .await
                 {
@@ -10030,12 +10183,11 @@ impl MemoryDB {
         // construction, so a buried fact in a `space="personal"` memory must not
         // leak into a `space="work"` recall. The rehydrated row carries the
         // parent's own field values, so we filter on them directly.
-        let fact_results: Vec<SearchResult> = if filters_active && !fact_results.is_empty() {
+        let fact_results: Vec<SearchResult> = if source_filters_active && !fact_results.is_empty() {
             fact_results
                 .into_iter()
                 .filter(|r| {
                     memory_type.is_none_or(|mt| r.memory_type.as_deref() == Some(mt))
-                        && space.is_none_or(|sp| r.space.as_deref() == Some(sp))
                         && source_agent.is_none_or(|sa| r.source_agent.as_deref() == Some(sa))
                 })
                 .collect()
@@ -10272,7 +10424,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -10366,7 +10518,7 @@ impl MemoryDB {
                     q,
                     fetch_pool,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None, // temporal_cue
                     None, // confirmation_boost
@@ -10391,7 +10543,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None, // temporal_cue
                     None, // confirmation_boost
@@ -10458,7 +10610,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -10473,7 +10625,7 @@ impl MemoryDB {
                 query,
                 fetch_pool,
                 memory_type,
-                space,
+                scope,
                 source_agent,
                 None,
                 None,
@@ -10523,7 +10675,7 @@ impl MemoryDB {
                             &draft,
                             fetch_pool,
                             memory_type,
-                            space,
+                            scope,
                             source_agent,
                             None,
                             None,
@@ -10556,7 +10708,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -10612,7 +10764,7 @@ impl MemoryDB {
         query: &str,
         limit: usize,
         memory_type: Option<&str>,
-        space: Option<&str>,
+        scope: &ReadScope,
         source_agent: Option<&str>,
         llm: Option<Arc<dyn crate::llm_provider::LlmProvider>>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
@@ -10631,7 +10783,7 @@ impl MemoryDB {
                     q,
                     fetch_pool,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -10653,7 +10805,7 @@ impl MemoryDB {
                     query,
                     limit,
                     memory_type,
-                    space,
+                    scope,
                     source_agent,
                     None,
                     None,
@@ -10706,6 +10858,7 @@ impl MemoryDB {
     async fn expand_anchor_entities_khop(
         &self,
         anchor_entity_ids: &[String],
+        scope: &ReadScope,
     ) -> Result<Vec<String>, WenlanError> {
         use crate::retrieval::traversal::{
             bfs_khop, build_adjacency, parse_khop_depth, parse_khop_max_nodes,
@@ -10719,16 +10872,22 @@ impl MemoryDB {
         let max_nodes =
             parse_khop_max_nodes(std::env::var("WENLAN_GRAPH_KHOP_MAX_NODES").ok().as_deref());
 
+        let anchor_entity_ids = self
+            .filter_entity_ids_scoped(anchor_entity_ids, scope)
+            .await?;
+        if anchor_entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
         // depth 0 -> no expansion; return deduped seeds via the pure fn (no SQL).
         if max_hops == 0 {
             return Ok(bfs_khop(
                 &Default::default(),
-                anchor_entity_ids,
+                &anchor_entity_ids,
                 0,
                 max_nodes,
             ));
         }
-
         let conn = self.conn.lock().await;
 
         // Collect edges incident to the bounded frontier, hop by hop. A fetch-side
@@ -10756,17 +10915,38 @@ impl MemoryDB {
             // cap trims mid-fanout, WHICH neighbours survive must not depend on DB
             // row order (the eval path is wired, so non-determinism would be a
             // reproducibility bug).
+            let scope_parameter = frontier.len() + 1;
+            let (endpoint_scope, scope_value) = match scope {
+                ReadScope::Global => (String::new(), None),
+                ReadScope::Space(space) => (
+                    format!("AND ef.space = ?{scope_parameter} AND et.space = ?{scope_parameter}"),
+                    Some(libsql::Value::Text(space.clone())),
+                ),
+                ReadScope::Uncategorized => (
+                    "AND ef.space IS NULL AND et.space IS NULL".to_string(),
+                    None,
+                ),
+            };
             let sql = format!(
-                "SELECT from_entity, to_entity FROM relations WHERE from_entity IN ({ph})
+                "SELECT r.from_entity, r.to_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.from_entity IN ({ph}) {endpoint_scope}
                  UNION
-                 SELECT from_entity, to_entity FROM relations WHERE to_entity IN ({ph})
+                 SELECT r.from_entity, r.to_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.to_entity IN ({ph}) {endpoint_scope}
                  ORDER BY from_entity, to_entity",
                 ph = ph
             );
-            let params: Vec<libsql::Value> = frontier
+            let mut params: Vec<libsql::Value> = frontier
                 .iter()
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
+            if let Some(value) = scope_value {
+                params.push(value);
+            }
 
             let mut rows = conn
                 .query(&sql, libsql::params_from_iter(params))
@@ -10804,7 +10984,12 @@ impl MemoryDB {
         drop(conn);
 
         let adjacency = build_adjacency(&edges);
-        Ok(bfs_khop(&adjacency, anchor_entity_ids, max_hops, max_nodes))
+        Ok(bfs_khop(
+            &adjacency,
+            &anchor_entity_ids,
+            max_hops,
+            max_nodes,
+        ))
     }
 
     /// Augment search results with knowledge graph observations via RRF merge.
@@ -10822,7 +11007,7 @@ impl MemoryDB {
         results: Vec<SearchResult>,
         limit: usize,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        self.augment_with_graph_gated(query, results, limit, true)
+        self.augment_with_graph_gated(query, results, limit, true, &ReadScope::Global)
             .await
     }
 
@@ -10839,8 +11024,9 @@ impl MemoryDB {
         results: Vec<SearchResult>,
         limit: usize,
         allow_stream: bool,
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        let entity_hits = match self.search_entities_by_vector(query, 5).await {
+        let entity_hits = match self.search_entities_by_vector_scoped(query, 5, scope).await {
             Ok(hits) if !hits.is_empty() => hits,
             _ => return Ok(results),
         };
@@ -10851,7 +11037,7 @@ impl MemoryDB {
         // real linked memories that survive the strip. See augment_with_memory_stream.
         if allow_stream && graph_memory_stream_enabled() {
             return self
-                .augment_with_memory_stream(results, limit, &entity_hits)
+                .augment_with_memory_stream(results, limit, &entity_hits, scope)
                 .await;
         }
 
@@ -10864,7 +11050,7 @@ impl MemoryDB {
         // When OFF, use entity_ids verbatim -> byte-identical single-hop path.
         // Log-and-degrade: a traversal Err falls back to the anchor set.
         let observation_seed_ids: Vec<String> = if khop_traversal_enabled() {
-            match self.expand_anchor_entities_khop(&entity_ids).await {
+            match self.expand_anchor_entities_khop(&entity_ids, scope).await {
                 Ok(expanded) if !expanded.is_empty() => expanded,
                 Ok(_) => entity_ids.clone(),
                 Err(e) => {
@@ -10880,7 +11066,7 @@ impl MemoryDB {
         };
 
         let graph_results = match self
-            .get_observations_for_entities(&observation_seed_ids, limit)
+            .get_observations_for_entities_scoped(&observation_seed_ids, limit, scope)
             .await
         {
             Ok(r) if !r.is_empty() => r,
@@ -10925,6 +11111,7 @@ impl MemoryDB {
     async fn stream_anchor_ids(
         &self,
         entity_hits: &[EntitySearchResult],
+        scope: &ReadScope,
     ) -> Result<Vec<String>, WenlanError> {
         // Type filter (cheap, in-memory) then degree filter (one query).
         let typed: Vec<String> = entity_hits
@@ -10935,7 +11122,7 @@ impl MemoryDB {
         if typed.is_empty() {
             return Ok(vec![]);
         }
-        let degrees = self.entity_degrees(&typed).await?;
+        let degrees = self.entity_degrees(&typed, scope).await?;
         let cap = graph_hub_cap();
         Ok(typed
             .into_iter()
@@ -10967,10 +11154,11 @@ impl MemoryDB {
         results: Vec<SearchResult>,
         limit: usize,
         entity_hits: &[EntitySearchResult],
+        scope: &ReadScope,
     ) -> Result<Vec<SearchResult>, WenlanError> {
         // 1. Shared anchor eligibility (type + degree). One source of truth
         //    with the G3 touch probe so the two can never drift.
-        let ranked_anchor_ids = self.stream_anchor_ids(entity_hits).await?;
+        let ranked_anchor_ids = self.stream_anchor_ids(entity_hits, scope).await?;
         if ranked_anchor_ids.is_empty() {
             log::info!(
                 "[graph_stream] no eligible anchors after type+degree filter (cap={}); graph contributes nothing",
@@ -10981,7 +11169,7 @@ impl MemoryDB {
 
         // 2. Linked memories, one per source_id, best anchor rank.
         let graph_memories = self
-            .get_memories_for_entities(&ranked_anchor_ids, limit)
+            .get_memories_for_entities_scoped(&ranked_anchor_ids, limit, scope)
             .await?;
         if graph_memories.is_empty() {
             return Ok(results);
@@ -11062,7 +11250,7 @@ impl MemoryDB {
             Ok(h) if !h.is_empty() => h,
             _ => return Ok(false),
         };
-        let anchors = self.stream_anchor_ids(&hits).await?;
+        let anchors = self.stream_anchor_ids(&hits, &ReadScope::Global).await?;
         if anchors.is_empty() {
             return Ok(false);
         }
@@ -11077,20 +11265,39 @@ impl MemoryDB {
     async fn entity_degrees(
         &self,
         entity_ids: &[String],
+        scope: &ReadScope,
     ) -> Result<HashMap<String, usize>, WenlanError> {
         if entity_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let conn = self.conn.lock().await;
         let placeholders: Vec<String> = (1..=entity_ids.len()).map(|i| format!("?{i}")).collect();
+        let scope_parameter = entity_ids.len() + 1;
+        let (join, scope_sql, scope_value) = match scope {
+            ReadScope::Global => ("", String::new(), None),
+            ReadScope::Space(space) => (
+                "JOIN memories m ON m.source_id = me.memory_id AND m.source = 'memory' AND m.chunk_index = 0",
+                format!("AND m.space = ?{scope_parameter}"),
+                Some(libsql::Value::Text(space.clone())),
+            ),
+            ReadScope::Uncategorized => (
+                "JOIN memories m ON m.source_id = me.memory_id AND m.source = 'memory' AND m.chunk_index = 0",
+                "AND m.space IS NULL".to_string(),
+                None,
+            ),
+        };
         let sql = format!(
-            "SELECT entity_id, COUNT(*) FROM memory_entities WHERE entity_id IN ({}) GROUP BY entity_id",
+            "SELECT me.entity_id, COUNT(*) FROM memory_entities me {join} \
+             WHERE me.entity_id IN ({}) {scope_sql} GROUP BY me.entity_id",
             placeholders.join(",")
         );
-        let params: Vec<libsql::Value> = entity_ids
+        let mut params: Vec<libsql::Value> = entity_ids
             .iter()
             .map(|id| libsql::Value::Text(id.clone()))
             .collect();
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
         let mut rows = conn
             .query(&sql, libsql::params_from_iter(params))
             .await
@@ -11193,12 +11400,29 @@ impl MemoryDB {
     ///
     /// Single conn lock is held across the bounded BFS loop (depth ≤ 3, small).
     /// No non-libsql `.await` is called inside the lock.
+    #[cfg(test)]
     async fn expand_entities_khop(
         &self,
         seed_ids: &[String],
         depth: usize,
         frontier_cap: usize,
     ) -> Result<Vec<String>, WenlanError> {
+        self.expand_entities_khop_scoped(seed_ids, depth, frontier_cap, &ReadScope::Global)
+            .await
+    }
+
+    async fn expand_entities_khop_scoped(
+        &self,
+        seed_ids: &[String],
+        depth: usize,
+        frontier_cap: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<String>, WenlanError> {
+        if seed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let seed_ids = self.filter_entity_ids_scoped(seed_ids, scope).await?;
         if seed_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -11225,17 +11449,38 @@ impl MemoryDB {
             let ph = placeholders.join(",");
 
             // Bidirectional: outgoing (from_entity IN frontier) + incoming (to_entity IN frontier)
+            let scope_parameter = frontier.len() + 1;
+            let (endpoint_scope, scope_value) = match scope {
+                ReadScope::Global => (String::new(), None),
+                ReadScope::Space(space) => (
+                    format!("AND ef.space = ?{scope_parameter} AND et.space = ?{scope_parameter}"),
+                    Some(libsql::Value::Text(space.clone())),
+                ),
+                ReadScope::Uncategorized => (
+                    "AND ef.space IS NULL AND et.space IS NULL".to_string(),
+                    None,
+                ),
+            };
             let sql = format!(
-                "SELECT to_entity FROM relations WHERE from_entity IN ({ph})
+                "SELECT r.to_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.from_entity IN ({ph}) {endpoint_scope}
                  UNION
-                 SELECT from_entity FROM relations WHERE to_entity IN ({ph})",
+                 SELECT r.from_entity FROM relations r
+                 JOIN entities ef ON ef.id = r.from_entity
+                 JOIN entities et ON et.id = r.to_entity
+                 WHERE r.to_entity IN ({ph}) {endpoint_scope}",
                 ph = ph
             );
 
-            let params: Vec<libsql::Value> = frontier
+            let mut params: Vec<libsql::Value> = frontier
                 .iter()
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
+            if let Some(value) = scope_value {
+                params.push(value);
+            }
 
             let mut rows = conn
                 .query(&sql, libsql::params_from_iter(params))
@@ -11296,9 +11541,29 @@ impl MemoryDB {
         seed_entity_ids: &[String],
         limit: usize,
     ) -> Result<Vec<SearchResult>, WenlanError> {
+        self.augment_with_graph_seeded_scoped(
+            query,
+            results,
+            seed_entity_ids,
+            limit,
+            &ReadScope::Global,
+        )
+        .await
+    }
+
+    async fn augment_with_graph_seeded_scoped(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+        seed_entity_ids: &[String],
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SearchResult>, WenlanError> {
         // Empty seeds → fall back to existing query-anchor path
         if seed_entity_ids.is_empty() {
-            return self.augment_with_graph(query, results, limit).await;
+            return self
+                .augment_with_graph_gated(query, results, limit, true, scope)
+                .await;
         }
 
         // Read tuning env vars
@@ -11319,9 +11584,13 @@ impl MemoryDB {
             .map(|(rank, id)| (id.clone(), rank))
             .collect();
         let seeds = crate::retrieval::signals::seed_entities_by_rank(&pool_pairs, top_k);
+        let seeds = self.filter_entity_ids_scoped(&seeds, scope).await?;
 
         // BFS to expand seed set
-        let expanded = match self.expand_entities_khop(&seeds, depth, frontier_cap).await {
+        let expanded = match self
+            .expand_entities_khop_scoped(&seeds, depth, frontier_cap, scope)
+            .await
+        {
             Ok(ids) => ids,
             Err(e) => {
                 log::warn!(
@@ -11333,7 +11602,10 @@ impl MemoryDB {
         };
 
         // Fetch observations for expanded entity set
-        let graph_results = match self.get_observations_for_entities(&expanded, limit).await {
+        let graph_results = match self
+            .get_observations_for_entities_scoped(&expanded, limit, scope)
+            .await
+        {
             Ok(r) if !r.is_empty() => r,
             _ => return Ok(results),
         };
@@ -12043,6 +12315,16 @@ impl MemoryDB {
         query: &str,
         k: usize,
     ) -> Result<Vec<SummaryNode>, WenlanError> {
+        self.search_summary_nodes_scoped(query, k, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn search_summary_nodes_scoped(
+        &self,
+        query: &str,
+        k: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SummaryNode>, WenlanError> {
         let embedding = self.get_or_compute_embedding(query)?;
         let vec_str = Self::vec_to_sql(&embedding);
         let fetch_limit = (k.max(1) * 3) as i64;
@@ -12053,16 +12335,42 @@ impl MemoryDB {
 
         // Root node (always included, not vector-gated).
         let mut root: Option<SummaryNode> = None;
-        if let Ok(mut rows) = conn
-            .query(
-                &format!(
-                    "SELECT {select} FROM summary_nodes s \
-                     WHERE s.level = 1 AND s.status = 'active' LIMIT 1"
-                ),
-                (),
-            )
-            .await
-        {
+        let summary_source_guard = |parameter: usize| match scope {
+            ReadScope::Global => String::new(),
+            ReadScope::Space(_) => format!(
+                "AND EXISTS (SELECT 1 FROM summary_node_sources sns WHERE sns.node_id = s.id) \
+                 AND NOT EXISTS ( \
+                     SELECT 1 FROM summary_node_sources sns \
+                     WHERE sns.node_id = s.id AND NOT EXISTS ( \
+                         SELECT 1 FROM memories m \
+                         WHERE m.source_id = sns.memory_source_id \
+                           AND m.source = 'memory' AND m.space = ?{parameter} \
+                     ) \
+                 )"
+            ),
+            ReadScope::Uncategorized => {
+                "AND EXISTS (SELECT 1 FROM summary_node_sources sns WHERE sns.node_id = s.id) \
+                 AND NOT EXISTS ( \
+                     SELECT 1 FROM summary_node_sources sns \
+                     WHERE sns.node_id = s.id AND NOT EXISTS ( \
+                         SELECT 1 FROM memories m \
+                         WHERE m.source_id = sns.memory_source_id \
+                           AND m.source = 'memory' AND m.space IS NULL \
+                     ) \
+                 )"
+                .to_string()
+            }
+        };
+        let root_guard = summary_source_guard(1);
+        let root_sql = format!(
+            "SELECT {select} FROM summary_nodes s \
+             WHERE s.level = 1 AND s.status = 'active' {root_guard} LIMIT 1"
+        );
+        let root_params = match scope {
+            ReadScope::Space(space) => vec![libsql::Value::Text(space.clone())],
+            ReadScope::Global | ReadScope::Uncategorized => Vec::new(),
+        };
+        if let Ok(mut rows) = conn.query(&root_sql, root_params).await {
             if let Ok(Some(row)) = rows.next().await {
                 root = Self::row_to_summary_node(&row).ok();
             }
@@ -12071,16 +12379,31 @@ impl MemoryDB {
         // Vector-matched bucket nodes.
         let mut ranked: std::collections::HashMap<String, (f32, SummaryNode)> =
             std::collections::HashMap::new();
-        let vec_sql = format!(
-            "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
-             FROM vector_top_k('idx_summary_nodes_embedding', vector32(?1), ?2) AS vt \
-             JOIN summary_nodes s ON s.rowid = vt.id \
-             WHERE s.level = 0 AND s.status = 'active'"
-        );
-        if let Ok(mut rows) = conn
-            .query(&vec_sql, libsql::params![vec_str.clone(), fetch_limit])
-            .await
-        {
+        let vector_guard = summary_source_guard(3);
+        let vec_sql = if matches!(scope, ReadScope::Global) {
+            format!(
+                "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
+                 FROM vector_top_k('idx_summary_nodes_embedding', vector32(?1), ?2) AS vt \
+                 JOIN summary_nodes s ON s.rowid = vt.id \
+                 WHERE s.level = 0 AND s.status = 'active'"
+            )
+        } else {
+            format!(
+                "SELECT {select}, vector_distance_cos(s.embedding, vector32(?1)) AS dist \
+                 FROM summary_nodes s \
+                 WHERE s.level = 0 AND s.status = 'active' AND s.embedding IS NOT NULL \
+                   {vector_guard} \
+                 ORDER BY dist ASC LIMIT ?2"
+            )
+        };
+        let mut vector_params = vec![
+            libsql::Value::Text(vec_str.clone()),
+            libsql::Value::Integer(fetch_limit),
+        ];
+        if let ReadScope::Space(space) = scope {
+            vector_params.push(libsql::Value::Text(space.clone()));
+        }
+        if let Ok(mut rows) = conn.query(&vec_sql, vector_params).await {
             let mut rank = 0usize;
             while let Ok(Some(row)) = rows.next().await {
                 if let Ok(node) = Self::row_to_summary_node(&row) {
@@ -12094,16 +12417,21 @@ impl MemoryDB {
         // FTS-matched bucket nodes (RRF-merged with vector).
         use crate::retrieval::fts_query::sanitize_fts_query;
         let fts_q = sanitize_fts_query(query);
+        let fts_guard = summary_source_guard(3);
         let fts_sql = format!(
             "SELECT {select} FROM summary_nodes s \
              JOIN summary_nodes_fts f ON s.rowid = f.rowid \
-             WHERE summary_nodes_fts MATCH ?1 AND s.level = 0 AND s.status = 'active' \
+             WHERE summary_nodes_fts MATCH ?1 AND s.level = 0 AND s.status = 'active' {fts_guard} \
              ORDER BY rank LIMIT ?2"
         );
-        if let Ok(mut rows) = conn
-            .query(&fts_sql, libsql::params![fts_q, fetch_limit])
-            .await
-        {
+        let mut fts_params = vec![
+            libsql::Value::Text(fts_q),
+            libsql::Value::Integer(fetch_limit),
+        ];
+        if let ReadScope::Space(space) = scope {
+            fts_params.push(libsql::Value::Text(space.clone()));
+        }
+        if let Ok(mut rows) = conn.query(&fts_sql, fts_params).await {
             let mut rank = 0usize;
             while let Ok(Some(row)) = rows.next().await {
                 if let Ok(node) = Self::row_to_summary_node(&row) {
@@ -13229,6 +13557,19 @@ impl MemoryDB {
         pinned: Option<bool>,
         limit: usize,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
+        let scope = legacy_read_scope(space);
+        self.list_memories_scoped(&scope, memory_type, confirmed, pinned, limit)
+            .await
+    }
+
+    pub async fn list_memories_scoped(
+        &self,
+        scope: &ReadScope,
+        memory_type: Option<&str>,
+        confirmed: Option<bool>,
+        pinned: Option<bool>,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
 
         let mut sql = String::from(
@@ -13268,13 +13609,13 @@ impl MemoryDB {
         );
         let mut params: Vec<libsql::Value> = Vec::new();
 
-        if let Some(d) = space {
-            if d == "uncategorized" {
-                sql.push_str(" AND space IS NULL");
-            } else {
-                params.push(d.into());
+        match scope {
+            ReadScope::Global => {}
+            ReadScope::Space(space) => {
+                params.push(space.clone().into());
                 sql.push_str(&format!(" AND space = ?{}", params.len()));
             }
+            ReadScope::Uncategorized => sql.push_str(" AND space IS NULL"),
         }
         if let Some(mt) = memory_type {
             params.push(mt.into());
@@ -13536,13 +13877,24 @@ impl MemoryDB {
         limit: usize,
         space_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
+        let scope = legacy_read_scope(space_filter);
+        self.load_memories_by_type_scoped(memory_type, limit, &scope)
+            .await
+    }
+
+    pub async fn load_memories_by_type_scoped(
+        &self,
+        memory_type: &str,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
         let supersedes_exclusion = "AND pending_revision = 0 AND source_id NOT IN (SELECT supersedes FROM memories WHERE supersedes IS NOT NULL AND pending_revision = 0 AND source = 'memory' GROUP BY supersedes)";
 
-        let space_clause = match space_filter {
-            Some("uncategorized") => "AND space IS NULL",
-            Some(_) => "AND space = ?3",
-            None => "",
+        let space_clause = match scope {
+            ReadScope::Global => "",
+            ReadScope::Space(_) => "AND space = ?3",
+            ReadScope::Uncategorized => "AND space IS NULL",
         };
 
         let sql = format!(
@@ -13584,15 +13936,15 @@ impl MemoryDB {
             supersedes_exclusion, space_clause
         );
 
-        let mut rows = match space_filter {
-            Some("uncategorized") | None => {
+        let mut rows = match scope {
+            ReadScope::Global | ReadScope::Uncategorized => {
                 conn.query(&sql, libsql::params![memory_type.to_string(), limit as i64])
                     .await
             }
-            Some(space) => {
+            ReadScope::Space(space) => {
                 conn.query(
                     &sql,
-                    libsql::params![memory_type.to_string(), limit as i64, space.to_string()],
+                    libsql::params![memory_type.to_string(), limit as i64, space.clone()],
                 )
                 .await
             }
@@ -13776,12 +14128,36 @@ impl MemoryDB {
             .await
     }
 
+    pub async fn list_filtered_scoped(
+        &self,
+        source: Option<&str>,
+        memory_type: Option<&str>,
+        scope: &ReadScope,
+        limit: usize,
+    ) -> Result<Vec<IndexedFileInfo>, WenlanError> {
+        self.list_filtered_confirmed_scoped(source, memory_type, scope, None, limit)
+            .await
+    }
+
     /// Like `list_filtered` but with an optional `confirmed` predicate.
     pub async fn list_filtered_confirmed(
         &self,
         source: Option<&str>,
         memory_type: Option<&str>,
         space: Option<&str>,
+        confirmed: Option<bool>,
+        limit: usize,
+    ) -> Result<Vec<IndexedFileInfo>, WenlanError> {
+        let scope = legacy_read_scope(space);
+        self.list_filtered_confirmed_scoped(source, memory_type, &scope, confirmed, limit)
+            .await
+    }
+
+    pub async fn list_filtered_confirmed_scoped(
+        &self,
+        source: Option<&str>,
+        memory_type: Option<&str>,
+        scope: &ReadScope,
         confirmed: Option<bool>,
         limit: usize,
     ) -> Result<Vec<IndexedFileInfo>, WenlanError> {
@@ -13801,14 +14177,14 @@ impl MemoryDB {
             params.push(mt.to_string().into());
             idx += 1;
         }
-        if let Some(d) = space {
-            if d == "uncategorized" {
-                conditions.push("space IS NULL".to_string());
-            } else {
+        match scope {
+            ReadScope::Global => {}
+            ReadScope::Space(space) => {
                 conditions.push(format!("space = ?{}", idx));
-                params.push(d.to_string().into());
+                params.push(space.clone().into());
                 idx += 1;
             }
+            ReadScope::Uncategorized => conditions.push("space IS NULL".to_string()),
         }
         if let Some(c) = confirmed {
             if c {
@@ -15959,7 +16335,15 @@ impl MemoryDB {
 
     /// List all pinned memories.
     pub async fn list_pinned_memories(&self) -> Result<Vec<MemoryItem>, WenlanError> {
-        self.list_memories(None, None, None, Some(true), 100).await
+        self.list_pinned_memories_scoped(&ReadScope::Global).await
+    }
+
+    pub async fn list_pinned_memories_scoped(
+        &self,
+        scope: &ReadScope,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
+        self.list_memories_scoped(scope, None, None, Some(true), 100)
+            .await
     }
 
     /// Hybrid search filtered to fact-type memories (formerly corrections).
@@ -15970,7 +16354,18 @@ impl MemoryDB {
         limit: usize,
         space: Option<&str>,
     ) -> Result<Vec<SearchResult>, WenlanError> {
-        self.search_memory(query, limit, Some("fact"), space, None, None, None, None)
+        let scope = legacy_read_scope(space);
+        self.search_corrections_by_topic_scoped(query, limit, &scope)
+            .await
+    }
+
+    pub async fn search_corrections_by_topic_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<SearchResult>, WenlanError> {
+        self.search_memory(query, limit, Some("fact"), scope, None, None, None, None)
             .await
     }
 
@@ -17547,11 +17942,20 @@ impl MemoryDB {
         limit: usize,
         domain_filter: Option<&str>,
     ) -> Result<Vec<MemoryItem>, WenlanError> {
+        let scope = legacy_read_scope(domain_filter);
+        self.get_nurture_cards_scoped(limit, &scope).await
+    }
+
+    pub async fn get_nurture_cards_scoped(
+        &self,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<MemoryItem>, WenlanError> {
         let conn = self.conn.lock().await;
-        let space_clause = match domain_filter {
-            Some("uncategorized") => "AND c.space IS NULL",
-            Some(_) => "AND c.space = ?2",
-            None => "",
+        let space_clause = match scope {
+            ReadScope::Global => "",
+            ReadScope::Space(_) => "AND c.space = ?2",
+            ReadScope::Uncategorized => "AND c.space IS NULL",
         };
         let sql = format!(
             "SELECT c.source_id, c.title, c.content, c.summary, c.memory_type, c.space,
@@ -17583,10 +17987,12 @@ impl MemoryDB {
             space_clause
         );
 
-        let mut rows = match domain_filter {
-            Some("uncategorized") | None => conn.query(&sql, libsql::params![limit as i64]).await,
-            Some(space) => {
-                conn.query(&sql, libsql::params![limit as i64, space.to_string()])
+        let mut rows = match scope {
+            ReadScope::Global | ReadScope::Uncategorized => {
+                conn.query(&sql, libsql::params![limit as i64]).await
+            }
+            ReadScope::Space(space) => {
+                conn.query(&sql, libsql::params![limit as i64, space.clone()])
                     .await
             }
         }
@@ -20695,6 +21101,16 @@ impl MemoryDB {
         limit: i64,
         since_ms: Option<i64>,
     ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
+        self.list_recent_memories_scoped(limit, since_ms, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn list_recent_memories_scoped(
+        &self,
+        limit: i64,
+        since_ms: Option<i64>,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
         use wenlan_types::{ActivityKind, RecentActivityItem};
 
         // --- Phase A: fetch rows (drop conn guard before second async call) ---
@@ -20710,8 +21126,14 @@ impl MemoryDB {
             Option<String>,
         )> = {
             let conn = self.conn.lock().await;
-            let mut rows = conn
-                .query(
+            let (scope_sql, scope_value) = match scope {
+                ReadScope::Global => ("", None),
+                ReadScope::Space(space) => {
+                    ("AND space = ?2", Some(libsql::Value::Text(space.clone())))
+                }
+                ReadScope::Uncategorized => ("AND space IS NULL", None),
+            };
+            let sql = format!(
                     "SELECT source_id, title, summary, content, \
                             created_at, last_modified, \
                             (SELECT CASE \
@@ -20724,10 +21146,16 @@ impl MemoryDB {
                      FROM memories \
                      WHERE source = 'memory' AND chunk_index = 0 \
                        AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
+                       {scope_sql} \
                      ORDER BY COALESCE(last_modified, created_at) DESC \
-                     LIMIT ?1",
-                    libsql::params![limit],
-                )
+                     LIMIT ?1"
+            );
+            let params = match scope_value {
+                Some(value) => vec![libsql::Value::Integer(limit), value],
+                None => vec![libsql::Value::Integer(limit)],
+            };
+            let mut rows = conn
+                .query(&sql, params)
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("list_recent_memories scan: {e}")))?;
             let mut out = Vec::new();
@@ -20830,22 +21258,41 @@ impl MemoryDB {
         &self,
         limit: i64,
     ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
+        self.list_unconfirmed_memories_scoped(limit, &ReadScope::Global)
+            .await
+    }
+
+    pub async fn list_unconfirmed_memories_scoped(
+        &self,
+        limit: i64,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
         use wenlan_types::{ActivityBadge, ActivityKind, RecentActivityItem};
 
         let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT source_id, title, summary, content, \
+        let (scope_sql, scope_value) = match scope {
+            ReadScope::Global => ("", None),
+            ReadScope::Space(space) => ("AND space = ?2", Some(libsql::Value::Text(space.clone()))),
+            ReadScope::Uncategorized => ("AND space IS NULL", None),
+        };
+        let sql = format!(
+            "SELECT source_id, title, summary, content, \
                         created_at, last_modified \
                  FROM memories \
                  WHERE source = 'memory' AND chunk_index = 0 \
                    AND (supersede_mode IS NULL OR supersede_mode NOT IN ('archive', 'evicted')) \
                    AND (confirmed = 0 OR confirmed IS NULL) \
                    AND (is_recap IS NULL OR is_recap != 1) \
+                   {scope_sql} \
                  ORDER BY COALESCE(last_modified, created_at) DESC \
-                 LIMIT ?1",
-                libsql::params![limit],
-            )
+                 LIMIT ?1"
+        );
+        let params = match scope_value {
+            Some(value) => vec![libsql::Value::Integer(limit), value],
+            None => vec![libsql::Value::Integer(limit)],
+        };
+        let mut rows = conn
+            .query(&sql, params)
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_unconfirmed_memories scan: {e}")))?;
 
@@ -27714,7 +28161,10 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let results = db.search("Rust programming", 10, None, None).await.unwrap();
+        let results = db
+            .search("Rust programming", 10, None, &ReadScope::Global)
+            .await
+            .unwrap();
         // Should find at least the Rust document (via FTS even if vector index is absent)
         assert!(!results.is_empty(), "search should return results");
     }
@@ -27740,7 +28190,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let results = db
-            .search("pets animals", 10, Some("local_files"), None)
+            .search("pets animals", 10, Some("local_files"), &ReadScope::Global)
             .await
             .unwrap();
         for r in &results {
@@ -27760,7 +28210,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         // Empty or very short query — should not panic
-        let results = db.search("", 10, None, None).await;
+        let results = db.search("", 10, None, &ReadScope::Global).await;
         // May return results or error, but should not panic
         assert!(results.is_ok() || results.is_err());
     }
@@ -27783,7 +28233,7 @@ pub(crate) mod tests {
         db.upsert_documents(docs).await.unwrap();
 
         let results = db
-            .search("programming language", 3, None, None)
+            .search("programming language", 3, None, &ReadScope::Global)
             .await
             .unwrap();
         assert!(results.len() <= 3, "should respect limit");
@@ -27815,7 +28265,16 @@ pub(crate) mod tests {
 
         // Hybrid search (vector + FTS) should find results via at least FTS
         let results = db
-            .search_memory("color blue", 10, None, None, None, None, None, None)
+            .search_memory(
+                "color blue",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -27856,7 +28315,7 @@ pub(crate) mod tests {
                 "deadline Friday",
                 10,
                 Some("fact"),
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -27878,7 +28337,7 @@ pub(crate) mod tests {
                 "color blue",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 Some("claude-code"),
                 None,
                 None,
@@ -27950,7 +28409,7 @@ pub(crate) mod tests {
                     "astronomy telescope galaxies",
                     lim,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -27969,7 +28428,7 @@ pub(crate) mod tests {
                 "photosynthesis chloroplast biology cellular respiration enzyme",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28029,11 +28488,27 @@ pub(crate) mod tests {
         let (prf, plain) =
             temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", None::<&str>)], async {
                 let prf = db
-                    .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                    .search_memory_prf(
+                        "color blue",
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        Some(llm.clone()),
+                    )
                     .await
                     .unwrap();
                 let plain = db
-                    .search_memory("color blue", 10, None, None, None, None, None, None)
+                    .search_memory(
+                        "color blue",
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                     .await
                     .unwrap();
                 (prf, plain)
@@ -28073,11 +28548,20 @@ pub(crate) mod tests {
 
         let (prf, plain) = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("2"))], async {
             let prf = db
-                .search_memory_prf("color blue", 10, None, None, None, None)
+                .search_memory_prf("color blue", 10, None, &ReadScope::Global, None, None)
                 .await
                 .unwrap();
             let plain = db
-                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .search_memory(
+                    "color blue",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
             (prf, plain)
@@ -28120,11 +28604,27 @@ pub(crate) mod tests {
 
         let (prf, plain) = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("2"))], async {
             let prf = db
-                .search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
+                .search_memory_prf(
+                    "color blue",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    Some(llm.clone()),
+                )
                 .await
                 .unwrap();
             let plain = db
-                .search_memory("color blue", 10, None, None, None, None, None, None)
+                .search_memory(
+                    "color blue",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
             (prf, plain)
@@ -28182,7 +28682,7 @@ pub(crate) mod tests {
                 "quantum entanglement physics",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(llm.clone()),
             )
@@ -28238,15 +28738,29 @@ pub(crate) mod tests {
         );
 
         let three = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("3"))], async {
-            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
-                .await
-                .unwrap()
+            db.search_memory_prf(
+                "color blue",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(llm.clone()),
+            )
+            .await
+            .unwrap()
         })
         .await;
         let one = temp_env::async_with_vars([("WENLAN_PRF_ROUNDS", Some("1"))], async {
-            db.search_memory_prf("color blue", 10, None, None, None, Some(llm.clone()))
-                .await
-                .unwrap()
+            db.search_memory_prf(
+                "color blue",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(llm.clone()),
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -28330,7 +28844,7 @@ pub(crate) mod tests {
                     "astronomy telescope galaxies",
                     4,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     Some(llm.clone()),
                 )
@@ -28341,7 +28855,7 @@ pub(crate) mod tests {
                     "astronomy telescope galaxies",
                     4,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -28396,7 +28910,16 @@ pub(crate) mod tests {
 
         // Both decisions should still appear in search (archive-visible mode for decisions)
         let results = db
-            .search_memory("database system", 10, None, None, None, None, None, None)
+            .search_memory(
+                "database system",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let source_ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -28447,7 +28970,7 @@ pub(crate) mod tests {
                 "favorite color dashboards",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28589,7 +29112,7 @@ pub(crate) mod tests {
                 "Kubernetes container orchestration",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28751,7 +29274,7 @@ pub(crate) mod tests {
                 "Postgres MVCC concurrency control transactional",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -28854,7 +29377,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -28919,7 +29442,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -28946,7 +29469,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -29006,7 +29529,7 @@ pub(crate) mod tests {
                     "Kubernetes container orchestration",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                     None,
@@ -29021,7 +29544,7 @@ pub(crate) mod tests {
                 "Kubernetes container orchestration",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -29163,7 +29686,7 @@ pub(crate) mod tests {
                 "color blue",
                 10,
                 Some("correction"),
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -31838,7 +32361,7 @@ pub(crate) mod tests {
                 "mode preference coding",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -32369,7 +32892,12 @@ pub(crate) mod tests {
 
         // Search should find original but not the pending revision
         let results = db
-            .search("kubernetes container orchestration", 10, None, None)
+            .search(
+                "kubernetes container orchestration",
+                10,
+                None,
+                &ReadScope::Global,
+            )
             .await
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -32938,7 +33466,10 @@ pub(crate) mod tests {
         )
         .await;
 
-        let results = db.search("pickle", 10, None, None).await.unwrap();
+        let results = db
+            .search("pickle", 10, None, &ReadScope::Global)
+            .await
+            .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
 
         assert!(
@@ -33254,7 +33785,14 @@ pub(crate) mod tests {
 
         let reranker: Arc<dyn crate::reranker::Reranker> = Arc::new(crate::reranker::NoopReranker);
         let results = db
-            .search_memory_cross_rerank("Rust programming", 10, None, None, None, Some(reranker))
+            .search_memory_cross_rerank(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(reranker),
+            )
             .await
             .unwrap();
         assert!(
@@ -33316,7 +33854,7 @@ pub(crate) mod tests {
                     "Rust programming language features",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     Some(reranker),
                 )
@@ -33355,7 +33893,14 @@ pub(crate) mod tests {
         .unwrap();
 
         let results = db
-            .search_memory_cross_rerank("Rust programming", 10, None, None, None, None)
+            .search_memory_cross_rerank(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -34135,7 +34680,7 @@ pub(crate) mod tests {
                 "Tauri IPC debugging",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -34786,7 +35331,7 @@ pub(crate) mod tests {
 
         // Pre-condition: both rows are searchable before eviction.
         let pre = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let pre_ids: Vec<&str> = pre.iter().map(|r| r.source_id.as_str()).collect();
@@ -34819,7 +35364,7 @@ pub(crate) mod tests {
 
         // Real search now EXCLUDES the evicted row while the control survives.
         let post = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let post_ids: Vec<&str> = post.iter().map(|r| r.source_id.as_str()).collect();
@@ -34847,7 +35392,7 @@ pub(crate) mod tests {
             .unwrap();
         }
         let recovered = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let rec_ids: Vec<&str> = recovered.iter().map(|r| r.source_id.as_str()).collect();
@@ -35029,7 +35574,7 @@ pub(crate) mod tests {
                 "Rust systems safety",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -36362,15 +36907,31 @@ pub(crate) mod tests {
         cue: Option<crate::temporal_query::DateRange>,
     ) -> (Vec<SearchResult>, Vec<SearchResult>) {
         let off = temp_env::async_with_vars([(flag, off_val)], async {
-            db.search_memory_cross_rerank_cued(query, limit, None, None, None, cue, None)
-                .await
-                .expect("g4_probe OFF arm")
+            db.search_memory_cross_rerank_cued(
+                query,
+                limit,
+                None,
+                &ReadScope::Global,
+                None,
+                cue,
+                None,
+            )
+            .await
+            .expect("g4_probe OFF arm")
         })
         .await;
         let on = temp_env::async_with_vars([(flag, Some("1"))], async {
-            db.search_memory_cross_rerank_cued(query, limit, None, None, None, cue, None)
-                .await
-                .expect("g4_probe ON arm")
+            db.search_memory_cross_rerank_cued(
+                query,
+                limit,
+                None,
+                &ReadScope::Global,
+                None,
+                cue,
+                None,
+            )
+            .await
+            .expect("g4_probe ON arm")
         })
         .await;
         (off, on)
@@ -36527,9 +37088,17 @@ pub(crate) mod tests {
         // Legacy path = stream explicitly OFF ("0"; unset is now default ON). Run
         // the shipped public path directly.
         let out = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
-            db.search_memory_cross_rerank_cued("photosynthesis", 5, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank_cued(
+                "photosynthesis",
+                5,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -36583,15 +37152,33 @@ pub(crate) mod tests {
 
         // Quick path, OFF = "0" (opt-out the default-ON stream) vs ON = "1".
         let off = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("0"))], async {
-            db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
-                .await
-                .expect("g4 graph-stream OFF arm")
+            db.search_memory(
+                "photosynthesis",
+                5,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("g4 graph-stream OFF arm")
         })
         .await;
         let on = temp_env::async_with_vars([("WENLAN_GRAPH_MEMORY_STREAM", Some("1"))], async {
-            db.search_memory("photosynthesis", 5, None, None, None, None, None, None)
-                .await
-                .expect("g4 graph-stream ON arm")
+            db.search_memory(
+                "photosynthesis",
+                5,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("g4 graph-stream ON arm")
         })
         .await;
 
@@ -36714,11 +37301,11 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             async {
                 let quick = db
-                    .search_memory(QUERY, 10, None, None, None, None, None, None)
+                    .search_memory(QUERY, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap();
                 let ce_pool = db
-                    .search_memory_cross_rerank(QUERY, 10, None, None, None, None)
+                    .search_memory_cross_rerank(QUERY, 10, None, &ReadScope::Global, None, None)
                     .await
                     .unwrap();
                 (quick, ce_pool)
@@ -36735,12 +37322,19 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             async {
                 let quick = db
-                    .search_memory(QUERY, 10, None, None, None, None, None, None)
+                    .search_memory(QUERY, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap();
                 let reranker: Arc<dyn Reranker> = Arc::new(OrderPreservingReranker);
                 let ce_pool = db
-                    .search_memory_cross_rerank(QUERY, 10, None, None, None, Some(reranker))
+                    .search_memory_cross_rerank(
+                        QUERY,
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        Some(reranker),
+                    )
                     .await
                     .unwrap();
                 (quick, ce_pool)
@@ -36800,7 +37394,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("2"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -36835,7 +37429,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("1"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -36865,7 +37459,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("3"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -36903,7 +37497,7 @@ pub(crate) mod tests {
                 ("WENLAN_GRAPH_KHOP_MAX_NODES", Some("10")),
             ],
             async {
-                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub), &ReadScope::Global)
                     .await
                     .unwrap()
             },
@@ -36943,7 +37537,7 @@ pub(crate) mod tests {
                 ("WENLAN_GRAPH_KHOP_MAX_NODES", Some("10")),
             ],
             async {
-                db.expand_anchor_entities_khop(std::slice::from_ref(&hub))
+                db.expand_anchor_entities_khop(std::slice::from_ref(&hub), &ReadScope::Global)
                     .await
                     .unwrap()
             },
@@ -36964,7 +37558,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_khop_expand_empty_anchor_is_empty() {
         let (db, _dir) = test_db().await;
-        let expanded = db.expand_anchor_entities_khop(&[]).await.unwrap();
+        let expanded = db
+            .expand_anchor_entities_khop(&[], &ReadScope::Global)
+            .await
+            .unwrap();
         assert!(expanded.is_empty());
     }
 
@@ -37057,7 +37654,7 @@ pub(crate) mod tests {
         // Anchor on the 2-hop entity directly so the traversal target is deterministic,
         // independent of how vector-anchor ranking orders a tiny test corpus.
         let expanded = temp_env::async_with_vars([("WENLAN_GRAPH_KHOP_DEPTH", Some("2"))], async {
-            db.expand_anchor_entities_khop(std::slice::from_ref(&a))
+            db.expand_anchor_entities_khop(std::slice::from_ref(&a), &ReadScope::Global)
                 .await
                 .unwrap()
         })
@@ -37392,7 +37989,16 @@ pub(crate) mod tests {
         // With flag OFF, output must be identical to pre-T9 path
         std::env::remove_var("WENLAN_ENABLE_GRAPH_SEED");
         let results = db
-            .search_memory("Rust programming", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -37437,7 +38043,16 @@ pub(crate) mod tests {
 
         // Search — KG observations boost scores via RRF but are stripped from output
         let results = db
-            .search_memory("Rust programming", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -37464,7 +38079,16 @@ pub(crate) mod tests {
         db.upsert_documents(vec![doc]).await.unwrap();
 
         let results = db
-            .search_memory("Python scripting", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Python scripting",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -37745,7 +38369,16 @@ pub(crate) mod tests {
         drop(conn);
 
         let results = db
-            .search_memory("Redis caching", 10, None, None, None, None, None, None)
+            .search_memory(
+                "Redis caching",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
@@ -42844,7 +43477,7 @@ pub(crate) mod tests {
 
         // Confirm pending_revision=0 in search results by default.
         let results = db
-            .search("pending revision test memory", 5, None, None)
+            .search("pending revision test memory", 5, None, &ReadScope::Global)
             .await
             .unwrap();
         let found = results.iter().find(|r| r.source_id == "pr_test_normal");
@@ -42899,7 +43532,7 @@ pub(crate) mod tests {
 
         // Search for the merged memory.
         let results = db
-            .search("merged A+B combined content", 10, None, None)
+            .search("merged A+B combined content", 10, None, &ReadScope::Global)
             .await
             .unwrap();
         let merged = results.iter().find(|r| r.source_id == merged_id);
@@ -45606,9 +46239,16 @@ pub(crate) mod tests {
         .unwrap();
 
         let hits = temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some("1"))], async {
-            db.search_memory_cross_rerank("pages topic retrieval", 10, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank(
+                "pages topic retrieval",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
         assert!(
@@ -45639,9 +46279,16 @@ pub(crate) mod tests {
 
         let hits =
             temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", None::<&str>)], async {
-                db.search_memory_cross_rerank("pages disabled", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "pages disabled",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -45672,7 +46319,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let hits = temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some("0"))], async {
-            db.search_memory_cross_rerank("truthy zero", 10, None, None, None, None)
+            db.search_memory_cross_rerank("truthy zero", 10, None, &ReadScope::Global, None, None)
                 .await
                 .unwrap()
         })
@@ -45708,9 +46355,16 @@ pub(crate) mod tests {
         for value in ["true", "YES", "True"] {
             let hits =
                 temp_env::async_with_vars([("WENLAN_ENABLE_PAGE_CHANNEL", Some(value))], async {
-                    db.search_memory_cross_rerank("truthy syn", 10, None, None, None, None)
-                        .await
-                        .unwrap()
+                    db.search_memory_cross_rerank(
+                        "truthy syn",
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap()
                 })
                 .await;
             assert!(
@@ -45934,9 +46588,16 @@ pub(crate) mod tests {
 
         let baseline =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", None::<&str>)], async {
-                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         // No summary rows in the default-OFF output.
@@ -45952,9 +46613,16 @@ pub(crate) mod tests {
         // Run again with flag explicitly "0" — must be byte-identical (id+score).
         let zero =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("0"))], async {
-                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         // Byte-identity = same id ORDER (the load-bearing invariant). Scores
@@ -46017,9 +46685,16 @@ pub(crate) mod tests {
 
         let hits =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
-                db.search_memory_cross_rerank("rust programming", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(!hits.is_empty(), "expected hits");
@@ -46096,9 +46771,16 @@ pub(crate) mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let reranker: Arc<dyn Reranker> = Arc::new(RecordingReranker { seen: seen.clone() });
         let _ = temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
-            db.search_memory_cross_rerank("rust programming", 10, None, None, None, Some(reranker))
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank(
+                "rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(reranker),
+            )
+            .await
+            .unwrap()
         })
         .await;
         let candidate_ids = seen.lock().unwrap();
@@ -46168,14 +46850,23 @@ pub(crate) mod tests {
                         pref_query,
                         10,
                         None,
-                        None,
+                        &ReadScope::Global,
                         None,
                         Some(reranker.clone()),
                     )
                     .await
                     .unwrap();
                 let base = db
-                    .search_memory(pref_query, 10, None, None, None, None, None, None)
+                    .search_memory(
+                        pref_query,
+                        10,
+                        None,
+                        &ReadScope::Global,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                     .await
                     .unwrap();
                 (bypassed, base)
@@ -46200,7 +46891,7 @@ pub(crate) mod tests {
                 "rust programming",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(reranker.clone()),
             ),
@@ -46216,7 +46907,14 @@ pub(crate) mod tests {
         let before = *calls.lock().unwrap();
         let _ = temp_env::async_with_vars(
             [("WENLAN_RERANK_SKIP_PREFERENCE", None::<&str>)],
-            db.search_memory_cross_rerank(pref_query, 10, None, None, None, Some(reranker.clone())),
+            db.search_memory_cross_rerank(
+                pref_query,
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                Some(reranker.clone()),
+            ),
         )
         .await
         .unwrap();
@@ -46263,7 +46961,7 @@ pub(crate) mod tests {
         for value in ["1", "true", "YES", "True"] {
             let hits =
                 temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
-                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                    db.search_memory_cross_rerank("rust", 10, None, &ReadScope::Global, None, None)
                         .await
                         .unwrap()
                 })
@@ -46276,7 +46974,7 @@ pub(crate) mod tests {
         for value in ["0", "false", ""] {
             let hits =
                 temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some(value))], async {
-                    db.search_memory_cross_rerank("rust", 10, None, None, None, None)
+                    db.search_memory_cross_rerank("rust", 10, None, &ReadScope::Global, None, None)
                         .await
                         .unwrap()
                 })
@@ -46337,9 +47035,16 @@ pub(crate) mod tests {
         // Query with space="work" filter active: personal-sourced summary must be dropped.
         let hits =
             temp_env::async_with_vars([("WENLAN_ENABLE_GLOBAL_PRELUDE", Some("1"))], async {
-                db.search_memory_cross_rerank("rust", 10, None, Some("work"), None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "rust",
+                    10,
+                    None,
+                    &ReadScope::Space("work".to_string()),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -46370,9 +47075,18 @@ pub(crate) mod tests {
         // Unset flag → legacy path
         let results =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)], async {
-                db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -46388,9 +47102,18 @@ pub(crate) mod tests {
         // Flag ON must also surface the same hit (no regression)
         let results_on =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory(
+                    "rust programming",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
         assert!(
@@ -46423,7 +47146,7 @@ pub(crate) mod tests {
         // Flag OFF: FTS branch errors, returns Ok but FTS may contribute 0 rows
         let _results_off =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", None::<&str>)], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap() // must not panic/error regardless
             })
@@ -46432,7 +47155,7 @@ pub(crate) mod tests {
         // Flag ON: sanitize_fts_query neutralizes parens, FTS channel fires
         let results_on =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             })
@@ -46475,8 +47198,17 @@ pub(crate) mod tests {
 
         let result =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory(&long_query, 10, None, None, None, None, None, None)
-                    .await
+                db.search_memory(
+                    &long_query,
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
             })
             .await;
         assert!(
@@ -46529,7 +47261,7 @@ pub(crate) mod tests {
 
         let results =
             temp_env::async_with_vars([("WENLAN_ENABLE_FTS_HARDENING", Some("1"))], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             })
@@ -46586,17 +47318,35 @@ pub(crate) mod tests {
 
         // Unset flag (default path).
         let unset = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", None::<&str>)], async {
-            db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory(
+                "rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
         // Explicit "0" (falsy → same default path).
         let zero = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("0"))], async {
-            db.search_memory("rust programming", 10, None, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory(
+                "rust programming",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -46681,13 +47431,13 @@ pub(crate) mod tests {
 
         let query = "obsidian";
         let off = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", None::<&str>)], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
         .await;
         let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -46766,7 +47516,7 @@ pub(crate) mod tests {
 
         let query = "quartzite sandstone metaquartzite orthoquartzite";
         let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -46822,7 +47572,7 @@ pub(crate) mod tests {
                 "qwertyuiop zxcvbnm asdfghjkl",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -46943,9 +47693,18 @@ pub(crate) mod tests {
             .unwrap();
 
         let on = temp_env::async_with_vars([("WENLAN_MAGNITUDE_FUSION", Some("1"))], async {
-            db.search_memory("feldspar mineral", 10, None, None, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory(
+                "feldspar mineral",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
 
@@ -47078,7 +47837,7 @@ pub(crate) mod tests {
                     "what database decision did I make yesterday",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47126,9 +47885,16 @@ pub(crate) mod tests {
 
         let temporal_results =
             temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
-                db.search_memory_temporal("what database did I pick", 10, None, None, None, now)
-                    .await
-                    .unwrap()
+                db.search_memory_temporal(
+                    "what database did I pick",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    now,
+                )
+                .await
+                .unwrap()
             })
             .await;
 
@@ -47137,7 +47903,7 @@ pub(crate) mod tests {
                 "what database did I pick",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -47192,7 +47958,7 @@ pub(crate) mod tests {
                     "what happened last week in sprint planning",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47224,7 +47990,7 @@ pub(crate) mod tests {
                     "what database architecture did I decide yesterday",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47245,7 +48011,7 @@ pub(crate) mod tests {
                     "what database architecture did I decide yesterday",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     now,
                 )
@@ -47268,8 +48034,15 @@ pub(crate) mod tests {
 
         let results =
             temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_FILTER", Some("1"))], async {
-                db.search_memory_temporal("what happened yesterday", 10, None, None, None, now)
-                    .await
+                db.search_memory_temporal(
+                    "what happened yesterday",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    now,
+                )
+                .await
             })
             .await;
         assert!(results.is_ok(), "empty DB must return Ok; got {results:?}");
@@ -47324,7 +48097,7 @@ pub(crate) mod tests {
 
         // Plain baseline (no temporal flags): gold is present; capture its score.
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
@@ -47344,7 +48117,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47424,7 +48197,7 @@ pub(crate) mod tests {
         let query = "what database retrieval plan did I pick yesterday";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_score = plain
@@ -47443,7 +48216,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47491,7 +48264,7 @@ pub(crate) mod tests {
         let query = "what database retrieval config did I note yesterday";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_score = plain
@@ -47502,7 +48275,7 @@ pub(crate) mod tests {
 
         let boosted =
             temp_env::async_with_vars([("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1"))], async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             })
@@ -47545,7 +48318,7 @@ pub(crate) mod tests {
         let query = "what database retrieval work did I do yesterday";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
@@ -47556,7 +48329,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", None::<&str>),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47598,7 +48371,7 @@ pub(crate) mod tests {
         let query = "what database did I pick";
 
         let plain = db
-            .search_memory(query, 10, None, None, None, None, None, None)
+            .search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
             .await
             .unwrap();
         let plain_ids: Vec<&str> = plain.iter().map(|r| r.source_id.as_str()).collect();
@@ -47609,7 +48382,7 @@ pub(crate) mod tests {
                 ("WENLAN_ENABLE_TEMPORAL_SOFT_BOOST", Some("1")),
             ],
             async {
-                db.search_memory_temporal(query, 10, None, None, None, now)
+                db.search_memory_temporal(query, 10, None, &ReadScope::Global, None, now)
                     .await
                     .unwrap()
             },
@@ -47688,14 +48461,14 @@ pub(crate) mod tests {
 
         let unset =
             temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", None::<&str>)], async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             })
             .await;
 
         let zero = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -47757,7 +48530,7 @@ pub(crate) mod tests {
         let query = "password key"; // short factual query -> Factual intent -> fts boosted
 
         let off = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -47769,7 +48542,7 @@ pub(crate) mod tests {
                 ("WENLAN_QUERY_INTENT_FTS_BOOST", Some("3.0")), // large boost to make effect detectable
             ],
             async {
-                db.search_memory(query, 10, None, None, None, None, None, None)
+                db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                     .await
                     .unwrap()
             },
@@ -47849,14 +48622,14 @@ pub(crate) mod tests {
             "summarize my thoughts on the database design tradeoffs and overall system complexity";
 
         let off = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("0"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
         .await;
 
         let on = temp_env::async_with_vars([("WENLAN_ENABLE_QUERY_INTENT", Some("1"))], async {
-            db.search_memory(query, 10, None, None, None, None, None, None)
+            db.search_memory(query, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
                 .unwrap()
         })
@@ -47958,17 +48731,31 @@ pub(crate) mod tests {
 
         let unset =
             temp_env::async_with_vars([("WENLAN_ENABLE_SESSION_DIVERSITY", None::<&str>)], async {
-                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "diversity flag identity",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
 
         let off =
             temp_env::async_with_vars([("WENLAN_ENABLE_SESSION_DIVERSITY", Some("0"))], async {
-                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "diversity flag identity",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             })
             .await;
 
@@ -47987,9 +48774,16 @@ pub(crate) mod tests {
                 ("WENLAN_SESSION_DIVERSITY_MAX", Some("2")),
             ],
             async {
-                db.search_memory_cross_rerank("diversity flag identity", 10, None, None, None, None)
-                    .await
-                    .unwrap()
+                db.search_memory_cross_rerank(
+                    "diversity flag identity",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
             },
         )
         .await;
@@ -48026,7 +48820,7 @@ pub(crate) mod tests {
                     "mem session diversity safety test",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48046,7 +48840,7 @@ pub(crate) mod tests {
                     "mem session diversity safety test",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48519,9 +49313,16 @@ pub(crate) mod tests {
         })
         .await;
         let hits = temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
-            db.search_memory_cross_rerank("when is the renewal date", 10, None, None, None, None)
-                .await
-                .unwrap()
+            db.search_memory_cross_rerank(
+                "when is the renewal date",
+                10,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
         })
         .await;
         // The rehydrated parent surfaces as source="memory" (metric-honest).
@@ -48559,7 +49360,7 @@ pub(crate) mod tests {
                     "November 3 renewal date specific",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48573,7 +49374,7 @@ pub(crate) mod tests {
                     "November 3 renewal date specific",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -48615,7 +49416,7 @@ pub(crate) mod tests {
                 "milestone launch day",
                 10,
                 None,
-                Some("work"),
+                &ReadScope::Space("work".to_string()),
                 None,
                 None,
             )
@@ -48691,22 +49492,36 @@ pub(crate) mod tests {
         .await;
         let unset: Vec<String> =
             temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>)], async {
-                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
-                    .await
-                    .unwrap()
-                    .into_iter()
-                    .map(|r| r.id)
-                    .collect()
+                db.search_memory_cross_rerank(
+                    "rust python journal",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
             })
             .await;
         let off: Vec<String> =
             temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("0"))], async {
-                db.search_memory_cross_rerank("rust python journal", 10, None, None, None, None)
-                    .await
-                    .unwrap()
-                    .into_iter()
-                    .map(|r| r.id)
-                    .collect()
+                db.search_memory_cross_rerank(
+                    "rust python journal",
+                    10,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
             })
             .await;
         assert_eq!(
@@ -49255,7 +50070,7 @@ pub(crate) mod tests {
                 "kubernetes orchestration",
                 10,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -49349,7 +50164,7 @@ pub(crate) mod tests {
                     "verbatim episode storage tier",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -49385,7 +50200,7 @@ pub(crate) mod tests {
                     "verbatim episode storage tier",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -49438,7 +50253,7 @@ pub(crate) mod tests {
                     "compose ranking retrieval fusion",
                     10,
                     None,
-                    None,
+                    &ReadScope::Global,
                     None,
                     None,
                 )
@@ -49478,7 +50293,7 @@ pub(crate) mod tests {
                     "diary passphrase rotated quarter",
                     10,
                     None,
-                    Some("work"),
+                    &ReadScope::Space("work".to_string()),
                     None,
                     None,
                 )
@@ -49741,7 +50556,7 @@ pub(crate) mod tests {
                 "who is Alice",
                 5,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -49758,7 +50573,7 @@ pub(crate) mod tests {
                 "who is Alice",
                 5,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -49821,7 +50636,14 @@ pub(crate) mod tests {
             let llm: std::sync::Arc<dyn crate::llm_provider::LlmProvider> =
                 std::sync::Arc::new(ArrayLlm);
             let r = db
-                .search_memory_expanded("what is libsql", 5, None, None, None, Some(llm))
+                .search_memory_expanded(
+                    "what is libsql",
+                    5,
+                    None,
+                    &ReadScope::Global,
+                    None,
+                    Some(llm),
+                )
                 .await
                 .unwrap();
             assert!(!r.is_empty());

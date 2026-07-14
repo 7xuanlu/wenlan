@@ -88,7 +88,7 @@
 - Produces: `wenlan_server::read_scope::effective_read_scope(&MemoryDB, Option<&str>, Option<&str>) -> Result<ReadScope, ServerError>`.
 - Produces: `ScopeBinding`, `SelectorPrecedence`, `SelectionGate`, and `UnknownScopePolicy` catalog vocabulary used by every later task.
 
-- [ ] **Step 0: Capture the read-only live baseline before product edits**
+- [x] **Step 0: Capture the read-only live baseline before product edits**
 
 Resolve the configured DB and Page projection paths without constructing
 `MemoryDB`; `MemoryDB::new` runs migrations/bootstrap and is forbidden for this
@@ -108,7 +108,7 @@ coordination bytes are not durable data. If the store cannot be opened
 read-only, record the blocker before proceeding rather than silently treating
 the population as empty.
 
-- [ ] **Step 1: Add focused RED resolver and precedence tests**
+- [x] **Step 1: Add focused RED resolver and precedence tests**
 
 Add core tests for absent, whitespace, registered exact name, unknown name,
 NULL selector, and the registered-`uncategorized` collision. Add server tests
@@ -147,7 +147,7 @@ cargo test -p wenlan-server --lib sensitive_read_routes::handler_contract_tests 
 Expected RED: `read_scope` modules and fail-closed resolver do not exist; the
 existing helper falls back to Global for an unknown selector.
 
-- [ ] **Step 2: Implement the core and server resolver**
+- [x] **Step 2: Implement the core and server resolver**
 
 Use these exact public shapes:
 
@@ -197,7 +197,7 @@ read handler moves to `effective_read_scope`. Leave `registered_request_space`
 for mutating routes unchanged. Read handlers migrate to
 `effective_read_scope` only in the wave that fixes their core query.
 
-- [ ] **Step 3: Make the route catalog distinguish contract state**
+- [x] **Step 3: Make the route catalog distinguish contract state**
 
 Replace ambiguous catalog enums with:
 
@@ -232,7 +232,7 @@ and exact 15 Global keys in both core and server catalog tests. The violation
 predicate remains derived from row metadata and treats every `*Missing`,
 `SelectorPrecedence::Missing`, or non-`Rejected` scoped row as violating.
 
-- [ ] **Step 4: Verify the foundation and commit**
+- [x] **Step 4: Verify the foundation and commit**
 
 ```bash
 cargo test -p wenlan-core --test read_scope -- --nocapture
@@ -300,7 +300,7 @@ is marked repaired yet.
 - Establishes the minimal Page/Entity scoped query modules now; Tasks 6 and 7
   extend these modules instead of moving Wave 1 logic out of `db.rs` later.
 
-- [ ] **Step 1: Add Wave 1 RED HTTP cases and channel canaries**
+- [x] **Step 1: Add Wave 1 RED HTTP cases and channel canaries**
 
 Create one hermetic fixture with registered `work` and `personal` Spaces plus
 NULL rows and unregistered literal `space='uncategorized'` rows. Global includes
@@ -384,7 +384,7 @@ cargo test -p wenlan-server --test space_scoping_e2e wave_1 -- --nocapture
 Expected RED: header-only GET routes ignore the selector; unknown selectors
 fall back; Page/graph supplemental candidates can cross Space or vanish.
 
-- [ ] **Step 2: Add typed scoped retrieval entry points**
+- [x] **Step 2: Add typed scoped retrieval entry points**
 
 Replace the existing `space: Option<&str>` argument, in place, with
 `scope: &ReadScope` at every canonical retrieval boundary:
@@ -445,7 +445,7 @@ summary nodes require a non-empty source set whose every owner exists and
 matches. Keep the general unscoped Entity-vector helper only for non-route
 write/entity-resolution paths; add a scoped retrieval wrapper.
 
-- [ ] **Step 3: Migrate the 8 handlers and preserve Global wrappers**
+- [x] **Step 3: Migrate the 8 handlers and preserve Global wrappers**
 
 For body routes call:
 
@@ -462,7 +462,7 @@ header only. Keep the state `RwLock` guard dropped before resolver/query awaits.
 Replace `.unwrap_or_default()` only where it could hide a required scope-gating
 failure; keep optional-channel degrade semantics.
 
-- [ ] **Step 4: Update Wave 1 catalog rows and old assertions**
+- [x] **Step 4: Update Wave 1 catalog rows and old assertions**
 
 Set the 8 rows to their real selector precedence,
 `UnknownScopePolicy::Rejected`, and completed selection gates. Assert exact
@@ -470,7 +470,7 @@ pending-key set and count `32`. Replace unknown-falls-back expectations in
 `space_header_fallback.rs` and context tests with `422`; retain positive Global
 and registered/Uncategorized assertions.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 cargo test -p wenlan-core --lib search_memory -- --nocapture
