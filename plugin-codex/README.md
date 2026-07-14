@@ -9,7 +9,7 @@ tools.
 ```bash
 npx -y wenlan setup
 codex plugin marketplace add .
-codex plugin add wenlan@wenlan-local
+codex plugin add wenlan@7xuanlu-wenlan
 ```
 
 Start a new Codex thread after installing so the skills and MCP server load.
@@ -22,7 +22,7 @@ After editing `plugin-codex`, reinstall it into Codex's plugin cache:
 
 ```bash
 python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py plugin-codex
-codex plugin add wenlan@wenlan-local
+codex plugin add wenlan@7xuanlu-wenlan
 ```
 
 The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back

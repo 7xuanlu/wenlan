@@ -1,7 +1,7 @@
 {
-  "name": "wenlan-local",
+  "name": "7xuanlu-wenlan",
   "interface": {
-    "displayName": "Wenlan Local"
+    "displayName": "Wenlan"
   },
   "plugins": [
     {
