@@ -7,13 +7,13 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, path::Path, str::FromStr};
 use wenlan_types::{
     requests::{
         AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
         UpdatePageRequest,
     },
-    RawDocument,
+    MemoryType, RawDocument,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -27,6 +27,36 @@ pub struct WriteResult {
     pub revision_card_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub gated: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryUpdate<'a> {
+    pub content: Option<&'a str>,
+    pub space: Option<Option<&'a str>>,
+    pub confirm: bool,
+    pub memory_type: Option<&'a str>,
+}
+
+pub async fn update_memory(
+    db: &MemoryDB,
+    source_id: &str,
+    update: MemoryUpdate<'_>,
+) -> Result<(), WenlanError> {
+    let parsed_memory_type = update
+        .memory_type
+        .map(MemoryType::from_str)
+        .transpose()
+        .map_err(WenlanError::Validation)?;
+    let normalized_memory_type = parsed_memory_type.map(|memory_type| memory_type.to_string());
+
+    db.apply_memory_update(
+        source_id,
+        update.content,
+        update.space,
+        update.confirm,
+        normalized_memory_type.as_deref(),
+    )
+    .await
 }
 
 fn is_false(value: &bool) -> bool {
@@ -60,6 +90,14 @@ pub enum PageWrite<'a> {
         require_stale: bool,
         knowledge_path: Option<&'a Path>,
         citations: Option<(String, String)>,
+    },
+    ReplaceSource {
+        page_id: &'a str,
+        title: &'a str,
+        summary: Option<&'a str>,
+        content: &'a str,
+        source_memory_ids: &'a [String],
+        agent: &'a str,
     },
 }
 
@@ -113,7 +151,76 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             )
             .await
         }
+        PageWrite::ReplaceSource {
+            page_id,
+            title,
+            summary,
+            content,
+            source_memory_ids,
+            agent,
+        } => {
+            replace_source_page_impl(
+                db,
+                page_id,
+                title,
+                summary,
+                content,
+                source_memory_ids,
+                agent,
+            )
+            .await
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn replace_source_page_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    title: &str,
+    summary: Option<&str>,
+    content: &str,
+    source_memory_ids: &[String],
+    agent: &str,
+) -> Result<WriteResult, WenlanError> {
+    if title.trim().is_empty() || content.trim().is_empty() || source_memory_ids.is_empty() {
+        return Err(WenlanError::Validation(
+            "source Page replacement requires title, content, and source ids".into(),
+        ));
+    }
+    let current = db
+        .get_page(page_id)
+        .await?
+        .ok_or_else(|| WenlanError::NotFound(format!("Page not found: {page_id}")))?;
+    if current.creation_kind != "source" || current.user_edited {
+        return Err(WenlanError::Conflict(format!(
+            "source Page {page_id} is not machine-owned"
+        )));
+    }
+    let source_refs: Vec<&str> = source_memory_ids.iter().map(String::as_str).collect();
+    if !db
+        .replace_source_page(page_id, title, summary, content, &source_refs, agent)
+        .await?
+    {
+        return Err(WenlanError::Conflict(format!(
+            "source Page {page_id} changed ownership before replacement"
+        )));
+    }
+    let detail = format!("title={title}, sources={}", source_memory_ids.len());
+    if let Err(error) = db
+        .log_agent_activity(agent, "page_update", source_memory_ids, None, &detail)
+        .await
+    {
+        log::warn!("[replace_source_page] activity log failed: {error}");
+    }
+    Ok(WriteResult {
+        id: page_id.to_string(),
+        attached_to: None,
+        warnings: Vec::new(),
+        wrote: true,
+        revision_card_id: None,
+        gated: false,
+    })
 }
 
 async fn attach_page_sources_impl(
@@ -1386,32 +1493,16 @@ async fn accept_page_revision_card(
     let projection = knowledge_path.map(|path| {
         crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
     });
-    let wrote = match card.page_version {
-        Some(expected_version) => {
-            db.try_update_page_content_with_changelog_at_version(
-                &card.page_id,
-                &card.content,
-                &source_refs,
-                "revision_accept",
-                &new_changelog,
-                None,
-                expected_version,
-            )
-            .await?
-        }
-        None => {
-            db.try_update_page_content_with_changelog(
-                &card.page_id,
-                &card.content,
-                &source_refs,
-                "revision_accept",
-                false,
-                &new_changelog,
-                None,
-            )
-            .await?
-        }
-    };
+    let wrote = db
+        .try_accept_page_revision(
+            &card.page_id,
+            &card.content,
+            &source_refs,
+            &new_changelog,
+            card.page_version,
+            &card.revision_id,
+        )
+        .await?;
 
     if !wrote {
         let current_version = db
@@ -1430,17 +1521,6 @@ async fn accept_page_revision_card(
             card.revision_id, card.page_id, staged_version, current_version
         )));
     }
-
-    let conn = db.conn.lock().await;
-    conn.execute(
-        "UPDATE memories \
-         SET pending_revision = 0, confirmed = 0, stability = 'new' \
-         WHERE source_id = ?1 AND pending_revision = 1",
-        libsql::params![card.revision_id.clone()],
-    )
-    .await
-    .map_err(|e| WenlanError::VectorDb(format!("accept_page_revision_card consume: {e}")))?;
-    drop(conn);
 
     if let Some(ref projection) = projection {
         if let Ok(Some(updated_page)) = db.get_page(&card.page_id).await {
@@ -3348,6 +3428,138 @@ mod tests {
             markdown.contains(&format!("origin_version: {}", after.version)),
             "markdown projection must carry the accepted page version"
         );
+    }
+
+    #[tokio::test]
+    async fn accept_page_revision_consume_failure_keeps_page_retryable() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_accept_abort_original";
+        let new_mem_id = "mem_page_accept_abort_new";
+        let original_content = "original page content before failed revision acceptance";
+        let proposed_content = "proposed page content must commit with card consumption";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card.revision_card_id.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER abort_page_revision_consume
+                 BEFORE UPDATE OF pending_revision ON memories
+                 WHEN OLD.source_id = '{}' AND OLD.pending_revision = 1
+                 BEGIN SELECT RAISE(ABORT, 'blocked revision consume'); END;",
+                card_id.replace('\'', "''")
+            ))
+            .await
+            .unwrap();
+        }
+
+        let err = accept_pending_revision(&db, &card_id, "test-agent")
+            .await
+            .expect_err("consume fault must fail the acceptance");
+        assert!(err.to_string().contains("blocked revision consume"));
+        let after_failure = db.get_page(&page_id).await.unwrap().unwrap();
+        let pending = db.list_pending_revisions(10).await.unwrap();
+        assert!(pending
+            .iter()
+            .any(|revision| revision.revision_source_id == card_id));
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_page_revision_consume", ())
+                .await
+                .unwrap();
+        }
+        let retry = accept_pending_revision(&db, &card_id, "test-agent").await;
+        assert_eq!(
+            after_failure.content, before.content,
+            "failed card consumption must not commit Page content first"
+        );
+        assert_eq!(
+            after_failure.version, before.version,
+            "failed card consumption must leave the Page version retryable"
+        );
+        assert!(
+            retry.is_ok(),
+            "retry after the fault is removed must converge"
+        );
+        assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn accept_page_revision_source_failure_keeps_page_retryable() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem_page_source_abort_original";
+        let new_mem_id = "mem_page_source_abort_new";
+        let original_content = "original page content before source attachment failure";
+        let proposed_content = "proposed page content must commit with exact sources";
+
+        seed_memory(&db, mem_id, original_content).await;
+        seed_memory(&db, new_mem_id, proposed_content).await;
+        let page_id = seed_page(&db, mem_id, original_content).await;
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let card = stage_page_revision_card(
+            &db,
+            &before,
+            proposed_content,
+            &[mem_id.to_string(), new_mem_id.to_string()],
+            "page_growth",
+        )
+        .await
+        .unwrap();
+        let card_id = card.revision_card_id.unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER abort_page_revision_source
+                 BEFORE INSERT ON page_sources
+                 WHEN NEW.memory_source_id = '{}'
+                 BEGIN SELECT RAISE(ABORT, 'blocked revision source attachment'); END;",
+                new_mem_id.replace('\'', "''")
+            ))
+            .await
+            .unwrap();
+        }
+
+        let err = accept_pending_revision(&db, &card_id, "test-agent")
+            .await
+            .expect_err("source attachment fault must fail the acceptance");
+        assert!(err
+            .to_string()
+            .contains("blocked revision source attachment"));
+        let after_failure = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(after_failure.content, before.content);
+        assert_eq!(after_failure.version, before.version);
+        assert_eq!(after_failure.source_memory_ids, before.source_memory_ids);
+        assert!(db
+            .list_pending_revisions(10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|revision| revision.revision_source_id == card_id));
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER abort_page_revision_source", ())
+                .await
+                .unwrap();
+        }
+        accept_pending_revision(&db, &card_id, "test-agent")
+            .await
+            .expect("retry after the source fault must converge");
+        assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
     }
 
     #[tokio::test]

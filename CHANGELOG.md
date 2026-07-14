@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.2](https://github.com/7xuanlu/wenlan/compare/v0.13.1...v0.13.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* gate releases behind a prerelease, not a draft ([#340](https://github.com/7xuanlu/wenlan/issues/340)) ([ecdfd0a](https://github.com/7xuanlu/wenlan/commit/ecdfd0aec6dadd55c9a0c32f91d9fdf2c7a479cb))
+* harden evidence-driven lint maintenance paths ([#351](https://github.com/7xuanlu/wenlan/issues/351)) ([92020e6](https://github.com/7xuanlu/wenlan/commit/92020e6e9417b5d0206ae32abf4f563672f2c63c))
+
+## [0.13.1](https://github.com/7xuanlu/wenlan/compare/v0.13.0...v0.13.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* add whole-system and deep semantic lint diagnostics ([#343](https://github.com/7xuanlu/wenlan/issues/343)) ([1c912fb](https://github.com/7xuanlu/wenlan/commit/1c912fb10986b600227be72da2b36abc5cc2e36a))
+* harden lint diagnostics from live dogfood ([#349](https://github.com/7xuanlu/wenlan/issues/349)) ([f567f22](https://github.com/7xuanlu/wenlan/commit/f567f2243251d428e1de06fc1cf198814ff57f1c))
+* keep daemon responsive during directory sync ([#350](https://github.com/7xuanlu/wenlan/issues/350)) ([54f3dd3](https://github.com/7xuanlu/wenlan/commit/54f3dd3903de0566be30becc1c241ed1b88fc887))
+
 ## [0.13.0](https://github.com/7xuanlu/wenlan/compare/v0.12.1...v0.13.0) (2026-07-12)
 
 

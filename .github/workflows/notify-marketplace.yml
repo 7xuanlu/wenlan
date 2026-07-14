@@ -1,11 +1,17 @@
 name: notify-marketplace
 
-# On a published release, tell the claude-plugins marketplace to re-sync pins.
-# The marketplace's sync-marketplace workflow re-derives every plugin's pin itself,
-# so this only needs to fire the dispatch (the client_payload is informational).
+# When a release is promoted out of prerelease, tell the claude-plugins
+# marketplace to re-sync pins. The marketplace's sync-marketplace workflow
+# re-derives every plugin's pin itself, so this only needs to fire the dispatch
+# (the client_payload is informational).
+#
+# `released`, not `published`: release-please publishes the release before any
+# artifact exists, so `published` fired ~41 minutes early and pointed the
+# marketplace at a version with no binaries and no npm package. `released` fires
+# when release.yml's finalize-release clears the prerelease flag.
 on:
   release:
-    types: [published]
+    types: [released]
 
 jobs:
   notify:

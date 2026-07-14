@@ -132,6 +132,14 @@ async fn generate_fixture(root: &Path) {
              WITH RECURSIVE n(x) AS (
                VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 100000
              )
+             INSERT INTO memories (id, source, source_id, source_agent)
+             SELECT printf('memory-%06d', x), 'text',
+                    printf('source-%05d-%02d', ((x - 1) / 10) + 1, ((x - 1) % 10) + 1),
+                    NULL
+               FROM n;
+             WITH RECURSIVE n(x) AS (
+               VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 100000
+             )
              INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason)
              SELECT printf('page-%05d', ((x - 1) / 10) + 1),
                     printf('source-%05d-%02d', ((x - 1) / 10) + 1, ((x - 1) % 10) + 1),
@@ -150,7 +158,7 @@ async fn generate_fixture(root: &Path) {
         .await
         .expect("populate deterministic scale database");
     println!(
-        "FIXTURE_READY pages={PAGE_COUNT} state_entries={PAGE_COUNT} evidence_rows={EVIDENCE_COUNT} projection_defect_file={PAGE_COUNT} evidence_defect_row={EVIDENCE_COUNT}"
+        "FIXTURE_READY pages={PAGE_COUNT} state_entries={PAGE_COUNT} owner_rows={EVIDENCE_COUNT} evidence_rows={EVIDENCE_COUNT} projection_defect_file={PAGE_COUNT} evidence_defect_row={EVIDENCE_COUNT}"
     );
 }
 
@@ -173,6 +181,10 @@ async fn run_fixture(root: &Path) {
     );
     assert_eq!(
         scalar_count(&snapshot, "SELECT COUNT(*) FROM page_evidence").await,
+        EVIDENCE_COUNT
+    );
+    assert_eq!(
+        scalar_count(&snapshot, "SELECT COUNT(*) FROM memories").await,
         EVIDENCE_COUNT
     );
 
@@ -227,7 +239,7 @@ async fn run_fixture(root: &Path) {
         .expect("finish shared lint snapshot");
     assert!(receipt.is_consistent());
     println!(
-        "SCALE_GATE_PASS pages={PAGE_COUNT} state_entries={PAGE_COUNT} evidence_rows={EVIDENCE_COUNT} projection_defect_file={PAGE_COUNT} evidence_defect_row={EVIDENCE_COUNT} sample_cap={LINT_MAX_EVIDENCE_PER_CHECK} measured_ms={} measured_region=shared_snapshot+page_scan+exact_population_assertions+production_page_group+snapshot_finish",
+        "SCALE_GATE_PASS pages={PAGE_COUNT} state_entries={PAGE_COUNT} owner_rows={EVIDENCE_COUNT} evidence_rows={EVIDENCE_COUNT} projection_defect_file={PAGE_COUNT} evidence_defect_row={EVIDENCE_COUNT} sample_cap={LINT_MAX_EVIDENCE_PER_CHECK} measured_ms={} measured_region=shared_snapshot+page_scan+exact_population_assertions+production_page_group+snapshot_finish",
         measured.elapsed().as_millis()
     );
 }

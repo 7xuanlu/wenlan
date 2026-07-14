@@ -668,6 +668,36 @@ pub(crate) fn derive_episode(
     })
 }
 
+fn derive_memory_child_fields(
+    content: &str,
+    structured_fields: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut fields = Vec::new();
+    let content = redact_pii(content);
+    if !content.trim().is_empty() {
+        fields.push(("narrative".to_string(), content));
+    }
+    if let Some(structured_fields) = structured_fields {
+        for child in crate::schema::split_structured_fields_to_facts(structured_fields) {
+            let field = child
+                .split_once(": ")
+                .map(|(key, _)| key.to_string())
+                .unwrap_or_else(|| "field".to_string());
+            fields.push((field, child));
+        }
+    }
+    fields
+}
+
+fn child_vector_id(parent_id: &str, field: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(parent_id.as_bytes());
+    hasher.update(b"|");
+    hasher.update(field.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    hash[..16].to_string()
+}
+
 /// True iff `WENLAN_ENABLE_SALIENCE_PRIOR` is set to a truthy value
 /// (`1`, `true`, or `yes`, case-insensitive). T8 salience prior is OPT-IN:
 /// when unset or falsey, the ranking formula forces `salience_mult` to `1.0`,
@@ -8134,113 +8164,123 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("begin transaction: {}", e)))?;
 
-        // Delete existing rows for these source_ids
-        for (source, source_id) in &source_ids_to_delete {
-            conn.execute(
-                "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
-                libsql::params![source.clone(), source_id.clone()],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("delete old memories: {}", e)))?;
-            // T15a: pair the parent delete with its child rows (no FK; parent_id
-            // is source_id not rowid, so cascade is explicit). Scoped to memory
-            // parents — episode/page parents never have children.
-            if source == "memory" {
+        let total = memory_rows.len();
+        let transaction_result: Result<(), WenlanError> = async {
+            // Delete existing rows for these source_ids
+            for (source, source_id) in &source_ids_to_delete {
                 conn.execute(
-                    "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
-                    libsql::params![source_id.clone()],
+                    "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
+                    libsql::params![source.clone(), source_id.clone()],
                 )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete old child_vectors: {}", e)))?;
+                .map_err(|e| WenlanError::VectorDb(format!("delete old memories: {}", e)))?;
+                // T15a: pair the parent delete with its child rows (no FK; parent_id
+                // is source_id not rowid, so cascade is explicit). Scoped to memory
+                // parents — episode/page parents never have children.
+                if source == "memory" {
+                    conn.execute(
+                        "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                        libsql::params![source_id.clone()],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete old child_vectors: {}", e))
+                    })?;
+                }
             }
-        }
 
-        // Insert new memory rows with proper NULL handling for optional fields
-        let total = memory_rows.len();
-        for (row, embedding) in memory_rows.into_iter().zip(embeddings.iter()) {
-            let vec_str = Self::vec_to_sql(embedding);
-            let confirmed_int: Option<i64> = row.confirmed.map(|b| if b { 1 } else { 0 });
+            // Insert new memory rows with proper NULL handling for optional fields
+            for (row, embedding) in memory_rows.into_iter().zip(embeddings.iter()) {
+                let vec_str = Self::vec_to_sql(embedding);
+                let confirmed_int: Option<i64> = row.confirmed.map(|b| if b { 1 } else { 0 });
 
-            let summary_val: libsql::Value =
-                row.summary.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let url_val: libsql::Value = row.url.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let language_val: libsql::Value = row
-                .language
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let byte_start_val: libsql::Value = row
-                .byte_start
-                .map(|v| v.into())
-                .unwrap_or(libsql::Value::Null);
-            let byte_end_val: libsql::Value = row
-                .byte_end
-                .map(|v| v.into())
-                .unwrap_or(libsql::Value::Null);
-            let semantic_unit_val: libsql::Value = row
-                .semantic_unit
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let memory_type_val: libsql::Value = row
-                .memory_type
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let space_val: libsql::Value =
-                row.space.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let source_agent_val: libsql::Value = row
-                .source_agent
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let confidence_val: libsql::Value = row
-                .confidence
-                .map(|v| (v as f64).into())
-                .unwrap_or(libsql::Value::Null);
-            let confirmed_val: libsql::Value = confirmed_int
-                .map(|v| v.into())
-                .unwrap_or(libsql::Value::Null);
-            let stability_val: libsql::Value = row
-                .stability
-                .clone()
-                .map(libsql::Value::Text)
-                .unwrap_or(libsql::Value::Text("new".to_string()));
-            let supersedes_val: libsql::Value = row
-                .supersedes
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let pending_revision_val: i64 = if row.pending_revision { 1 } else { 0 };
-            let entity_id_val: libsql::Value = row
-                .entity_id
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let quality_val: libsql::Value =
-                row.quality.map(|s| s.into()).unwrap_or(libsql::Value::Null);
-            let importance_val: libsql::Value = row
-                .importance
-                .map(|v| (v as i64).into())
-                .unwrap_or(libsql::Value::Null);
-            let is_recap_val: i64 = if row.is_recap { 1 } else { 0 };
-            let structured_fields_val: libsql::Value = row
-                .structured_fields
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let retrieval_cue_val: libsql::Value = row
-                .retrieval_cue
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let source_text_val: libsql::Value = row
-                .source_text
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let episode_of_val: libsql::Value = row
-                .episode_of
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
-            let content_hash_val: libsql::Value = row
-                .content_hash
-                .map(|s| s.into())
-                .unwrap_or(libsql::Value::Null);
+                let summary_val: libsql::Value = row
+                    .summary
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let url_val: libsql::Value =
+                    row.url.map(|s| s.into()).unwrap_or(libsql::Value::Null);
+                let language_val: libsql::Value = row
+                    .language
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let byte_start_val: libsql::Value = row
+                    .byte_start
+                    .map(|v| v.into())
+                    .unwrap_or(libsql::Value::Null);
+                let byte_end_val: libsql::Value = row
+                    .byte_end
+                    .map(|v| v.into())
+                    .unwrap_or(libsql::Value::Null);
+                let semantic_unit_val: libsql::Value = row
+                    .semantic_unit
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let memory_type_val: libsql::Value = row
+                    .memory_type
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let space_val: libsql::Value = row
+                    .space
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let source_agent_val: libsql::Value = row
+                    .source_agent
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let confidence_val: libsql::Value = row
+                    .confidence
+                    .map(|v| (v as f64).into())
+                    .unwrap_or(libsql::Value::Null);
+                let confirmed_val: libsql::Value = confirmed_int
+                    .map(|v| v.into())
+                    .unwrap_or(libsql::Value::Null);
+                let stability_val: libsql::Value = row
+                    .stability
+                    .clone()
+                    .map(libsql::Value::Text)
+                    .unwrap_or(libsql::Value::Text("new".to_string()));
+                let supersedes_val: libsql::Value = row
+                    .supersedes
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let pending_revision_val: i64 = if row.pending_revision { 1 } else { 0 };
+                let entity_id_val: libsql::Value = row
+                    .entity_id
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let quality_val: libsql::Value = row
+                    .quality
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let importance_val: libsql::Value = row
+                    .importance
+                    .map(|v| (v as i64).into())
+                    .unwrap_or(libsql::Value::Null);
+                let is_recap_val: i64 = if row.is_recap { 1 } else { 0 };
+                let structured_fields_val: libsql::Value = row
+                    .structured_fields
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let retrieval_cue_val: libsql::Value = row
+                    .retrieval_cue
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let source_text_val: libsql::Value = row
+                    .source_text
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let episode_of_val: libsql::Value = row
+                    .episode_of
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
+                let content_hash_val: libsql::Value = row
+                    .content_hash
+                    .map(|s| s.into())
+                    .unwrap_or(libsql::Value::Null);
 
-            conn.execute(
-                "INSERT INTO memories (id, content, source, source_id, title, summary, url,
+                conn.execute(
+                    "INSERT INTO memories (id, content, source, source_id, title, summary, url,
                     chunk_index, last_modified, chunk_type, language, byte_start, byte_end,
                     semantic_unit, memory_type, space, source_agent, confidence, confirmed,
                     stability, supersedes, pending_revision, word_count,
@@ -8252,78 +8292,98 @@ impl MemoryDB {
                     ?24, ?25, ?26, ?27, ?28,
                     ?29, ?30, ?31,
                     vector32(?32), ?33, ?34, ?35, ?36)",
-                libsql::params![
-                    row.id,
-                    row.content,
-                    row.source,
-                    row.source_id,
-                    row.title,
-                    summary_val,
-                    url_val,
-                    row.chunk_index as i64,
-                    row.last_modified,
-                    row.chunk_type,
-                    language_val,
-                    byte_start_val,
-                    byte_end_val,
-                    semantic_unit_val,
-                    memory_type_val,
-                    space_val,
-                    source_agent_val,
-                    confidence_val,
-                    confirmed_val,
-                    stability_val,
-                    supersedes_val,
-                    pending_revision_val,
-                    row.word_count,
-                    entity_id_val,
-                    "legacy", // column retired; status derived from enrichment_steps
-                    quality_val,
-                    is_recap_val,
-                    row.supersede_mode,
-                    structured_fields_val,
-                    retrieval_cue_val,
-                    source_text_val,
-                    vec_str,
-                    row.last_modified, // created_at = last_modified at insert time
-                    importance_val,
-                    episode_of_val,
-                    content_hash_val
-                ],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("insert memory: {}", e)))?;
-        }
+                    libsql::params![
+                        row.id,
+                        row.content,
+                        row.source,
+                        row.source_id,
+                        row.title,
+                        summary_val,
+                        url_val,
+                        row.chunk_index as i64,
+                        row.last_modified,
+                        row.chunk_type,
+                        language_val,
+                        byte_start_val,
+                        byte_end_val,
+                        semantic_unit_val,
+                        memory_type_val,
+                        space_val,
+                        source_agent_val,
+                        confidence_val,
+                        confirmed_val,
+                        stability_val,
+                        supersedes_val,
+                        pending_revision_val,
+                        row.word_count,
+                        entity_id_val,
+                        "legacy", // column retired; status derived from enrichment_steps
+                        quality_val,
+                        is_recap_val,
+                        row.supersede_mode,
+                        structured_fields_val,
+                        retrieval_cue_val,
+                        source_text_val,
+                        vec_str,
+                        row.last_modified, // created_at = last_modified at insert time
+                        importance_val,
+                        episode_of_val,
+                        content_hash_val
+                    ],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("insert memory: {}", e)))?;
+            }
 
-        // T15a: insert child vectors in the SAME tx (empty when flag OFF).
-        for (row, embedding) in child_rows.into_iter().zip(child_embeddings.iter()) {
-            let vec_str = Self::vec_to_sql(embedding);
-            conn.execute(
-                "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
+            // T15a: insert child vectors in the SAME tx (empty when flag OFF).
+            for (row, embedding) in child_rows.into_iter().zip(child_embeddings.iter()) {
+                let vec_str = Self::vec_to_sql(embedding);
+                conn.execute(
+                    "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
                  VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
-                libsql::params![row.id, row.parent_id, row.field, row.content, vec_str],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("insert child_vector: {}", e)))?;
-        }
+                    libsql::params![row.id, row.parent_id, row.field, row.content, vec_str],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("insert child_vector: {}", e)))?;
+            }
 
-        // Soft-suppress superseded memories (skip when pending_revision — human hasn't approved yet)
-        for doc in &docs {
-            if let Some(ref superseded_id) = doc.supersedes {
-                if !doc.pending_revision {
-                    conn.execute(
-                        "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
-                        libsql::params![superseded_id.to_string()],
-                    )
-                    .await
-                    .ok(); // Best effort
+            // Soft-suppress superseded memories (skip when pending_revision — human hasn't approved yet)
+            for doc in &docs {
+                if let Some(ref superseded_id) = doc.supersedes {
+                    if !doc.pending_revision {
+                        conn.execute(
+                            "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
+                            libsql::params![superseded_id.to_string()],
+                        )
+                        .await
+                        .ok(); // Best effort
+                    }
                 }
             }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = transaction_result {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "{error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
         }
 
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("commit transaction: {}", e)))?;
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "commit transaction: {error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(WenlanError::VectorDb(format!(
+                "commit transaction: {error}"
+            )));
+        }
 
         log::info!("[memory_db] upserted {} memories", total);
         Ok(total)
@@ -12166,28 +12226,56 @@ impl MemoryDB {
         source_id: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
-            libsql::params![source.to_string(), source_id.to_string()],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_by_source_id: {}", e)))?;
-        // Clean up orphaned enrichment_steps (no FK cascade)
-        conn.execute(
-            "DELETE FROM enrichment_steps WHERE source_id = ?1",
-            libsql::params![source_id.to_string()],
-        )
-        .await
-        .ok();
-        // T15a: clean up orphaned child_vectors for memory parents (no FK cascade;
-        // parent_id is source_id not rowid). Scoped to memory deletes.
-        if source == "memory" {
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_by_source_id BEGIN: {e}")))?;
+        let result: Result<(), WenlanError> = async {
             conn.execute(
-                "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
+                libsql::params![source.to_string(), source_id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_by_source_id: {e}")))?;
+            // Clean up orphaned enrichment_steps (no FK cascade).
+            conn.execute(
+                "DELETE FROM enrichment_steps WHERE source_id = ?1",
                 libsql::params![source_id.to_string()],
             )
             .await
-            .ok();
+            .map_err(|e| WenlanError::VectorDb(format!("delete enrichment steps: {e}")))?;
+            // T15a: clean up derived memory state whose parent key is source_id.
+            if source == "memory" {
+                conn.execute(
+                    "DELETE FROM child_vectors WHERE parent_kind = 'memory' AND parent_id = ?1",
+                    libsql::params![source_id.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete child vectors: {e}")))?;
+                conn.execute(
+                    "DELETE FROM memory_entities WHERE memory_id = ?1",
+                    libsql::params![source_id.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete memory entity links: {e}")))?;
+                conn.execute(
+                    "DELETE FROM document_tags WHERE source = 'memory' AND source_id = ?1",
+                    libsql::params![source_id.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete memory tags: {e}")))?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "delete_by_source_id COMMIT: {error}"
+            )));
         }
         Ok(())
     }
@@ -12195,7 +12283,8 @@ impl MemoryDB {
     /// Rebind chunks from one source_id to another. Used for rename optimization:
     /// when a file is renamed (old vanishes, new appears with same content_hash),
     /// rebind the old document's chunks to the new doc_source_id instead of
-    /// delete+enqueue. Updates enrichment_steps to point to the new source_id.
+    /// delete+enqueue. Rebinds checkpoints and memory-owned retrieval children
+    /// in the same transaction as the primary chunks.
     pub async fn rebind_source_id(
         &self,
         source: &str,
@@ -12203,23 +12292,53 @@ impl MemoryDB {
         new_source_id: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
-            libsql::params![
-                new_source_id.to_string(),
-                source.to_string(),
-                old_source_id.to_string()
-            ],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id: {}", e)))?;
-        // Also update enrichment_steps to point to the new source_id.
-        conn.execute(
-            "UPDATE enrichment_steps SET source_id = ?1 WHERE source_id = ?2",
-            libsql::params![new_source_id.to_string(), old_source_id.to_string()],
-        )
-        .await
-        .ok();
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
+                libsql::params![new_source_id, source, old_source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id memories: {e}")))?;
+            conn.execute(
+                "UPDATE enrichment_steps SET source_id = ?1 WHERE source_id = ?2",
+                libsql::params![new_source_id, old_source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id checkpoints: {e}")))?;
+            if source == "memory" {
+                conn.execute(
+                    "UPDATE memories
+                     SET source_id = CASE WHEN source_id = ?1 THEN ?2 ELSE source_id END,
+                         episode_of = CASE WHEN episode_of = ?1 THEN ?2 ELSE episode_of END
+                     WHERE source = 'episode' AND (source_id = ?1 OR episode_of = ?1)",
+                    libsql::params![old_source_id, new_source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id episodes: {e}")))?;
+                conn.execute(
+                    "UPDATE child_vectors SET parent_id = ?1
+                     WHERE parent_kind = 'memory' AND parent_id = ?2",
+                    libsql::params![new_source_id, old_source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id children: {e}")))?;
+            }
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "rebind_source_id commit: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -12506,22 +12625,387 @@ impl MemoryDB {
 
     /// Update a single memory's content (and re-embed).
     pub async fn update_memory(&self, id: &str, new_content: &str) -> Result<(), WenlanError> {
-        let embedding = self.get_or_compute_embedding(new_content)?;
-        let vec_str = Self::vec_to_sql(&embedding);
+        self.apply_memory_update(id, Some(new_content), None, false, None)
+            .await
+    }
+
+    pub(crate) async fn apply_memory_update(
+        &self,
+        source_id: &str,
+        new_content: Option<&str>,
+        requested_space: Option<Option<&str>>,
+        confirm: bool,
+        requested_memory_type: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        if new_content.is_none()
+            && requested_space.is_none()
+            && !confirm
+            && requested_memory_type.is_none()
+        {
+            return Ok(());
+        }
+
+        struct HeadMetadata {
+            source: String,
+            title: String,
+            structured_fields: Option<String>,
+            source_text: Option<String>,
+            memory_type: Option<String>,
+            space: Option<String>,
+            source_agent: Option<String>,
+            confidence: Option<f64>,
+            confirmed: Option<i64>,
+            stability: String,
+            pending_revision: i64,
+            last_modified: i64,
+            supersede_mode: String,
+            created_at: i64,
+        }
+
+        let head = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source, title, structured_fields, source_text, memory_type,
+                            space, source_agent, confidence, confirmed, stability,
+                            pending_revision, last_modified, supersede_mode,
+                            COALESCE(created_at, last_modified)
+                     FROM memories
+                     WHERE source_id = ?1 AND source != 'episode' AND chunk_index = 0
+                     LIMIT 1",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory read: {e}")))?;
+            let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory row: {e}")))?
+            else {
+                return Err(WenlanError::NotFound(format!(
+                    "memory {source_id} not found"
+                )));
+            };
+            HeadMetadata {
+                source: row.get(0).unwrap_or_else(|_| "memory".to_string()),
+                title: row.get(1).unwrap_or_default(),
+                structured_fields: row.get::<Option<String>>(2).unwrap_or(None),
+                source_text: row.get::<Option<String>>(3).unwrap_or(None),
+                memory_type: row.get::<Option<String>>(4).unwrap_or(None),
+                space: row.get::<Option<String>>(5).unwrap_or(None),
+                source_agent: row.get::<Option<String>>(6).unwrap_or(None),
+                confidence: row.get::<Option<f64>>(7).unwrap_or(None),
+                confirmed: row.get::<Option<i64>>(8).unwrap_or(None),
+                stability: row
+                    .get::<Option<String>>(9)
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "new".to_string()),
+                pending_revision: row.get::<Option<i64>>(10).unwrap_or(None).unwrap_or(0),
+                last_modified: row.get(11).unwrap_or(0),
+                supersede_mode: row
+                    .get::<Option<String>>(12)
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "hide".to_string()),
+                created_at: row.get(13).unwrap_or(0),
+            }
+        };
+
+        let content_embedding = new_content
+            .map(|content| {
+                self.get_or_compute_embedding(content)
+                    .map(|v| Self::vec_to_sql(&v))
+            })
+            .transpose()?;
+
+        struct PreparedChild {
+            id: String,
+            field: String,
+            content: String,
+            embedding: String,
+        }
+
+        let fact_enabled = crate::retrieval::fact_channel::fact_channel_enabled();
+        let prepared_children = if head.source == "memory" && new_content.is_some() && fact_enabled
+        {
+            let fields = derive_memory_child_fields(
+                new_content.unwrap_or_default(),
+                head.structured_fields.as_deref(),
+            );
+            let texts: Vec<String> = fields.iter().map(|(_, text)| text.clone()).collect();
+            let embeddings = if texts.is_empty() {
+                Vec::new()
+            } else {
+                self.generate_embeddings(&texts)?
+            };
+            if embeddings.len() != fields.len() {
+                return Err(WenlanError::Embedding(format!(
+                    "Expected {} child embeddings, got {}",
+                    fields.len(),
+                    embeddings.len()
+                )));
+            }
+            fields
+                .into_iter()
+                .zip(embeddings.iter())
+                .map(|((field, content), embedding)| PreparedChild {
+                    id: child_vector_id(source_id, &field),
+                    field,
+                    content,
+                    embedding: Self::vec_to_sql(embedding),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        enum EpisodeMutation {
+            Preserve,
+            Delete,
+            Replace {
+                derivation: EpisodeDerivation,
+                embedding: String,
+            },
+        }
+
+        let episode_mutation = if head.source != "memory"
+            || new_content.is_none()
+            || head.source_text.is_some()
+        {
+            EpisodeMutation::Preserve
+        } else if episode_channel_enabled() {
+            match derive_episode(
+                source_id,
+                None,
+                new_content.unwrap_or_default(),
+                episode_word_gate(),
+            ) {
+                Some(derivation) => {
+                    let embeddings =
+                        self.generate_embeddings(std::slice::from_ref(&derivation.verbatim))?;
+                    let embedding = embeddings.first().ok_or_else(|| {
+                        WenlanError::Embedding("Expected one episode embedding, got zero".into())
+                    })?;
+                    EpisodeMutation::Replace {
+                        derivation,
+                        embedding: Self::vec_to_sql(embedding),
+                    }
+                }
+                None => EpisodeMutation::Delete,
+            }
+        } else {
+            EpisodeMutation::Delete
+        };
+
+        let requested_space =
+            requested_space.map(|space| space.map(std::string::ToString::to_string));
+        let requested_memory_type = requested_memory_type.map(str::to_string);
+        let effective_space = requested_space
+            .clone()
+            .unwrap_or_else(|| head.space.clone());
+        let effective_memory_type = requested_memory_type
+            .clone()
+            .or_else(|| head.memory_type.clone());
+        let effective_confidence = if confirm { Some(1.0) } else { head.confidence };
+        let effective_confirmed = if confirm { Some(1) } else { head.confirmed };
+        let effective_stability = if confirm {
+            "confirmed".to_string()
+        } else {
+            head.stability.clone()
+        };
+
+        let _fact_activity = (head.source == "memory" && new_content.is_some()).then(|| {
+            self.begin_derived_artifact_write(crate::derived_artifact_state::DerivedArtifact::Fact)
+        });
+        let _episode_activity = (head.source == "memory" && new_content.is_some()).then(|| {
+            self.begin_derived_artifact_write(
+                crate::derived_artifact_state::DerivedArtifact::Episode,
+            )
+        });
 
         let conn = self.conn.lock().await;
-        // Match on source_id (the external identifier passed from API routes)
-        // and chunk_index = 0 (primary chunk holds the canonical content).
-        conn.execute(
-            "UPDATE memories SET content = ?1, embedding = vector32(?2) WHERE source_id = ?3 AND chunk_index = 0 AND source != 'episode'",
-            libsql::params![new_content.to_string(), vec_str, id.to_string()],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("update_memory: {}", e)))?;
-        drop(conn);
-        // T15a: keep child vectors in sync with the edited content (no-op when
-        // the fact channel is off).
-        self.rebuild_child_vectors_for(id).await?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_memory begin: {e}")))?;
+
+        let mutation_result: Result<(), WenlanError> = async {
+            if let (Some(content), Some(embedding)) = (new_content, content_embedding.as_deref()) {
+                let affected = conn
+                    .execute(
+                        "UPDATE memories
+                         SET content = ?1, embedding = vector32(?2), word_count = ?3
+                         WHERE source_id = ?4 AND chunk_index = 0 AND source != 'episode'",
+                        libsql::params![
+                            content,
+                            embedding,
+                            content.split_whitespace().count() as i64,
+                            source_id
+                        ],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("update_memory head: {e}")))?;
+                if affected == 0 {
+                    return Err(WenlanError::Conflict(format!(
+                        "memory {source_id} changed before update"
+                    )));
+                }
+
+                conn.execute(
+                    "DELETE FROM memories
+                     WHERE source_id = ?1 AND source != 'episode' AND chunk_index > 0",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory stale chunks: {e}")))?;
+
+                if head.source == "memory" {
+                    conn.execute(
+                        "DELETE FROM child_vectors
+                         WHERE parent_kind = 'memory' AND parent_id = ?1",
+                        libsql::params![source_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("update_memory child delete: {e}"))
+                    })?;
+                    for child in prepared_children {
+                        conn.execute(
+                            "INSERT OR REPLACE INTO child_vectors
+                             (id, parent_kind, parent_id, field, content, embedding)
+                             VALUES (?1, 'memory', ?2, ?3, ?4, vector32(?5))",
+                            libsql::params![
+                                child.id,
+                                source_id,
+                                child.field,
+                                child.content,
+                                child.embedding
+                            ],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("update_memory child insert: {e}"))
+                        })?;
+                    }
+
+                    match episode_mutation {
+                        EpisodeMutation::Preserve => {}
+                        EpisodeMutation::Delete => {
+                            conn.execute(
+                                "DELETE FROM memories
+                                 WHERE source = 'episode' AND source_id = ?1",
+                                libsql::params![source_id],
+                            )
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("update_memory episode delete: {e}"))
+                            })?;
+                        }
+                        EpisodeMutation::Replace {
+                            derivation,
+                            embedding,
+                        } => {
+                            conn.execute(
+                                "DELETE FROM memories
+                                 WHERE source = 'episode' AND source_id = ?1",
+                                libsql::params![source_id],
+                            )
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("update_memory episode delete: {e}"))
+                            })?;
+                            conn.execute(
+                                "INSERT INTO memories (id, content, source, source_id, title,
+                                    summary, url, chunk_index, last_modified, chunk_type,
+                                    language, byte_start, byte_end, semantic_unit, memory_type,
+                                    space, source_agent, confidence, confirmed, stability,
+                                    supersedes, pending_revision, word_count, entity_id,
+                                    enrichment_status, quality, is_recap, supersede_mode,
+                                    structured_fields, retrieval_cue, source_text, embedding,
+                                    created_at, importance, episode_of)
+                                 VALUES (?1, ?2, 'episode', ?3, ?4,
+                                    NULL, NULL, 0, ?5, 'text',
+                                    NULL, NULL, NULL, NULL, ?6,
+                                    ?7, ?8, ?9, ?10, ?11,
+                                    NULL, ?12, ?13, NULL,
+                                    'legacy', NULL, 0, ?14,
+                                    NULL, NULL, NULL, vector32(?15),
+                                    ?16, NULL, ?17)",
+                                libsql::params![
+                                    derivation.episode_id,
+                                    derivation.verbatim,
+                                    source_id,
+                                    head.title,
+                                    head.last_modified,
+                                    effective_memory_type,
+                                    effective_space,
+                                    head.source_agent,
+                                    effective_confidence,
+                                    effective_confirmed,
+                                    effective_stability,
+                                    head.pending_revision,
+                                    derivation.word_count,
+                                    head.supersede_mode,
+                                    embedding,
+                                    head.created_at,
+                                    source_id
+                                ],
+                            )
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("update_memory episode insert: {e}"))
+                            })?;
+                        }
+                    }
+                }
+            }
+
+            if let Some(space) = requested_space {
+                conn.execute(
+                    "UPDATE memories SET space = ?1 WHERE source_id = ?2",
+                    libsql::params![space, source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory space: {e}")))?;
+            }
+            if let Some(memory_type) = requested_memory_type {
+                conn.execute(
+                    "UPDATE memories SET memory_type = ?1 WHERE source_id = ?2",
+                    libsql::params![memory_type, source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory type: {e}")))?;
+            }
+            if confirm {
+                conn.execute(
+                    "UPDATE memories
+                     SET stability = 'confirmed', confirmed = 1, confidence = 1.0
+                     WHERE source_id = ?1 AND source = 'memory'",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("update_memory confirm: {e}")))?;
+            }
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = mutation_result {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "{error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "update_memory commit: {error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(WenlanError::VectorDb(format!(
+                "update_memory commit: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -12562,20 +13046,7 @@ impl MemoryDB {
         };
 
         // Build (field, text) children: narrative + per structured field.
-        let mut fields: Vec<(String, String)> = Vec::new();
-        let content = redact_pii(&content);
-        if !content.trim().is_empty() {
-            fields.push(("narrative".to_string(), content));
-        }
-        if let Some(ref sf) = structured_fields {
-            for child in crate::schema::split_structured_fields_to_facts(sf) {
-                let field = child
-                    .split_once(": ")
-                    .map(|(k, _)| k.to_string())
-                    .unwrap_or_else(|| "field".to_string());
-                fields.push((field, child));
-            }
-        }
+        let fields = derive_memory_child_fields(&content, structured_fields.as_deref());
 
         let texts: Vec<String> = fields.iter().map(|(_, t)| t.clone()).collect();
         let embeddings = if texts.is_empty() {
@@ -12595,12 +13066,7 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("rebuild_child delete: {e}")))?;
         for ((field, text), embedding) in fields.into_iter().zip(embeddings.iter()) {
-            let mut hasher = Sha256::new();
-            hasher.update(parent_id.as_bytes());
-            hasher.update(b"|");
-            hasher.update(field.as_bytes());
-            let hash = format!("{:x}", hasher.finalize());
-            let child_id = hash[..16].to_string();
+            let child_id = child_vector_id(parent_id, &field);
             let vec_str = Self::vec_to_sql(embedding);
             conn.execute(
                 "INSERT OR REPLACE INTO child_vectors (id, parent_kind, parent_id, field, content, embedding)
@@ -14052,6 +14518,28 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("merge_entities mem: {e}")))?;
 
             conn.execute(
+                "INSERT OR IGNORE INTO memory_entities (memory_id, entity_id)
+                 SELECT memory_id, ?1 FROM memory_entities WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge_entities memory links: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM memory_entities WHERE entity_id = ?1",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge_entities old links: {e}")))?;
+
+            conn.execute(
+                "UPDATE pages SET entity_id = ?1 WHERE entity_id = ?2",
+                libsql::params![canonical_id, alias_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge_entities pages: {e}")))?;
+
+            conn.execute(
                 "UPDATE OR IGNORE entity_aliases SET canonical_entity_id = ?1 WHERE canonical_entity_id = ?2",
                 libsql::params![canonical_id, alias_id],
             )
@@ -14524,27 +15012,56 @@ impl MemoryDB {
 
     pub async fn delete_entity(&self, entity_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        // Null out entity_id references in memories (manual cascade since no FK)
-        conn.execute(
-            "UPDATE memories SET entity_id = NULL WHERE entity_id = ?1",
-            libsql::params![entity_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_entity cascade memories: {}", e)))?;
-        // Remove aliases referencing this entity before deleting it (FK constraint)
-        conn.execute(
-            "DELETE FROM entity_aliases WHERE canonical_entity_id = ?1",
-            libsql::params![entity_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_entity cascade aliases: {}", e)))?;
-        conn.execute(
-            "DELETE FROM entities WHERE id = ?1",
-            libsql::params![entity_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete_entity: {}", e)))?;
-        Ok(())
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity begin: {e}")))?;
+
+        let result: Result<(), WenlanError> = async {
+            conn.execute(
+                "UPDATE memories SET entity_id = NULL WHERE entity_id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity memories: {e}")))?;
+
+            conn.execute(
+                "UPDATE pages SET entity_id = NULL WHERE entity_id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity pages: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM entity_aliases WHERE canonical_entity_id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity aliases: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM entities WHERE id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity entity: {e}")))?;
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => match conn.execute("COMMIT", ()).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    Err(WenlanError::VectorDb(format!("delete_entity commit: {e}")))
+                }
+            },
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
     }
 
     /// True if any non-archived memory carries the given space. Legacy data probe:
@@ -21250,6 +21767,143 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Atomically replace an existing machine-owned source Page and its exact
+    /// chunk provenance without deleting the last valid Page first. Returns
+    /// `false` when ownership changed before the guarded UPDATE.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn replace_source_page(
+        &self,
+        id: &str,
+        title: &str,
+        summary: Option<&str>,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+    ) -> Result<bool, WenlanError> {
+        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
+        let source_ids_json = serde_json::to_string(source_memory_ids)
+            .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
+        let embed_text = crate::pages::page_embedding_text(title, summary, &sanitized_content);
+        let embedding_sql = match self.generate_embeddings(&[embed_text]) {
+            Ok(mut vectors) if !vectors.is_empty() => {
+                vectors.pop().map(|embedding| Self::vec_to_sql(&embedding))
+            }
+            Ok(_) => {
+                log::warn!("replace_source_page: empty embedding result for {id}");
+                None
+            }
+            Err(error) => {
+                log::warn!("replace_source_page: embedding failed for {id}: {error}");
+                None
+            }
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page begin: {e}")))?;
+        let result = async {
+            let affected = match embedding_sql.as_deref() {
+                Some(embedding) => {
+                    conn.execute(
+                        "UPDATE pages SET title=?1, summary=?2, content=?3,
+                             source_memory_ids=?4, version=version+1,
+                             last_compiled=?5, last_modified=?5,
+                             embedding=vector32(?6), citations='[]'
+                         WHERE id=?7 AND status='active'
+                           AND creation_kind='source' AND COALESCE(user_edited,0)=0",
+                        libsql::params![
+                            title,
+                            summary,
+                            sanitized_content.as_str(),
+                            source_ids_json.as_str(),
+                            now.as_str(),
+                            embedding,
+                            id
+                        ],
+                    )
+                    .await
+                }
+                None => {
+                    conn.execute(
+                        "UPDATE pages SET title=?1, summary=?2, content=?3,
+                             source_memory_ids=?4, version=version+1,
+                             last_compiled=?5, last_modified=?5, citations='[]'
+                         WHERE id=?6 AND status='active'
+                           AND creation_kind='source' AND COALESCE(user_edited,0)=0",
+                        libsql::params![
+                            title,
+                            summary,
+                            sanitized_content.as_str(),
+                            source_ids_json.as_str(),
+                            now.as_str(),
+                            id
+                        ],
+                    )
+                    .await
+                }
+            }
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page row: {e}")))?;
+            if affected == 0 {
+                return Ok(false);
+            }
+            conn.execute(
+                "DELETE FROM page_sources WHERE page_id=?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page sources: {e}")))?;
+            conn.execute(
+                "DELETE FROM page_evidence WHERE page_id=?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_source_page evidence: {e}")))?;
+            for source_id in source_memory_ids {
+                conn.execute(
+                    "INSERT INTO page_sources
+                         (page_id,memory_source_id,linked_at,link_reason)
+                     VALUES (?1,?2,?3,?4)",
+                    libsql::params![id, *source_id, now_ts, link_reason],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("replace_source_page source insert: {e}"))
+                })?;
+            }
+            Self::insert_resolved_page_evidence(&conn, id, source_memory_ids, now_ts, link_reason)
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("replace_source_page evidence insert: {e}"))
+                })?;
+            Ok::<bool, WenlanError>(true)
+        }
+        .await;
+        let replaced = match result {
+            Ok(replaced) => replaced,
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        };
+        if !replaced {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Ok(false);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "replace_source_page commit: {error}"
+            )));
+        }
+        drop(conn);
+        if let Err(error) = self.refresh_page_wikilinks(id, &sanitized_content).await {
+            log::warn!("[page-links] source Page refresh failed for {id}: {error}");
+        }
+        Ok(true)
+    }
+
     /// Retrieve a page by id. Returns None if not found.
     pub async fn get_page(&self, id: &str) -> Result<Option<Page>, WenlanError> {
         let conn = self.conn.lock().await;
@@ -21458,6 +22112,7 @@ impl MemoryDB {
             None,
             None,
             None,
+            None,
         )
         .await
         .map(|_| ())
@@ -21483,6 +22138,7 @@ impl MemoryDB {
             source_memory_ids,
             link_reason,
             true,
+            None,
             None,
             None,
             None,
@@ -21518,6 +22174,7 @@ impl MemoryDB {
             Some(changelog),
             citations_json,
             None,
+            None,
         )
         .await
     }
@@ -21544,6 +22201,33 @@ impl MemoryDB {
             Some(changelog),
             citations_json,
             Some(expected_version),
+            None,
+        )
+        .await
+    }
+
+    /// Apply a staged Page revision and consume its pending card in the same
+    /// transaction. `expected_version=None` preserves legacy card behavior;
+    /// versioned cards use CAS and return `false` on a stale Page.
+    pub(crate) async fn try_accept_page_revision(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        changelog: &str,
+        expected_version: Option<i64>,
+        revision_source_id: &str,
+    ) -> Result<bool, WenlanError> {
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            "revision_accept",
+            false,
+            Some(changelog),
+            None,
+            expected_version,
+            Some(revision_source_id),
         )
         .await
     }
@@ -21553,7 +22237,8 @@ impl MemoryDB {
     /// `citations_json` when `Some` is written atomically with the content;
     /// `None` always resets `citations` to `'[]'` on a content change (never
     /// leaves a stale marker-to-source map pointing at prose that no longer
-    /// carries those markers).
+    /// carries those markers). `consume_revision_id` makes pending-card
+    /// consumption part of the same transaction.
     #[allow(clippy::too_many_arguments)]
     async fn try_update_page_content(
         &self,
@@ -21565,6 +22250,7 @@ impl MemoryDB {
         changelog: Option<&str>,
         citations_json: Option<&str>,
         expected_version: Option<i64>,
+        consume_revision_id: Option<&str>,
     ) -> Result<bool, WenlanError> {
         let citations_bind: &str = citations_json.unwrap_or("[]");
         // Sanitize daemon-reserved Sources delimiters from client content so
@@ -21734,7 +22420,9 @@ impl MemoryDB {
                 }
             }
         };
-        if (require_stale || expected_version.is_some()) && affected == 0 {
+        if (require_stale || expected_version.is_some() || consume_revision_id.is_some())
+            && affected == 0
+        {
             // No rows matched the CAS condition (concurrent writer won or page
             // was already cleared). ROLLBACK closes the open transaction before
             // returning — an empty txn, but the connection must not be left in
@@ -21787,12 +22475,18 @@ impl MemoryDB {
             }
         }
         for sid in source_memory_ids {
-            let _ = conn
+            if let Err(e) = conn
                 .execute(
                     "INSERT OR IGNORE INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
                     libsql::params![id, sid, now_ts, link_reason],
                 )
-                .await;
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "update_page_content source insert: {e}"
+                )));
+            }
         }
 
         // Mirror the memory-source reconcile onto page_evidence. Only memory
@@ -21844,6 +22538,32 @@ impl MemoryDB {
             )));
         }
 
+        if let Some(revision_id) = consume_revision_id {
+            let consumed = match conn
+                .execute(
+                    "UPDATE memories
+                     SET pending_revision = 0, confirmed = 0, stability = 'new'
+                     WHERE source_id = ?1 AND pending_revision = 1",
+                    libsql::params![revision_id],
+                )
+                .await
+            {
+                Ok(affected) => affected,
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(WenlanError::VectorDb(format!(
+                        "accept_page_revision_card consume: {e}"
+                    )));
+                }
+            };
+            if consumed == 0 {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::Conflict(format!(
+                    "pending page revision was already consumed: {revision_id}"
+                )));
+            }
+        }
+
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("update_page_content commit: {e}")))?;
@@ -21870,7 +22590,13 @@ impl MemoryDB {
         content: &str,
     ) -> Result<(), WenlanError> {
         let labels = crate::synthesis::wikilinks::extract_wikilinks(content);
-        let links = crate::synthesis::wikilinks::resolve_against_pages(self, &labels).await?;
+        let scope = self
+            .get_page(page_id)
+            .await?
+            .and_then(|page| page.workspace.or(page.space));
+        let links =
+            crate::synthesis::wikilinks::resolve_against_pages(self, &labels, scope.as_deref())
+                .await?;
         self.replace_page_links(page_id, &links).await
     }
 
@@ -21941,14 +22667,27 @@ impl MemoryDB {
     ) -> Result<Option<Page>, WenlanError> {
         // Entity-first, but scoped.
         if let Some(eid) = entity_id {
-            if let Some(page) = self.get_page_by_entity(eid).await? {
-                let page_workspace = page.workspace.as_deref().or(page.space.as_deref());
-                let ws_ok = workspace.is_none_or(|w| page_workspace == Some(w));
-                let status_ok = page.review_status == "confirmed";
-                let human_owned = page.user_edited || page.creation_kind == "authored";
-                if ws_ok && status_ok && (allow_user_edited || !human_owned) {
-                    return Ok(Some(page));
-                }
+            let allow_human_owned = i64::from(allow_user_edited);
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
+                     FROM pages
+                     WHERE entity_id = ?1 AND status = 'active'
+                       AND COALESCE(review_status, 'confirmed') = 'confirmed'
+                       AND (?2 IS NULL OR COALESCE(workspace, space) = ?2)
+                       AND (?3 != 0 OR (COALESCE(user_edited, 0) = 0 AND COALESCE(creation_kind, 'distilled') <> 'authored'))
+                     ORDER BY id ASC LIMIT 1",
+                    libsql::params![eid, workspace, allow_human_owned],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("scoped page entity match: {e}")))?;
+            if let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                return Ok(Some(Self::row_to_page(&row)?));
             }
         }
         // Embedding cosine, scoped in SQL on space + review_status + ownership.
@@ -22424,9 +23163,32 @@ impl MemoryDB {
 
     pub async fn delete_page(&self, id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute("DELETE FROM pages WHERE id = ?1", libsql::params![id])
+        conn.execute("BEGIN", ())
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("delete_page: {e}")))?;
+            .map_err(|e| WenlanError::VectorDb(format!("delete_page begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "UPDATE page_links SET target_page_id = NULL WHERE target_page_id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_page orphan links: {e}")))?;
+            conn.execute("DELETE FROM pages WHERE id = ?1", libsql::params![id])
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_page row: {e}")))?;
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "delete_page commit: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -22550,6 +23312,53 @@ impl MemoryDB {
             )),
             None => Ok(None),
         }
+    }
+
+    /// Find exactly one active page whose title and scope match. Automatic
+    /// wikilink resolution refuses ambiguous same-scope titles instead of
+    /// attaching to whichever row SQLite happens to return first.
+    pub async fn find_unique_active_page_id_by_title_scoped(
+        &self,
+        label: &str,
+        scope: Option<&str>,
+    ) -> Result<Option<String>, WenlanError> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM pages
+                 WHERE LOWER(title) = LOWER(?1) AND status = 'active'
+                   AND ((?2 IS NULL AND COALESCE(workspace, space) IS NULL)
+                        OR COALESCE(workspace, space) = ?2)
+                 ORDER BY id ASC LIMIT 2",
+                libsql::params![trimmed, scope],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("find_unique_active_page_id_by_title_scoped: {e}"))
+            })?;
+        let first = match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row) => row
+                .get::<String>(0)
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+            None => return Ok(None),
+        };
+        if rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some(first))
     }
 
     /// Replace the entire outbound-link set for a page in one BEGIN/COMMIT.
@@ -22707,70 +23516,69 @@ impl MemoryDB {
     }
 
     /// Walk the orphan rows and re-resolve them against current page titles.
-    /// Returns the number of rows that flipped from NULL to a real target —
-    /// the refinery uses this for the log line. Snapshots the label list
+    /// Returns the number of distinct labels that flipped at least one row
+    /// from NULL to a real target — the refinery uses this for the log line.
+    /// Snapshots the orphan rows
     /// under a brief lock, then drops the connection before the per-label
     /// lookups so other writers aren't starved while the resolver scans.
+    /// Resolution is per source Page and scope; existing non-NULL targets are
+    /// explicit inventory and are never rewritten here.
     pub async fn resolve_orphan_page_links(&self) -> Result<usize, WenlanError> {
-        let labels: Vec<String> = {
+        let orphan_rows: Vec<(String, String, Option<String>)> = {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT DISTINCT label_key FROM page_links WHERE target_page_id IS NULL",
+                    "SELECT pl.source_page_id, pl.label_key, COALESCE(p.workspace, p.space)
+                     FROM page_links pl
+                     INNER JOIN pages p ON p.id = pl.source_page_id
+                     WHERE pl.target_page_id IS NULL AND p.status = 'active'
+                     ORDER BY pl.source_page_id ASC, pl.label_key ASC",
                     (),
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("resolve_orphan_links list: {e}")))?;
-            let mut labels: Vec<String> = Vec::new();
+            let mut orphan_rows = Vec::new();
             while let Some(row) = rows
                 .next()
                 .await
                 .map_err(|e| WenlanError::VectorDb(e.to_string()))?
             {
-                labels.push(row.get::<String>(0).unwrap_or_default());
+                orphan_rows.push((
+                    row.get::<String>(0).unwrap_or_default(),
+                    row.get::<String>(1).unwrap_or_default(),
+                    row.get::<Option<String>>(2).unwrap_or(None),
+                ));
             }
-            labels
+            orphan_rows
         };
 
-        let mut resolved = 0usize;
-        for label_key in labels {
+        let mut resolved_labels = std::collections::BTreeSet::new();
+        for (source_page_id, label_key, scope) in orphan_rows {
             let trimmed = label_key.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            // Look up + update under a fresh short-lived lock per label so
-            // other writers (page inserts, ingest) aren't blocked while we
-            // walk the full orphan set.
+            let Some(target) = self
+                .find_unique_active_page_id_by_title_scoped(trimmed, scope.as_deref())
+                .await?
+            else {
+                continue;
+            };
             let conn = self.conn.lock().await;
-            let mut hit = conn
-                .query(
-                    "SELECT id FROM pages \
-                     WHERE LOWER(title) = ?1 AND status = 'active' \
-                     LIMIT 1",
-                    libsql::params![trimmed],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("resolve_orphan_links lookup: {e}")))?;
-            if let Some(row) = hit
-                .next()
-                .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-            {
-                let target: String = row
-                    .get(0)
-                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-                drop(hit);
-                conn.execute(
-                    "UPDATE page_links SET target_page_id = ?1 \
-                     WHERE label_key = ?2 AND target_page_id IS NULL",
-                    libsql::params![target, label_key],
+            let changed = conn
+                .execute(
+                    "UPDATE page_links SET target_page_id = ?1
+                     WHERE source_page_id = ?2 AND label_key = ?3
+                       AND target_page_id IS NULL",
+                    libsql::params![target, source_page_id, label_key.as_str()],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("resolve_orphan_links update: {e}")))?;
-                resolved += 1;
+            if changed > 0 {
+                resolved_labels.insert(label_key);
             }
         }
-        Ok(resolved)
+        Ok(resolved_labels.len())
     }
 
     /// Search pages via vector similarity + FTS5 with RRF fusion.
@@ -23642,7 +24450,13 @@ impl MemoryDB {
 
         let rows_affected = match conn
             .execute(
-                "DELETE FROM page_sources WHERE memory_source_id NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
+                "DELETE FROM page_sources
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM memories m
+                     WHERE m.source != 'episode'
+                       AND (m.source_id = page_sources.memory_source_id
+                            OR m.id = page_sources.memory_source_id)
+                 )",
                 (),
             )
             .await
@@ -23658,7 +24472,14 @@ impl MemoryDB {
 
         if let Err(e) = conn
             .execute(
-                "DELETE FROM page_evidence WHERE source_kind = 'memory' AND locator NOT IN (SELECT DISTINCT source_id FROM memories WHERE source != 'episode')",
+                "DELETE FROM page_evidence
+                 WHERE source_kind = 'memory'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM memories m
+                       WHERE m.source != 'episode'
+                         AND (m.source_id = page_evidence.locator
+                              OR m.id = page_evidence.locator)
+                   )",
                 (),
             )
             .await
@@ -23870,18 +24691,37 @@ impl MemoryDB {
         existing_id: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE memories SET supersedes = ?1 WHERE source_id = ?2 AND source = 'memory'",
-            libsql::params![existing_id, incoming_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing link: {e}")))?;
-        conn.execute(
-            "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
-            libsql::params![existing_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing suppress: {e}")))?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "UPDATE memories SET supersedes = ?1 WHERE source_id = ?2 AND source = 'memory'",
+                libsql::params![existing_id, incoming_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_supersede_existing link: {e}")))?;
+            conn.execute(
+                "UPDATE memories SET confirmed = 0 WHERE source_id = ?1 AND source = 'memory'",
+                libsql::params![existing_id],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("resolve_supersede_existing suppress: {e}"))
+            })?;
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "resolve_supersede_existing commit: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -24688,6 +25528,67 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("mark_done: {}", e)))?;
+        Ok(())
+    }
+
+    /// Atomically publish the source-sync receipt and mark its enrichment row
+    /// done. A terminal queue row must never exist without the receipt used by
+    /// directory sync to skip unchanged files and reap deleted ones.
+    pub async fn complete_document_enrichment(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        mtime_ns: i64,
+        content_hash: &str,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("complete enrichment begin: {e}")))?;
+        let result = async {
+            conn.execute(
+                "INSERT INTO source_sync_state
+                    (source_id, file_path, mtime_ns, content_hash, last_synced_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(source_id, file_path) DO UPDATE SET
+                    mtime_ns = excluded.mtime_ns,
+                    content_hash = excluded.content_hash,
+                    last_synced_at = excluded.last_synced_at",
+                libsql::params![source_id, file_path, mtime_ns, content_hash, now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("complete enrichment receipt: {e}")))?;
+
+            let affected = conn
+                .execute(
+                    "UPDATE document_enrichment_queue
+                     SET status = 'done', next_retry_at = NULL,
+                         error_detail = NULL, updated_at = ?3
+                     WHERE source_id = ?1 AND file_path = ?2
+                       AND status = 'in_progress'",
+                    libsql::params![source_id, file_path, now],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("complete enrichment queue: {e}")))?;
+            if affected != 1 {
+                return Err(WenlanError::Conflict(format!(
+                    "document enrichment row is not in progress: {source_id}:{file_path}"
+                )));
+            }
+            Ok::<(), WenlanError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "complete enrichment commit: {error}"
+            )));
+        }
         Ok(())
     }
 
@@ -25533,6 +26434,8 @@ impl MemoryDB {
                 SELECT m.supersedes, c.depth + 1
                 FROM memories m
                 JOIN chain c ON m.source_id = c.source_id
+                    AND m.source != 'episode'
+                    AND m.chunk_index = 0
                 WHERE m.supersedes IS NOT NULL
                   AND c.depth < ?2
             )
@@ -25545,7 +26448,9 @@ impl MemoryDB {
                 m.source_agent,
                 m.supersede_mode
             FROM chain c
-            JOIN memories m ON m.source_id = c.source_id AND m.chunk_index = 0
+            JOIN memories m ON m.source_id = c.source_id
+                AND m.source != 'episode'
+                AND m.chunk_index = 0
             ORDER BY c.depth ASC
         ";
 
@@ -26408,6 +27313,120 @@ pub(crate) mod tests {
 
         // Should have roughly the same number of memories, not double
         assert_eq!(count1, count2, "upsert should replace, not accumulate");
+    }
+
+    #[tokio::test]
+    async fn upsert_documents_rolls_back_and_reuses_connection() {
+        let (db, _dir) = test_db().await;
+        let original =
+            "Original evidence must remain available after a failed replacement. ".repeat(200);
+        db.upsert_documents_with_derived_channels_for_test(
+            vec![memory_doc_with_fields(
+                "tx-replace",
+                &original,
+                "{\"status\":\"original\"}",
+            )],
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+
+        let old_memories = db
+            .get_memories_by_source_id("memory", "tx-replace")
+            .await
+            .unwrap();
+        assert!(
+            old_memories.len() > 1,
+            "fixture must cover replacement of multiple chunks"
+        );
+        let mut old_chunk_inventory: Vec<_> = old_memories
+            .iter()
+            .map(|memory| (memory.id.clone(), memory.content.clone()))
+            .collect();
+        old_chunk_inventory.sort();
+        let old_child_count = count_child_vectors_for(&db, "tx-replace").await;
+        assert!(
+            old_child_count >= 2,
+            "fixture must include derived child rows"
+        );
+        let old_child_inventory = child_vector_inventory_for(&db, "tx-replace").await;
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "CREATE TRIGGER fail_tx_replacement
+                 BEFORE INSERT ON memories
+                 WHEN NEW.source = 'memory' AND NEW.source_id = 'tx-replace'
+                 BEGIN SELECT RAISE(ABORT, 'blocked replacement'); END",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let replacement = memory_doc_with_fields(
+            "tx-replace",
+            "Replacement content must not partially overwrite the original.",
+            "{\"status\":\"replacement\"}",
+        );
+        let error = db
+            .upsert_documents_with_derived_channels_for_test(vec![replacement.clone()], false, true)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("blocked replacement"),
+            "expected trigger failure, got {error}"
+        );
+
+        let memories_after_failure = db
+            .get_memories_by_source_id("memory", "tx-replace")
+            .await
+            .unwrap();
+        assert_eq!(
+            memories_after_failure.len(),
+            old_memories.len(),
+            "failed replacement must preserve every old chunk"
+        );
+        let mut chunk_inventory_after_failure: Vec<_> = memories_after_failure
+            .iter()
+            .map(|memory| (memory.id.clone(), memory.content.clone()))
+            .collect();
+        chunk_inventory_after_failure.sort();
+        assert_eq!(
+            chunk_inventory_after_failure, old_chunk_inventory,
+            "failed replacement must preserve old chunk identity and content"
+        );
+        assert_eq!(
+            count_child_vectors_for(&db, "tx-replace").await,
+            old_child_count,
+            "failed replacement must preserve derived child rows"
+        );
+        assert_eq!(
+            child_vector_inventory_for(&db, "tx-replace").await,
+            old_child_inventory,
+            "failed replacement must preserve child identity and content"
+        );
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER fail_tx_replacement", ())
+                .await
+                .unwrap();
+        }
+        db.upsert_documents_with_derived_channels_for_test(vec![replacement], false, true)
+            .await
+            .expect("connection should accept a new transaction after rollback");
+
+        let memories_after_retry = db
+            .get_memories_by_source_id("memory", "tx-replace")
+            .await
+            .unwrap();
+        assert_eq!(memories_after_retry.len(), 1);
+        assert_eq!(
+            memories_after_retry[0].content,
+            "Replacement content must not partially overwrite the original."
+        );
     }
 
     #[tokio::test]
@@ -28211,6 +29230,263 @@ pub(crate) mod tests {
         assert!(result.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_delete_memory_cleans_derived_links_and_tags() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "INSERT INTO entities
+                 (id,name,entity_type,confirmed,created_at,updated_at)
+             VALUES ('entity-delete','Delete Target','concept',0,1,1);
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+             VALUES ('row-delete','Delete Target','memory','mem-delete','delete',0,1,'text');
+             INSERT INTO memory_entities (memory_id,entity_id)
+             VALUES ('mem-delete','entity-delete');
+             INSERT INTO document_tags (source,source_id,tag)
+             VALUES ('memory','mem-delete','derived');",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        db.delete_by_source_id("memory", "mem-delete")
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        for (table, sql) in [
+            (
+                "memory_entities",
+                "SELECT COUNT(*) FROM memory_entities WHERE memory_id='mem-delete'",
+            ),
+            (
+                "document_tags",
+                "SELECT COUNT(*) FROM document_tags WHERE source='memory' AND source_id='mem-delete'",
+            ),
+        ] {
+            let count: i64 = conn
+                .query(sql, ())
+                .await
+                .unwrap()
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get(0)
+                .unwrap();
+            assert_eq!(count, 0, "{table} must not retain deleted memory state");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_memory_rolls_back_when_derived_cleanup_fails() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "INSERT INTO entities
+                 (id,name,entity_type,confirmed,created_at,updated_at)
+             VALUES ('entity-rollback','Rollback Target','concept',0,1,1);
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+             VALUES ('row-rollback','Rollback Target','memory','mem-rollback','rollback',0,1,'text');
+             INSERT INTO memory_entities (memory_id,entity_id)
+             VALUES ('mem-rollback','entity-rollback');
+             CREATE TRIGGER reject_memory_entity_cleanup
+             BEFORE DELETE ON memory_entities
+             BEGIN SELECT RAISE(ABORT, 'forced cleanup failure'); END;",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        assert!(db
+            .delete_by_source_id("memory", "mem-rollback")
+            .await
+            .is_err());
+
+        let rows = db
+            .get_memories_by_source_id("memory", "mem-rollback")
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "failed cleanup must roll back primary delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn rebind_source_id_rolls_back_when_checkpoint_rebind_fails() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+                 VALUES ('row-rebind','body','memory','source-old','rebind',0,1,'text');
+                 INSERT INTO enrichment_steps
+                     (source_id,step_name,status,attempts,updated_at)
+                 VALUES ('source-old','extract','ok',1,1);
+                 INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,episode_of)
+                 VALUES ('episode-rebind','episode','episode','source-old','episode',0,1,'text','source-old');
+                 INSERT INTO child_vectors
+                     (id,parent_kind,parent_id,field,content,embedding)
+                 VALUES ('child-rebind','memory','source-old','claim','child',NULL);
+                 CREATE TRIGGER abort_enrichment_step_rebind
+                 BEFORE UPDATE OF source_id ON enrichment_steps
+                 WHEN OLD.source_id = 'source-old'
+                 BEGIN SELECT RAISE(ABORT, 'blocked checkpoint rebind'); END;",
+            )
+            .await
+            .unwrap();
+        }
+
+        let result = db
+            .rebind_source_id("memory", "source-old", "source-new")
+            .await;
+        let (old_memories, new_memories, old_steps, new_steps) = {
+            let conn = db.conn.lock().await;
+            let mut counts = Vec::new();
+            for sql in [
+                "SELECT COUNT(*) FROM memories WHERE source='memory' AND source_id='source-old'",
+                "SELECT COUNT(*) FROM memories WHERE source='memory' AND source_id='source-new'",
+                "SELECT COUNT(*) FROM enrichment_steps WHERE source_id='source-old'",
+                "SELECT COUNT(*) FROM enrichment_steps WHERE source_id='source-new'",
+            ] {
+                let count = conn
+                    .query(sql, ())
+                    .await
+                    .unwrap()
+                    .next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .get::<i64>(0)
+                    .unwrap();
+                counts.push(count);
+            }
+            conn.execute("DROP TRIGGER abort_enrichment_step_rebind", ())
+                .await
+                .unwrap();
+            (counts[0], counts[1], counts[2], counts[3])
+        };
+        db.record_enrichment_step("unrelated", "extract", "ok", None)
+            .await
+            .expect("connection must remain reusable after abort trigger");
+
+        assert!(
+            result.is_err(),
+            "a checkpoint rebind failure must fail the whole source-id rebind"
+        );
+        assert_eq!((old_memories, new_memories), (1, 0));
+        assert_eq!((old_steps, new_steps), (1, 0));
+
+        db.rebind_source_id("memory", "source-old", "source-new")
+            .await
+            .expect("retry after the fault is removed must converge");
+        let conn = db.conn.lock().await;
+        let episode_owner = conn
+            .query(
+                "SELECT source_id, episode_of FROM memories WHERE id='episode-rebind'",
+                (),
+            )
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(episode_owner.get::<String>(0).unwrap(), "source-new");
+        assert_eq!(
+            episode_owner.get::<Option<String>>(1).unwrap().as_deref(),
+            Some("source-new")
+        );
+        let child_owner = conn
+            .query(
+                "SELECT parent_id FROM child_vectors WHERE id='child-rebind'",
+                (),
+            )
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<String>(0)
+            .unwrap();
+        assert_eq!(child_owner, "source-new");
+    }
+
+    #[tokio::test]
+    async fn supersede_existing_rolls_back_link_when_suppression_fails() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,confirmed)
+                 VALUES
+                     ('row-supersede-incoming','new','memory','supersede-incoming','new',0,2,'text',1),
+                     ('row-supersede-existing','old','memory','supersede-existing','old',0,1,'text',1);
+                 CREATE TRIGGER abort_existing_suppression
+                 BEFORE UPDATE OF confirmed ON memories
+                 WHEN OLD.source_id = 'supersede-existing'
+                 BEGIN SELECT RAISE(ABORT, 'blocked existing suppression'); END;",
+            )
+            .await
+            .unwrap();
+        }
+
+        let result = db
+            .resolve_supersede_existing("supersede-incoming", "supersede-existing")
+            .await;
+        let (incoming_supersedes, existing_confirmed) = {
+            let conn = db.conn.lock().await;
+            let incoming_supersedes = conn
+                .query(
+                    "SELECT supersedes FROM memories WHERE source_id='supersede-incoming'",
+                    (),
+                )
+                .await
+                .unwrap()
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<Option<String>>(0)
+                .unwrap();
+            let existing_confirmed = conn
+                .query(
+                    "SELECT confirmed FROM memories WHERE source_id='supersede-existing'",
+                    (),
+                )
+                .await
+                .unwrap()
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap();
+            conn.execute("DROP TRIGGER abort_existing_suppression", ())
+                .await
+                .unwrap();
+            (incoming_supersedes, existing_confirmed)
+        };
+        db.record_enrichment_step("unrelated-supersede", "extract", "ok", None)
+            .await
+            .expect("connection must remain reusable after suppression abort");
+
+        assert!(result.is_err());
+        assert_eq!(
+            incoming_supersedes, None,
+            "failed suppression must roll back the incoming revision linkage"
+        );
+        assert_eq!(existing_confirmed, 1);
+    }
+
     // ==================== delete_bulk ====================
 
     #[tokio::test]
@@ -29059,6 +30335,92 @@ pub(crate) mod tests {
 
     // ==================== update_memory ====================
 
+    #[derive(Debug, PartialEq)]
+    struct PreservedMemoryMetadata {
+        id: String,
+        source_id: String,
+        source: String,
+        title: String,
+        summary: Option<String>,
+        url: Option<String>,
+        source_agent: Option<String>,
+        structured_fields: Option<String>,
+        retrieval_cue: Option<String>,
+        source_text: Option<String>,
+        confidence: Option<f64>,
+        importance: Option<i64>,
+        event_date: Option<i64>,
+        event_end: Option<i64>,
+        version: i64,
+        changelog: String,
+        created_at: Option<i64>,
+        last_modified: i64,
+        access_count: i64,
+        last_accessed: Option<i64>,
+        supersedes: Option<String>,
+        pending_revision: i64,
+        content_hash: Option<String>,
+        enrichment_status: String,
+    }
+
+    async fn preserved_memory_metadata(db: &MemoryDB, source_id: &str) -> PreservedMemoryMetadata {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, source_id, source, title, summary, url, source_agent,
+                        structured_fields, retrieval_cue, source_text, confidence,
+                        importance, event_date, event_end, COALESCE(version, 1),
+                        COALESCE(changelog, '[]'), created_at, last_modified,
+                        access_count, last_accessed, supersedes, pending_revision,
+                        content_hash, enrichment_status
+                 FROM memories
+                 WHERE source = 'memory' AND source_id = ?1 AND chunk_index = 0",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        PreservedMemoryMetadata {
+            id: row.get(0).unwrap(),
+            source_id: row.get(1).unwrap(),
+            source: row.get(2).unwrap(),
+            title: row.get(3).unwrap(),
+            summary: row.get::<Option<String>>(4).unwrap_or(None),
+            url: row.get::<Option<String>>(5).unwrap_or(None),
+            source_agent: row.get::<Option<String>>(6).unwrap_or(None),
+            structured_fields: row.get::<Option<String>>(7).unwrap_or(None),
+            retrieval_cue: row.get::<Option<String>>(8).unwrap_or(None),
+            source_text: row.get::<Option<String>>(9).unwrap_or(None),
+            confidence: row.get::<Option<f64>>(10).unwrap_or(None),
+            importance: row.get::<Option<i64>>(11).unwrap_or(None),
+            event_date: row.get::<Option<i64>>(12).unwrap_or(None),
+            event_end: row.get::<Option<i64>>(13).unwrap_or(None),
+            version: row.get(14).unwrap(),
+            changelog: row.get(15).unwrap(),
+            created_at: row.get::<Option<i64>>(16).unwrap_or(None),
+            last_modified: row.get(17).unwrap(),
+            access_count: row.get(18).unwrap(),
+            last_accessed: row.get::<Option<i64>>(19).unwrap_or(None),
+            supersedes: row.get::<Option<String>>(20).unwrap_or(None),
+            pending_revision: row.get(21).unwrap(),
+            content_hash: row.get::<Option<String>>(22).unwrap_or(None),
+            enrichment_status: row.get(23).unwrap(),
+        }
+    }
+
+    async fn episode_content_for(db: &MemoryDB, source_id: &str) -> Option<String> {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT content FROM memories
+                 WHERE source = 'episode' AND source_id = ?1",
+                libsql::params![source_id],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().map(|row| row.get(0).unwrap())
+    }
+
     #[tokio::test]
     async fn test_update_memory() {
         let (db, _dir) = test_db().await;
@@ -29094,6 +30456,323 @@ pub(crate) mod tests {
             updated_memories[0].content,
             "New updated memory content about machine learning."
         );
+    }
+
+    #[tokio::test]
+    async fn update_memory_missing_head_returns_not_found() {
+        let (db, _dir) = test_db().await;
+
+        let error = db
+            .update_memory("missing-update-head", "replacement content")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, WenlanError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn update_memory_replaces_multichunk_content_and_child_vectors() {
+        let (db, _dir) = test_db().await;
+        let original =
+            "Original multi chunk memory content stays internally consistent. ".repeat(200);
+        db.upsert_documents_with_derived_channels_for_test(
+            vec![memory_doc_with_fields(
+                "edit-multichunk",
+                &original,
+                "{\"status\":\"original\"}",
+            )],
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(
+            db.get_memories_by_source_id("memory", "edit-multichunk")
+                .await
+                .unwrap()
+                .len()
+                >= 3,
+            "fixture must include at least three chunks"
+        );
+
+        let edited = "Edited canonical content is stored once and derived rows follow it.";
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            db.update_memory("edit-multichunk", edited).await.unwrap();
+        })
+        .await;
+
+        let chunks = db
+            .get_memories_by_source_id("memory", "edit-multichunk")
+            .await
+            .unwrap();
+        assert_eq!(chunks.len(), 1, "no stale secondary chunk may survive");
+        assert_eq!(chunks[0].chunk_index, 0);
+        assert_eq!(chunks[0].content, edited);
+
+        let children = child_vector_inventory_for(&db, "edit-multichunk").await;
+        assert!(
+            children
+                .iter()
+                .any(|(_, field, content)| field == "narrative" && content == edited),
+            "narrative child must track edited content"
+        );
+        assert!(
+            children
+                .iter()
+                .any(|(_, field, content)| field == "status" && content == "status: original"),
+            "structured-field children must survive content edits"
+        );
+        assert!(
+            children
+                .iter()
+                .all(|(_, _, content)| !content.contains("Original multi chunk")),
+            "old narrative child content must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_memory_preserves_metadata_and_synchronizes_episode_and_fts() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars(
+            [
+                ("WENLAN_ENABLE_FACT_CHANNEL", Some("1")),
+                ("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1")),
+            ],
+            async {
+                let original =
+                    "olduniquetoken original memory has enough words for a content backed episode "
+                        .repeat(100);
+                db.upsert_documents_with_derived_channels_for_test(
+                    vec![memory_doc_with_fields(
+                        "edit-preserve",
+                        &original,
+                        "{\"status\":\"durable\"}",
+                    )],
+                    true,
+                    true,
+                )
+                .await
+                .unwrap();
+                {
+                    let conn = db.conn.lock().await;
+                    conn.execute(
+                        "UPDATE memories SET
+                            summary = 'preserved summary', url = 'https://example.test/source',
+                            retrieval_cue = 'preserved cue', importance = 9,
+                            event_date = 1779602400, event_end = 1779688800,
+                            version = 7, changelog = '[{\"version\":7}]',
+                            created_at = 1700000000, last_modified = 1700000100,
+                            access_count = 4, last_accessed = 1700000200,
+                            supersedes = 'older-memory', content_hash = 'preserved-hash',
+                            enrichment_status = 'legacy-preserved'
+                         WHERE source = 'memory' AND source_id = 'edit-preserve'",
+                        (),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let before = preserved_memory_metadata(&db, "edit-preserve").await;
+
+                let edited = "newuniquetoken edited canonical content has enough words to remain a useful episode";
+                crate::post_write::update_memory(
+                    &db,
+                    "edit-preserve",
+                    crate::post_write::MemoryUpdate {
+                        content: Some(edited),
+                        space: None,
+                        confirm: false,
+                        memory_type: None,
+                    },
+                )
+                .await
+                .unwrap();
+
+                assert_eq!(
+                    preserved_memory_metadata(&db, "edit-preserve").await,
+                    before,
+                    "content edit must preserve all untouched head metadata"
+                );
+                let chunks = db
+                    .get_memories_by_source_id("memory", "edit-preserve")
+                    .await
+                    .unwrap();
+                assert_eq!(chunks.len(), 1);
+                assert_eq!(chunks[0].content, edited);
+                assert_eq!(
+                    episode_content_for(&db, "edit-preserve").await.as_deref(),
+                    Some(edited),
+                    "content-backed episode must follow the canonical edit"
+                );
+
+                let conn = db.conn.lock().await;
+                let mut new_rows = conn
+                    .query(
+                        "SELECT c.id FROM memories_fts fts
+                         JOIN memories c ON c.rowid = fts.rowid
+                         WHERE c.source_id = 'edit-preserve'
+                           AND c.source = 'memory'
+                           AND memories_fts MATCH 'newuniquetoken'",
+                        (),
+                    )
+                    .await
+                    .unwrap();
+                assert!(new_rows.next().await.unwrap().is_some());
+                let mut old_rows = conn
+                    .query(
+                        "SELECT c.id FROM memories_fts fts
+                         JOIN memories c ON c.rowid = fts.rowid
+                         WHERE c.source_id = 'edit-preserve'
+                           AND c.source = 'memory'
+                           AND memories_fts MATCH 'olduniquetoken'",
+                        (),
+                    )
+                    .await
+                    .unwrap();
+                assert!(old_rows.next().await.unwrap().is_none());
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_memory_removes_disabled_or_below_gate_derived_rows() {
+        let (db, _dir) = test_db().await;
+        let original = "original content has enough words to create a content backed episode row";
+        db.upsert_documents_with_derived_channels_for_test(
+            vec![memory_doc_with_fields(
+                "edit-derived-delete",
+                original,
+                "{\"status\":\"old\"}",
+            )],
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(count_child_vectors_for(&db, "edit-derived-delete").await > 0);
+        assert!(episode_content_for(&db, "edit-derived-delete")
+            .await
+            .is_some());
+
+        temp_env::async_with_vars(
+            [
+                ("WENLAN_ENABLE_FACT_CHANNEL", None::<&str>),
+                ("WENLAN_ENABLE_EPISODE_CHANNEL", Some("1")),
+            ],
+            async {
+                db.update_memory("edit-derived-delete", "too short")
+                    .await
+                    .unwrap();
+            },
+        )
+        .await;
+
+        assert_eq!(
+            count_child_vectors_for(&db, "edit-derived-delete").await,
+            0,
+            "disabled fact channel must not retain stale child rows"
+        );
+        assert_eq!(
+            episode_content_for(&db, "edit-derived-delete").await,
+            None,
+            "below-gate edited content must remove the stale content-backed episode"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_memory_rolls_back_all_fields_and_reuses_connection() {
+        let (db, _dir) = test_db().await;
+        temp_env::async_with_vars([("WENLAN_ENABLE_FACT_CHANNEL", Some("1"))], async {
+            let original = "Original atomic update content spans several chunks. ".repeat(150);
+            db.upsert_documents_with_derived_channels_for_test(
+                vec![memory_doc_with_fields(
+                    "edit-rollback",
+                    &original,
+                    "{\"status\":\"original\"}",
+                )],
+                false,
+                true,
+            )
+            .await
+            .unwrap();
+            let old_chunks = db
+                .get_memories_by_source_id("memory", "edit-rollback")
+                .await
+                .unwrap();
+            let old_children = child_vector_inventory_for(&db, "edit-rollback").await;
+            let old_detail = db
+                .get_memory_detail("edit-rollback")
+                .await
+                .unwrap()
+                .unwrap();
+            {
+                let conn = db.conn.lock().await;
+                conn.execute(
+                    "CREATE TRIGGER fail_atomic_memory_edit
+                     BEFORE DELETE ON child_vectors
+                     WHEN OLD.parent_id = 'edit-rollback'
+                     BEGIN SELECT RAISE(ABORT, 'blocked child replacement'); END",
+                    (),
+                )
+                .await
+                .unwrap();
+            }
+
+            let update = crate::post_write::MemoryUpdate {
+                content: Some("Replacement content must be fully atomic across every field."),
+                space: Some(Some("new-space")),
+                confirm: true,
+                memory_type: Some("preference"),
+            };
+            let error = crate::post_write::update_memory(&db, "edit-rollback", update)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("blocked child replacement"));
+
+            let after_failure = db
+                .get_memory_detail("edit-rollback")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(after_failure.content, old_detail.content);
+            assert_eq!(after_failure.space, old_detail.space);
+            assert_eq!(after_failure.memory_type, old_detail.memory_type);
+            assert_eq!(after_failure.confirmed, old_detail.confirmed);
+            assert_eq!(
+                db.get_memories_by_source_id("memory", "edit-rollback")
+                    .await
+                    .unwrap()
+                    .len(),
+                old_chunks.len()
+            );
+            assert_eq!(
+                child_vector_inventory_for(&db, "edit-rollback").await,
+                old_children
+            );
+
+            {
+                let conn = db.conn.lock().await;
+                conn.execute("DROP TRIGGER fail_atomic_memory_edit", ())
+                    .await
+                    .unwrap();
+            }
+            crate::post_write::update_memory(&db, "edit-rollback", update)
+                .await
+                .expect("same connection must accept a later complete update");
+            let after_retry = db
+                .get_memory_detail("edit-rollback")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                after_retry.content,
+                "Replacement content must be fully atomic across every field."
+            );
+            assert_eq!(after_retry.space.as_deref(), Some("new-space"));
+            assert_eq!(after_retry.memory_type.as_deref(), Some("preference"));
+            assert!(after_retry.confirmed);
+        })
+        .await;
     }
 
     // ==================== update_timestamp_by_source_id ====================
@@ -29448,6 +31127,144 @@ pub(crate) mod tests {
         // Relation also gone (FK cascade)
         let bob_detail = db.get_entity_detail(&bob_id).await.unwrap();
         assert_eq!(bob_detail.relations.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_entity_rolls_back_and_clears_all_owned_references() {
+        let (db, _dir) = test_db().await;
+        let entity_id = db
+            .store_entity("Delete target", "person", None, None, None)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.upsert_documents(vec![make_memory_doc(
+            "delete_entity_memory",
+            "Memory owned by the delete target",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        db.update_memory_entity_id("delete_entity_memory", &entity_id)
+            .await
+            .unwrap();
+        db.link_memory_entities("delete_entity_memory", &[entity_id.as_str()])
+            .await
+            .unwrap();
+        db.insert_page(
+            "delete_entity_page",
+            "Entity-owned Page",
+            None,
+            "content",
+            Some(&entity_id),
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let aliases_before = {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO entity_aliases
+                    (alias_name, canonical_entity_id, created_at, source)
+                 VALUES ('Delete target alias', ?1, unixepoch(), 'test')",
+                libsql::params![entity_id.clone()],
+            )
+            .await
+            .unwrap();
+            let aliases_before = {
+                let mut rows = conn
+                    .query(
+                        "SELECT COUNT(*) FROM entity_aliases
+                         WHERE canonical_entity_id = ?1",
+                        libsql::params![entity_id.clone()],
+                    )
+                    .await
+                    .unwrap();
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+            };
+            conn.execute_batch(
+                "CREATE TRIGGER fail_entity_delete
+                 BEFORE DELETE ON entities
+                 BEGIN
+                     SELECT RAISE(ABORT, 'blocked entity delete');
+                 END;",
+            )
+            .await
+            .unwrap();
+            aliases_before
+        };
+
+        let error = db.delete_entity(&entity_id).await.unwrap_err();
+        assert!(error.to_string().contains("blocked entity delete"));
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT
+                        (SELECT entity_id FROM memories
+                         WHERE source_id = 'delete_entity_memory' LIMIT 1),
+                        (SELECT entity_id FROM pages
+                         WHERE id = 'delete_entity_page'),
+                        (SELECT COUNT(*) FROM entity_aliases
+                         WHERE canonical_entity_id = ?1),
+                        (SELECT COUNT(*) FROM memory_entities
+                         WHERE entity_id = ?1),
+                        (SELECT COUNT(*) FROM entities WHERE id = ?1)",
+                    libsql::params![entity_id.clone()],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(
+                row.get::<Option<String>>(0).unwrap(),
+                Some(entity_id.clone())
+            );
+            assert_eq!(
+                row.get::<Option<String>>(1).unwrap(),
+                Some(entity_id.clone())
+            );
+            assert_eq!(
+                row.get::<i64>(2).unwrap(),
+                aliases_before,
+                "aliases must roll back"
+            );
+            assert_eq!(row.get::<i64>(3).unwrap(), 1, "junction must remain");
+            assert_eq!(row.get::<i64>(4).unwrap(), 1, "entity must remain");
+
+            conn.execute("DROP TRIGGER fail_entity_delete", ())
+                .await
+                .unwrap();
+        }
+
+        db.delete_entity(&entity_id).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT
+                    (SELECT entity_id FROM memories
+                     WHERE source_id = 'delete_entity_memory' LIMIT 1),
+                    (SELECT entity_id FROM pages WHERE id = 'delete_entity_page'),
+                    (SELECT COUNT(*) FROM entity_aliases
+                     WHERE canonical_entity_id = ?1),
+                    (SELECT COUNT(*) FROM memory_entities WHERE entity_id = ?1),
+                    (SELECT COUNT(*) FROM entities WHERE id = ?1)",
+                libsql::params![entity_id],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<Option<String>>(0).unwrap(), None);
+        assert_eq!(row.get::<Option<String>>(1).unwrap(), None);
+        assert_eq!(row.get::<i64>(2).unwrap(), 0);
+        assert_eq!(row.get::<i64>(3).unwrap(), 0);
+        assert_eq!(row.get::<i64>(4).unwrap(), 0);
     }
 
     #[tokio::test]
@@ -36388,6 +38205,31 @@ pub(crate) mod tests {
 
     // ---- page_links / wikilink graph ----
 
+    async fn insert_scoped_wikilink_page(
+        db: &MemoryDB,
+        id: &str,
+        title: &str,
+        content: &str,
+        scope: &str,
+    ) {
+        db.insert_page_with_kind(
+            id,
+            title,
+            None,
+            content,
+            None,
+            Some(scope),
+            &[],
+            &chrono::Utc::now().to_rfc3339(),
+            "research",
+            "confirmed",
+            Some(scope),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn list_active_page_titles_excludes_archived_and_honours_limit() {
         let (db, _dir) = test_db().await;
@@ -36464,6 +38306,146 @@ pub(crate) mod tests {
         assert_eq!(by_label.get("Alpha"), Some(&Some("page_alpha".to_string())));
         // Orphan stays NULL until the target gets created.
         assert_eq!(by_label.get("Quantum Knitting"), Some(&None));
+    }
+
+    #[tokio::test]
+    async fn wikilink_resolution_uses_the_source_page_scope() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(
+            &db,
+            "target-personal",
+            "Scoped Topic",
+            "personal body",
+            "personal",
+        )
+        .await;
+        insert_scoped_wikilink_page(&db, "target-work", "Scoped Topic", "work body", "work").await;
+        insert_scoped_wikilink_page(
+            &db,
+            "source-work",
+            "Work Source",
+            "see [[Scoped Topic]]",
+            "work",
+        )
+        .await;
+
+        let links = db.get_page_outbound_links("source-work").await.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target_page_id.as_deref(),
+            Some("target-work"),
+            "automatic resolution must stay in the source Page scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn wikilink_same_scope_duplicate_titles_remain_unresolved() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(&db, "duplicate-a", "Ambiguous", "body a", "work").await;
+        insert_scoped_wikilink_page(&db, "duplicate-b", "Ambiguous", "body b", "work").await;
+        insert_scoped_wikilink_page(
+            &db,
+            "source-ambiguous",
+            "Ambiguous Source",
+            "see [[Ambiguous]]",
+            "work",
+        )
+        .await;
+
+        let links = db
+            .get_page_outbound_links("source-ambiguous")
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target_page_id, None,
+            "same-scope ambiguity must remain visible as an orphan"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_wikilink_repair_is_scoped_per_source_page() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(
+            &db,
+            "orphan-source-work",
+            "Work Source",
+            "see [[Future Topic]]",
+            "work",
+        )
+        .await;
+        insert_scoped_wikilink_page(
+            &db,
+            "orphan-source-personal",
+            "Personal Source",
+            "see [[Future Topic]]",
+            "personal",
+        )
+        .await;
+        insert_scoped_wikilink_page(
+            &db,
+            "future-work",
+            "Future Topic",
+            "future work body",
+            "work",
+        )
+        .await;
+
+        assert_eq!(db.resolve_orphan_page_links().await.unwrap(), 1);
+        let work_links = db
+            .get_page_outbound_links("orphan-source-work")
+            .await
+            .unwrap();
+        let personal_links = db
+            .get_page_outbound_links("orphan-source-personal")
+            .await
+            .unwrap();
+        assert_eq!(work_links[0].target_page_id.as_deref(), Some("future-work"));
+        assert_eq!(
+            personal_links[0].target_page_id, None,
+            "a work target must not repair the personal source's orphan"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_resolver_preserves_explicit_cross_scope_targets() {
+        let (db, _dir) = test_db().await;
+        insert_scoped_wikilink_page(
+            &db,
+            "explicit-target-work",
+            "Explicit Work Target",
+            "work body",
+            "work",
+        )
+        .await;
+        insert_scoped_wikilink_page(
+            &db,
+            "explicit-source-personal",
+            "Explicit Personal Source",
+            "body",
+            "personal",
+        )
+        .await;
+        db.replace_page_links(
+            "explicit-source-personal",
+            &[crate::synthesis::wikilinks::Wikilink {
+                label: "Explicit Work Target".to_string(),
+                target_page_id: Some("explicit-target-work".to_string()),
+            }],
+        )
+        .await
+        .unwrap();
+
+        db.resolve_orphan_page_links().await.unwrap();
+        let links = db
+            .get_page_outbound_links("explicit-source-personal")
+            .await
+            .unwrap();
+        assert_eq!(
+            links[0].target_page_id.as_deref(),
+            Some("explicit-target-work"),
+            "automatic orphan repair must not rewrite an explicit target"
+        );
     }
 
     #[tokio::test]
@@ -36655,6 +38637,78 @@ pub(crate) mod tests {
             db.get_page_inbound_links("page_tgt").await.unwrap().len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn page_links_target_delete_becomes_orphan_and_reresolves() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_target_old",
+            "Replaceable Target",
+            None,
+            "old target",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page_source_keep",
+            "Source Keep",
+            None,
+            "see [[Replaceable Target]]",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db.get_page_outbound_links("page_source_keep")
+                .await
+                .unwrap()[0]
+                .target_page_id
+                .as_deref(),
+            Some("page_target_old")
+        );
+
+        db.delete_page("page_target_old").await.unwrap();
+        let target_after_delete = db
+            .get_page_outbound_links("page_source_keep")
+            .await
+            .unwrap()[0]
+            .target_page_id
+            .clone();
+
+        db.insert_page(
+            "page_target_new",
+            "Replaceable Target",
+            None,
+            "new target",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        let resolved = db.resolve_orphan_page_links().await.unwrap();
+        let target_after_repair = db
+            .get_page_outbound_links("page_source_keep")
+            .await
+            .unwrap()[0]
+            .target_page_id
+            .clone();
+        assert_eq!(
+            target_after_delete, None,
+            "deleting a target must expose existing references as unresolved"
+        );
+        assert_eq!(resolved, 1);
+        assert_eq!(target_after_repair.as_deref(), Some("page_target_new"));
     }
 
     #[tokio::test]
@@ -39096,6 +41150,83 @@ pub(crate) mod tests {
         assert_eq!(sources.len(), 1, "valid row should be intact");
     }
 
+    #[tokio::test]
+    async fn cleanup_orphaned_page_sources_accepts_logical_and_row_ids() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_locator_forms",
+            "Locator forms",
+            None,
+            "content",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.upsert_documents(vec![make_memory_doc(
+            "logical_locator",
+            "Memory with two valid locator forms",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+
+        let row_id = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM memories
+                     WHERE source_id = 'logical_locator' AND chunk_index = 0",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap()
+        };
+
+        for locator in ["logical_locator", row_id.as_str(), "missing_locator"] {
+            db.link_page_source("page_locator_forms", locator, "test")
+                .await
+                .unwrap();
+        }
+
+        let removed = db.cleanup_orphaned_page_sources().await.unwrap();
+        assert_eq!(removed, 1, "only the missing owner should be removed");
+
+        let source_locators: std::collections::HashSet<_> = db
+            .get_page_sources("page_locator_forms")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+        assert_eq!(
+            source_locators,
+            std::collections::HashSet::from(["logical_locator".to_string(), row_id.clone()])
+        );
+
+        let evidence_locators: std::collections::HashSet<_> = db
+            .get_page_evidence("page_locator_forms")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|evidence| evidence.source_kind == "memory")
+            .filter_map(|evidence| evidence.locator)
+            .collect();
+        assert_eq!(evidence_locators, source_locators);
+    }
+
     // ---- upsert_memory_in_place ----
 
     #[tokio::test]
@@ -40468,6 +42599,59 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn walk_chain_ignores_derived_and_secondary_rows() {
+        let (db, _dir) = test_db().await;
+
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "wc_shape_old".to_string(),
+            title: "Old".to_string(),
+            content: "Old canonical content.".to_string(),
+            memory_type: Some("fact".to_string()),
+            confirmed: Some(true),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "wc_shape_new".to_string(),
+            title: "New".to_string(),
+            content: "New canonical content.".to_string(),
+            memory_type: Some("fact".to_string()),
+            confirmed: Some(true),
+            supersedes: Some("wc_shape_old".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,supersedes)
+             VALUES
+                 ('wc-shape-secondary','secondary','memory','wc_shape_new','New',1,1,'text','wc_shape_old');
+             INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,episode_of)
+             VALUES
+                 ('wc-shape-new-episode','episode','episode','wc_shape_new','New episode',0,1,'text','wc_shape_new'),
+                 ('wc-shape-old-episode','episode','episode','wc_shape_old','Old episode',0,1,'text','wc_shape_old');",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let chain = db.walk_supersede_chain("wc_shape_new").await.unwrap();
+        let ids: Vec<&str> = chain.iter().map(|entry| entry.source_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["wc_shape_new", "wc_shape_old"],
+            "revision history must contain only canonical memory heads"
+        );
+    }
+
+    #[tokio::test]
     async fn walk_chain_three_hops() {
         let (db, _dir) = test_db().await;
 
@@ -40911,6 +43095,75 @@ pub(crate) mod tests {
             eid, canonical,
             "memory entity_id should re-point to canonical"
         );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_transfers_canonical_memory_links_and_page_owner() {
+        let (db, _tmp) = test_db().await;
+        let (canonical, alias) = seed_two_entities(&db).await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.link_memory_entities(
+            "memory_linked_to_both",
+            &[canonical.as_str(), alias.as_str()],
+        )
+        .await
+        .unwrap();
+        db.link_memory_entities("memory_linked_to_alias", &[alias.as_str()])
+            .await
+            .unwrap();
+        db.insert_page(
+            "page_owned_by_alias",
+            "Alias Page",
+            None,
+            "content",
+            Some(&alias),
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        db.merge_entities(&canonical, &alias).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT memory_id, entity_id FROM memory_entities
+                 ORDER BY memory_id, entity_id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut links = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            links.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+        }
+        assert_eq!(
+            links,
+            vec![
+                ("memory_linked_to_alias".to_string(), canonical.clone()),
+                ("memory_linked_to_both".to_string(), canonical.clone()),
+            ],
+            "alias-only links must transfer and collisions must deduplicate"
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT entity_id FROM pages WHERE id = 'page_owned_by_alias'",
+                (),
+            )
+            .await
+            .unwrap();
+        let page_owner = rows
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<Option<String>>(0)
+            .unwrap();
+        assert_eq!(page_owner, Some(canonical));
     }
 
     #[tokio::test]
@@ -42502,6 +44755,51 @@ pub(crate) mod tests {
         assert!(
             mismatched.is_none(),
             "workspace-scoped matching must not match pages from other workspaces"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_matching_page_scoped_entity_miss_releases_lock_before_embedding_fallback() {
+        let (db, _td) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let phrase = "entity miss must fall back to a same-scope embedding candidate";
+        db.insert_page_with_kind(
+            "page_entity_miss_fallback",
+            "Entity Miss Fallback",
+            Some(phrase),
+            phrase,
+            None,
+            Some("recap"),
+            &[],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let embedding = db
+            .generate_embeddings(&[phrase.to_string()])
+            .unwrap()
+            .remove(0);
+
+        let matched = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            db.find_matching_page_scoped(
+                Some("entity-does-not-exist"),
+                &embedding,
+                0.85,
+                Some("work"),
+                false,
+            ),
+        )
+        .await
+        .expect("entity miss must not deadlock before embedding fallback")
+        .unwrap();
+        assert_eq!(
+            matched.as_ref().map(|page| page.id.as_str()),
+            Some("page_entity_miss_fallback")
         );
     }
 
@@ -46030,6 +48328,32 @@ pub(crate) mod tests {
             .await
             .unwrap();
         rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    async fn child_vector_inventory_for(
+        db: &MemoryDB,
+        parent_id: &str,
+    ) -> Vec<(String, String, String)> {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, field, content
+                 FROM child_vectors
+                 WHERE parent_kind = 'memory' AND parent_id = ?1
+                 ORDER BY id",
+                libsql::params![parent_id],
+            )
+            .await
+            .unwrap();
+        let mut inventory = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            inventory.push((
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+            ));
+        }
+        inventory
     }
 
     fn memory_doc_with_fields(source_id: &str, content: &str, fields_json: &str) -> RawDocument {

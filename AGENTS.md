@@ -185,8 +185,8 @@ Releases are automated via [release-please](https://github.com/googleapis/releas
 
 **How it works:**
 1. Every push to `main`, release-please scans new commits and maintains an open "release PR" that accumulates changes and updates `CHANGELOG.md`.
-2. When you're ready to ship, merge the release PR. That triggers a GitHub release (draft) + git tag.
-3. The `v*` tag push triggers `.github/workflows/release.yml`, which builds `wenlan`, `wenlan-server`, and `wenlan-mcp`, uploads standalone binaries to the release, and publishes it.
+2. When you're ready to ship, merge the release PR. release-please creates a **published** GitHub release + git tag.
+3. The `v*` tag push triggers `.github/workflows/release.yml`. Its first job immediately demotes that release to a **prerelease**, so `releases/latest` keeps resolving to the last good version while the build runs. It then builds `wenlan`, `wenlan-server`, and `wenlan-mcp`, uploads standalone binaries, publishes to crates.io / npm / Homebrew, and only if every one of those jobs succeeds does `finalize-release` clear the prerelease flag. That promotion is what fires `release: released` and, through it, `notify-marketplace`.
 4. The release-please workflow also syncs daemon `Cargo.toml` versions on the release branch (release-please can't handle Cargo workspaces reliably with `simple` release type).
 
 **Commit messages control version bumps.** Pre-1.0:

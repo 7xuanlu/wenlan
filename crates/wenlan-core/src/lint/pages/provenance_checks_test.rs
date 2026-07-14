@@ -13,6 +13,7 @@ use wenlan_types::lint::{
 fn source(locator: &str, expected: &str, actual: &[&str]) -> SourceRecord {
     SourceRecord {
         locator: locator.to_string(),
+        owner_present: true,
         expected_kind: expected.to_string(),
         evidence_kinds: actual.iter().map(|kind| (*kind).to_string()).collect(),
     }
@@ -60,6 +61,12 @@ fn mixed_source_kinds_and_drift_map_to_exact_outcomes() {
         &[
             source("missing", "memory", &[]),
             source("unknown", "memory", &["future_kind"]),
+            SourceRecord {
+                locator: "orphan".to_string(),
+                owner_present: false,
+                expected_kind: "memory".to_string(),
+                evidence_kinds: vec!["memory".to_string()],
+            },
         ],
         &[],
     )
@@ -224,7 +231,7 @@ async fn hundred_thousand_sql_rows_validate_all_and_cap_opaque_samples() {
     assert_eq!(
         result.evidence().first(),
         Some(&wenlan_types::lint::LintEvidenceRef::OpaqueId {
-            opaque_id: LintOpaqueId::from_sorted_position(100).unwrap(),
+            opaque_id: LintOpaqueId::from_sorted_position(0).unwrap(),
         })
     );
     assert!(!serde_json::to_string(&result)
@@ -368,13 +375,67 @@ async fn set_query_matches_writer_precedence_and_pages_workspace_scope() {
         .result(SOURCE_COVERAGE_ID, 0)
         .unwrap();
     assert_eq!(global_result.outcome(), LintOutcome::Finding);
-    assert_eq!(global_result.severity(), LintSeverity::Warning);
+    assert_eq!(global_result.severity(), LintSeverity::Error);
     let global_citations = load_and_assess_citations(&global_context)
         .await
         .unwrap()
         .result(CITATION_PARTITIONS_ID, 0)
         .unwrap();
     assert_eq!(global_citations.coverage().denominator(), 2);
+}
+
+#[tokio::test]
+async fn matching_evidence_cannot_mask_missing_logical_or_row_id_owner() {
+    let (db, _tmp) = test_db().await;
+    let conn = db._db.connect().unwrap();
+    insert_memory(&conn, "mem-owner-row", "owner-logical-id", "memory", None).await;
+    insert_page(&conn, "page-owner-check", "workspace-a", None).await;
+    for locator in [
+        "owner-logical-id",
+        "mem-owner-row",
+        "missing-logical-owner",
+        "mem-missing-row-owner",
+    ] {
+        conn.execute(
+            "INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason)
+             VALUES ('page-owner-check', ?1, 1, 'test')",
+            libsql::params![locator],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO page_evidence (page_id, source_kind, locator, linked_at, link_reason)
+             VALUES ('page-owner-check', 'memory', ?1, 1, 'test')",
+            libsql::params![locator],
+        )
+        .await
+        .unwrap();
+    }
+
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let scope = AppliedScope::global();
+    let clock = LintClock::fixed();
+    let gate = ExecutionGate::new(CancellationToken::new());
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
+    let result = super::source::load_and_assess_sources(&context)
+        .await
+        .unwrap()
+        .result(SOURCE_COVERAGE_ID, 0)
+        .unwrap();
+
+    assert_eq!(result.outcome(), LintOutcome::Finding);
+    assert_eq!(result.severity(), LintSeverity::Error);
+    assert_eq!(result.coverage().denominator(), 4);
+    assert_eq!(result.coverage().evaluated(), 4);
+    assert_eq!(metric(&result, LintMetricCode::AffectedRecords), 2);
+    assert_eq!(result.evidence().len(), 2);
 }
 
 fn metric(result: &LintCheckResult, code: LintMetricCode) -> u64 {

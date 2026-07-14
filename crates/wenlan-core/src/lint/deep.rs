@@ -108,7 +108,8 @@ async fn memory_duplicates(context: &LintContext<'_, '_>) -> Result<RowCheck, ()
         context,
         &format!(
             "WITH heads AS (
-                 SELECT m.source_id, LOWER(TRIM(MIN(m.content))) AS normalized
+                 SELECT m.source_id,
+                        LOWER(TRIM(MAX(CASE WHEN m.chunk_index=0 THEN m.content END))) AS normalized
                    FROM memories m
                   WHERE m.source='memory' AND m.pending_revision=0
                     AND COALESCE(m.is_recap,0)=0 AND m.supersede_mode!='evicted'{scope}

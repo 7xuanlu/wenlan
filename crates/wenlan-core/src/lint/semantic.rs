@@ -54,6 +54,13 @@ struct Adjudication {
     agent_submissions: u64,
 }
 
+#[derive(Clone, Copy, Default)]
+struct SemanticTelemetry<'a> {
+    adjudication: Option<&'a Adjudication>,
+    judged: u64,
+    unresolved: u64,
+}
+
 pub(super) async fn run(
     context: &LintContext<'_, '_>,
     provider: Option<&dyn LlmProvider>,
@@ -440,6 +447,24 @@ fn semantic_result(
         .iter()
         .filter(|candidate| candidate.check_id() == check_id)
         .collect::<Vec<_>>();
+    let adjudicated_verdicts = adjudication
+        .map(|value| {
+            check_candidates
+                .iter()
+                .filter_map(|candidate| value.verdicts.get(&candidate.reference()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let judged = adjudicated_verdicts.len() as u64;
+    let unresolved = adjudicated_verdicts
+        .iter()
+        .filter(|verdict| verdict.has_unresolved_disagreement())
+        .count() as u64;
+    let telemetry = SemanticTelemetry {
+        adjudication,
+        judged,
+        unresolved,
+    };
     let result = if population.eligible() == 0 {
         terminal_result(
             context,
@@ -447,6 +472,7 @@ fn semantic_result(
             population,
             LintOutcome::NotRunPrerequisite,
             LintReasonCode::InsufficientSemanticEvidence,
+            telemetry,
         )
     } else if population.truncated() {
         terminal_result(
@@ -455,6 +481,7 @@ fn semantic_result(
             population,
             LintOutcome::FailedToRun,
             LintReasonCode::SemanticPopulationIncomplete,
+            telemetry,
         )
     } else if check_candidates.is_empty() {
         terminal_result(
@@ -463,6 +490,7 @@ fn semantic_result(
             population,
             LintOutcome::NotRunPrerequisite,
             LintReasonCode::InsufficientSemanticEvidence,
+            telemetry,
         )
     } else {
         match adjudication {
@@ -478,12 +506,10 @@ fn semantic_result(
                     LintOutcome::FailedToRun
                 },
                 missing_reason,
+                SemanticTelemetry::default(),
             ),
             Some(adjudication) => {
-                let verdicts = check_candidates
-                    .iter()
-                    .filter_map(|candidate| adjudication.verdicts.get(&candidate.reference()))
-                    .collect::<Vec<_>>();
+                let verdicts = &adjudicated_verdicts;
                 if verdicts.len() != check_candidates.len() {
                     terminal_result(
                         context,
@@ -491,6 +517,7 @@ fn semantic_result(
                         population,
                         LintOutcome::FailedToRun,
                         LintReasonCode::SemanticPopulationIncomplete,
+                        telemetry,
                     )
                 } else if verdicts
                     .iter()
@@ -502,22 +529,22 @@ fn semantic_result(
                         population,
                         LintOutcome::FailedToRun,
                         LintReasonCode::SemanticDisagreementUnresolved,
+                        telemetry,
                     )
-                } else if check_candidates
-                    .iter()
-                    .zip(&verdicts)
-                    .any(|(candidate, verdict)| {
+                } else if check_candidates.iter().zip(verdicts.iter()).any(
+                    |(candidate, verdict)| {
                         verdict.decision() == LintSemanticDecision::Finding
                             && requires_second_judge(candidate.proposed_action())
                             && verdict.second_decision().is_none()
-                    })
-                {
+                    },
+                ) {
                     terminal_result(
                         context,
                         check_id,
                         population,
                         LintOutcome::FailedToRun,
                         LintReasonCode::SemanticSecondJudgeRequired,
+                        telemetry,
                     )
                 } else {
                     completed_result(
@@ -525,7 +552,7 @@ fn semantic_result(
                         candidates,
                         check_id,
                         population,
-                        &verdicts,
+                        verdicts,
                         Some(adjudication),
                     )
                 }
@@ -590,6 +617,10 @@ fn completed_result(
         .collect::<Vec<_>>();
     let affected = evidence.len() as u64;
     let finding = affected > 0;
+    let unresolved = verdicts
+        .iter()
+        .filter(|verdict| verdict.has_unresolved_disagreement())
+        .count() as u64;
     LintCheckResult::try_new_with_gate_effect(
         LintCheckResultInput {
             check_id: check_id.as_str().to_string(),
@@ -618,7 +649,13 @@ fn completed_result(
                 affected,
             )
             .expect("complete semantic coverage"),
-            metrics: semantic_metrics(population, population.candidates(), affected, adjudication),
+            metrics: semantic_metrics(
+                population,
+                population.candidates(),
+                affected,
+                adjudication,
+                unresolved,
+            ),
             summary_code: if finding {
                 LintSummaryCode::FindingDetected
             } else {
@@ -639,6 +676,7 @@ fn terminal_result(
     population: &LintSemanticPopulation,
     outcome: LintOutcome,
     reason_code: LintReasonCode,
+    telemetry: SemanticTelemetry<'_>,
 ) -> LintCheckResult {
     let prerequisite = outcome == LintOutcome::NotRunPrerequisite;
     LintCheckResult::try_new_with_gate_effect(
@@ -665,7 +703,13 @@ fn terminal_result(
                 1,
             )
             .expect("incomplete semantic coverage"),
-            metrics: semantic_metrics(population, 0, 0, None),
+            metrics: semantic_metrics(
+                population,
+                telemetry.judged,
+                0,
+                telemetry.adjudication,
+                telemetry.unresolved,
+            ),
             summary_code: if prerequisite {
                 LintSummaryCode::PrerequisiteUnavailable
             } else {
@@ -691,6 +735,7 @@ fn semantic_metrics(
     judged: u64,
     affected: u64,
     adjudication: Option<&Adjudication>,
+    unresolved: u64,
 ) -> Vec<LintMetric> {
     vec![
         metric(
@@ -715,16 +760,7 @@ fn semantic_metrics(
             LintMetricCode::SemanticAgentSubmissions,
             adjudication.map_or(0, |value| value.agent_submissions),
         ),
-        metric(
-            LintMetricCode::SemanticUnresolvedDisagreements,
-            adjudication.map_or(0, |value| {
-                value
-                    .verdicts
-                    .values()
-                    .filter(|verdict| verdict.has_unresolved_disagreement())
-                    .count() as u64
-            }),
-        ),
+        metric(LintMetricCode::SemanticUnresolvedDisagreements, unresolved),
         boolean_metric(
             LintMetricCode::SemanticProviderOnDevice,
             adjudication.is_some_and(|value| value.route == LintSemanticProviderRoute::OnDevice),
@@ -765,7 +801,7 @@ fn inconsistent_results(
                         1,
                     )
                     .expect("snapshot coverage"),
-                    metrics: semantic_metrics(population, 0, 0, None),
+                    metrics: semantic_metrics(population, 0, 0, None, 0),
                     summary_code: LintSummaryCode::SnapshotInconsistent,
                     recommendation_code: Some(LintRecommendationCode::RerunAfterSnapshotStabilizes),
                     evidence: vec![LintEvidenceRef::ReasonCode {
@@ -800,6 +836,7 @@ fn failed_generation(context: &LintContext<'_, '_>, reason_code: LintReasonCode)
                 &population,
                 LintOutcome::FailedToRun,
                 reason_code,
+                SemanticTelemetry::default(),
             );
             context
                 .record_population(check_id.as_str(), population_basis(context), 0)

@@ -84,6 +84,139 @@ fn version_sync_detects_mismatch() {
     assert_eq!(mismatched.len(), 1, "mismatch must be detected");
 }
 
+// ── Teeth #5: FastEmbed CI cache contract ──
+
+fn fastembed_ci_cache_violations(workflow: &str) -> Vec<String> {
+    const CACHE_STEP: &str = "Cache fastembed model (Linux)";
+    const CACHE_DIR: &str = "${{ github.workspace }}/.fastembed_cache";
+    const CACHE_PATH: &str = "${{ env.FASTEMBED_CACHE_DIR }}";
+    const JOBS: &[(&str, &str)] = &[
+        ("test", "Workspace lib tests (Linux)"),
+        (
+            "test-quarantine",
+            "Quarantined tests (wenlan-mcp + wenlan-types)",
+        ),
+    ];
+
+    let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse ci.yml");
+    let mut violations = Vec::new();
+
+    for (job_name, consumer_name) in JOBS {
+        let actual_cache_dir = parsed["jobs"][*job_name]["env"]["FASTEMBED_CACHE_DIR"].as_str();
+        if actual_cache_dir != Some(CACHE_DIR) {
+            violations.push(format!(
+                "job {job_name} sets FASTEMBED_CACHE_DIR={actual_cache_dir:?}, expected {CACHE_DIR:?}"
+            ));
+        }
+
+        let Some(steps) = parsed["jobs"][*job_name]["steps"].as_sequence() else {
+            violations.push(format!("job {job_name} has no steps"));
+            continue;
+        };
+        if steps.iter().any(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|run| run.contains("WENLAN_TEST_FASTEMBED_CACHE"))
+        }) {
+            violations.push(format!(
+                "job {job_name} overrides FASTEMBED_CACHE_DIR with WENLAN_TEST_FASTEMBED_CACHE"
+            ));
+        }
+        let cache_indexes: Vec<usize> = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                (step["name"].as_str() == Some(CACHE_STEP)).then_some(index)
+            })
+            .collect();
+        if cache_indexes.len() != 1 {
+            violations.push(format!(
+                "job {job_name} has {} {CACHE_STEP:?} steps, expected 1",
+                cache_indexes.len()
+            ));
+            continue;
+        }
+
+        let cache_index = cache_indexes[0];
+        let actual_path = steps[cache_index]["with"]["path"].as_str();
+        if actual_path != Some(CACHE_PATH) {
+            violations.push(format!(
+                "job {job_name} caches {actual_path:?}, expected {CACHE_PATH:?}"
+            ));
+        }
+
+        let consumer_index = steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some(consumer_name));
+        match consumer_index {
+            Some(index) if cache_index < index => {}
+            Some(index) => violations.push(format!(
+                "job {job_name} restores FastEmbed at step {cache_index} after consumer step {index}"
+            )),
+            None => violations.push(format!(
+                "job {job_name} is missing consumer step {consumer_name:?}"
+            )),
+        }
+    }
+
+    violations
+}
+
+#[test]
+fn fastembed_ci_cache_is_restored_before_model_consumers() {
+    let workflow =
+        std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("read ci.yml");
+    let violations = fastembed_ci_cache_violations(&workflow);
+    assert!(
+        violations.is_empty(),
+        "FastEmbed CI cache contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn fastembed_ci_cache_contract_detects_wrong_path_and_order() {
+    let workflow = r#"
+jobs:
+  test:
+    env:
+      FASTEMBED_CACHE_DIR: /tmp/wrong-fastembed-cache
+    steps:
+      - name: Workspace lib tests (Linux)
+        run: export WENLAN_TEST_FASTEMBED_CACHE=/tmp/stale-cache
+      - name: Cache fastembed model (Linux)
+        with:
+          path: ~/.local/share/wenlan/memorydb/fastembed_cache
+  test-quarantine:
+    env:
+      FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
+    steps:
+      - name: Cache fastembed model (Linux)
+        with:
+          path: ${{ env.FASTEMBED_CACHE_DIR }}
+      - name: Quarantined tests (wenlan-mcp + wenlan-types)
+"#;
+    let violations = fastembed_ci_cache_violations(workflow);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("FASTEMBED_CACHE_DIR")),
+        "fixture must violate the explicit cache directory: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("after consumer")),
+        "fixture must violate restore ordering: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("WENLAN_TEST_FASTEMBED_CACHE")),
+        "fixture must reject per-step cache overrides: {violations:?}"
+    );
+}
+
 // ── Teeth #1: repo pointer/path resolver ──
 
 const REPO_TOP_DIRS: &[&str] = &["crates/", "docs/", "app/", "scripts/", ".github/"];

@@ -732,6 +732,7 @@ pub async fn handle_steep(
             s.tuning.distillation.clone(),
         )
     };
+    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
     let result = wenlan_core::refinery::run_periodic_steep_with_api(
         &db,
         llm.as_ref(),
@@ -742,6 +743,7 @@ pub async fn handle_steep(
         &tuning,
         &confidence_cfg,
         &distillation_cfg,
+        Some(&knowledge_path),
         wenlan_core::refinery::TriggerKind::Backstop,
     )
     .await

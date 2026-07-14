@@ -316,18 +316,46 @@ async fn scoped_candidates_hydrate_cross_space_existing_link_endpoints() {
 
     let report = prepare(&db, Some("work")).await;
     let work = report.agent_work().unwrap();
-    assert!(candidates_for(work, LintSemanticCheckId::MemoryEntityLinks)
-        .iter()
-        .any(|candidate| {
+    let memory_link = candidates_for(work, LintSemanticCheckId::MemoryEntityLinks)
+        .into_iter()
+        .find(|candidate| {
             candidate.kind() == LintSemanticCandidateKind::ExistingLink
                 && candidate.proposed_action() == LintSemanticAction::RemoveMemoryEntityLink
-        }));
-    assert!(candidates_for(work, LintSemanticCheckId::EntityRelations)
+        })
+        .expect("cross-space memory link candidate");
+    let memory_link_excerpts = memory_link
+        .evidence_refs()
         .iter()
-        .any(|candidate| {
+        .map(|reference| work.records()[usize::from(*reference - 1)].excerpt())
+        .collect::<Vec<_>>();
+    assert!(memory_link_excerpts
+        .iter()
+        .any(|value| value.contains("scope=work")));
+    assert!(memory_link_excerpts
+        .iter()
+        .any(|value| value.contains("scope=personal")));
+
+    let relation = candidates_for(work, LintSemanticCheckId::EntityRelations)
+        .into_iter()
+        .find(|candidate| {
             candidate.kind() == LintSemanticCandidateKind::ExistingLink
                 && candidate.proposed_action() == LintSemanticAction::RemoveEntityRelation
-        }));
+        })
+        .expect("cross-space relation candidate");
+    let relation_excerpts = relation
+        .evidence_refs()
+        .iter()
+        .map(|reference| work.records()[usize::from(*reference - 1)].excerpt())
+        .collect::<Vec<_>>();
+    assert!(relation_excerpts
+        .iter()
+        .all(|value| value.contains("relation_type=related")));
+    assert!(relation_excerpts
+        .iter()
+        .any(|value| value.contains("scope=work")));
+    assert!(relation_excerpts
+        .iter()
+        .any(|value| value.contains("scope=personal")));
 }
 
 #[tokio::test]
@@ -487,6 +515,24 @@ async fn candidate_truncation_is_incomplete_not_clean() {
         LintOutcome::FailedToRun,
         LintReasonCode::SemanticPopulationIncomplete,
     );
+
+    let submission = submission_for(work, None, false);
+    let submitted = submit(&db, submission, None).await;
+    let result = check(&submitted, LintSemanticCheckId::MemoryEntityLinks);
+    assert_reason(
+        &submitted,
+        LintSemanticCheckId::MemoryEntityLinks,
+        LintOutcome::FailedToRun,
+        LintReasonCode::SemanticPopulationIncomplete,
+    );
+    assert_eq!(
+        metric_value(result, LintMetricCode::SemanticJudgedRecords),
+        Some(&LintMetricValue::Count { value: 6 })
+    );
+    assert_eq!(
+        metric_value(result, LintMetricCode::SemanticAgentSubmissions),
+        Some(&LintMetricValue::Count { value: 1 })
+    );
 }
 
 #[tokio::test]
@@ -536,6 +582,15 @@ async fn page_evidence_candidates_ignore_high_frequency_token_noise() {
         .candidates(),
         1
     );
+
+    let work = report.agent_work().unwrap();
+    let provenance = candidates_for(work, LintSemanticCheckId::PageProvenanceAdequacy);
+    assert_eq!(provenance.len(), 2);
+    for candidate in provenance {
+        let excerpt = work.records()[usize::from(candidate.evidence_refs()[0] - 1)].excerpt();
+        assert!(excerpt.contains("creation_kind=authored"));
+        assert!(excerpt.contains("review_status=confirmed"));
+    }
 }
 
 #[tokio::test]
@@ -553,13 +608,39 @@ async fn disagreement_and_missing_second_judge_remain_incomplete() {
     );
 
     let prepared = prepare(&db, None).await;
-    let disagreement = disagreement_submission(prepared.agent_work().unwrap());
+    let work = prepared.agent_work().unwrap();
+    let contradiction_count =
+        candidates_for(work, LintSemanticCheckId::MemoryContradiction).len() as u64;
+    let disagreement = disagreement_submission(work);
     let report = submit(&db, disagreement, None).await;
     assert_reason(
         &report,
         LintSemanticCheckId::MemoryContradiction,
         LintOutcome::FailedToRun,
         LintReasonCode::SemanticDisagreementUnresolved,
+    );
+    let contradiction = check(&report, LintSemanticCheckId::MemoryContradiction);
+    assert_eq!(
+        metric_value(contradiction, LintMetricCode::SemanticJudgedRecords),
+        Some(&LintMetricValue::Count {
+            value: contradiction_count
+        })
+    );
+    assert_eq!(
+        metric_value(
+            contradiction,
+            LintMetricCode::SemanticUnresolvedDisagreements
+        ),
+        Some(&LintMetricValue::Count {
+            value: contradiction_count
+        })
+    );
+    assert_eq!(
+        metric_value(
+            check(&report, LintSemanticCheckId::MemoryClassification),
+            LintMetricCode::SemanticUnresolvedDisagreements
+        ),
+        Some(&LintMetricValue::Count { value: 0 })
     );
 }
 

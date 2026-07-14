@@ -14,6 +14,7 @@ const VALID_KINDS: [&str; 4] = ["authored", "external_file", "external_url", "me
 pub(super) struct SourceRecord {
     #[cfg(test)]
     pub(super) locator: String,
+    pub(super) owner_present: bool,
     pub(super) expected_kind: String,
     pub(super) evidence_kinds: Vec<String>,
 }
@@ -28,6 +29,7 @@ pub(super) struct ExtraEvidence {
 #[cfg(test)]
 #[derive(Debug)]
 struct SourceBuilder {
+    owner_present: bool,
     expected_kind: String,
     evidence_kinds: Vec<String>,
 }
@@ -53,6 +55,7 @@ pub(super) async fn load_and_assess_sources(
          classified AS MATERIALIZED (
            SELECT r.page_id, r.memory_source_id,
                   CASE
+                    WHEN r.owner_present = 0 THEN 2
                     WHEN es.evidence_count IS NULL THEN 2
                     WHEN es.invalid_count > 0 THEN 2
                     WHEN es.evidence_count = 1 AND CASE r.expected_kind
@@ -141,7 +144,7 @@ pub(super) fn assess_sources(records: &[SourceRecord], extras: &[ExtraEvidence])
             .evidence_kinds
             .iter()
             .any(|kind| !VALID_KINDS.contains(&kind.as_str()));
-        let level = if unknown || record.evidence_kinds.is_empty() {
+        let level = if !record.owner_present || unknown || record.evidence_kinds.is_empty() {
             Level::Error
         } else if record.evidence_kinds.len() == 1
             && record.evidence_kinds[0] == record.expected_kind
@@ -184,7 +187,8 @@ pub(super) async fn load_sources(context: &LintContext<'_, '_>) -> Result<Vec<So
     let (scope_sql, params) = scoped_pages(context.scope().filter());
     let sql = format!(
         "{}
-         SELECT r.page_id, r.memory_source_id, r.expected_kind, pe.source_kind
+         SELECT r.page_id, r.memory_source_id, r.owner_present,
+                r.expected_kind, pe.source_kind
            FROM resolved r
            LEFT JOIN page_evidence pe
              ON pe.page_id = r.page_id AND pe.locator = r.memory_source_id
@@ -200,14 +204,16 @@ pub(super) async fn load_sources(context: &LintContext<'_, '_>) -> Result<Vec<So
     while let Some(row) = rows.next().await.map_err(|_| ())? {
         let page_id = row.get::<String>(0).map_err(|_| ())?;
         let locator = row.get::<String>(1).map_err(|_| ())?;
-        let expected_kind = row.get::<String>(2).map_err(|_| ())?;
+        let owner_present = row.get::<i64>(2).map_err(|_| ())? != 0;
+        let expected_kind = row.get::<String>(3).map_err(|_| ())?;
         let builder = grouped
             .entry((page_id, locator))
             .or_insert_with(|| SourceBuilder {
+                owner_present,
                 expected_kind,
                 evidence_kinds: Vec::new(),
             });
-        if let Ok(Some(kind)) = row.get::<Option<String>>(3) {
+        if let Ok(Some(kind)) = row.get::<Option<String>>(4) {
             builder.evidence_kinds.push(kind);
         }
     }
@@ -215,6 +221,7 @@ pub(super) async fn load_sources(context: &LintContext<'_, '_>) -> Result<Vec<So
         .into_iter()
         .map(|((_, locator), builder)| SourceRecord {
             locator,
+            owner_present: builder.owner_present,
             expected_kind: builder.expected_kind,
             evidence_kinds: builder.evidence_kinds,
         })
@@ -232,23 +239,26 @@ fn source_ctes(scope_sql: &str) -> String {
          source_id_matches AS MATERIALIZED (
            SELECT s.page_id, s.memory_source_id, MIN(m.id) AS matched_id
              FROM sources s
-             JOIN memories m ON m.source_id = s.memory_source_id
+             JOIN memories m
+               ON m.source_id = s.memory_source_id AND m.source != 'episode'
             GROUP BY s.page_id, s.memory_source_id
          ),
          resolved_shapes AS MATERIALIZED (
            SELECT s.page_id, s.memory_source_id,
                   COALESCE(ms.source, mi.source, '') AS source,
                   COALESCE(ms.source_agent, mi.source_agent) AS source_agent,
-                  COALESCE(ms.source_id, mi.source_id, s.memory_source_id) AS resolved_source_id
+                  COALESCE(ms.source_id, mi.source_id, s.memory_source_id) AS resolved_source_id,
+                  CASE WHEN ms.id IS NOT NULL OR mi.id IS NOT NULL THEN 1 ELSE 0 END AS owner_present
              FROM sources s
              LEFT JOIN source_id_matches sm
                ON sm.page_id = s.page_id AND sm.memory_source_id = s.memory_source_id
              LEFT JOIN memories ms ON ms.id = sm.matched_id
              LEFT JOIN memories mi
                ON mi.id = s.memory_source_id AND sm.matched_id IS NULL
+              AND mi.source != 'episode'
          ),
          resolved AS MATERIALIZED (
-           SELECT page_id, memory_source_id,
+           SELECT page_id, memory_source_id, owner_present,
                   CASE
                     WHEN LOWER(source) = 'authored' OR LOWER(COALESCE(source_agent, '')) = 'authored' THEN 'authored'
                     WHEN SUBSTR(resolved_source_id, 1, 7) = 'http://' OR SUBSTR(resolved_source_id, 1, 8) = 'https://' THEN 'external_url'
