@@ -10,7 +10,11 @@
 
 ## Global Constraints
 
-- Work only in `/Users/lucian/.codex/worktrees/7d9f/wenlan` on `codex/route-scope-contracts`.
+- Make daemon/core/types/MCP changes only in
+  `/Users/lucian/.codex/worktrees/7d9f/wenlan` on
+  `codex/route-scope-contracts`. Create a separate Wenlan App worktree and
+  `codex/route-scope-compat` branch for the two companion client files; never
+  edit either repo's `main` checkout.
 - Canonical design: `docs/superpowers/specs/2026-07-14-route-scope-contracts-design.md` at or after commit `02104092`.
 - Space is the only product selector; bind Memory/document rows on `memories.space`, Pages on `pages.workspace`, and Entities on `entities.space`.
 - Keep all 55 existing sensitive read paths and success envelopes. Do not add an endpoint, CLI command, MCP tool, authentication layer, mutating lint, repair action, schema migration, or Page `workspace` selector.
@@ -46,12 +50,16 @@
 - Modify `crates/wenlan-server/src/memory_routes.rs`: the remaining Memory, Page, Entity, derived, and snapshot handlers.
 - Modify `crates/wenlan-server/src/knowledge_routes.rs`: recent relation extraction and scope handoff.
 - Modify `crates/wenlan-types/src/requests.rs`: additive optional `space` only on `SearchPagesRequest`; do not alter response types.
+- Modify `crates/wenlan-mcp/src/tools.rs`: keep both in-workspace
+  `SearchPagesRequest` struct literals compiling with `space: None`.
 - Modify `crates/wenlan-core/src/lint/serving/routes*.rs`: typed catalog vocabulary, exact route bindings, and wave ledger.
 - Create `crates/wenlan-server/tests/space_scoping_e2e.rs` plus
   `tests/space_scoping/{fixture,case_runner,retrieval_cases,record_cases,page_cases,knowledge_cases,global_cases}.rs`:
   route-bound fixtures and executed registries for all 40 scoped and 15 Global routes.
 - Modify `crates/wenlan-server/tests/space_header_fallback.rs` and `crates/wenlan-server/tests/list_pages_by_space_e2e.rs`: replace defect-preserving expectations.
-- Modify `scripts/lint-e2e.sh`: final real-daemon lint expectation changes from actionable route finding to clean route check.
+- Modify `scripts/lint-e2e.sh` and `scripts/lint-e2e.py`: final real-daemon lint
+  expectation changes from actionable route finding to clean route check while
+  an independent synthetic report still proves actionable exit `1`.
 - Create `docs/superpowers/reviews/2026-07-14-route-scope-implementation-evidence.md`: RED/GREEN checkpoints, read-only orphan preflight, downstream App check, final review verdicts.
 
 ---
@@ -80,14 +88,23 @@
 
 - [ ] **Step 0: Capture the read-only live baseline before product edits**
 
-Resolve the configured DB and Page projection paths through existing Wenlan path
-helpers. Fingerprint the DB file and complete Page tree, then run the four
-read-only grouped binding queries from Task 8. Store only domain, distinct
-binding, registered/unregistered status, and count in the implementation
-evidence file. Record the current git HEAD and exact commands. Do not open row
-content or write the store. If the configured store cannot be opened read-only,
-record the blocker before proceeding rather than silently treating the
-population as empty.
+Resolve the configured DB and Page projection paths without constructing
+`MemoryDB`; `MemoryDB::new` runs migrations/bootstrap and is forbidden for this
+audit. Fingerprint the durable DB bundle (`.db`, `-wal`, and `-journal`, with
+explicit absent markers) and complete Page tree immediately before the audit.
+Use `sqlite3 -readonly` with `PRAGMA query_only=ON` and one explicit read
+transaction for the four grouped binding queries from Task 8, then repeat the
+same fingerprints immediately afterward. Store only domain, distinct binding,
+registered/unregistered status, count, and a receipt-local opaque binding hash
+in the committed implementation evidence file; never commit raw personal Space
+names. Keep the raw read-only output in the private local receipt directory and
+link only its path plus SHA-256. The reserved contract literal
+`"uncategorized"` may be named. Record current git HEAD and exact commands. If the durable bundle changes due
+to concurrent daemon activity, retry from a quiescent store; do not claim a
+non-mutation receipt from mismatched hashes. Do not hash `-shm`, whose reader
+coordination bytes are not durable data. If the store cannot be opened
+read-only, record the blocker before proceeding rather than silently treating
+the population as empty.
 
 - [ ] **Step 1: Add focused RED resolver and precedence tests**
 
@@ -251,25 +268,37 @@ is marked repaired yet.
 - Modify: `crates/wenlan-server/src/routes.rs`
 - Modify: `crates/wenlan-server/src/memory_routes.rs`
 - Modify: `crates/wenlan-core/src/db.rs`
+- Create: `crates/wenlan-core/src/db/scoped_pages.rs`
+- Create: `crates/wenlan-core/src/db/scoped_pages_test.rs`
+- Create: `crates/wenlan-core/src/db/scoped_entities.rs`
+- Create: `crates/wenlan-core/src/db/scoped_entities_test.rs`
+- Modify: `crates/wenlan-core/src/{document_enrichment,kg_quality}.rs`
+- Modify: `crates/wenlan-core/src/synthesis/{decision_logs,recaps}.rs`
+- Modify: `crates/wenlan-core/src/eval/{answer_quality,context_path,layer,lifecycle,locomo,longmemeval,pipeline,retrieval,retrieval_drift,runner}.rs`
+- Modify: `crates/wenlan-server/src/scheduler.rs`
 - Modify: `crates/wenlan-server/tests/context_space_filter_e2e.rs`
 - Modify: `crates/wenlan-server/tests/space_header_fallback.rs`
 - Modify: `crates/wenlan-core/src/lint/serving/routes/retrieval.rs`
 
 **Interfaces:**
 - Consumes: `ReadScope` and `effective_read_scope` from Task 1.
-- Produces: scoped wrappers `search_scoped`, `search_memory_scoped`,
-  `search_pages_scoped`, `select_visible_pages_scoped`,
+- Produces: typed-scope migrations for the existing `search_memory*` stack and
+  scoped wrappers `search_pages_scoped`, `select_visible_pages_scoped`,
   `load_memories_by_type_scoped`, `list_recent_memories_scoped`,
   `list_unconfirmed_memories_scoped`, and `list_pinned_memories_scoped`.
 - Produces: executed registry entries for the 8 Wave 1 routes.
 - Produces: one route-bound case runner shared by every wave; test cases can
   provide only path parameters, query fields, body, and assertions, never an
   independent method/path key.
+- Establishes the minimal Page/Entity scoped query modules now; Tasks 6 and 7
+  extend these modules instead of moving Wave 1 logic out of `db.rs` later.
 
 - [ ] **Step 1: Add Wave 1 RED HTTP cases and channel canaries**
 
 Create one hermetic fixture with registered `work` and `personal` Spaces plus
-NULL rows. Build the runner around the canonical catalog row:
+NULL rows and unregistered literal `space='uncategorized'` rows. Global includes
+the literal orphan; `ReadScope::Uncategorized` includes only NULL rows. Build
+the runner around the canonical catalog row:
 
 ```rust
 type RouteKey = (Method, &'static str);
@@ -279,7 +308,15 @@ type RunCase = for<'a> fn(
 
 struct BehaviorCase {
     key: RouteKey,
+    expected: ExpectedContract,
     run: RunCase,
+}
+
+struct ExpectedContract {
+    precedence: ExpectedPrecedence,
+    binding: ExpectedBinding,
+    gate: ExpectedGate,
+    unknown_rejected: bool,
 }
 
 struct RequestSpec {
@@ -290,21 +327,23 @@ struct RequestSpec {
 ```
 
 `CaseRunner::bind(case.key)` must find exactly one catalog row and return a
-`BoundRoute` that owns its method, path template, selector precedence, binding,
-selection gate, and unknown policy. `BoundRoute::send(RequestSpec, Selector)`
-renders only declared path placeholders and injects body/query/header selectors
-according to that row. A case cannot override method, path, or precedence.
+`BoundRoute` that owns its method and path template. A case cannot override
+either value. `ExpectedContract` is a separately declared test fixture and must
+not be derived from or generated by catalog metadata. `BoundRoute::send`
+renders only declared path placeholders; the case injects body/query/header
+selectors according to its independent expected precedence.
 Record `CaseEvidence` only after the response and all assertions complete.
 
-`CaseRunner::finish()` rejects duplicate/missing catalog keys and requires the
-probe matrix implied by each row: Global/work/Uncategorized/unknown for every
-scoped collection; primary precedence plus empty-primary fallback for body/query
-routes; missing and mismatch equivalence for direct and parent-gated routes;
-batch omission/order for batch routes. Cumulative executed-set equality is 8
-after Wave 1, 26 after Wave 2, 35 after Wave 3, and 40 after Wave 4. Maintain a
-separate 15-case Global registry that compares canonical response bytes with and
-without both Space headers; it must equal `EXPECTED_GLOBAL_15` before Task 7
-closes.
+`CaseRunner::finish()` rejects duplicate/missing keys, checks catalog metadata
+against the independently authored `ExpectedContract`, and requires the probe
+matrix implied by that expected fixture: Global/work/Uncategorized/unknown for
+every scoped collection; primary precedence plus empty-primary fallback for
+body/query routes; missing and mismatch equivalence for direct and parent-gated
+routes; batch omission/order for batch routes. Cumulative executed-set equality
+is 8 after Wave 1, 26 after Wave 2, 35 after Wave 3, and 40 after Wave 4.
+Maintain a separate independently enumerated 15-case Global registry that
+compares canonical response bytes with and without both Space headers; it must
+equal `EXPECTED_GLOBAL_15` before Task 7 closes.
 
 Exercise exactly the 8 Wave 1 keys. Add precedence cases, unknown `422`, and
 Uncategorized. Seed Page, graph (`surface_new`), episode, fact, and summary
@@ -320,12 +359,14 @@ WENLAN_ENABLE_GLOBAL_PRELUDE=1
 WENLAN_RERANK_SKIP_PREFERENCE=0
 ```
 
-Also insert a higher-scoring cross-Space candidate before the selected result
-and request `limit=1`. Use a non-preference query so the normal rerank path is
-exercised. Assert every enabled in-scope stream appears and no cross-Space/NULL
-canary appears. Use one shared process-wide retrieval-feature mutex for this
-composite test; per-feature environment locks do not serialize against each
-other.
+For every ranked/limited retrieval stream, insert at least eight higher-scoring
+cross-Space candidates before one selected result and request `limit=1`. This
+exceeds the current `limit * 3` global ANN window, so the old filter-after-ANN
+implementation cannot pass. Use a non-preference query so the normal rerank
+path is exercised. Assert every enabled in-scope stream appears and no
+cross-Space/NULL canary appears. Use one shared process-wide retrieval-feature
+mutex for this composite test; per-feature environment locks do not serialize
+against each other.
 
 Run:
 
@@ -338,23 +379,38 @@ fall back; Page/graph supplemental candidates can cross Space or vanish.
 
 - [ ] **Step 2: Add typed scoped retrieval entry points**
 
-Replace the existing `space: Option<&str>` arguments at canonical retrieval
-boundaries with `&ReadScope`. Internal and eval callers that intentionally need
-unscoped behavior pass `&ReadScope::Global`; do not retain an Option-based
-compatibility path that can recreate sentinel ambiguity. Route handlers call
-the same typed methods:
+Replace the existing `space: Option<&str>` argument, in place, with
+`scope: &ReadScope` at every canonical retrieval boundary:
+
+```text
+search_memory
+search_memory_with_cue
+search_memory_temporal
+search_memory_cross_rerank
+search_memory_cross_rerank_cued
+search_memory_expanded
+search_memory_prf
+search_memory_decomposed
+```
+
+Preserve every other current parameter and behavior, including
+`confirmation_boost`, `recap_penalty`, `SearchScoringConfig`, temporal cues,
+graph overrides, and rerankers. Internal and eval callers that intentionally
+need unscoped behavior pass `&ReadScope::Global`; update all compiler-identified
+callers in the files owned by this task. Do not retain an Option-based
+compatibility path that can recreate sentinel ambiguity. Representative shape:
 
 ```rust
-pub async fn search_memory_scoped(
+pub async fn search_memory(
     &self,
     query: &str,
     limit: usize,
     memory_type: Option<&str>,
     scope: &ReadScope,
     source_agent: Option<&str>,
-    confirmed: Option<bool>,
-    since: Option<i64>,
-    until: Option<i64>,
+    confirmation_boost: Option<f32>,
+    recap_penalty: Option<f32>,
+    scoring: Option<&SearchScoringConfig>,
 ) -> Result<Vec<SearchResult>, WenlanError>;
 
 pub async fn search_pages_scoped(
@@ -366,10 +422,15 @@ pub async fn search_pages_scoped(
 ) -> Result<Vec<Page>, WenlanError>;
 ```
 
-Every vector/FTS branch adds the domain predicate before candidate fetch and
-before `LIMIT`. A scoped `WHERE` after `vector_top_k(..., N)` is insufficient
-because global top-N can starve the selected population; use a scoped candidate
-query or bounded progressive overfetch with an explicit cap. Page predicates
+Do not add a second Option-compatible or `_scoped` search stack. Every
+vector/FTS branch adds the domain predicate
+before candidate fetch and before `LIMIT`. A scoped `WHERE` after
+`vector_top_k(..., N)` is insufficient because global top-N can starve the
+selected population. For selected `Space`/`Uncategorized`, use the existing
+brute-force `vector_distance_cos` fallback shape with a scope predicate in the
+same SQL query before `ORDER BY ... LIMIT`; keep indexed `vector_top_k` only for
+`Global`. This intentionally trades selected-scope latency for complete,
+truthful results until libSQL exposes a filtered ANN primitive. Page predicates
 use `pages.workspace`; `page_type` continues to filter `pages.space`.
 Graph-only Memory additions, graph anchors/k-hop endpoints, episodes, facts,
 summaries, and Page visibility all consume the same `ReadScope`. Selected
@@ -410,10 +471,17 @@ cargo test -p wenlan-server --test context_space_filter_e2e -- --nocapture
 cargo test -p wenlan-server --test space_header_fallback -- --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_1 -- --nocapture
 cargo test -p wenlan-core --lib lint::serving_review_test -- --nocapture
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
 git diff --check
 git add crates/wenlan-core/src/db.rs crates/wenlan-server/src/routes.rs \
+  crates/wenlan-core/src/db/scoped_pages.rs crates/wenlan-core/src/db/scoped_pages_test.rs \
+  crates/wenlan-core/src/db/scoped_entities.rs crates/wenlan-core/src/db/scoped_entities_test.rs \
+  crates/wenlan-core/src/document_enrichment.rs crates/wenlan-core/src/kg_quality.rs \
+  crates/wenlan-core/src/synthesis/decision_logs.rs crates/wenlan-core/src/synthesis/recaps.rs \
+  crates/wenlan-core/src/eval/{answer_quality,context_path,layer,lifecycle,locomo,longmemeval,pipeline,retrieval,retrieval_drift,runner}.rs \
   crates/wenlan-server/src/memory_routes.rs crates/wenlan-server/tests \
+  crates/wenlan-server/src/scheduler.rs \
   crates/wenlan-core/src/lint/serving/routes/retrieval.rs
 git commit -m "fix: isolate scoped retrieval candidate pools"
 ```
@@ -477,8 +545,10 @@ and chunk errors can become partial/empty `200`.
 Direct queries combine ID and binding in one SQL lookup. History anchors and
 every returned predecessor/successor row must match; stop at a mismatch. Batch
 query filters inside `IN (...)`, then reorders according to the input vector and
-omits missing/mismatched rows. Use `WenlanError::NotFound("memory not found")`
-for all absent/mismatched direct Memory owners.
+omits missing/mismatched rows. Core direct lookup returns `Ok(None)` for both
+absent and mismatched owners; the HTTP handler alone maps either case to the
+same static `404` body, `"memory not found"`, without logging the requested ID
+above DEBUG.
 
 Implement exact route-facing shapes:
 
@@ -725,9 +795,10 @@ violations are exactly `14`.
 
 **Files:**
 - Modify: `crates/wenlan-types/src/requests.rs`
+- Modify: `crates/wenlan-mcp/src/tools.rs`
 - Modify: `crates/wenlan-core/src/db.rs`
-- Create: `crates/wenlan-core/src/db/scoped_pages.rs`
-- Create: `crates/wenlan-core/src/db/scoped_pages_test.rs`
+- Modify: `crates/wenlan-core/src/db/scoped_pages.rs`
+- Modify: `crates/wenlan-core/src/db/scoped_pages_test.rs`
 - Modify: `crates/wenlan-core/src/pages.rs`
 - Modify: `crates/wenlan-server/src/routes.rs`
 - Modify: `crates/wenlan-server/src/memory_routes.rs`
@@ -738,7 +809,9 @@ violations are exactly `14`.
 - Modify: `crates/wenlan-core/src/lint/serving/routes/pages.rs`
 
 **Interfaces:**
-- Extends: `SearchPagesRequest { query, limit, page_type, space: Option<String> }`.
+- Extends: `SearchPagesRequest { query, limit, page_type, #[serde(default)] space: Option<String> }`.
+- Preserves: both MCP `SearchPagesRequest` constructors with explicit
+  `space: None`; no MCP tool schema or response type changes.
 - Consumes: the Task 2 `search_pages_scoped` candidate-pool method.
 - Produces in `db/scoped_pages.rs`: `list_recent_pages_with_badges_scoped`,
   `list_recent_changes_scoped`, `list_pages_scoped`,
@@ -755,8 +828,11 @@ Create work Pages whose `pages.space='decision'`, personal Pages whose
 a personal Page to prove overlap cannot override workspace. Exercise all 9 Page
 keys, body/query/header precedence, unknown `422`, selected direct/child `404`,
 and mixed `page_sources` where a work Page references personal Memory content.
-Insert higher-ranked out-of-scope search candidates before a low-ranked
-in-scope Page and use a small limit.
+Insert at least eight higher-ranked out-of-scope search candidates before a
+low-ranked in-scope Page and use `limit=1`, exceeding the current global ANN
+fetch window. Also prove a workspace with fewer Pages than the requested limit
+returns a truthful short list. Add a Page whose literal workspace is
+`"uncategorized"`; Global includes it and the NULL-only selector excludes it.
 
 Update defect-preserving tests so an unknown query expects `422` and a selected
 list filters `workspace`, not category.
@@ -788,10 +864,11 @@ match scope {
 ```
 
 Keep `page_type` as an independent `c.space = ?page_type` predicate. Apply the
-workspace clause to vector and FTS candidates before ranking/fetch limits. If
-the ANN primitive cannot predicate before `vector_top_k`, use bounded
-progressive overfetch with an explicit cap and expose insufficient candidate
-population as an error rather than a clean empty page.
+workspace clause to vector and FTS candidates before ranking/fetch limits. For
+selected scope, use the existing brute-force `vector_distance_cos` query shape
+with workspace and page-type predicates before `ORDER BY ... LIMIT`; keep ANN
+only for Global. A legitimately small workspace returns a short list, never an
+error.
 
 Direct and child methods gate the parent Page in the same query path. Page
 sources return only rows whose parent matches; when response assembly resolves
@@ -811,15 +888,18 @@ pending KG set and violation count `5`.
 
 ```bash
 cargo test -p wenlan-types search_pages_request -- --nocapture
+cargo test -p wenlan-mcp search_pages -- --nocapture
 cargo test -p wenlan-core --lib search_pages -- --nocapture
 cargo test -p wenlan-core --lib page_links -- --nocapture
 cargo test -p wenlan-server --test list_pages_by_space_e2e -- --nocapture
 cargo test -p wenlan-server --test space_header_fallback -- --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_3 -- --nocapture
 cargo test -p wenlan-core --lib lint::serving_review_test -- --nocapture
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
 git diff --check
-git add crates/wenlan-types/src/requests.rs crates/wenlan-core/src/db.rs \
+git add crates/wenlan-types/src/requests.rs crates/wenlan-mcp/src/tools.rs \
+  crates/wenlan-core/src/db.rs \
   crates/wenlan-core/src/db/scoped_pages.rs crates/wenlan-core/src/db/scoped_pages_test.rs \
   crates/wenlan-core/src/pages.rs crates/wenlan-server/src/routes.rs \
   crates/wenlan-server/src/memory_routes.rs crates/wenlan-server/tests \
@@ -837,8 +917,8 @@ catalog violations are exactly `5`.
 
 **Files:**
 - Modify: `crates/wenlan-core/src/db.rs`
-- Create: `crates/wenlan-core/src/db/scoped_entities.rs`
-- Create: `crates/wenlan-core/src/db/scoped_entities_test.rs`
+- Modify: `crates/wenlan-core/src/db/scoped_entities.rs`
+- Modify: `crates/wenlan-core/src/db/scoped_entities_test.rs`
 - Modify: `crates/wenlan-server/src/memory_routes.rs`
 - Modify: `crates/wenlan-server/src/knowledge_routes.rs`
 - Modify: `crates/wenlan-server/tests/space_scoping_e2e.rs`
@@ -863,7 +943,9 @@ work-personal, and personal-personal relations, plus suggestion proposals with
 work-only, mixed, missing, and empty source IDs. Exercise all 5 routes. Assert
 selected entity detail cannot embed relations whose other endpoint differs.
 Insert a higher-ranked personal Entity before a work Entity and request a small
-limit. Assert Global still includes the cross-Space relation.
+limit. Assert Global still includes the cross-Space relation. Add a literal
+`space='uncategorized'` Entity and prove it is Global-only orphan inventory, not
+part of the NULL selector.
 
 Run:
 
@@ -879,21 +961,23 @@ suggestions are filtered only by action/status.
 Implement and test the route-only wrappers in `db/scoped_entities.rs` and
 `db/scoped_entities_test.rs`. Use them only in HTTP and retrieval-route call
 sites that require scope. Do not change the shared unscoped
-`search_entities_by_vector` used by
-entity resolution and write-time graph augmentation. Entity vector/name
-candidates add `entities.space` before ranking/limit. Entity detail joins both
+`search_entities_by_vector` used by entity resolution and write-time graph
+augmentation. Entity vector/name candidates add `entities.space` before
+ranking/limit. Selected Entity vector search uses `vector_distance_cos` with
+the binding predicate before `ORDER BY ... LIMIT`; only Global keeps the
+existing ANN path. Entity detail joins both
 relation endpoints and applies both endpoint predicates. Recent relation SQL
 joins subject and object Entities and requires both to match for selected reads.
 Missing and mismatched detail both return the same static `404` body bytes,
 `"entity not found"`; do not include the requested ID.
 
-Suggestion visibility is computed before materialization/limit. Prefer one
-bounded SQL query over `refinement_queue` using `json_valid(source_ids)`,
-`json_each(source_ids)`, and paired `EXISTS`/`NOT EXISTS` predicates so an empty,
-malformed, missing-owner, or mismatched owner set is excluded without loading
-proposal payloads. If libSQL behavior requires a two-step path, fetch only a
-bounded candidate window, resolve all unique owners in one query, fail on a
-truncated unjudged population, then apply:
+Suggestion visibility is computed before materialization/limit in one SQL query
+over `refinement_queue` using `json_valid(source_ids)`, `json_each(source_ids)`,
+and paired `EXISTS`/`NOT EXISTS` predicates. Empty, malformed, missing-owner, or
+mismatched owner sets are excluded before proposal payloads are materialized.
+The repo already uses `json_each(refinement_queue.source_ids)` in core; do not
+add a bounded application-side candidate window or a partial-result fallback.
+The SQL visibility predicate must be equivalent to:
 
 ```rust
 !proposal.source_ids.is_empty()
@@ -948,8 +1032,10 @@ conservative suggestions, and zero canonical route-scope violations pass.
 
 **Files:**
 - Modify: `scripts/lint-e2e.sh`
+- Modify: `scripts/lint-e2e.py`
 - Modify: `docs/superpowers/reviews/2026-07-14-route-scope-implementation-evidence.md`
-- Reference only: `/Users/lucian/Repos/wenlan-app/app/src/search.rs`
+- Companion modify: `<wenlan-app-worktree>/app/src/api.rs`
+- Companion modify: `<wenlan-app-worktree>/app/src/search.rs`
 - Reference only: `/Users/lucian/Repos/wenlan-app/src/lib/tauri.ts`
 - Reference only: `/Users/lucian/Repos/wenlan-app/src/components/ChunkViewer.tsx`
 
@@ -959,10 +1045,13 @@ conservative suggestions, and zero canonical route-scope violations pass.
 
 - [ ] **Step 1: Update the exact-checkout lint E2E expectation**
 
-In `scripts/lint-e2e.sh`, change real-daemon baseline/global/registered/
-Uncategorized runs from expected CLI exit `1` with a
-`serving.route_scope_contracts` finding to exit `0` with that check clean. Keep
-the typed finding fixture used to prove exit `1`, incomplete fixture for exit
+In `scripts/lint-e2e.sh` and `scripts/lint-e2e.py`, change real-daemon
+baseline/global/registered/Uncategorized runs from expected CLI exit `1` with a
+`serving.route_scope_contracts` finding to exit `0` with that check clean.
+`clean_fixture` and `precedence_fixture` must no longer require a finding from
+the real baseline. Add an independent synthetic valid report containing one
+typed `serving.route_scope_contracts` actionable finding and use it for CLI exit
+`1`, precedence, and tarball assertions. Keep the incomplete fixture for exit
 `2`, HTTP/CLI parity, no `/api/wiki/check`, producer SHA, and non-mutation
 fingerprints.
 
@@ -981,21 +1070,43 @@ SELECT 'page', workspace FROM pages WHERE workspace IS NOT NULL GROUP BY workspa
 SELECT name FROM spaces GROUP BY name;
 ```
 
-Record only domain, distinct binding, whether registered, and count in the
-evidence file. Compare the result with Task 1 Step 0 and record before/after
-SHA-256 fingerprints of the DB and Page tree. The fingerprints must be
-unchanged; any difference is a failed non-mutation gate until explained and
-re-baselined from a quiescent store. Do not repair orphan values in this
-project.
+Record only domain, opaque binding hash, whether registered, and count in the
+committed evidence file. Use the same `sqlite3 -readonly`/`query_only` transaction and
+immediate before/after durable-bundle plus Page-tree fingerprints as Task 1.
+Each audit's own before/after pair must match; Task 1 and Task 8 populations may
+legitimately differ because the user can keep using Wenlan during
+implementation, so report that difference as store drift rather than lint
+mutation. Record literal non-NULL `"uncategorized"` bindings explicitly as
+Global-only orphan inventory and keep a hermetic test proving the
+`Uncategorized` selector still means SQL NULL only. The approved design says
+orphan inventory does not block this project. Do not repair orphan values here.
 
-- [ ] **Step 3: Verify downstream ChunkViewer compatibility**
+- [ ] **Step 3: Preserve downstream App behavior and wire compatibility**
 
-Re-read the three App call sites and confirm the request remains
-`GET /api/chunks/{source_id}` and response remains `Vec<MemoryDetail>`. Read the
-current App `AGENTS.md` and package scripts, then run its existing Rust or
-TypeScript contract/build command that covers the call. Record the exact command
-and result. If environment setup prevents the command, record the exact blocker
-as residual risk rather than substituting a unit test.
+Read the current App `AGENTS.md` before editing its separate repo. Re-read the
+three ChunkViewer call sites and confirm the request remains
+`GET /api/chunks/{source_id}` and response remains `Vec<MemoryDetail>`.
+
+The App currently maps `GET /api/memory/{id}/detail` to
+`Result<Option<MemoryItem>, String>` but its generic `get_json` turns the new
+static `404` into `Err`. In a companion App branch, add a focused
+`get_optional_json` helper that returns `Ok(None)` only for HTTP 404, propagates
+all other non-success statuses, and otherwise deserializes normally. Route
+`get_memory_detail` through it and add RED/GREEN tests for 404, 500, malformed
+success, and present Memory. Do not weaken the daemon's selected-scope 404
+contract.
+
+The App is currently pinned to an older `wenlan-types`, so its
+`SearchPagesRequest` literal still serializes without `space`; the daemon must
+accept that payload as Global through `#[serde(default)]`. Add a daemon
+compatibility test using the old JSON shape. Do not bump the App dependency in
+this project. Record that its Rust constructor needs `space: None` when its
+`wenlan-types` pin is upgraded.
+
+Run the App's focused Rust tests plus its existing build/contract command and
+record exact results. Failure to run or repair the App compatibility gate blocks
+publication; do not downgrade it to residual risk. Commit and open the companion
+App PR before the daemon PR is marked ready.
 
 - [ ] **Step 4: Run final serial repository gates**
 
@@ -1026,21 +1137,24 @@ limit behavior, 404 non-disclosure, response compatibility, and test false
 greens. Apply only evidence-backed findings through RED tests, rerun affected
 gates, and record both verdicts in the evidence file.
 
-- [ ] **Step 6: Commit, publish, and open the PR**
+- [ ] **Step 6: Commit, publish, and open both PRs**
 
 ```bash
-git add scripts/lint-e2e.sh
+git add scripts/lint-e2e.sh scripts/lint-e2e.py
 git add -f docs/superpowers/reviews/2026-07-14-route-scope-implementation-evidence.md
 git commit -m "test: verify sensitive read scope contracts"
 git status --short
 git log --oneline origin/main..HEAD
 ```
 
-Use `github:yeet` to push `codex/route-scope-contracts` and open a ready PR. The
-PR body must list the four catalog checkpoints, exact final verifier commands,
-live preflight non-mutation receipt, downstream App result, and final two-model
-review verdicts.
+Use `github:yeet` first in the companion App branch, then push
+`codex/route-scope-contracts` and open the daemon PR. The App PR contains only
+the optional-404 client compatibility change and its tests. The daemon PR body
+links that companion PR and lists the four catalog checkpoints, exact final
+verifier commands, live preflight non-mutation receipt, downstream App result,
+and final two-model review verdicts.
 
 Acceptance gate: worktree clean, all serial gates green, committed-HEAD lint E2E
-green, read-only live fingerprints unchanged, downstream compatibility result
-recorded, final reviews resolved, and PR URL available.
+green, each read-only live audit has matching before/after durable fingerprints,
+the companion App compatibility PR is green, final reviews are resolved, and
+both PR URLs are available.

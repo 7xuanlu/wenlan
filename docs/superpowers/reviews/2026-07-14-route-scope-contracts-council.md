@@ -81,3 +81,41 @@ changes affect plugin presentation and CI, not the sensitive-read catalog,
 daemon handlers, core query ownership, or scope contract. The executable plan
 therefore uses design commit `02104092` and current main `09725cdf` without
 reopening the approved product contract.
+
+## Executable Plan Review
+
+Frozen review input: plan commit `6216c85a`.
+
+- Claude Opus xhigh adversarial review: `needs-attention` / `REQUEST_CHANGES`.
+- Codex GPT-5.6 Sol xhigh independent review: `REQUEST_CHANGES`.
+- Both independently confirmed the exact 55/40/15 inventory, 8/18/9/5 waves,
+  typed resolver, Page workspace/category separation, two-endpoint relation
+  rule, and conservative suggestion ownership.
+
+Reconciled corrections applied before implementation:
+
+1. Update both in-workspace MCP `SearchPagesRequest` literals in Task 6 and run
+   a workspace build in the same wave.
+2. Drive HTTP probes from an independently authored expected contract; compare
+   catalog metadata to it rather than letting metadata certify itself.
+3. Replace filter-after-ANN/unspecified-overfetch guidance with scoped
+   predicate-before-order brute-force vector SQL; keep ANN only for Global.
+4. Preserve every current retrieval parameter and migrate all existing
+   `search_memory*` boundaries/callers to typed `ReadScope`.
+5. Split the real clean lint baseline from a synthetic actionable finding in
+   both `lint-e2e.sh` and `lint-e2e.py`.
+6. Make the live receipt WAL-aware, query-only, and based on immediate
+   before/after durable bundle fingerprints without constructing `MemoryDB`.
+7. Keep core direct Memory lookup optional and map `None` to one static 404 in
+   the handler.
+8. Add a companion App change so daemon 404 still produces `Ok(None)` for the
+   existing UI command, while old SearchPages JSON remains accepted as Global.
+9. Establish Page/Entity scoped query modules in Wave 1 and extend them later,
+   avoiding a second abstraction pass.
+
+The recommendation to make literal-string orphan bindings block this delivery
+was not adopted because the approved design explicitly classifies orphan repair
+as inventory/follow-up. The plan instead records them as redacted Global-only
+inventory and proves the NULL-only `Uncategorized` behavior in hermetic tests.
+No third plan-review round is required by the user's two-review limit; the next
+gate is RED-first implementation against the amended plan.
