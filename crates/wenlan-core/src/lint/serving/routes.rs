@@ -6,9 +6,11 @@ pub enum Method {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectorPrecedence {
-    None,
+    NotApplicable,
+    Missing,
     BodyThenHeader,
-    QueryOnly,
+    QueryThenHeader,
+    HeaderOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +20,7 @@ pub enum Capability {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScopeOwner {
+pub enum ScopeBinding {
     Global,
     MemorySpace,
     PageWorkspace,
@@ -26,16 +28,21 @@ pub enum ScopeOwner {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DirectIdGate {
+pub enum SelectionGate {
     NotApplicable,
-    Enforced,
-    Missing,
+    SingleIdMissing,
+    SingleId404,
+    BatchMissing,
+    BatchFiltered,
+    ParentCollectionMissing,
+    ParentCollectionFiltered,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownScopePolicy {
     NotApplicable,
     FallsBackUnscoped,
+    Rejected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,18 +60,24 @@ pub struct SensitiveReadRoute {
     pub data_class: &'static str,
     pub selector_precedence: SelectorPrecedence,
     pub capability: Capability,
-    pub scope_owner: ScopeOwner,
-    pub direct_id_gate: DirectIdGate,
+    pub scope_binding: ScopeBinding,
+    pub selection_gate: SelectionGate,
     pub unknown_scope: UnknownScopePolicy,
     pub cross_scope_policy: CrossScopePolicy,
 }
 
 impl SensitiveReadRoute {
     pub const fn scope_contract_violation(self) -> bool {
-        !matches!(self.scope_owner, ScopeOwner::Global)
-            && (matches!(self.direct_id_gate, DirectIdGate::Missing)
-                || matches!(self.selector_precedence, SelectorPrecedence::None)
-                || matches!(self.unknown_scope, UnknownScopePolicy::FallsBackUnscoped))
+        !matches!(self.scope_binding, ScopeBinding::Global)
+            && (matches!(
+                self.selection_gate,
+                SelectionGate::SingleIdMissing
+                    | SelectionGate::BatchMissing
+                    | SelectionGate::ParentCollectionMissing
+            ) || matches!(
+                self.selector_precedence,
+                SelectorPrecedence::Missing | SelectorPrecedence::NotApplicable
+            ) || !matches!(self.unknown_scope, UnknownScopePolicy::Rejected))
     }
 }
 
@@ -76,8 +89,8 @@ macro_rules! row {
             data_class: $data,
             selector_precedence: $selector,
             capability: $capability,
-            scope_owner: $scope,
-            direct_id_gate: $gate,
+            scope_binding: $scope,
+            selection_gate: $gate,
             unknown_scope: $crate::lint::serving::routes::UnknownScopePolicy::$unknown,
             cross_scope_policy: $cross,
         }

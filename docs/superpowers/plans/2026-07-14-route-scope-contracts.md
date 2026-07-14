@@ -68,8 +68,10 @@
 
 **Files:**
 - Create: `crates/wenlan-core/src/read_scope.rs`
+- Create: `crates/wenlan-core/tests/read_scope.rs`
 - Modify: `crates/wenlan-core/src/lib.rs`
 - Create: `crates/wenlan-server/src/read_scope.rs`
+- Create: `crates/wenlan-server/tests/read_scope.rs`
 - Modify: `crates/wenlan-server/src/lib.rs`
 - Modify: `crates/wenlan-server/src/space_header.rs`
 - Modify: `crates/wenlan-server/src/memory_routes.rs`
@@ -189,9 +191,11 @@ selector. For `uncategorized`, an existing exact Space returns
 `ReadScopeResolveError::Unknown(name)`. The server maps those two variants to
 `ValidationError`/`422` and `Store` to the ordinary internal DB error path.
 
-Delete `registered_read_space`; leave `registered_request_space` for mutating
-routes unchanged. Read handlers migrate to `effective_read_scope` only in the
-wave that fixes their core query.
+Keep `registered_read_space` only as a private compatibility helper while
+unmigrated read handlers still call it, then delete it in Task 7 after the last
+read handler moves to `effective_read_scope`. Leave `registered_request_space`
+for mutating routes unchanged. Read handlers migrate to
+`effective_read_scope` only in the wave that fixes their core query.
 
 - [ ] **Step 3: Make the route catalog distinguish contract state**
 
@@ -231,14 +235,17 @@ predicate remains derived from row metadata and treats every `*Missing`,
 - [ ] **Step 4: Verify the foundation and commit**
 
 ```bash
-cargo test -p wenlan-core --lib read_scope -- --nocapture
-cargo test -p wenlan-core --lib lint::serving_review_test -- --nocapture
+cargo test -p wenlan-core --test read_scope -- --nocapture
+cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture
 cargo test -p wenlan-server --lib space_header -- --nocapture
 cargo test -p wenlan-server --lib sensitive_read_routes -- --nocapture
+cargo test -p wenlan-server --test read_scope -- --nocapture
 cargo fmt --all -- --check
 git diff --check
 git add crates/wenlan-core/src/read_scope.rs crates/wenlan-core/src/lib.rs \
+  crates/wenlan-core/tests/read_scope.rs \
   crates/wenlan-server/src/read_scope.rs crates/wenlan-server/src/lib.rs \
+  crates/wenlan-server/tests/read_scope.rs \
   crates/wenlan-server/src/space_header.rs crates/wenlan-server/src/memory_routes.rs \
   crates/wenlan-core/src/lint/serving crates/wenlan-core/src/lint/serving_review_test.rs \
   crates/wenlan-server/src/sensitive_read_routes
@@ -470,7 +477,7 @@ cargo test -p wenlan-core --lib search_memory -- --nocapture
 cargo test -p wenlan-server --test context_space_filter_e2e -- --nocapture
 cargo test -p wenlan-server --test space_header_fallback -- --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_1 -- --nocapture
-cargo test -p wenlan-core --lib lint::serving_review_test -- --nocapture
+cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture
 cargo check --workspace --all-targets
 cargo fmt --all -- --check
 git diff --check
@@ -775,7 +782,7 @@ executed and the catalog pending set is exactly the 9 Page + 5 KG keys, count
 cargo test -p wenlan-core --lib briefing -- --nocapture
 cargo test -p wenlan-core --lib snapshot -- --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_2 -- --nocapture
-cargo test -p wenlan-core --lib lint::serving_review_test -- --nocapture
+cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture
 cargo fmt --all -- --check
 git diff --check
 git add crates/wenlan-core/src/briefing.rs crates/wenlan-core/src/db.rs \
@@ -894,7 +901,7 @@ cargo test -p wenlan-core --lib page_links -- --nocapture
 cargo test -p wenlan-server --test list_pages_by_space_e2e -- --nocapture
 cargo test -p wenlan-server --test space_header_fallback -- --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_3 -- --nocapture
-cargo test -p wenlan-core --lib lint::serving_review_test -- --nocapture
+cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture
 cargo check --workspace --all-targets
 cargo fmt --all -- --check
 git diff --check
@@ -1011,7 +1018,7 @@ cargo test -p wenlan-core --lib recent_relations -- --nocapture
 cargo test -p wenlan-core --lib entity_suggestions -- --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_4 -- --nocapture
 cargo test -p wenlan-server --lib sensitive_read_routes -- --nocapture
-cargo test -p wenlan-core --lib lint::serving_review_test -- --nocapture
+cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture
 cargo fmt --all -- --check
 git diff --check
 git add crates/wenlan-core/src/db.rs crates/wenlan-core/src/db/scoped_entities.rs \

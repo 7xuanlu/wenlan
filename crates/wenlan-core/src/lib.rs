@@ -54,6 +54,7 @@ pub mod post_write;
 pub mod privacy;
 pub mod prompts;
 pub mod quality_gate;
+pub mod read_scope;
 pub mod reconcile;
 pub mod refinery;
 pub mod reranker;

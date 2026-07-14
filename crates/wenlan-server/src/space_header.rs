@@ -91,4 +91,16 @@ mod tests {
             .unwrap();
         assert_eq!(val.as_deref(), Some("health"));
     }
+
+    #[tokio::test]
+    async fn wenlan_header_wins_when_both_names_are_present() {
+        let mut parts = build_parts(&[
+            ("X-Origin-Space", "legacy"),
+            ("X-Wenlan-Space", "preferred"),
+        ]);
+        let SpaceHeader(val) = SpaceHeader::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(val.as_deref(), Some("preferred"));
+    }
 }
