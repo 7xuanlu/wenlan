@@ -195,7 +195,48 @@ candidates; extreme invisible prefixes can underfill a response but cannot
 leak those events. The truthful catalog checkpoint is 55 total, 15 Global, and
 17 remaining violations.
 
-Tasks 5-8 pending.
+### Task 5: Briefing and snapshot parent collections
+
+RED evidence:
+
+- All four focused parent tests failed before implementation: unknown
+  selectors returned success, selected briefing used the wrong population and
+  cache path, snapshot membership was unscoped, and catalog rows still
+  described missing parent gates.
+- The first GREEN run exposed a fixture defect: `capture_refs.source_id` is a
+  primary key, so reusing one personal capture across two snapshots replaced
+  the mixed-snapshot row. The fixture now uses distinct captures and the
+  mixed/global compatibility assertion is effective.
+- The original `--lib snapshot` filter also selected unrelated lint tests
+  containing the word `snapshot`, including process-environment tests. It was
+  replaced with the exact DB snapshot test. The canonical source-snapshot
+  identity test passes when run exactly and in isolation.
+
+GREEN evidence:
+
+| Contract | Command | Result |
+|---|---|---|
+| Canonical source-snapshot identity | `cargo test -p wenlan-core --lib lint::operations::tests::config_queue::source_snapshot_identity_is_canonical_and_semantically_complete -- --exact --nocapture` | 1 passed, 0 failed |
+| Briefing assembly and cache behavior | `cargo test -p wenlan-core --lib briefing -- --nocapture` | 8 passed, 0 failed |
+| Existing snapshot DB behavior | `cargo test -p wenlan-core --lib db::tests::test_get_captures_for_snapshot -- --exact --nocapture` | 1 passed, 0 failed |
+| Three parent routes and registry | `cargo test -p wenlan-server --test space_scoping_e2e wave_2_parent -- --nocapture` | 4 passed, 0 failed |
+| Cumulative Wave 2 routes | `cargo test -p wenlan-server --test space_scoping_e2e wave_2 -- --nocapture` | 13 passed, 0 failed |
+| Complete Space HTTP registry | `cargo test -p wenlan-server --test space_scoping_e2e -- --nocapture` | 19 passed, 0 failed |
+| Core catalog and diagnostics | `cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture` | 16 passed, 0 failed |
+| Server catalog mirror | `cargo test -p wenlan-server --lib sensitive_read_routes -- --nocapture` | 7 passed, 0 failed |
+| Changed-crate lint | `cargo clippy -p wenlan-core -p wenlan-server --all-targets -- -D warnings` | passed |
+| Workspace compile | `cargo check --workspace --all-targets` | passed |
+
+Global briefing retains its existing generation/cache behavior. Selected
+briefings use scoped stats and recent memories without reading or writing the
+singleton cache. Selected snapshot collections require current Memory
+ownership before loading content; mixed-owner collisions are omitted,
+required-content failures propagate, and mismatch/missing parents share the
+same `404`. Global metadata remains backward compatible, including orphan
+capture references. The truthful catalog checkpoint is 55 total, 15 Global,
+and 14 remaining violations.
+
+Tasks 6-8 pending.
 
 ## Downstream App
 

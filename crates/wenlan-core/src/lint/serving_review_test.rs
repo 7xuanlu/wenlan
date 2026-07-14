@@ -43,9 +43,9 @@ fn route_contract_records_observed_scope_and_trust_semantics() {
         route(Method::Get, "/api/snapshots/{id}/captures-with-content").expect("snapshot read row");
     assert_eq!(
         snapshot.selection_gate,
-        SelectionGate::ParentCollectionMissing
+        SelectionGate::ParentCollectionFiltered
     );
-    assert!(snapshot.scope_contract_violation());
+    assert!(!snapshot.scope_contract_violation());
 }
 
 #[test]
@@ -138,7 +138,7 @@ async fn route_scope_result_is_derived_from_canonical_contract() {
     let report = run(&db, None).await;
     let result = check(&report, ROUTE_SCOPE_ID);
     let defects = super::super::routes::scope_contract_violations().count() as u64;
-    assert_eq!(defects, 17);
+    assert_eq!(defects, 14);
     assert_eq!(metric(result, LintMetricCode::AffectedRecords), defects);
 }
 

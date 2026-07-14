@@ -5,6 +5,7 @@ use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::prompts::PromptRegistry;
+use crate::read_scope::ReadScope;
 use crate::tuning::BriefingConfig;
 use serde::Serialize;
 
@@ -97,23 +98,14 @@ fn assemble_briefing(topics: Option<&str>, fallback_memories: &[BriefingMemory])
     }
 }
 
-/// Generate a briefing using template + optional LLM topic extraction.
-pub async fn generate_briefing(
-    db: &MemoryDB,
+async fn assemble_briefing_response(
     llm: Option<&dyn LlmProvider>,
     prompts: &PromptRegistry,
     tuning: &BriefingConfig,
+    stats: BriefingStats,
+    memories: Vec<BriefingMemory>,
+    generated_at: i64,
 ) -> Result<BriefingResponse, WenlanError> {
-    let now = chrono::Utc::now().timestamp();
-    let cutoff = now - 48 * 3600;
-
-    // 1. Fetch stats + recent memories
-    let stats = db.get_briefing_stats(cutoff).await?;
-    let memories = db
-        .get_recent_memories_for_briefing(cutoff, tuning.max_topic_memories)
-        .await?;
-
-    // 2. Try LLM summarization from titles
     let topics = if let Some(llm) = llm {
         if llm.is_available() && !memories.is_empty() {
             let prompt = extract_topics_prompt(&memories, tuning);
@@ -149,20 +141,62 @@ pub async fn generate_briefing(
         None
     };
 
-    // 3. Assemble — body only (stats go to separate fields)
     let content = assemble_briefing(topics.as_deref(), &memories);
-
-    // 4. Cache
-    let memory_count = db.get_memory_count().await?;
-    db.upsert_briefing_cache(&content, memory_count).await?;
 
     Ok(BriefingResponse {
         content,
         new_today: stats.new_today,
         primary_agent: stats.primary_agent,
-        generated_at: now,
+        generated_at,
         is_stale: false,
     })
+}
+
+/// Generate a Global briefing using the existing template and cache path.
+pub async fn generate_briefing(
+    db: &MemoryDB,
+    llm: Option<&dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    tuning: &BriefingConfig,
+) -> Result<BriefingResponse, WenlanError> {
+    let now = chrono::Utc::now().timestamp();
+    let cutoff = now - 48 * 3600;
+    let stats = db.get_briefing_stats(cutoff).await?;
+    let memories = db
+        .get_recent_memories_for_briefing(cutoff, tuning.max_topic_memories)
+        .await?;
+    let response = assemble_briefing_response(llm, prompts, tuning, stats, memories, now).await?;
+
+    let memory_count = db.get_memory_count().await?;
+    db.upsert_briefing_cache(&response.content, memory_count)
+        .await?;
+
+    Ok(response)
+}
+
+/// Generate a briefing for the effective read scope.
+///
+/// Selected scopes are deliberately uncached: the singleton cache is Global
+/// and must never be read or mutated by a selected request.
+pub async fn generate_briefing_scoped(
+    db: &MemoryDB,
+    llm: Option<&dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    tuning: &BriefingConfig,
+    scope: &ReadScope,
+) -> Result<BriefingResponse, WenlanError> {
+    if matches!(scope, ReadScope::Global) {
+        return generate_briefing(db, llm, prompts, tuning).await;
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let cutoff = now - 48 * 3600;
+    let stats = db.get_briefing_stats_scoped(cutoff, scope).await?;
+    let memories = db
+        .get_recent_memories_for_briefing_scoped(cutoff, tuning.max_topic_memories, scope)
+        .await?;
+
+    assemble_briefing_response(llm, prompts, tuning, stats, memories, now).await
 }
 
 #[cfg(test)]

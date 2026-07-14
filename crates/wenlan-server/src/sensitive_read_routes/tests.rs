@@ -58,8 +58,8 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
         "/api/snapshots/{id}/captures-with-content",
     ] {
         let row = route(Method::Get, path).expect("parent collection row");
-        assert_eq!(row.selection_gate, SelectionGate::ParentCollectionMissing);
-        assert!(row.scope_contract_violation());
+        assert_eq!(row.selection_gate, SelectionGate::ParentCollectionFiltered);
+        assert!(!row.scope_contract_violation());
     }
 }
 
@@ -149,7 +149,7 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         rows.iter()
             .filter(|row| row.scope_contract_violation())
             .count(),
-        17
+        14
     );
 }
 

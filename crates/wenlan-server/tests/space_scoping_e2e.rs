@@ -77,3 +77,23 @@ async fn wave_2_derived_filters_events_before_limit() {
 fn wave_2_derived_registry_matches_completed_catalog_contracts() {
     space_scoping::derived_cases::registry_matches_completed_contracts();
 }
+
+#[tokio::test]
+async fn wave_2_parent_collections_reject_unknown_selectors() {
+    space_scoping::parent_cases::unknown_selectors_are_rejected().await;
+}
+
+#[tokio::test]
+async fn wave_2_parent_collections_isolate_briefing_cache() {
+    space_scoping::parent_cases::scoped_briefing_does_not_read_or_write_global_cache().await;
+}
+
+#[tokio::test]
+async fn wave_2_parent_collections_scope_snapshot_membership() {
+    space_scoping::parent_cases::snapshot_parent_collections_are_scoped().await;
+}
+
+#[test]
+fn wave_2_parent_collections_registry_matches_completed_contracts() {
+    space_scoping::parent_cases::registry_matches_completed_contracts();
+}

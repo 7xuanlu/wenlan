@@ -719,10 +719,11 @@ Global payloads remain unchanged.
 - Modify: `crates/wenlan-core/src/lint/serving_review_test.rs`
 
 **Interfaces:**
-- Produces: `generate_briefing_scoped(..., &ReadScope)` with Global cached and selected uncached branches.
+- Produces: `generate_briefing_scoped(..., &ReadScope)` with existing Global
+  generation/cache behavior and selected uncached branches.
 - Produces: `get_captures_for_snapshot_scoped(snapshot_id, &ReadScope)` and `get_snapshot_captures_with_content_scoped`.
 
-- [ ] **Step 1: Add RED cache-bleed and mixed-snapshot cases**
+- [x] **Step 1: Add RED cache-bleed and mixed-snapshot cases**
 
 Seed the Global briefing cache with a personal canary and work Memory input.
 Selected work must not return the cache canary and must not change the cache
@@ -740,7 +741,7 @@ cargo test -p wenlan-server --test space_scoping_e2e wave_2_parent_collections -
 Expected RED: briefing can read/write the singleton cache and snapshot captures
 resolve content without a Space gate.
 
-- [ ] **Step 2: Split briefing orchestration by effective scope**
+- [x] **Step 2: Split briefing orchestration by effective scope**
 
 Use this exact entry point:
 
@@ -754,13 +755,13 @@ pub async fn generate_briefing_scoped(
 ) -> Result<BriefingResponse, WenlanError>;
 ```
 
-`Global` delegates to existing cache-first generation. `Space` and
+`Global` delegates to the existing generation path and its cache write. `Space` and
 `Uncategorized` call `get_briefing_stats_scoped` and
 `get_recent_memories_for_briefing_scoped`, assemble the same
 `BriefingResponse`, and never invoke `get_cached_briefing` or
 `upsert_briefing_cache`. Do not add per-scope cache rows.
 
-- [ ] **Step 3: Scope snapshot membership before content loading**
+- [x] **Step 3: Scope snapshot membership before content loading**
 
 Map capture source names to their current Memory source names inside core, join
 current Memory ownership, and filter by `ReadScope`. A selected empty set
@@ -769,18 +770,18 @@ same scoped capture set. Move content projection into the scoped core method and
 replace `list_indexed_files().await.unwrap_or_default()` plus per-chunk error
 swallowing with propagated required-load errors.
 
-- [ ] **Step 4: Close the exact Wave 2 checkpoint**
+- [x] **Step 4: Close the exact Wave 2 checkpoint**
 
 Add the three executed keys: briefing and two snapshot routes. Mark snapshot
 rows `SelectionGate::ParentCollectionFiltered`. Assert all 18 Wave 2 keys have
 executed and the catalog pending set is exactly the 9 Page + 5 KG keys, count
 `14`.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 cargo test -p wenlan-core --lib briefing -- --nocapture
-cargo test -p wenlan-core --lib snapshot -- --nocapture
+cargo test -p wenlan-core --lib db::tests::test_get_captures_for_snapshot -- --exact --nocapture
 cargo test -p wenlan-server --test space_scoping_e2e wave_2 -- --nocapture
 cargo test -p wenlan-core --lib lint::serving::tests -- --nocapture
 cargo fmt --all -- --check

@@ -3,8 +3,10 @@ use super::{
     CrossScopePolicy::*,
     Method::*,
     ScopeBinding::*,
-    SelectionGate::{BatchFiltered, NotApplicable as NoGate, ParentCollectionMissing, SingleId404},
-    SelectorPrecedence::{HeaderOnly, Missing, NotApplicable as NoSelector, QueryThenHeader},
+    SelectionGate::{
+        BatchFiltered, NotApplicable as NoGate, ParentCollectionFiltered, SingleId404,
+    },
+    SelectorPrecedence::{HeaderOnly, NotApplicable as NoSelector, QueryThenHeader},
     SensitiveReadRoute,
 };
 
@@ -26,10 +28,10 @@ pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Get,"/api/memory/{id}/versions","memory_versions",HeaderOnly,UnauthenticatedLocal,MemorySpace,SingleId404,Rejected,Forbidden),
     row!(Get,"/api/decisions","decision_list",QueryThenHeader,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/decisions/domains","decision_spaces",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,AggregateOnly),
-    row!(Get,"/api/briefing","briefing",Missing,UnauthenticatedLocal,MemorySpace,NoGate,NotApplicable,Forbidden),
+    row!(Get,"/api/briefing","briefing",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/memory/pending-revisions","memory_revisions",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/memory/pending-revision/{source_id}","memory_revision",HeaderOnly,UnauthenticatedLocal,MemorySpace,SingleId404,Rejected,Forbidden),
     row!(Get,"/api/snapshots","snapshot_list",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
-    row!(Get,"/api/snapshots/{id}/captures","snapshot_captures",Missing,UnauthenticatedLocal,MemorySpace,ParentCollectionMissing,NotApplicable,Forbidden),
-    row!(Get,"/api/snapshots/{id}/captures-with-content","snapshot_content",Missing,UnauthenticatedLocal,MemorySpace,ParentCollectionMissing,NotApplicable,Forbidden),
+    row!(Get,"/api/snapshots/{id}/captures","snapshot_captures",HeaderOnly,UnauthenticatedLocal,MemorySpace,ParentCollectionFiltered,Rejected,Forbidden),
+    row!(Get,"/api/snapshots/{id}/captures-with-content","snapshot_content",HeaderOnly,UnauthenticatedLocal,MemorySpace,ParentCollectionFiltered,Rejected,Forbidden),
 ];

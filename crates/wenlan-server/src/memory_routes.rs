@@ -3005,6 +3005,7 @@ pub async fn handle_list_decision_domains(
 /// GET /api/briefing
 pub async fn handle_get_briefing(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_core::briefing::BriefingResponse>, ServerError> {
     let (db, llm, prompts, tuning) = {
         let s = state.read().await;
@@ -3014,9 +3015,15 @@ pub async fn handle_get_briefing(
         let tuning = s.tuning.briefing.clone();
         (db, llm, prompts, tuning)
     };
-    let briefing = wenlan_core::briefing::generate_briefing(&db, llm.as_deref(), &prompts, &tuning)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let briefing = wenlan_core::briefing::generate_briefing_scoped(
+        &db,
+        llm.as_deref(),
+        &prompts,
+        &tuning,
+        &scope,
+    )
+    .await?;
     Ok(Json(briefing))
 }
 
@@ -3242,15 +3249,14 @@ pub async fn handle_list_snapshots(
 pub async fn handle_get_snapshot_captures(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<Vec<wenlan_types::SnapshotCapture>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let rows = db
-        .get_captures_for_snapshot(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let rows = db.get_captures_for_snapshot_scoped(&id, &scope).await?;
     let captures = rows
         .into_iter()
         .map(|c| wenlan_types::SnapshotCapture {
@@ -3267,71 +3273,21 @@ pub async fn handle_get_snapshot_captures(
 /// GET /api/snapshots/{id}/captures-with-content
 ///
 /// Returns captures for a snapshot plus their full chunked text and LLM
-/// summary. Mirrors the pre-split `get_snapshot_captures_with_content`
-/// Tauri command: for each `capture_refs` row, maps the router-side
-/// trigger name (`focus`/`hotkey`/`snip`/`thought`) to the DB-side
-/// source name (`focus_capture`/`hotkey_capture`/`snip_capture`/
-/// `quick_thought`), fetches chunks, joins their content, and looks up
-/// the summary via list_indexed_files.
+/// summary.
 pub async fn handle_get_snapshot_captures_with_content(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<Vec<wenlan_types::SnapshotCaptureWithContent>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let captures = db
-        .get_captures_for_snapshot(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    // list_indexed_files is a single aggregate scan, so fetch once
-    // upfront rather than once per capture.
-    let indexed_files = if captures.is_empty() {
-        Vec::new()
-    } else {
-        db.list_indexed_files().await.unwrap_or_default()
-    };
-
-    let mut results = Vec::with_capacity(captures.len());
-    for c in captures {
-        let vdb_source = match c.source.as_str() {
-            "focus" => "focus_capture",
-            "hotkey" => "hotkey_capture",
-            "snip" => "snip_capture",
-            "thought" => "quick_thought",
-            other => other,
-        };
-
-        let chunks = db
-            .get_memories_by_source_id(vdb_source, &c.source_id)
-            .await
-            .unwrap_or_default();
-        let content = chunks
-            .iter()
-            .map(|ch| ch.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let summary = indexed_files
-            .iter()
-            .find(|f| f.source == vdb_source && f.source_id == c.source_id)
-            .and_then(|f| f.summary.clone());
-
-        results.push(wenlan_types::SnapshotCaptureWithContent {
-            source_id: c.source_id,
-            app_name: c.app_name,
-            window_title: c.window_title,
-            timestamp: c.timestamp,
-            source: c.source,
-            content,
-            summary,
-        });
-    }
-
-    Ok(Json(results))
+        .get_snapshot_captures_with_content_scoped(&id, &scope)
+        .await?;
+    Ok(Json(captures))
 }
 
 /// POST /api/memory/{id}/update-page

@@ -52,6 +52,16 @@ fn legacy_read_scope(space: Option<&str>) -> ReadScope {
     }
 }
 
+fn capture_memory_source(source: &str) -> &str {
+    match source {
+        "focus" => "focus_capture",
+        "hotkey" => "hotkey_capture",
+        "snip" => "snip_capture",
+        "thought" => "quick_thought",
+        other => other,
+    }
+}
+
 fn parse_activity_ids(ids_csv: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     ids_csv
@@ -19748,6 +19758,185 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Get snapshot captures whose current Memory owner belongs to `scope`.
+    pub async fn get_captures_for_snapshot_scoped(
+        &self,
+        snapshot_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Vec<CaptureRefRow>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            let captures = self.get_captures_for_snapshot(snapshot_id).await?;
+            return if captures.is_empty() {
+                Err(WenlanError::NotFound("snapshot not found".to_string()))
+            } else {
+                Ok(captures)
+            };
+        }
+
+        let mut conditions = vec!["cr.snapshot_id = ?".to_string()];
+        let mut values = vec![libsql::Value::Text(snapshot_id.to_string())];
+        push_read_scope_filter(scope, "m.space", &mut conditions, &mut values);
+        match scope {
+            ReadScope::Space(space) => {
+                conditions.push(
+                    "NOT EXISTS (
+                         SELECT 1 FROM memories other
+                          WHERE other.source = m.source
+                            AND other.source_id = m.source_id
+                            AND (other.space IS NULL OR other.space <> ?)
+                     )"
+                    .to_string(),
+                );
+                values.push(libsql::Value::Text(space.clone()));
+            }
+            ReadScope::Uncategorized => conditions.push(
+                "NOT EXISTS (
+                     SELECT 1 FROM memories other
+                      WHERE other.source = m.source
+                        AND other.source_id = m.source_id
+                        AND other.space IS NOT NULL
+                 )"
+                .to_string(),
+            ),
+            ReadScope::Global => unreachable!(),
+        }
+        let sql = format!(
+            "SELECT cr.source_id, cr.activity_id, cr.snapshot_id, cr.app_name,
+                    cr.window_title, cr.timestamp, cr.source
+               FROM capture_refs cr
+               JOIN memories m
+                 ON m.source_id = cr.source_id
+                AND m.chunk_index = 0
+                AND m.source = CASE cr.source
+                    WHEN 'focus' THEN 'focus_capture'
+                    WHEN 'hotkey' THEN 'hotkey_capture'
+                    WHEN 'snip' THEN 'snip_capture'
+                    WHEN 'thought' THEN 'quick_thought'
+                    ELSE cr.source
+                END
+              WHERE {}
+              ORDER BY cr.timestamp",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_captures_for_snapshot_scoped: {e}")))?;
+        let mut results = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("snapshot capture row: {e}")))?
+        {
+            results.push(CaptureRefRow {
+                source_id: row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot source_id: {e}")))?,
+                activity_id: row
+                    .get(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot activity_id: {e}")))?,
+                snapshot_id: row
+                    .get(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot id: {e}")))?,
+                app_name: row
+                    .get(3)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot app_name: {e}")))?,
+                window_title: row
+                    .get(4)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot window_title: {e}")))?,
+                timestamp: row
+                    .get(5)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot timestamp: {e}")))?,
+                source: row
+                    .get(6)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot source: {e}")))?,
+            });
+        }
+
+        if results.is_empty() {
+            Err(WenlanError::NotFound("snapshot not found".to_string()))
+        } else {
+            Ok(results)
+        }
+    }
+
+    async fn get_snapshot_capture_content(
+        &self,
+        source: &str,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<String, WenlanError> {
+        let mut conditions = vec!["source = ?".to_string(), "source_id = ?".to_string()];
+        let mut values = vec![
+            libsql::Value::Text(source.to_string()),
+            libsql::Value::Text(source_id.to_string()),
+        ];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT content FROM memories WHERE {} ORDER BY chunk_index ASC LIMIT 10000",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("snapshot capture content: {e}")))?;
+        let mut chunks = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("snapshot content row: {e}")))?
+        {
+            chunks.push(
+                row.get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("snapshot content: {e}")))?,
+            );
+        }
+        if chunks.is_empty() {
+            return Err(WenlanError::VectorDb(format!(
+                "snapshot capture content missing: {source_id}"
+            )));
+        }
+        Ok(chunks.join("\n"))
+    }
+
+    /// Get scoped snapshot captures with required content and summary loads.
+    pub async fn get_snapshot_captures_with_content_scoped(
+        &self,
+        snapshot_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::SnapshotCaptureWithContent>, WenlanError> {
+        let captures = self
+            .get_captures_for_snapshot_scoped(snapshot_id, scope)
+            .await?;
+        let indexed_files = self.list_indexed_files_scoped(scope).await?;
+        let mut results = Vec::with_capacity(captures.len());
+
+        for capture in captures {
+            let memory_source = capture_memory_source(&capture.source);
+            let content = self
+                .get_snapshot_capture_content(memory_source, &capture.source_id, scope)
+                .await?;
+            let summary = indexed_files
+                .iter()
+                .find(|file| file.source == memory_source && file.source_id == capture.source_id)
+                .and_then(|file| file.summary.clone());
+
+            results.push(wenlan_types::SnapshotCaptureWithContent {
+                source_id: capture.source_id,
+                app_name: capture.app_name,
+                window_title: capture.window_title,
+                timestamp: capture.timestamp,
+                source: capture.source,
+                content,
+                summary,
+            });
+        }
+
+        Ok(results)
+    }
+
     // ==================== Session Snapshots ====================
 
     /// Insert a session snapshot.
@@ -20157,6 +20346,112 @@ impl MemoryDB {
         })
     }
 
+    /// Get briefing stats from the selected Memory population.
+    pub async fn get_briefing_stats_scoped(
+        &self,
+        cutoff: i64,
+        scope: &ReadScope,
+    ) -> Result<crate::briefing::BriefingStats, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.get_briefing_stats(cutoff).await;
+        }
+
+        let today_start = chrono::Utc::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "last_modified > ?".to_string(),
+            "chunk_index = 0".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(today_start)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT COUNT(DISTINCT source_id) FROM memories WHERE {}",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing_stats_scoped new_today: {e}")))?;
+        let new_today = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<u64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "last_modified > ?".to_string(),
+            "chunk_index = 0".to_string(),
+            "space IS NOT NULL".to_string(),
+            "space != ''".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(cutoff)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT space, COUNT(*) AS cnt FROM memories WHERE {} \
+             GROUP BY space ORDER BY cnt DESC LIMIT 1",
+            conditions.join(" AND ")
+        );
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing_stats_scoped domain: {e}")))?;
+        let dominant_domain = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<String>(0).ok()
+        } else {
+            None
+        };
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "last_modified > ?".to_string(),
+            "chunk_index = 0".to_string(),
+            "source_agent IS NOT NULL".to_string(),
+            "source_agent != ''".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(cutoff)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT source_agent, COUNT(*) AS cnt FROM memories WHERE {} \
+             GROUP BY source_agent ORDER BY cnt DESC LIMIT 1",
+            conditions.join(" AND ")
+        );
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing_stats_scoped agent: {e}")))?;
+        let primary_agent = if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<String>(0).ok()
+        } else {
+            None
+        };
+
+        Ok(crate::briefing::BriefingStats {
+            dominant_domain,
+            primary_agent,
+            new_today,
+        })
+    }
+
     /// Get recent memories for briefing generation (all types, sorted by recency).
     pub async fn get_recent_memories_for_briefing(
         &self,
@@ -20191,6 +20486,69 @@ impl MemoryDB {
                 memory_type: row.get(2).unwrap_or_else(|_| "observation".to_string()),
                 space: row.get::<Option<String>>(3).unwrap_or(None),
                 last_modified: row.get(4).unwrap_or(0),
+            });
+        }
+        Ok(results)
+    }
+
+    /// Get recent briefing inputs from the selected Memory population.
+    pub async fn get_recent_memories_for_briefing_scoped(
+        &self,
+        cutoff: i64,
+        limit: usize,
+        scope: &ReadScope,
+    ) -> Result<Vec<crate::briefing::BriefingMemory>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.get_recent_memories_for_briefing(cutoff, limit).await;
+        }
+
+        let mut conditions = vec![
+            "source = 'memory'".to_string(),
+            "chunk_index = 0".to_string(),
+            "last_modified > ?".to_string(),
+            "is_recap = 0".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Integer(cutoff)];
+        push_read_scope_filter(scope, "space", &mut conditions, &mut values);
+        values.push(libsql::Value::Integer(limit as i64));
+        let sql = format!(
+            "SELECT title, content, COALESCE(memory_type, 'observation'), space, last_modified
+             FROM memories
+             WHERE {}
+             ORDER BY last_modified DESC
+             LIMIT ?",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("get_recent_memories_for_briefing_scoped: {e}"))
+            })?;
+
+        let mut results = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("briefing scoped row: {e}")))?
+        {
+            results.push(crate::briefing::BriefingMemory {
+                title: row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing title: {e}")))?,
+                content: row
+                    .get(1)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing content: {e}")))?,
+                memory_type: row
+                    .get(2)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing memory_type: {e}")))?,
+                space: row
+                    .get(3)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing space: {e}")))?,
+                last_modified: row
+                    .get(4)
+                    .map_err(|e| WenlanError::VectorDb(format!("briefing timestamp: {e}")))?,
             });
         }
         Ok(results)
