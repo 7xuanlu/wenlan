@@ -328,8 +328,10 @@ GREEN evidence:
 | Relation compatibility | `cargo test -p wenlan-core --lib recent_relations -- --nocapture` | 1 passed, 0 failed |
 | Suggestion compatibility | `cargo test -p wenlan-core --lib entity_suggestions -- --nocapture` | 1 passed, 0 failed |
 
-The final catalog is 55 total, 15 Global, 40 scoped, and zero contract
-violations. Selected relations require both Entity endpoints to match;
+The Task 7 checkpoint catalog was 55 total, 15 Global, 40 scoped, and zero
+contract violations. Task 8 adversarial review later reclassified two existing
+Page export endpoints, producing the final 57/15/42 catalog recorded below.
+Selected relations require both Entity endpoints to match;
 suggestions require every nonempty source ID to resolve to a matching Memory
 owner in one guarded SQL query. Global behavior remains unchanged except that
 missing Entity detail now returns the required nondisclosing static 404. The
@@ -344,9 +346,14 @@ work, personal, SQL-NULL, and literal `space='uncategorized'` Pages. The lint
 E2E harness now expects real baseline/Global/registered/Uncategorized and
 tarball reports to be clean with exit `0`; a separate typed synthetic report
 with one route-scope defect owns exit `1`, incomplete precedence, and tarball
-producer-receipt assertions. Commit `662da31d` passed exact committed-HEAD
-execution. The final post-review HEAD will repeat the same gate after the
-hardening fixes below are committed.
+producer-receipt assertions. Commit `662da31d` passed the first exact
+committed-HEAD execution. After all review fixes, product commit `217558d8`
+repeated the gate from two clean-room builds (`6m49s` exact checkout and
+`6m42s` tarball checkout) and ended with:
+
+```text
+PASS: HTTP/CLI parity, exits 0/1/2, scopes, privacy, provenance, and zero mutation
+```
 
 The first exact-HEAD run passed baseline exit `0`, clean fixture exit `0`, and
 synthetic route-scope exit `1`, then correctly returned exit `1` after the
@@ -488,6 +495,49 @@ a personal superseder had globally set its work predecessor to
 NULL equality; the same/NULL-Space legacy suppression test remains green.
 
 Codex Sol xhigh re-review and the delta-only follow-up both returned
-**APPROVED**, with no remaining Critical or Important findings. Claude Opus
-xhigh adversarial review remains pending until the final committed-HEAD gates
-are green.
+**APPROVED**, with no remaining Critical or Important findings.
+
+The integrated Claude Opus xhigh adversarial review then found two Page export
+routes incorrectly classified as non-sensitive:
+
+1. `POST /api/pages/export` used unscoped `list_pages(... LIMIT 1000)` and could
+   materialize Pages from every workspace into a caller-selected directory.
+2. `POST /api/pages/{id}/export` used unscoped `get_page` and returned a known
+   cross-workspace Page instead of the same static 404 as a missing ID.
+
+RED handler contracts reproduced `exported=2` instead of `1` for a selected
+workspace and `200` instead of `404` for the cross-workspace direct ID. Product
+commit `217558d8` routes both handlers through the existing
+`list_pages_scoped`/`get_page_scoped` methods, removes both paths from
+`NON_SENSITIVE_PATHS`, and adds them to the canonical Page catalog, router
+binding, frozen key sets, Wave 3 unknown-scope probes, and executed contracts.
+The final catalog is 57 total, 15 Global, 42 scoped, and zero violations.
+
+| Export hardening contract | Focused result |
+|---|---|
+| RED reproduction | 4 passed, 2 failed for the expected disclosure assertions |
+| Handler contracts after fix | 6 passed, 0 failed |
+| Sensitive route catalog and handlers | 9 passed, 0 failed |
+| Core serving lint contracts | 16 passed, 0 failed |
+| Wave 3 Page HTTP contracts | 5 passed, 0 failed |
+| Core/server Clippy with `-D warnings` | passed |
+
+Claude's focused working-tree re-review returned **APPROVED** with no material
+findings. Its remaining low-severity notes are pre-existing bulk export
+truncation at 1,000 active Pages, intentional scoping for legacy clients that
+send a Space header, and repeated `create_dir_all` calls inside the exporter.
+None weakens data isolation or the read-only lint contract.
+
+## Final Gates
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --workspace --lib` | passed |
+| `space_header_fallback` | 31 passed, 0 failed |
+| `list_pages_by_space_e2e` | 3 passed, 0 failed |
+| `space_scoping_e2e` | 30 passed, 0 failed |
+| App `cargo fmt`, workspace Clippy, full library suite | passed; 307 tests passed, 1 ignored |
+| Exact product commit `217558d8` `scripts/lint-e2e.sh` | passed from exact checkout and tarball checkout |
+| `git diff --check` | passed |

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Use `superpowers:test-driven-development` for each task and `superpowers:systematic-debugging` when a RED test fails for an unexpected reason. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make all 40 sensitive Space-bound daemon read routes enforce one typed, fail-closed Space selector while preserving the 15 deliberate Global routes and existing success response shapes.
+**Goal:** Make all 42 sensitive Space-bound daemon read routes enforce one typed, fail-closed Space selector while preserving the 15 deliberate Global routes and existing success response shapes.
 
-**Architecture:** `wenlan-core` owns `ReadScope` resolution and domain query gates; `wenlan-server` only extracts body/query/header candidates and maps core errors to HTTP. The canonical lint route catalog remains the progress ledger, while executed hermetic HTTP cases prove behavior for the exact 40-route set. Four delivery waves move the catalog violation count `40 -> 32 -> 14 -> 5 -> 0` without adding an endpoint, mutating route, or second scope axis.
+**Architecture:** `wenlan-core` owns `ReadScope` resolution and domain query gates; `wenlan-server` only extracts body/query/header candidates and maps core errors to HTTP. The canonical lint route catalog remains the progress ledger, while executed hermetic HTTP cases prove behavior for the exact scoped-route set. Four delivery waves move the initial catalog violation count `40 -> 32 -> 14 -> 5 -> 0`; final adversarial review then reclassified two existing Page export endpoints from the non-sensitive allowlist and closed them through the same Page workspace infrastructure, without adding an endpoint, mutating route, or second scope axis.
 
 **Tech Stack:** Rust 2021, Axum 0.8, Tokio, libSQL/SQLite, Serde, Tower HTTP test router, Cargo, Bash, `jq`.
 
@@ -17,7 +17,7 @@
   edit either repo's `main` checkout.
 - Canonical design: `docs/superpowers/specs/2026-07-14-route-scope-contracts-design.md` at or after commit `02104092`.
 - Space is the only product selector; bind Memory/document rows on `memories.space`, Pages on `pages.workspace`, and Entities on `entities.space`.
-- Keep all 55 existing sensitive read paths and success envelopes. Do not add an endpoint, CLI command, MCP tool, authentication layer, mutating lint, repair action, schema migration, or Page `workspace` selector.
+- Keep all 57 classified sensitive read paths and success envelopes. Do not add an endpoint, CLI command, MCP tool, authentication layer, mutating lint, repair action, schema migration, or Page `workspace` selector.
 - Preserve Global behavior for the exact 15 routes frozen in the design. A supplied Space header must not alter those routes.
 - Exact case-sensitive `uncategorized` means NULL-bound rows only when no registered Space has that exact name; a collision returns `422`.
 - Missing and mismatched true direct IDs return identical `404` status/body bytes. Batch reads omit missing/mismatched IDs and preserve input order.
@@ -55,7 +55,7 @@
 - Modify `crates/wenlan-core/src/lint/serving/routes*.rs`: typed catalog vocabulary, exact route bindings, and wave ledger.
 - Create `crates/wenlan-server/tests/space_scoping_e2e.rs` plus
   `tests/space_scoping/{fixture,case_runner,retrieval_cases,record_cases,page_cases,knowledge_cases,global_cases}.rs`:
-  route-bound fixtures and executed registries for all 40 scoped and 15 Global routes.
+  route-bound fixtures and executed registries for all 42 scoped and 15 Global routes.
 - Modify `crates/wenlan-server/tests/space_header_fallback.rs` and `crates/wenlan-server/tests/list_pages_by_space_e2e.rs`: replace defect-preserving expectations.
 - Modify `scripts/lint-e2e.sh` and `scripts/lint-e2e.py`: final real-daemon lint
   expectation changes from actionable route finding to clean route check while
@@ -833,7 +833,7 @@ violations are exactly `14`.
 
 Create work Pages whose `pages.space='decision'`, personal Pages whose
 `pages.space='recap'`, and NULL-workspace Pages. Add an in-work source Memory to
-a personal Page to prove overlap cannot override workspace. Exercise all 9 Page
+a personal Page to prove overlap cannot override workspace. Exercise all 11 Page
 keys, body/query/header precedence, unknown `422`, selected direct/child `404`,
 and mixed `page_sources` where a work Page references personal Memory content.
 Insert at least eight higher-ranked out-of-scope search candidates before a
@@ -889,7 +889,9 @@ text. Every missing or mismatched direct/child parent maps to the same static
 
 `POST /api/pages/search` uses body then header. `GET /api/pages` uses query then
 header. Other Page routes use header only; existing query controls remain
-independent. Add all 9 executed entries and update catalog rows. Assert exact
+independent. Page export routes reuse `list_pages_scoped` and `get_page_scoped`
+so workspace filtering precedes the 1,000-row export cap and mismatched IDs are
+indistinguishable from missing IDs. Add all 11 executed entries and update catalog rows. Assert exact
 pending KG set and violation count `5`.
 
 - [x] **Step 4: Verify and commit**
@@ -915,7 +917,7 @@ git add crates/wenlan-types/src/requests.rs crates/wenlan-mcp/src/tools.rs \
 git commit -m "fix: bind page reads to workspaces"
 ```
 
-Acceptance gate: all 9 Page HTTP keys execute; category and workspace stay
+Acceptance gate: all 11 Page HTTP keys execute; category and workspace stay
 independent; child routes gate parents; sources cannot leak Memory content; and
 catalog violations are exactly `5`.
 
@@ -1000,10 +1002,10 @@ is `MemorySpace`, although delivery remains in this KG wave.
 Set the 5 final catalog rows to completed contracts. Assert:
 
 ```rust
-assert_eq!(sensitive_read_routes().count(), 55);
+assert_eq!(sensitive_read_routes().count(), 57);
 assert_eq!(global_keys(), EXPECTED_GLOBAL_15);
-assert_eq!(scoped_keys(), EXPECTED_SCOPED_40);
-assert_eq!(executed_case_keys(), EXPECTED_SCOPED_40);
+assert_eq!(scoped_keys(), EXPECTED_SCOPED_42);
+assert_eq!(executed_case_keys(), EXPECTED_SCOPED_42);
 assert_eq!(executed_global_case_keys(), EXPECTED_GLOBAL_15);
 assert_eq!(scope_contract_violations().count(), 0);
 ```
@@ -1030,7 +1032,7 @@ git add crates/wenlan-core/src/db.rs crates/wenlan-core/src/db/scoped_entities.r
 git commit -m "fix: scope entity and relation reads"
 ```
 
-Acceptance gate: all 5 KG HTTP keys execute; exact 40-route scoped registry and
+Acceptance gate: all 5 KG HTTP keys execute; exact 42-route scoped registry and
 15-route Global invariance registry equality, two-endpoint relations,
 conservative suggestions, and zero canonical route-scope violations pass.
 
@@ -1051,7 +1053,7 @@ conservative suggestions, and zero canonical route-scope violations pass.
 - Consumes the final zero-violation catalog and all executed HTTP cases.
 - Produces a redacted evidence record and PR-ready branch; no product API.
 
-- [ ] **Step 1: Update the exact-checkout lint E2E expectation**
+- [x] **Step 1: Update the exact-checkout lint E2E expectation**
 
 In `scripts/lint-e2e.sh` and `scripts/lint-e2e.py`, change real-daemon
 baseline/global/registered/Uncategorized runs from expected CLI exit `1` with a
@@ -1116,7 +1118,7 @@ record exact results. Failure to run or repair the App compatibility gate blocks
 publication; do not downgrade it to residual risk. Commit and open the companion
 App PR before the daemon PR is marked ready.
 
-- [ ] **Step 4: Run final serial repository gates**
+- [x] **Step 4: Run final serial repository gates**
 
 ```bash
 cargo fmt --all -- --check
@@ -1137,7 +1139,7 @@ bash scripts/lint-e2e.sh
 Expected: all commands pass; lint E2E ends with its PASS line and proves CLI
 exit `0/1/2`, HTTP parity, producer SHA, privacy, and zero mutation.
 
-- [ ] **Step 5: Run final independent reviews and address findings**
+- [x] **Step 5: Run final independent reviews and address findings**
 
 Run one Codex Sol xhigh implementation review and one Claude Opus xhigh
 adversarial review against `origin/main`. Review data isolation, query-before-
