@@ -288,3 +288,230 @@ async fn selected_fact_channel_rehydrates_only_matching_scope() {
         .iter()
         .all(|row| row.source_id != "personal-fact-parent"));
 }
+
+#[tokio::test]
+async fn list_entities_scoped_distinguishes_null_from_literal_uncategorized() {
+    let (db, _tmp) = test_db().await;
+    let work = db
+        .store_entity("Scoped list work", "topic", Some("work"), None, Some(0.9))
+        .await
+        .unwrap();
+    let personal = db
+        .store_entity(
+            "Scoped list personal",
+            "topic",
+            Some("personal"),
+            None,
+            Some(0.9),
+        )
+        .await
+        .unwrap();
+    let null = db
+        .store_entity("Scoped list null", "topic", None, None, Some(0.9))
+        .await
+        .unwrap();
+    let literal = db
+        .store_entity(
+            "Scoped list literal",
+            "topic",
+            Some("uncategorized"),
+            None,
+            Some(0.9),
+        )
+        .await
+        .unwrap();
+
+    let work_rows = db
+        .list_entities_scoped(None, &ReadScope::Space("work".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        work_rows
+            .iter()
+            .map(|entity| entity.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![work.as_str()]
+    );
+    let null_rows = db
+        .list_entities_scoped(None, &ReadScope::Uncategorized)
+        .await
+        .unwrap();
+    assert_eq!(
+        null_rows
+            .iter()
+            .map(|entity| entity.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![null.as_str()]
+    );
+    let global = db
+        .list_entities_scoped(None, &ReadScope::Global)
+        .await
+        .unwrap();
+    let global_ids = global
+        .iter()
+        .map(|entity| entity.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for id in [&work, &personal, &null, &literal] {
+        assert!(global_ids.contains(id.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn get_entity_detail_scoped_requires_matching_relation_endpoints() {
+    let (db, _tmp) = test_db().await;
+    let work = db
+        .store_entity("Detail work", "topic", Some("work"), None, Some(0.9))
+        .await
+        .unwrap();
+    let work_peer = db
+        .store_entity("Detail work peer", "topic", Some("work"), None, Some(0.9))
+        .await
+        .unwrap();
+    let personal = db
+        .store_entity(
+            "Detail personal",
+            "topic",
+            Some("personal"),
+            None,
+            Some(0.9),
+        )
+        .await
+        .unwrap();
+    let visible = db
+        .create_relation(&work, &work_peer, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+    let hidden = db
+        .create_relation(&work, &personal, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+
+    let detail = db
+        .get_entity_detail_scoped(&work, &ReadScope::Space("work".to_string()))
+        .await
+        .unwrap();
+    assert!(detail
+        .relations
+        .iter()
+        .any(|relation| relation.id == visible));
+    assert!(detail
+        .relations
+        .iter()
+        .all(|relation| relation.id != hidden));
+    assert!(matches!(
+        db.get_entity_detail_scoped(&personal, &ReadScope::Space("work".to_string()))
+            .await,
+        Err(crate::WenlanError::NotFound(message)) if message == "entity not found"
+    ));
+}
+
+#[tokio::test]
+async fn list_recent_relations_scoped_requires_both_endpoints() {
+    let (db, _tmp) = test_db().await;
+    let work = db
+        .store_entity("Relation work", "topic", Some("work"), None, Some(0.9))
+        .await
+        .unwrap();
+    let work_peer = db
+        .store_entity("Relation work peer", "topic", Some("work"), None, Some(0.9))
+        .await
+        .unwrap();
+    let personal = db
+        .store_entity(
+            "Relation personal",
+            "topic",
+            Some("personal"),
+            None,
+            Some(0.9),
+        )
+        .await
+        .unwrap();
+    let visible = db
+        .create_relation(&work, &work_peer, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+    let hidden = db
+        .create_relation(&work, &personal, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+
+    let selected = db
+        .list_recent_relations_scoped(20, None, &ReadScope::Space("work".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|relation| relation.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![visible.as_str()]
+    );
+    let global = db
+        .list_recent_relations_scoped(20, None, &ReadScope::Global)
+        .await
+        .unwrap();
+    assert!(global.iter().any(|relation| relation.id == hidden));
+}
+
+#[tokio::test]
+async fn list_entity_suggestions_scoped_excludes_invalid_and_mixed_owner_sets() {
+    let (db, _tmp) = test_db().await;
+    db.upsert_documents(vec![
+        memory_doc("suggest-work", "work"),
+        memory_doc("suggest-personal", "personal"),
+    ])
+    .await
+    .unwrap();
+    for (id, sources) in [
+        ("suggest-work-only", vec!["suggest-work".to_string()]),
+        (
+            "suggest-mixed",
+            vec!["suggest-work".to_string(), "suggest-personal".to_string()],
+        ),
+        ("suggest-missing", vec!["suggest-absent".to_string()]),
+        ("suggest-empty", Vec::new()),
+    ] {
+        db.insert_refinement_proposal(id, "suggest_entity", &sources, Some(id), 0.9)
+            .await
+            .unwrap();
+    }
+    let conn = db.conn.lock().await;
+    conn.execute(
+        "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence) \
+         VALUES ('suggest-malformed', 'suggest_entity', 'not-json', 'malformed', 0.9)",
+        (),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+
+    let selected = db
+        .list_entity_suggestions_scoped(&ReadScope::Space("work".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|proposal| proposal.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["suggest-work-only"]
+    );
+
+    let global = db
+        .list_entity_suggestions_scoped(&ReadScope::Global)
+        .await
+        .unwrap();
+    let global_ids = global
+        .iter()
+        .map(|proposal| proposal.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for id in [
+        "suggest-work-only",
+        "suggest-mixed",
+        "suggest-missing",
+        "suggest-empty",
+        "suggest-malformed",
+    ] {
+        assert!(global_ids.contains(id));
+    }
+}

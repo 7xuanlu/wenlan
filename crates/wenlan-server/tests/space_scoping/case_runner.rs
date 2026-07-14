@@ -91,6 +91,18 @@ pub const WAVE_3_PAGES: &[ExpectedContract] = &[
     ),
 ];
 
+pub const WAVE_4_KNOWLEDGE: &[ExpectedContract] = &[
+    entity_body(Method::Post, "/api/memory/entities/list"),
+    entity_body(Method::Post, "/api/memory/entities/search"),
+    entity_header_gate(
+        Method::Get,
+        "/api/memory/entities/{entity_id}",
+        SelectionGate::SingleId404,
+    ),
+    memory_header(Method::Get, "/api/memory/entity-suggestions"),
+    entity_header(Method::Get, "/api/knowledge/recent-relations"),
+];
+
 const fn body(method: Method, path: &'static str) -> ExpectedContract {
     expected(method, path, SelectorPrecedence::BodyThenHeader)
 }
@@ -157,6 +169,42 @@ const fn page_expected(
         binding: ScopeBinding::PageWorkspace,
         gate: SelectionGate::NotApplicable,
     }
+}
+
+const fn entity_body(method: Method, path: &'static str) -> ExpectedContract {
+    entity_expected(method, path, SelectorPrecedence::BodyThenHeader)
+}
+
+const fn entity_header(method: Method, path: &'static str) -> ExpectedContract {
+    entity_expected(method, path, SelectorPrecedence::HeaderOnly)
+}
+
+const fn entity_header_gate(
+    method: Method,
+    path: &'static str,
+    gate: SelectionGate,
+) -> ExpectedContract {
+    let mut contract = entity_header(method, path);
+    contract.gate = gate;
+    contract
+}
+
+const fn entity_expected(
+    method: Method,
+    path: &'static str,
+    precedence: SelectorPrecedence,
+) -> ExpectedContract {
+    ExpectedContract {
+        method,
+        path,
+        precedence,
+        binding: ScopeBinding::EntitySpace,
+        gate: SelectionGate::NotApplicable,
+    }
+}
+
+const fn memory_header(method: Method, path: &'static str) -> ExpectedContract {
+    expected(method, path, SelectorPrecedence::HeaderOnly)
 }
 
 pub fn assert_wave_1_catalog_contract() {
@@ -280,4 +328,75 @@ pub fn assert_wave_3_pages_executed_keys(
     let unique = executed.iter().copied().collect::<BTreeSet<_>>();
     assert_eq!(unique.len(), executed.len(), "duplicate Wave 3 Page key");
     assert_eq!(unique, expected, "executed Wave 3 Page key set drifted");
+}
+
+pub fn assert_wave_4_knowledge_catalog_contract() {
+    let keys = WAVE_4_KNOWLEDGE
+        .iter()
+        .map(|case| (case.method, case.path))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        keys.len(),
+        5,
+        "Wave 4 Knowledge must contain five unique keys"
+    );
+
+    for expected in WAVE_4_KNOWLEDGE {
+        let actual = route(expected.method, expected.path).expect("cataloged Wave 4 route");
+        assert_eq!(
+            actual.selector_precedence, expected.precedence,
+            "{}",
+            expected.path
+        );
+        assert_eq!(actual.scope_binding, expected.binding, "{}", expected.path);
+        assert_eq!(actual.selection_gate, expected.gate, "{}", expected.path);
+        assert_eq!(
+            actual.unknown_scope,
+            UnknownScopePolicy::Rejected,
+            "{}",
+            expected.path
+        );
+        assert!(!actual.scope_contract_violation(), "{}", expected.path);
+    }
+
+    let rows = wenlan_server::sensitive_read_routes::sensitive_read_routes().collect::<Vec<_>>();
+    assert_eq!(rows.len(), 55);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.scope_binding == ScopeBinding::Global)
+            .count(),
+        15
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.scope_binding != ScopeBinding::Global)
+            .count(),
+        40
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.scope_contract_violation())
+            .count(),
+        0
+    );
+}
+
+pub fn assert_wave_4_knowledge_executed_keys(
+    executed: impl IntoIterator<Item = (Method, &'static str)>,
+) {
+    let expected = WAVE_4_KNOWLEDGE
+        .iter()
+        .map(|case| (case.method, case.path))
+        .collect::<BTreeSet<_>>();
+    let executed = executed.into_iter().collect::<Vec<_>>();
+    let unique = executed.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(
+        unique.len(),
+        executed.len(),
+        "duplicate Wave 4 Knowledge key"
+    );
+    assert_eq!(
+        unique, expected,
+        "executed Wave 4 Knowledge key set drifted"
+    );
 }

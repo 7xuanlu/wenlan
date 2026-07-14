@@ -49,17 +49,6 @@ pub(crate) async fn registered_request_space(
     Ok(registered)
 }
 
-pub(crate) async fn registered_read_space(
-    db: &wenlan_core::db::MemoryDB,
-    requested: &Option<String>,
-    context: &str,
-) -> Result<Option<String>, ServerError> {
-    if requested.as_deref().map(str::trim) == Some("uncategorized") {
-        return Ok(Some("uncategorized".to_string()));
-    }
-    registered_request_space(db, requested, context).await
-}
-
 // ===== Profile Types =====
 
 #[derive(Debug, Serialize)]
@@ -1399,18 +1388,17 @@ pub struct ListEntitiesResponse {
 pub async fn handle_list_entities(
     State(state): State<Arc<RwLock<ServerState>>>,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<ListEntitiesRequest>,
+    Json(req): Json<ListEntitiesRequest>,
 ) -> Result<Json<ListEntitiesResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    req.space = registered_read_space(&db, &req.space, "list_entities").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let entities = db
-        .list_entities(req.entity_type.as_deref(), req.space.as_deref())
+        .list_entities_scoped(req.entity_type.as_deref(), &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(ListEntitiesResponse { entities }))
@@ -1418,14 +1406,15 @@ pub async fn handle_list_entities(
 
 pub async fn handle_get_entity_detail(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(entity_id): Path<String>,
 ) -> Result<Json<wenlan_core::db::EntityDetail>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let detail = db
-        .get_entity_detail(&entity_id)
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let detail = db.get_entity_detail_scoped(&entity_id, &scope).await?;
     Ok(Json(detail))
 }
 
@@ -1434,6 +1423,8 @@ pub struct SearchEntitiesRequest {
     pub query: String,
     #[serde(default = "default_entity_search_limit")]
     pub limit: usize,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 fn default_entity_search_limit() -> usize {
@@ -1447,12 +1438,18 @@ pub struct SearchEntitiesResponse {
 
 pub async fn handle_search_entities(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(req): Json<SearchEntitiesRequest>,
 ) -> Result<Json<SearchEntitiesResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let results = db
-        .search_entities_by_vector(&req.query, req.limit)
+        .search_entities_by_vector_scoped(&req.query, req.limit, &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(SearchEntitiesResponse { results }))
@@ -1623,11 +1620,15 @@ pub struct EntitySuggestion {
 
 pub async fn handle_get_entity_suggestions(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<Vec<EntitySuggestion>>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let pending = db
-        .get_pending_refinements()
+        .list_entity_suggestions_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 

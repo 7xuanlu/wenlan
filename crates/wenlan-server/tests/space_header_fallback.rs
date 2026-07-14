@@ -566,7 +566,8 @@ async fn chat_context_unregistered_header_is_rejected() {
 
 #[tokio::test]
 async fn list_entities_header_fallback_returns_200() {
-    let (router, _tmp, _db) = common::test_app().await;
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("work", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -585,12 +586,8 @@ async fn list_entities_header_fallback_returns_200() {
 }
 
 #[tokio::test]
-async fn list_entities_unregistered_header_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    db.store_entity("Unscoped Space Fallback Entity", "person", None, None, None)
-        .await
-        .expect("seed entity must store");
-
+async fn list_entities_unregistered_header_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/memory/entities/list")
@@ -600,22 +597,7 @@ async fn list_entities_unregistered_header_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "list_entities must return 200"
-    );
-    let body: serde_json::Value = body_as_json(res).await;
-    let names = body["entities"]
-        .as_array()
-        .expect("entities must be an array")
-        .iter()
-        .filter_map(|entity| entity["name"].as_str())
-        .collect::<Vec<_>>();
-    assert!(
-        names.contains(&"Unscoped Space Fallback Entity"),
-        "unregistered space headers must not filter out unscoped entities; got {names:?}"
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 // ===== GET /api/memory/nurture (handle_get_nurture_cards) =====

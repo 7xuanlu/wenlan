@@ -154,7 +154,7 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         rows.iter()
             .filter(|row| row.scope_contract_violation())
             .count(),
-        5
+        0
     );
 }
 

@@ -142,21 +142,8 @@ async fn route_scope_result_is_derived_from_canonical_contract() {
     let result = check(&report, ROUTE_SCOPE_ID);
     let violations = super::super::routes::scope_contract_violations().collect::<Vec<_>>();
     let defects = violations.len() as u64;
-    let pending = violations
-        .iter()
-        .map(|row| (row.method, row.path))
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        pending,
-        BTreeSet::from([
-            (Method::Post, "/api/memory/entities/list"),
-            (Method::Post, "/api/memory/entities/search"),
-            (Method::Get, "/api/memory/entities/{entity_id}"),
-            (Method::Get, "/api/memory/entity-suggestions"),
-            (Method::Get, "/api/knowledge/recent-relations"),
-        ])
-    );
-    assert_eq!(defects, 5);
+    assert!(violations.is_empty());
+    assert_eq!(defects, 0);
     assert_eq!(metric(result, LintMetricCode::AffectedRecords), defects);
 }
 
