@@ -35,9 +35,9 @@
     ],
     "websiteURL": "https://wenlan.app",
     "defaultPrompt": [
-      "Brief me from my Wenlan wiki",
-      "Show my Wenlan pages on this project",
-      "Set up Wenlan"
+      "Catch me up on where this work left off",
+      "What do we know about this, with sources?",
+      "Turn today's work into source-cited pages"
     ],
     "brandColor": "#2563EB",
     "screenshots": []
