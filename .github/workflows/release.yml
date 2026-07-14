@@ -709,8 +709,6 @@ jobs:
     # Runs only after EVERY build + publish job succeeds. A failure in any of
     # them skips this job (GitHub requires all `needs` to succeed), so the
     # release stays a prerelease — never a `releases/latest` without artifacts.
-    # Clearing the prerelease flag here is also what fires `release: released`
-    # (and notify-marketplace) at the right moment: after the artifacts exist.
     needs: [release, docker-manifest, publish-crates, publish-npm, update-homebrew]
     runs-on: ubuntu-latest
     steps:
@@ -728,5 +726,18 @@ jobs:
             --prerelease=false \
             --latest \
             --repo "$GITHUB_REPOSITORY"
+
+          # Dispatch the marketplace from here rather than from a
+          # `release: released` handler. GITHUB_TOKEN-driven changes never
+          # trigger workflows, so the promotion above fires no release event at
+          # all; meanwhile release-please creates the release with a PAT, so
+          # `released` fired at tag-creation — 47 minutes before any artifact
+          # existed (v0.13.2). Calling the dispatch inline makes the ordering
+          # hold by construction. plugin=wenlan is the plugin + /wenlan: namespace.
+          GH_TOKEN="$MARKETPLACE_SYNC_TOKEN" gh api repos/7xuanlu/claude-plugins/dispatches \
+            -f event_type=plugin-released \
+            -F "client_payload[plugin]=wenlan" \
+            -F "client_payload[tag]=$RELEASE_TAG"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MARKETPLACE_SYNC_TOKEN: ${{ secrets.MARKETPLACE_SYNC_TOKEN }}
