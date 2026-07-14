@@ -265,6 +265,158 @@ async fn selected_page_visibility_requires_matching_workspace() {
 }
 
 #[tokio::test]
+async fn search_pages_route_helpers_bind_workspace_independently_from_category() {
+    let (db, _tmp) = test_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    for (id, category, workspace) in [
+        ("work-page-route", "decision", Some("work")),
+        ("personal-page-route", "recap", Some("personal")),
+        ("null-page-route", "decision", None),
+    ] {
+        db.insert_page_with_kind(
+            id,
+            id,
+            None,
+            "page route scope canary",
+            None,
+            Some(category),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            workspace,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let scope = ReadScope::Space("work".to_string());
+    let listed = db.list_pages_scoped("active", 10, 0, &scope).await.unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|page| page.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["work-page-route"]
+    );
+
+    let recent = db
+        .list_recent_pages_with_badges_scoped(10, None, &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        recent
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["work-page-route"]
+    );
+
+    let changes = db.list_recent_changes_scoped(10, &scope).await.unwrap();
+    assert_eq!(
+        changes
+            .iter()
+            .map(|change| change.page_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["work-page-route"]
+    );
+
+    assert!(db
+        .get_page_scoped("work-page-route", &scope)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(db
+        .get_page_scoped("personal-page-route", &scope)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        db.get_page_changelog_scoped("personal-page-route", &scope).await,
+        Err(crate::WenlanError::NotFound(message)) if message == "page not found"
+    ));
+
+    let null_pages = db
+        .list_pages_scoped("active", 10, 0, &ReadScope::Uncategorized)
+        .await
+        .unwrap();
+    assert_eq!(
+        null_pages
+            .iter()
+            .map(|page| page.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["null-page-route"]
+    );
+}
+
+#[tokio::test]
+async fn page_links_scoped_gate_parent_and_filter_source_pages() {
+    let (db, _tmp) = test_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    for (id, workspace) in [
+        ("work-target", "work"),
+        ("work-source", "work"),
+        ("personal-source", "personal"),
+        ("personal-parent", "personal"),
+    ] {
+        db.insert_page_with_kind(
+            id,
+            id,
+            None,
+            "page link scope canary",
+            None,
+            Some("decision"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some(workspace),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let conn = db.conn.lock().await;
+    conn.execute(
+        "INSERT INTO page_links (source_page_id, target_page_id, label, label_key)
+         VALUES ('work-source', 'work-target', 'Work target', 'work target'),
+                ('personal-source', 'work-target', 'Work target', 'work target'),
+                ('work-source', NULL, 'Work orphan', 'work orphan'),
+                ('personal-source', NULL, 'Personal orphan', 'personal orphan')",
+        (),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+
+    let scope = ReadScope::Space("work".to_string());
+    let outbound = db
+        .get_page_outbound_links_scoped("work-source", &scope)
+        .await
+        .unwrap();
+    assert_eq!(outbound.len(), 2);
+    let inbound = db
+        .get_page_inbound_links_scoped("work-target", &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        inbound,
+        vec![("work-source".to_string(), "Work target".to_string())]
+    );
+    let orphans = db.list_orphan_link_labels_scoped(1, &scope).await.unwrap();
+    assert_eq!(orphans, vec![("Work orphan".to_string(), 1)]);
+    assert!(matches!(
+        db.get_page_outbound_links_scoped("personal-parent", &scope).await,
+        Err(crate::WenlanError::NotFound(message)) if message == "page not found"
+    ));
+    assert!(matches!(
+        db.get_page_sources_scoped("personal-parent", &scope).await,
+        Err(crate::WenlanError::NotFound(message)) if message == "page not found"
+    ));
+}
+
+#[tokio::test]
 async fn selected_summary_requires_nonempty_all_matching_sources() {
     let (db, _tmp) = test_db().await;
     db.upsert_documents(vec![

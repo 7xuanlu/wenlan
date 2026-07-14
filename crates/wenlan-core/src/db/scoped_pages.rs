@@ -26,6 +26,25 @@ fn numbered_conditions(conditions: &[String], start: usize) -> String {
         .join(" AND ")
 }
 
+fn page_scope_clause(
+    scope: &ReadScope,
+    column: &str,
+    parameter: usize,
+) -> (String, Option<libsql::Value>) {
+    match scope {
+        ReadScope::Global => (String::new(), None),
+        ReadScope::Space(space) => (
+            format!(" AND {column} = ?{parameter}"),
+            Some(libsql::Value::Text(space.clone())),
+        ),
+        ReadScope::Uncategorized => (format!(" AND {column} IS NULL"), None),
+    }
+}
+
+fn page_not_found() -> WenlanError {
+    WenlanError::NotFound("page not found".to_string())
+}
+
 impl MemoryDB {
     /// Route-facing Page search. Selected scopes use a workspace predicate in
     /// the same query that ranks and limits candidates; Global preserves the
@@ -161,6 +180,453 @@ impl MemoryDB {
             page.relevance_score = *scores.get(&page.id).unwrap_or(&0.0);
         }
         Ok(results)
+    }
+
+    pub async fn list_recent_pages_with_badges_scoped(
+        &self,
+        limit: i64,
+        since_ms: Option<i64>,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::RecentActivityItem>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.list_recent_pages_with_badges(limit, since_ms).await;
+        }
+
+        use wenlan_types::{ActivityBadge, ActivityKind, RecentActivityItem};
+
+        let pages = self.list_pages_scoped("active", limit, 0, scope).await?;
+        let all_source_ids = pages
+            .iter()
+            .flat_map(|page| page.source_memory_ids.iter().cloned())
+            .collect::<Vec<_>>();
+        let visible_source_ids = self
+            .get_memories_by_source_ids_scoped(&all_source_ids, scope)
+            .await?
+            .into_iter()
+            .map(|memory| memory.source_id)
+            .collect::<HashSet<_>>();
+        let flagged = self
+            .pending_review_memory_ids(&visible_source_ids.iter().cloned().collect::<Vec<String>>())
+            .await?;
+        let since_rfc = since_ms.and_then(|ms| {
+            chrono::DateTime::from_timestamp(ms / 1000, 0).map(|dt| dt.to_rfc3339())
+        });
+        let since_s = since_ms.map(|ms| ms / 1000);
+
+        let mut items = Vec::with_capacity(pages.len());
+        for page in pages {
+            let visible_members = page
+                .source_memory_ids
+                .iter()
+                .filter(|id| visible_source_ids.contains(id.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            let needs_review = visible_members.iter().any(|id| flagged.contains(id));
+            let badge = if needs_review {
+                ActivityBadge::NeedsReview
+            } else if let Some(ref since) = since_rfc {
+                if page.created_at >= *since {
+                    ActivityBadge::New
+                } else {
+                    let growing_count = if visible_members.is_empty() {
+                        0
+                    } else {
+                        let placeholders = (2..visible_members.len() + 2)
+                            .map(|index| format!("?{index}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let scope_parameter = visible_members.len() + 2;
+                        let (scope_sql, scope_value) =
+                            page_scope_clause(scope, "space", scope_parameter);
+                        let sql = format!(
+                            "SELECT COUNT(*) FROM memories \
+                             WHERE source != 'episode' AND source_id IN ({placeholders}) \
+                               AND created_at >= ?1{scope_sql}"
+                        );
+                        let mut params = vec![libsql::Value::Integer(since_s.unwrap_or(0))];
+                        params.extend(visible_members.iter().cloned().map(libsql::Value::Text));
+                        if let Some(value) = scope_value {
+                            params.push(value);
+                        }
+                        let conn = self.conn.lock().await;
+                        let mut rows = conn.query(&sql, params).await.map_err(|error| {
+                            WenlanError::VectorDb(format!(
+                                "list_recent_pages_with_badges_scoped growth count: {error}"
+                            ))
+                        })?;
+                        rows.next()
+                            .await
+                            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+                            .map(|row| row.get::<i64>(0).unwrap_or(0))
+                            .unwrap_or(0)
+                    };
+                    if growing_count > 0 {
+                        ActivityBadge::Growing {
+                            added: growing_count as u32,
+                        }
+                    } else if page.version > 1 && page.last_modified >= *since {
+                        ActivityBadge::Revised
+                    } else {
+                        ActivityBadge::None
+                    }
+                }
+            } else {
+                ActivityBadge::None
+            };
+            let timestamp_ms = chrono::DateTime::parse_from_rfc3339(&page.last_modified)
+                .map(|dt| dt.timestamp_millis() as u64)
+                .unwrap_or(0);
+            items.push(RecentActivityItem {
+                kind: ActivityKind::Page,
+                id: page.id,
+                title: page.title,
+                snippet: page.summary.filter(|summary| !summary.is_empty()),
+                timestamp_ms,
+                badge,
+            });
+        }
+        Ok(items)
+    }
+
+    pub async fn list_recent_changes_scoped(
+        &self,
+        limit: i64,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::PageChange>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.list_recent_changes(limit).await;
+        }
+        let (scope_sql, scope_value) = page_scope_clause(scope, "c.workspace", 2);
+        let sql = format!(
+            "SELECT c.id, c.title, c.version, c.created_at, c.last_modified \
+             FROM pages c WHERE c.status = 'active'{scope_sql} \
+             ORDER BY c.last_modified DESC LIMIT ?1"
+        );
+        let mut params = vec![libsql::Value::Integer(limit)];
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn.query(&sql, params).await.map_err(|error| {
+            WenlanError::VectorDb(format!("list_recent_changes_scoped: {error}"))
+        })?;
+        let mut changes = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            let version = row.get::<i64>(2).unwrap_or(1);
+            let created_at = row.get::<String>(3).unwrap_or_default();
+            let last_modified = row.get::<String>(4).unwrap_or_default();
+            let change_kind = if version > 1 || created_at != last_modified {
+                wenlan_types::PageChangeKind::Revised
+            } else {
+                wenlan_types::PageChangeKind::Created
+            };
+            changes.push(wenlan_types::PageChange {
+                page_id: row.get(0).unwrap_or_default(),
+                title: row.get(1).unwrap_or_default(),
+                change_kind,
+                changed_at_ms: chrono::DateTime::parse_from_rfc3339(&last_modified)
+                    .map(|dt| dt.timestamp_millis())
+                    .unwrap_or(0),
+            });
+        }
+        Ok(changes)
+    }
+
+    pub async fn list_pages_scoped(
+        &self,
+        status: &str,
+        limit: i64,
+        offset: i64,
+        scope: &ReadScope,
+    ) -> Result<Vec<Page>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.list_pages(status, limit, offset).await;
+        }
+        let select = "c.id, c.title, c.summary, c.content, c.entity_id, c.space, \
+                      c.source_memory_ids, c.version, c.status, c.created_at, \
+                      c.last_compiled, c.last_modified, \
+                      COALESCE(c.sources_updated_count, 0), c.stale_reason, \
+                      COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), \
+                      COALESCE(c.creation_kind, 'distilled'), \
+                      COALESCE(c.review_status, 'confirmed'), c.workspace, c.citations";
+        let (sql, params) = match scope {
+            ReadScope::Space(workspace) => (
+                format!(
+                    "SELECT {select} FROM pages c \
+                     WHERE c.status = ?1 AND c.workspace = ?2 \
+                     ORDER BY c.last_modified DESC LIMIT ?3 OFFSET ?4"
+                ),
+                vec![
+                    libsql::Value::Text(status.to_string()),
+                    libsql::Value::Text(workspace.clone()),
+                    libsql::Value::Integer(limit),
+                    libsql::Value::Integer(offset),
+                ],
+            ),
+            ReadScope::Uncategorized => (
+                format!(
+                    "SELECT {select} FROM pages c \
+                     WHERE c.status = ?1 AND c.workspace IS NULL \
+                     ORDER BY c.last_modified DESC LIMIT ?2 OFFSET ?3"
+                ),
+                vec![
+                    libsql::Value::Text(status.to_string()),
+                    libsql::Value::Integer(limit),
+                    libsql::Value::Integer(offset),
+                ],
+            ),
+            ReadScope::Global => unreachable!(),
+        };
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, params)
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("list_pages_scoped: {error}")))?;
+        let mut pages = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            pages.push(Self::row_to_page(&row)?);
+        }
+        Ok(pages)
+    }
+
+    pub async fn list_orphan_link_labels_scoped(
+        &self,
+        min_count: i64,
+        scope: &ReadScope,
+    ) -> Result<Vec<(String, i64)>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.list_orphan_link_labels(min_count).await;
+        }
+        let (scope_sql, scope_value) = page_scope_clause(scope, "p.workspace", 2);
+        let sql = format!(
+            "SELECT MIN(pl.label) AS display_label, \
+                    COUNT(DISTINCT pl.source_page_id) AS n \
+             FROM page_links pl INNER JOIN pages p ON p.id = pl.source_page_id \
+             WHERE pl.target_page_id IS NULL AND p.status = 'active'{scope_sql} \
+             GROUP BY pl.label_key HAVING n >= ?1 \
+             ORDER BY n DESC, display_label ASC LIMIT 100"
+        );
+        let mut params = vec![libsql::Value::Integer(min_count)];
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn.query(&sql, params).await.map_err(|error| {
+            WenlanError::VectorDb(format!("list_orphan_link_labels_scoped: {error}"))
+        })?;
+        let mut labels = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            labels.push((row.get(0).unwrap_or_default(), row.get(1).unwrap_or(0)));
+        }
+        Ok(labels)
+    }
+
+    pub async fn get_page_scoped(
+        &self,
+        id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<Page>, WenlanError> {
+        if matches!(scope, ReadScope::Global) {
+            return self.get_page(id).await;
+        }
+        let select = "c.id, c.title, c.summary, c.content, c.entity_id, c.space, \
+                      c.source_memory_ids, c.version, c.status, c.created_at, \
+                      c.last_compiled, c.last_modified, \
+                      COALESCE(c.sources_updated_count, 0), c.stale_reason, \
+                      COALESCE(c.user_edited, 0), COALESCE(c.changelog, '[]'), \
+                      COALESCE(c.creation_kind, 'distilled'), \
+                      COALESCE(c.review_status, 'confirmed'), c.workspace, c.citations";
+        let (scope_sql, scope_value) = page_scope_clause(scope, "c.workspace", 2);
+        let sql = format!("SELECT {select} FROM pages c WHERE c.id = ?1{scope_sql}");
+        let mut params = vec![libsql::Value::Text(id.to_string())];
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, params)
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("get_page_scoped: {error}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            Some(row) => Ok(Some(Self::row_to_page(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_page_sources_scoped(
+        &self,
+        page_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Vec<wenlan_types::PageSource>, WenlanError> {
+        let (scope_sql, scope_value) = page_scope_clause(scope, "c.workspace", 2);
+        let sql = format!(
+            "SELECT c.id, ps.page_id, ps.memory_source_id, ps.linked_at, ps.link_reason \
+             FROM pages c LEFT JOIN page_sources ps ON ps.page_id = c.id \
+             WHERE c.id = ?1{scope_sql} ORDER BY ps.linked_at ASC"
+        );
+        let mut params = vec![libsql::Value::Text(page_id.to_string())];
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, params)
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("get_page_sources_scoped: {error}")))?;
+        let mut found = false;
+        let mut sources = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            found = true;
+            let Some(source_page_id) = row.get::<Option<String>>(1).unwrap_or(None) else {
+                continue;
+            };
+            sources.push(wenlan_types::PageSource {
+                page_id: source_page_id,
+                memory_source_id: row.get(2).unwrap_or_default(),
+                linked_at: row.get(3).unwrap_or(0),
+                link_reason: row.get::<Option<String>>(4).unwrap_or(None),
+            });
+        }
+        if !found {
+            return Err(page_not_found());
+        }
+        Ok(sources)
+    }
+
+    pub async fn get_page_outbound_links_scoped(
+        &self,
+        source_page_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Vec<crate::synthesis::wikilinks::Wikilink>, WenlanError> {
+        let (scope_sql, scope_value) = page_scope_clause(scope, "c.workspace", 2);
+        let sql = format!(
+            "SELECT c.id, pl.target_page_id, pl.label FROM pages c \
+             LEFT JOIN page_links pl ON pl.source_page_id = c.id \
+             WHERE c.id = ?1{scope_sql} ORDER BY pl.label_key"
+        );
+        let mut params = vec![libsql::Value::Text(source_page_id.to_string())];
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn.query(&sql, params).await.map_err(|error| {
+            WenlanError::VectorDb(format!("get_page_outbound_links_scoped: {error}"))
+        })?;
+        let mut found = false;
+        let mut links = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            found = true;
+            let Some(label) = row.get::<Option<String>>(2).unwrap_or(None) else {
+                continue;
+            };
+            links.push(crate::synthesis::wikilinks::Wikilink {
+                target_page_id: row.get::<Option<String>>(1).unwrap_or(None),
+                label,
+            });
+        }
+        if !found {
+            return Err(page_not_found());
+        }
+        Ok(links)
+    }
+
+    pub async fn get_page_inbound_links_scoped(
+        &self,
+        target_page_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Vec<(String, String)>, WenlanError> {
+        let (source_scope_sql, source_scope_value) =
+            page_scope_clause(scope, "source.workspace", 2);
+        let (target_scope_sql, target_scope_value) =
+            page_scope_clause(scope, "target.workspace", 3);
+        let sql = format!(
+            "SELECT target.id, source.id, pl.label FROM pages target \
+             LEFT JOIN page_links pl ON pl.target_page_id = target.id \
+             LEFT JOIN pages source ON source.id = pl.source_page_id \
+               AND source.status = 'active'{source_scope_sql} \
+             WHERE target.id = ?1{target_scope_sql} \
+             ORDER BY source.last_modified DESC, source.id ASC"
+        );
+        let mut params = vec![libsql::Value::Text(target_page_id.to_string())];
+        if let Some(value) = source_scope_value {
+            params.push(value);
+        }
+        if let Some(value) = target_scope_value {
+            params.push(value);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn.query(&sql, params).await.map_err(|error| {
+            WenlanError::VectorDb(format!("get_page_inbound_links_scoped: {error}"))
+        })?;
+        let mut found = false;
+        let mut links = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            found = true;
+            let Some(source_id) = row.get::<Option<String>>(1).unwrap_or(None) else {
+                continue;
+            };
+            links.push((source_id, row.get(2).unwrap_or_default()));
+        }
+        if !found {
+            return Err(page_not_found());
+        }
+        Ok(links)
+    }
+
+    pub async fn get_page_changelog_scoped(
+        &self,
+        page_id: &str,
+        scope: &ReadScope,
+    ) -> Result<String, WenlanError> {
+        let (scope_sql, scope_value) = page_scope_clause(scope, "c.workspace", 2);
+        let sql = format!(
+            "SELECT COALESCE(c.changelog, '[]') FROM pages c \
+             WHERE c.id = ?1{scope_sql}"
+        );
+        let mut params = vec![libsql::Value::Text(page_id.to_string())];
+        if let Some(value) = scope_value {
+            params.push(value);
+        }
+        let conn = self.conn.lock().await;
+        let mut rows = conn.query(&sql, params).await.map_err(|error| {
+            WenlanError::VectorDb(format!("get_page_changelog_scoped: {error}"))
+        })?;
+        match rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+        {
+            Some(row) => Ok(row.get(0).unwrap_or_else(|_| "[]".to_string())),
+            None => Err(page_not_found()),
+        }
     }
 
     pub async fn select_visible_pages_scoped(

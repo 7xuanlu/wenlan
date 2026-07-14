@@ -97,3 +97,28 @@ async fn wave_2_parent_collections_scope_snapshot_membership() {
 fn wave_2_parent_collections_registry_matches_completed_contracts() {
     space_scoping::parent_cases::registry_matches_completed_contracts();
 }
+
+#[tokio::test]
+async fn wave_3_pages_reject_unknown_selectors() {
+    space_scoping::page_cases::unknown_selectors_are_rejected().await;
+}
+
+#[tokio::test]
+async fn wave_3_pages_scope_collections_and_precedence() {
+    space_scoping::page_cases::collections_and_precedence_are_scoped().await;
+}
+
+#[tokio::test]
+async fn wave_3_pages_filter_ranked_candidates_before_limit() {
+    space_scoping::page_cases::ranked_candidates_are_filtered_before_limit().await;
+}
+
+#[tokio::test]
+async fn wave_3_pages_gate_direct_and_child_routes() {
+    space_scoping::page_cases::direct_and_child_routes_are_gated().await;
+}
+
+#[test]
+fn wave_3_pages_registry_matches_completed_contracts() {
+    space_scoping::page_cases::registry_matches_completed_contracts();
+}

@@ -1866,6 +1866,7 @@ pub async fn handle_get_rejections(
 /// GET /api/pages
 pub async fn handle_list_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let status = params.get("status").map(|s| s.as_str()).unwrap_or("active");
@@ -1886,9 +1887,11 @@ pub async fn handle_list_pages(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let space = registered_read_space(&db, &space, "list_pages").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, space.as_deref(), header_space.as_deref())
+            .await?;
     let pages = db
-        .list_pages_by_space(status, space.as_deref(), limit, offset)
+        .list_pages_scoped(status, limit as i64, offset as i64, &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "pages": pages })))
@@ -1897,13 +1900,15 @@ pub async fn handle_list_pages(
 /// GET /api/pages/:id
 pub async fn handle_get_page(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    match db.get_page(&id).await {
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    match db.get_page_scoped(&id, &scope).await {
         Ok(Some(page)) => Ok(Json(serde_json::json!({ "page": page }))),
         Ok(None) => Err(ServerError::NotFound("page not found".to_string())),
         Err(e) => Err(ServerError::SearchFailed(e.to_string())),
@@ -1916,6 +1921,7 @@ pub async fn handle_get_page(
 /// enriched with memory metadata for display.
 pub async fn handle_get_page_sources(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<wenlan_types::PageSourceWithMemory>>, ServerError> {
     let db = {
@@ -1923,15 +1929,13 @@ pub async fn handle_get_page_sources(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
-    let sources = db
-        .get_page_sources(&id)
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let sources = db.get_page_sources_scoped(&id, &scope).await?;
 
     let source_id_strings: Vec<String> =
         sources.iter().map(|s| s.memory_source_id.clone()).collect();
     let memories = db
-        .get_memories_by_source_ids(&source_id_strings)
+        .get_memories_by_source_ids_scoped(&source_id_strings, &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
@@ -2005,15 +2009,22 @@ pub async fn handle_delete_page(
 /// POST /api/pages/search
 pub async fn handle_search_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(req): Json<SearchPagesRequest>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let results = db
-        .search_pages(
+        .search_pages_scoped(
             &req.query,
             req.limit.unwrap_or(20),
             req.page_type.as_deref(),
+            &scope,
         )
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
@@ -3300,20 +3311,16 @@ pub async fn handle_get_snapshot_captures_with_content(
 /// fetch + parse the full body.
 pub async fn handle_get_page_links(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<wenlan_types::responses::PageLinksResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let outbound_raw = db
-        .get_page_outbound_links(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let inbound_raw = db
-        .get_page_inbound_links(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let outbound_raw = db.get_page_outbound_links_scoped(&id, &scope).await?;
+    let inbound_raw = db.get_page_inbound_links_scoped(&id, &scope).await?;
     let outbound = outbound_raw
         .into_iter()
         .map(|l| wenlan_types::responses::PageLinkOutbound {
@@ -3351,15 +3358,17 @@ pub struct OrphanLinksQuery {
 /// callers needing more should raise min_count and re-issue.
 pub async fn handle_list_orphan_links(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<OrphanLinksQuery>,
 ) -> Result<Json<wenlan_types::responses::OrphanLinksResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let min_count = q.min_count.unwrap_or(2).max(1);
     let labels = db
-        .list_orphan_link_labels(min_count)
+        .list_orphan_link_labels_scoped(min_count, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     let orphan_labels = labels
@@ -4928,21 +4937,19 @@ pub async fn handle_get_memory_revisions(
 /// Return the changelog entries for a page, plus envelope metadata.
 pub async fn handle_get_page_revisions(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<wenlan_types::responses::ListPageRevisionsResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let page = db
-        .get_page(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?
-        .ok_or_else(|| ServerError::NotFound(format!("page {id} not found")))?;
-    let changelog_str = db
-        .get_page_changelog(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .get_page_scoped(&id, &scope)
+        .await?
+        .ok_or_else(|| ServerError::NotFound("page not found".to_string()))?;
+    let changelog_str = db.get_page_changelog_scoped(&id, &scope).await?;
     let entries: Vec<wenlan_types::responses::PageChangelogEntry> =
         serde_json::from_str(&changelog_str)
             .map_err(|e| ServerError::Internal(format!("parse changelog: {e}")))?;

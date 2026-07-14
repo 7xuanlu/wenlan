@@ -19765,12 +19765,7 @@ impl MemoryDB {
         scope: &ReadScope,
     ) -> Result<Vec<CaptureRefRow>, WenlanError> {
         if matches!(scope, ReadScope::Global) {
-            let captures = self.get_captures_for_snapshot(snapshot_id).await?;
-            return if captures.is_empty() {
-                Err(WenlanError::NotFound("snapshot not found".to_string()))
-            } else {
-                Ok(captures)
-            };
+            return self.get_captures_for_snapshot(snapshot_id).await;
         }
 
         let mut conditions = vec!["cr.snapshot_id = ?".to_string()];
@@ -20384,7 +20379,9 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<u64>(0).unwrap_or(0)
+            row.get::<u64>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("briefing_stats_scoped new_today row: {e}"))
+            })?
         } else {
             0
         };
@@ -20412,7 +20409,9 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<String>(0).ok()
+            Some(row.get::<String>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("briefing_stats_scoped domain row: {e}"))
+            })?)
         } else {
             None
         };
@@ -20440,7 +20439,9 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<String>(0).ok()
+            Some(row.get::<String>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("briefing_stats_scoped agent row: {e}"))
+            })?)
         } else {
             None
         };

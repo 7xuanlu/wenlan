@@ -71,6 +71,17 @@ async fn seed_snapshot_fixture(fixture: &ScopeFixture) {
         )
         .await;
     fixture
+        .seed_record(
+            "focus_capture",
+            "uncategorized-capture",
+            None,
+            "fact",
+            35,
+            None,
+            false,
+        )
+        .await;
+    fixture
         .db
         .insert_capture_ref(
             "work-capture",
@@ -105,6 +116,19 @@ async fn seed_snapshot_fixture(fixture: &ScopeFixture) {
             "PersonalApp",
             "Personal Window",
             20,
+            "focus",
+        )
+        .await
+        .unwrap();
+    fixture
+        .db
+        .insert_capture_ref(
+            "uncategorized-capture",
+            "activity-mixed",
+            Some("snapshot-mixed"),
+            "UncategorizedApp",
+            "Uncategorized Window",
+            35,
             "focus",
         )
         .await
@@ -164,6 +188,17 @@ pub async fn scoped_briefing_does_not_read_or_write_global_cache() {
         )
         .await;
     fixture
+        .seed_record(
+            "memory",
+            "uncategorized-brief",
+            None,
+            "fact",
+            now - 2,
+            None,
+            false,
+        )
+        .await;
+    fixture
         .db
         .upsert_briefing_cache("personal-cache-secret", 99)
         .await
@@ -193,6 +228,27 @@ pub async fn scoped_briefing_does_not_read_or_write_global_cache() {
         after, before,
         "selected briefing must not mutate Global cache"
     );
+
+    let (status, uncategorized) = json_body(
+        fixture
+            .send(
+                HttpMethod::GET,
+                "/api/briefing",
+                None,
+                Some("uncategorized"),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{uncategorized}");
+    let serialized = uncategorized.to_string();
+    assert!(serialized.contains("uncategorized-brief"), "{serialized}");
+    assert!(!serialized.contains("work-brief"), "{serialized}");
+    assert!(
+        !serialized.contains("personal-brief-secret"),
+        "{serialized}"
+    );
+    assert_eq!(fixture.db.get_cached_briefing().await.unwrap(), before);
 }
 
 pub async fn snapshot_parent_collections_are_scoped() {
@@ -215,6 +271,38 @@ pub async fn snapshot_parent_collections_are_scoped() {
         assert!(
             !serialized.contains("Personal Window"),
             "{uri}: {serialized}"
+        );
+        assert!(
+            !serialized.contains("uncategorized-capture"),
+            "{uri}: {serialized}"
+        );
+    }
+
+    for suffix in ["captures", "captures-with-content"] {
+        let (status, body) = json_body(
+            fixture
+                .send(
+                    HttpMethod::GET,
+                    &format!("/api/snapshots/snapshot-mixed/{suffix}"),
+                    None,
+                    Some("uncategorized"),
+                )
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{suffix}: {body}");
+        let serialized = body.to_string();
+        assert!(
+            serialized.contains("uncategorized-capture"),
+            "{suffix}: {serialized}"
+        );
+        assert!(
+            !serialized.contains("work-capture"),
+            "{suffix}: {serialized}"
+        );
+        assert!(
+            !serialized.contains("personal-capture"),
+            "{suffix}: {serialized}"
         );
     }
 
@@ -311,6 +399,22 @@ pub async fn snapshot_parent_collections_are_scoped() {
         StatusCode::INTERNAL_SERVER_ERROR,
         "required capture content must fail loud"
     );
+
+    for suffix in ["captures", "captures-with-content"] {
+        let (status, missing) = json_body(
+            fixture
+                .send(
+                    HttpMethod::GET,
+                    &format!("/api/snapshots/snapshot-missing/{suffix}"),
+                    None,
+                    None,
+                )
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{suffix}: {missing}");
+        assert_eq!(missing, serde_json::json!([]), "{suffix}");
+    }
 }
 
 pub fn registry_matches_completed_contracts() {

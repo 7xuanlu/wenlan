@@ -12,7 +12,7 @@ struct ListPagesResponse {
     pages: Vec<Page>,
 }
 
-/// GET `/api/pages` with an optional space query param.
+/// GET `/api/pages` with an optional workspace selector.
 async fn list_pages(router: &common::AppRouter, space: Option<&str>) -> ListPagesResponse {
     let uri = match space {
         Some(s) => format!("/api/pages?space={}", s),
@@ -47,25 +47,29 @@ async fn list_pages_filters_by_space() {
         .await
         .expect("beta space must be registered");
 
-    common::create_page_fixture(
+    let alpha_id = common::create_page_fixture(
         &db,
         "Alpha Page Title",
         "Content about alpha space topics.",
-        Some("alpha"),
+        Some("decision"),
         &[],
         "authored",
     )
     .await;
+    db.set_page_workspace(&alpha_id, Some("alpha"))
+        .await
+        .unwrap();
 
-    common::create_page_fixture(
+    let beta_id = common::create_page_fixture(
         &db,
         "Beta Page Title",
         "Content about beta space topics.",
-        Some("beta"),
+        Some("recap"),
         &[],
         "authored",
     )
     .await;
+    db.set_page_workspace(&beta_id, Some("beta")).await.unwrap();
 
     // Query with space=alpha — only the alpha page must come back.
     let response = list_pages(&router, Some("alpha")).await;
@@ -97,7 +101,7 @@ async fn list_pages_filters_by_space() {
 }
 
 #[tokio::test]
-async fn list_pages_unregistered_query_space_falls_back_to_unscoped() {
+async fn list_pages_unregistered_query_space_is_rejected() {
     let (router, _tmp, db) = common::test_app().await;
 
     common::create_page_fixture(
@@ -110,13 +114,17 @@ async fn list_pages_unregistered_query_space_falls_back_to_unscoped() {
     )
     .await;
 
-    let response = list_pages(&router, Some("ghost-pages-space")).await;
-    let titles: Vec<&str> = response.pages.iter().map(|p| p.title.as_str()).collect();
-
-    assert!(
-        titles.contains(&"Unscoped Fallback Page"),
-        "unregistered page query spaces must not filter out unscoped page listings; got: {titles:?}"
-    );
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/pages?space=ghost-pages-space")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert!(
         db.get_space("ghost-pages-space").await.unwrap().is_none(),
         "read-only page filters must not auto-create an unregistered spaces row"

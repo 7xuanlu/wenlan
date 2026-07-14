@@ -25,8 +25,11 @@ fn route_contract_records_observed_scope_and_trust_semantics() {
     assert!(!search.scope_contract_violation());
 
     let page_search = route(Method::Post, "/api/pages/search").expect("page search row");
-    assert_eq!(page_search.selector_precedence, SelectorPrecedence::Missing);
-    assert!(page_search.scope_contract_violation());
+    assert_eq!(
+        page_search.selector_precedence,
+        SelectorPrecedence::BodyThenHeader
+    );
+    assert!(!page_search.scope_contract_violation());
 
     for (path, gate) in [
         ("/api/memory/{id}/detail", SelectionGate::SingleId404),
@@ -137,8 +140,23 @@ async fn route_scope_result_is_derived_from_canonical_contract() {
     let (db, _tmp) = test_db().await;
     let report = run(&db, None).await;
     let result = check(&report, ROUTE_SCOPE_ID);
-    let defects = super::super::routes::scope_contract_violations().count() as u64;
-    assert_eq!(defects, 14);
+    let violations = super::super::routes::scope_contract_violations().collect::<Vec<_>>();
+    let defects = violations.len() as u64;
+    let pending = violations
+        .iter()
+        .map(|row| (row.method, row.path))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        pending,
+        BTreeSet::from([
+            (Method::Post, "/api/memory/entities/list"),
+            (Method::Post, "/api/memory/entities/search"),
+            (Method::Get, "/api/memory/entities/{entity_id}"),
+            (Method::Get, "/api/memory/entity-suggestions"),
+            (Method::Get, "/api/knowledge/recent-relations"),
+        ])
+    );
+    assert_eq!(defects, 5);
     assert_eq!(metric(result, LintMetricCode::AffectedRecords), defects);
 }
 

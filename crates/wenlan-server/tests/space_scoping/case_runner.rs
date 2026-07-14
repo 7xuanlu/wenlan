@@ -67,6 +67,30 @@ pub const WAVE_2_RECORDS: &[ExpectedContract] = &[
     ),
 ];
 
+pub const WAVE_3_PAGES: &[ExpectedContract] = &[
+    page_header(Method::Get, "/api/pages/recent"),
+    page_header(Method::Get, "/api/pages/recent-changes"),
+    page_query(Method::Get, "/api/pages"),
+    page_body(Method::Post, "/api/pages/search"),
+    page_header(Method::Get, "/api/pages/orphan-links"),
+    page_header_gate(Method::Get, "/api/pages/{id}", SelectionGate::SingleId404),
+    page_header_gate(
+        Method::Get,
+        "/api/pages/{id}/sources",
+        SelectionGate::ParentCollectionFiltered,
+    ),
+    page_header_gate(
+        Method::Get,
+        "/api/pages/{id}/links",
+        SelectionGate::ParentCollectionFiltered,
+    ),
+    page_header_gate(
+        Method::Get,
+        "/api/pages/{id}/revisions",
+        SelectionGate::ParentCollectionFiltered,
+    ),
+];
+
 const fn body(method: Method, path: &'static str) -> ExpectedContract {
     expected(method, path, SelectorPrecedence::BodyThenHeader)
 }
@@ -95,6 +119,42 @@ const fn expected(
         path,
         precedence,
         binding: ScopeBinding::MemorySpace,
+        gate: SelectionGate::NotApplicable,
+    }
+}
+
+const fn page_body(method: Method, path: &'static str) -> ExpectedContract {
+    page_expected(method, path, SelectorPrecedence::BodyThenHeader)
+}
+
+const fn page_query(method: Method, path: &'static str) -> ExpectedContract {
+    page_expected(method, path, SelectorPrecedence::QueryThenHeader)
+}
+
+const fn page_header(method: Method, path: &'static str) -> ExpectedContract {
+    page_expected(method, path, SelectorPrecedence::HeaderOnly)
+}
+
+const fn page_header_gate(
+    method: Method,
+    path: &'static str,
+    gate: SelectionGate,
+) -> ExpectedContract {
+    let mut contract = page_header(method, path);
+    contract.gate = gate;
+    contract
+}
+
+const fn page_expected(
+    method: Method,
+    path: &'static str,
+    precedence: SelectorPrecedence,
+) -> ExpectedContract {
+    ExpectedContract {
+        method,
+        path,
+        precedence,
+        binding: ScopeBinding::PageWorkspace,
         gate: SelectionGate::NotApplicable,
     }
 }
@@ -181,4 +241,43 @@ pub fn assert_wave_2_records_executed_keys(
     let unique = executed.iter().copied().collect::<BTreeSet<_>>();
     assert_eq!(unique.len(), executed.len(), "duplicate Wave 2 record key");
     assert_eq!(unique, expected, "executed Wave 2 record key set drifted");
+}
+
+pub fn assert_wave_3_pages_catalog_contract() {
+    let keys = WAVE_3_PAGES
+        .iter()
+        .map(|case| (case.method, case.path))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(keys.len(), 9, "Wave 3 Pages must contain nine unique keys");
+
+    for expected in WAVE_3_PAGES {
+        let actual = route(expected.method, expected.path).expect("cataloged Wave 3 Page route");
+        assert_eq!(
+            actual.selector_precedence, expected.precedence,
+            "{}",
+            expected.path
+        );
+        assert_eq!(actual.scope_binding, expected.binding, "{}", expected.path);
+        assert_eq!(actual.selection_gate, expected.gate, "{}", expected.path);
+        assert_eq!(
+            actual.unknown_scope,
+            UnknownScopePolicy::Rejected,
+            "{}",
+            expected.path
+        );
+        assert!(!actual.scope_contract_violation(), "{}", expected.path);
+    }
+}
+
+pub fn assert_wave_3_pages_executed_keys(
+    executed: impl IntoIterator<Item = (Method, &'static str)>,
+) {
+    let expected = WAVE_3_PAGES
+        .iter()
+        .map(|case| (case.method, case.path))
+        .collect::<BTreeSet<_>>();
+    let executed = executed.into_iter().collect::<Vec<_>>();
+    let unique = executed.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(unique.len(), executed.len(), "duplicate Wave 3 Page key");
+    assert_eq!(unique, expected, "executed Wave 3 Page key set drifted");
 }
