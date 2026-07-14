@@ -13,6 +13,7 @@ copy_fixture() {
     cp -R plugin "$TMPDIR_TEST/root/plugin"
     cp -R plugin-codex "$TMPDIR_TEST/root/plugin-codex"
     cp -R .agents "$TMPDIR_TEST/root/.agents"
+    cp -R .claude-plugin "$TMPDIR_TEST/root/.claude-plugin"
     cp plugin-contract.json "$TMPDIR_TEST/root/plugin-contract.json"
     cp crates/wenlan-mcp/src/main.rs "$TMPDIR_TEST/root/crates/wenlan-mcp/src/main.rs"
 }
@@ -65,6 +66,18 @@ assert_rejects "codex resolver parity drift" \
 assert_rejects "marketplace source drift" \
     perl -0pi -e 's|"path": "./plugin-codex"|"path": "./plugin"|' \
     "$TMPDIR_TEST/root/.agents/plugins/marketplace.json"
+
+assert_rejects "claude marketplace category drift" \
+    perl -0pi -e 's/"category": "knowledge-base"/"category": "memory"/' \
+    "$TMPDIR_TEST/root/.claude-plugin/marketplace.json"
+
+assert_rejects "claude manifest category drift" \
+    perl -0pi -e 's/"category": "knowledge-base"/"category": "memory"/' \
+    "$TMPDIR_TEST/root/plugin/.claude-plugin/plugin.json"
+
+assert_rejects "claude marketplace description drift" \
+    perl -0pi -e 's/"description": "A living knowledge base/"description": "A memory layer/' \
+    "$TMPDIR_TEST/root/.claude-plugin/marketplace.json"
 
 assert_rejects "claude stdio default drift" \
     perl -0pi -e 's/"claude-code"/"codex"/' \

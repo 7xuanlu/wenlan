@@ -64,6 +64,9 @@ jobs:
               - 'plugin/**'
               - 'plugin-codex/**'
               - '.agents/plugins/**'
+              # The Claude marketplace is contract-checked too; without this
+              # glob a PR touching only the storefront skips the guard.
+              - '.claude-plugin/**'
               - 'plugin-contract.json'
               - 'scripts/validate-codex-plugin-slice.py'
               - 'scripts/validate-plugin-contract.py'

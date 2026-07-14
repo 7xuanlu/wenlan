@@ -9,13 +9,12 @@
   "homepage": "https://github.com/7xuanlu/wenlan",
   "repository": "https://github.com/7xuanlu/wenlan",
   "license": "Apache-2.0",
-  "category": "memory",
+  "category": "knowledge-base",
   "keywords": [
     "claude-code",
-    "memory",
-    "knowledge",
-    "context",
-    "recall",
+    "wiki",
+    "knowledge-base",
+    "wenlan",
     "mcp",
     "local-first"
   ]

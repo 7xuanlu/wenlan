@@ -6,6 +6,7 @@
       "plugin_root": "plugin",
       "manifest_path": "plugin/.claude-plugin/plugin.json",
       "manifest_name": "wenlan",
+      "manifest_category": "knowledge-base",
       "mcp_config_path": "plugin/.mcp.json",
       "mcp_server_name": "wenlan",
       "mcp_command": "${CLAUDE_PLUGIN_ROOT}/bin/wenlan-mcp-runner.sh",
@@ -14,6 +15,15 @@
       "agent_name": {
         "mode": "wenlan_mcp_stdio_default",
         "value": "claude-code"
+      },
+      "marketplace": {
+        "path": ".claude-plugin/marketplace.json",
+        "name": "7xuanlu-wenlan",
+        "plugin_name": "wenlan",
+        "source": "git-subdir",
+        "source_url": "https://github.com/7xuanlu/wenlan.git",
+        "source_path": "plugin",
+        "category": "knowledge-base"
       }
     },
     "codex": {

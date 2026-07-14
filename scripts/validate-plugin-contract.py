@@ -163,6 +163,12 @@ def validate_manifest(root: Path, surface: str, config: dict[str, Any]) -> None:
     manifest_path = root / config["manifest_path"]
     manifest = read_json(root, manifest_path)
     require_equal(f"{rel(root, manifest_path)} name", manifest.get("name"), config["manifest_name"])
+    if "manifest_category" in config:
+        require_equal(
+            f"{rel(root, manifest_path)} category",
+            manifest.get("category"),
+            config["manifest_category"],
+        )
     if surface == "codex":
         require_equal(
             f"{rel(root, manifest_path)} skills",
@@ -243,10 +249,10 @@ def iter_matching_plugin(plugins: list[Any], plugin_name: str):
             yield item
 
 
-def validate_marketplace(root: Path, config: dict[str, Any]) -> None:
+def validate_marketplace(root: Path, surface: str, config: dict[str, Any]) -> None:
     marketplace_config = config.get("marketplace")
     if not isinstance(marketplace_config, dict):
-        fail("codex contract must include marketplace object")
+        fail(f"{surface} contract must include marketplace object")
     path = root / marketplace_config["path"]
     marketplace = read_json(root, path)
     require_equal(f"{rel(root, path)} name", marketplace.get("name"), marketplace_config["name"])
@@ -256,33 +262,50 @@ def validate_marketplace(root: Path, config: dict[str, Any]) -> None:
     plugin = next(iter_matching_plugin(plugins, marketplace_config["plugin_name"]), None)
     if plugin is None:
         fail(f"{rel(root, path)} must contain plugin {marketplace_config['plugin_name']!r}")
+    label = f"{surface.capitalize()} marketplace"
     source = plugin.get("source")
     if not isinstance(source, dict):
         fail(f"{rel(root, path)} plugin source must be an object")
-    require_equal("Codex marketplace source", source.get("source"), marketplace_config["source"])
+    require_equal(f"{label} source", source.get("source"), marketplace_config["source"])
     require_equal(
-        "Codex marketplace source.path",
+        f"{label} source.path",
         source.get("path"),
         marketplace_config["source_path"],
     )
-    policy = plugin.get("policy")
-    if not isinstance(policy, dict):
-        fail(f"{rel(root, path)} plugin policy must be an object")
+    if "source_url" in marketplace_config:
+        require_equal(
+            f"{label} source.url",
+            source.get("url"),
+            marketplace_config["source_url"],
+        )
+    if "policy_installation" in marketplace_config:
+        policy = plugin.get("policy")
+        if not isinstance(policy, dict):
+            fail(f"{rel(root, path)} plugin policy must be an object")
+        require_equal(
+            f"{label} policy.installation",
+            policy.get("installation"),
+            marketplace_config["policy_installation"],
+        )
+        require_equal(
+            f"{label} policy.authentication",
+            policy.get("authentication"),
+            marketplace_config["policy_authentication"],
+        )
     require_equal(
-        "Codex marketplace policy.installation",
-        policy.get("installation"),
-        marketplace_config["policy_installation"],
-    )
-    require_equal(
-        "Codex marketplace policy.authentication",
-        policy.get("authentication"),
-        marketplace_config["policy_authentication"],
-    )
-    require_equal(
-        "Codex marketplace category",
+        f"{label} category",
         plugin.get("category"),
         marketplace_config["category"],
     )
+    if "description" in plugin:
+        # The storefront blurb is not a second copy to keep in sync by hand:
+        # it must be the manifest's own description.
+        manifest = read_json(root, root / config["manifest_path"])
+        require_equal(
+            f"{label} description",
+            plugin.get("description"),
+            manifest.get("description"),
+        )
 
 
 def validate_skill_surface(
@@ -370,7 +393,8 @@ def validate_contract(root: Path) -> None:
 
     validate_resolver_parity(root)
     validate_codex_readme(root)
-    validate_marketplace(root, surfaces["codex"])
+    validate_marketplace(root, "claude", surfaces["claude"])
+    validate_marketplace(root, "codex", surfaces["codex"])
 
     validate_skill_surface(
         root,
