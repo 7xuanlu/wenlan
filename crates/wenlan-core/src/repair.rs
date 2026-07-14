@@ -10,26 +10,27 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fmt::Write as _,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Component, Path, PathBuf},
+    str::FromStr,
 };
 use uuid::Uuid;
 use wenlan_types::{
     lint::{LintDigest, LintEvidenceRef, LintScope, LintScopeKind, LintSemanticAction},
     repair::{
-        PrepareRepairRequest, RepairAllowedEffects, RepairDigest, RepairExpectedState,
-        RepairLintScope, RepairManifest, RepairManifestDraft, RepairMutation, RepairPostAssertions,
-        RepairRollbackArtifact, RepairScope, RepairSource, RepairTarget, RepairWriter,
-        REPAIR_ROLLBACK_FORMAT_VERSION,
+        ApplyRepairRequest, PrepareRepairRequest, RepairAllowedEffects, RepairApplyReceipt,
+        RepairDigest, RepairExpectedState, RepairLintScope, RepairManifest, RepairManifestDraft,
+        RepairMutation, RepairPostAssertions, RepairRollbackArtifact, RepairScope, RepairSource,
+        RepairTarget, RepairWriter, REPAIR_RECEIPT_SCHEMA_VERSION, REPAIR_ROLLBACK_FORMAT_VERSION,
     },
+    MemoryType,
 };
-
-#[cfg(unix)]
-use std::fs::File;
 
 const MANIFEST_FILE: &str = "manifest.json";
 const ROLLBACK_FILE: &str = "rollback-v1.json";
+const APPLY_RECEIPT_FILE: &str = "apply-receipt.json";
+const APPLY_RECEIPT_PENDING_FILE: &str = ".apply-receipt.json.pending";
 
 #[derive(Debug, Clone)]
 pub struct RepairArtifactStore {
@@ -104,6 +105,84 @@ impl RepairArtifactStore {
         }
         result
     }
+
+    fn load_rollback(
+        &self,
+        manifest: &RepairManifest,
+    ) -> Result<(StoredRollbackArtifact, Vec<u8>), WenlanError> {
+        let path = self
+            .manifest_dir(manifest.manifest_id())?
+            .join(manifest.rollback().relative_path());
+        let bytes = fs::read(path)?;
+        if repair_digest(&bytes) != *manifest.rollback().digest() {
+            return Err(WenlanError::Validation(
+                "repair_rollback_digest_mismatch".to_string(),
+            ));
+        }
+        let rollback: StoredRollbackArtifact = serde_json::from_slice(&bytes)?;
+        if rollback.format_version != REPAIR_ROLLBACK_FORMAT_VERSION
+            || rollback.table != "memories"
+            || rollback.source_id != manifest.target().memory_source_id()
+            || rollback.rows.is_empty()
+        {
+            return Err(WenlanError::Validation(
+                "repair_rollback_mismatch".to_string(),
+            ));
+        }
+        Ok((rollback, bytes))
+    }
+
+    fn begin_apply_receipt(&self, manifest_id: &str) -> Result<PendingApplyReceipt, WenlanError> {
+        let manifest_dir = self.manifest_dir(manifest_id)?;
+        let final_path = manifest_dir.join(APPLY_RECEIPT_FILE);
+        if final_path.exists() {
+            return Err(WenlanError::Conflict("repair_already_applied".to_string()));
+        }
+        let pending_path = manifest_dir.join(APPLY_RECEIPT_PENDING_FILE);
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&pending_path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    WenlanError::Conflict("repair_apply_in_progress".to_string())
+                } else {
+                    WenlanError::Io(error)
+                }
+            })?;
+        set_private_file_permissions(&pending_path)?;
+        Ok(PendingApplyReceipt {
+            file: Some(file),
+            pending_path,
+            final_path,
+        })
+    }
+}
+
+struct PendingApplyReceipt {
+    file: Option<File>,
+    pending_path: PathBuf,
+    final_path: PathBuf,
+}
+
+impl PendingApplyReceipt {
+    fn finish(mut self, receipt: &RepairApplyReceipt) -> Result<(), WenlanError> {
+        let bytes = serde_json::to_vec_pretty(receipt)?;
+        let mut file = self.file.take().expect("pending apply receipt file");
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&self.pending_path, &self.final_path)?;
+        if let Some(parent) = self.final_path.parent() {
+            sync_dir(parent)?;
+        }
+        Ok(())
+    }
+
+    fn abort(mut self) {
+        drop(self.file.take());
+        let _ = fs::remove_file(&self.pending_path);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +201,20 @@ struct ResolvedTarget {
     space: Option<String>,
     version: Option<i64>,
     evidence_id: LintDigest,
+}
+
+#[derive(Serialize)]
+struct RepairApplyReceiptMaterial<'a> {
+    receipt_schema_version: u16,
+    manifest_id: &'a str,
+    manifest_digest: &'a RepairDigest,
+    applied_at: i64,
+    before_target_receipt: &'a RepairDigest,
+    after_target_receipt: &'a RepairDigest,
+    non_target_before: &'a RepairDigest,
+    non_target_after: &'a RepairDigest,
+    actual_effects: &'a RepairAllowedEffects,
+    writer: RepairWriter,
 }
 
 pub fn semantic_record_digest(kind: &str, durable_id: &str) -> LintDigest {
@@ -210,6 +303,199 @@ pub async fn prepare_memory_reclassification(
         .map_err(|error| WenlanError::Validation(error.to_string()))?;
     store.persist_prepared(&manifest, &rollback_bytes)?;
     Ok(manifest)
+}
+
+pub async fn apply_repair(
+    db: &MemoryDB,
+    store: &RepairArtifactStore,
+    request: ApplyRepairRequest,
+    now_epoch: i64,
+) -> Result<RepairApplyReceipt, WenlanError> {
+    if now_epoch <= 0 {
+        return Err(WenlanError::Validation(
+            "invalid_repair_applied_at".to_string(),
+        ));
+    }
+    let manifest = store.load_manifest(request.manifest_id())?;
+    if manifest.manifest_digest() != request.approved_manifest_digest() {
+        return Err(WenlanError::Conflict(
+            "repair_approval_mismatch".to_string(),
+        ));
+    }
+    let (rollback, _) = store.load_rollback(&manifest)?;
+    if target_receipt(&rollback)? != *manifest.expected_state().canonical_receipt() {
+        return Err(WenlanError::Validation(
+            "repair_rollback_target_mismatch".to_string(),
+        ));
+    }
+    let pending = store.begin_apply_receipt(manifest.manifest_id())?;
+    let after_memory_type = MemoryType::from_str(manifest.mutation().after_memory_type())
+        .map_err(WenlanError::Validation)?;
+    let proof = match crate::post_write::reclassify_memory_cas(
+        db,
+        manifest.target().memory_source_id(),
+        manifest.expected_state().canonical_receipt(),
+        manifest.target().scope().space(),
+        after_memory_type,
+    )
+    .await
+    {
+        Ok(proof) => proof,
+        Err(error) => {
+            pending.abort();
+            return Err(error);
+        }
+    };
+    let material = RepairApplyReceiptMaterial {
+        receipt_schema_version: REPAIR_RECEIPT_SCHEMA_VERSION,
+        manifest_id: manifest.manifest_id(),
+        manifest_digest: manifest.manifest_digest(),
+        applied_at: now_epoch,
+        before_target_receipt: proof.before_target_receipt(),
+        after_target_receipt: proof.after_target_receipt(),
+        non_target_before: proof.non_target_before(),
+        non_target_after: proof.non_target_after(),
+        actual_effects: manifest.allowed_effects(),
+        writer: manifest.writer(),
+    };
+    let receipt_digest = repair_digest(&serde_json::to_vec(&material)?);
+    let receipt = RepairApplyReceipt::try_new(
+        manifest.manifest_id().to_string(),
+        manifest.manifest_digest().clone(),
+        now_epoch,
+        proof.before_target_receipt().clone(),
+        proof.after_target_receipt().clone(),
+        proof.non_target_before().clone(),
+        proof.non_target_after().clone(),
+        manifest.allowed_effects().clone(),
+        manifest.writer(),
+        receipt_digest,
+    )
+    .map_err(|error| WenlanError::Validation(error.to_string()))?;
+    pending.finish(&receipt)?;
+    Ok(receipt)
+}
+
+pub(crate) async fn target_receipt_on_connection(
+    connection: &libsql::Connection,
+    source_id: &str,
+) -> Result<(RepairDigest, u64), WenlanError> {
+    let rollback = capture_rollback_on_connection(connection, source_id).await?;
+    let row_count = u64::try_from(rollback.rows.len())
+        .map_err(|_| WenlanError::Validation("repair_target_too_large".to_string()))?;
+    Ok((target_receipt(&rollback)?, row_count))
+}
+
+pub(crate) async fn validate_target_space_on_connection(
+    connection: &libsql::Connection,
+    source_id: &str,
+    expected_space: Option<&str>,
+) -> Result<(), WenlanError> {
+    let mut rows = connection
+        .query(
+            "SELECT space FROM memories
+             WHERE source='memory' AND source_id=?1 ORDER BY chunk_index,id",
+            libsql::params![source_id],
+        )
+        .await
+        .map_err(database_error)?;
+    let mut seen = 0_u64;
+    while let Some(row) = rows.next().await.map_err(database_error)? {
+        let actual: Option<String> = row.get(0).map_err(database_error)?;
+        if actual.as_deref() != expected_space {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        seen = seen.saturating_add(1);
+    }
+    if seen == 0 {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    Ok(())
+}
+
+pub(crate) async fn non_target_fingerprint_on_connection(
+    connection: &libsql::Connection,
+    target_source_id: &str,
+) -> Result<RepairDigest, WenlanError> {
+    let mut table_rows = connection
+        .query(
+            "SELECT name FROM sqlite_schema
+             WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            (),
+        )
+        .await
+        .map_err(database_error)?;
+    let mut tables = Vec::new();
+    while let Some(row) = table_rows.next().await.map_err(database_error)? {
+        tables.push(row.get::<String>(0).map_err(database_error)?);
+    }
+    drop(table_rows);
+
+    let mut digest = Sha256::new();
+    digest.update(b"wenlan-repair-non-target-v1");
+    for table in tables {
+        digest_field(&mut digest, table.as_bytes());
+        let pragma = format!("PRAGMA table_info({})", quote_literal(&table));
+        let mut column_rows = connection
+            .query(&pragma, ())
+            .await
+            .map_err(database_error)?;
+        let mut columns = Vec::new();
+        while let Some(row) = column_rows.next().await.map_err(database_error)? {
+            columns.push(row.get::<String>(1).map_err(database_error)?);
+        }
+        drop(column_rows);
+        for column in &columns {
+            digest_field(&mut digest, column.as_bytes());
+        }
+        if columns.is_empty() {
+            continue;
+        }
+        let selected = columns
+            .iter()
+            .map(|column| format!("quote({})", quote_identifier(column)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let ordering = (1..=columns.len())
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let (sql, params) = if table == "memories" {
+            (
+                format!(
+                    "SELECT {selected} FROM {}\
+                     WHERE NOT (source='memory' AND source_id=?1) ORDER BY {ordering}",
+                    quote_identifier(&table)
+                ),
+                libsql::params::Params::Positional(vec![libsql::Value::Text(
+                    target_source_id.to_string(),
+                )]),
+            )
+        } else {
+            (
+                format!(
+                    "SELECT {selected} FROM {} ORDER BY {ordering}",
+                    quote_identifier(&table)
+                ),
+                libsql::params::Params::None,
+            )
+        };
+        let mut rows = connection
+            .query(&sql, params)
+            .await
+            .map_err(database_error)?;
+        while let Some(row) = rows.next().await.map_err(database_error)? {
+            digest.update(b"row");
+            for index in 0..columns.len() {
+                let index = i32::try_from(index).map_err(|_| {
+                    WenlanError::Validation("repair_target_schema_too_wide".to_string())
+                })?;
+                let value: String = row.get(index).map_err(database_error)?;
+                digest_field(&mut digest, value.as_bytes());
+            }
+        }
+    }
+    Ok(repair_digest(&digest.finalize()))
 }
 
 fn validate_selected_finding(request: &PrepareRepairRequest) -> Result<(), WenlanError> {
@@ -373,6 +659,60 @@ async fn capture_rollback(
     })
 }
 
+async fn capture_rollback_on_connection(
+    connection: &libsql::Connection,
+    source_id: &str,
+) -> Result<StoredRollbackArtifact, WenlanError> {
+    let mut column_rows = connection
+        .query("PRAGMA table_info(memories)", ())
+        .await
+        .map_err(database_error)?;
+    let mut columns = Vec::new();
+    while let Some(row) = column_rows.next().await.map_err(database_error)? {
+        columns.push(row.get::<String>(1).map_err(database_error)?);
+    }
+    drop(column_rows);
+    if columns.is_empty() {
+        return Err(WenlanError::Validation(
+            "repair_target_schema_missing".to_string(),
+        ));
+    }
+    let selected = columns
+        .iter()
+        .map(|column| format!("quote({})", quote_identifier(column)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT {selected} FROM memories
+         WHERE source='memory' AND source_id=?1 ORDER BY chunk_index,id"
+    );
+    let mut query_rows = connection
+        .query(&sql, libsql::params![source_id])
+        .await
+        .map_err(database_error)?;
+    let mut rows = Vec::new();
+    while let Some(row) = query_rows.next().await.map_err(database_error)? {
+        let mut values = Vec::with_capacity(columns.len());
+        for index in 0..columns.len() {
+            let index = i32::try_from(index).map_err(|_| {
+                WenlanError::Validation("repair_target_schema_too_wide".to_string())
+            })?;
+            values.push(row.get::<String>(index).map_err(database_error)?);
+        }
+        rows.push(values);
+    }
+    if rows.is_empty() {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    Ok(StoredRollbackArtifact {
+        format_version: REPAIR_ROLLBACK_FORMAT_VERSION,
+        table: "memories".to_string(),
+        source_id: source_id.to_string(),
+        columns,
+        rows,
+    })
+}
+
 fn target_receipt(rollback: &StoredRollbackArtifact) -> Result<RepairDigest, WenlanError> {
     let mut bytes = b"wenlan-repair-target-v1".to_vec();
     bytes.extend(serde_json::to_vec(rollback)?);
@@ -417,6 +757,15 @@ fn repair_digest(bytes: &[u8]) -> RepairDigest {
 
 fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn digest_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+    digest.update(value);
 }
 
 fn safe_manifest_id(value: &str) -> bool {
@@ -499,7 +848,7 @@ mod tests {
             LintAgentSubmission, LintAgentVerdict, LintEvidenceRef, LintProfile, LintQuery,
             LintSemanticCheckId, LintSemanticDecision,
         },
-        repair::{PrepareRepairRequest, RepairLintScope},
+        repair::{ApplyRepairRequest, PrepareRepairRequest, RepairDigest, RepairLintScope},
         MemoryType,
     };
 
@@ -515,6 +864,8 @@ mod tests {
                      (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
                       pending_revision,is_recap,supersede_mode,memory_type,space)
                  VALUES ('row-target','Target decision','memory','mem_target','target',0,10,
+                         'text',0,0,'hide',NULL,'work'),
+                        ('row-target-2','Target detail','memory','mem_target','target',1,10,
                          'text',0,0,'hide',NULL,'work'),
                         ('row-other','Other fact','memory','mem_other','other',0,11,
                          'text',0,0,'hide','fact','personal');",
@@ -745,6 +1096,152 @@ mod tests {
             Err(WenlanError::Validation(message)) if message == "repair_scope_mismatch"
         ));
         assert_eq!(std::fs::read_dir(repair_root.path()).unwrap().count(), 0);
+    }
+
+    async fn prepared_fixture() -> (
+        MemoryDB,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        RepairManifest,
+    ) {
+        let (db, db_dir) = fixture().await;
+        let repair_root = tempfile::tempdir().unwrap();
+        let manifest = prepare_memory_reclassification(
+            &db,
+            &RepairArtifactStore::new(repair_root.path().to_path_buf()),
+            request(&db).await,
+            1_721_000_000,
+        )
+        .await
+        .unwrap();
+        (db, db_dir, repair_root, manifest)
+    }
+
+    fn exact_apply(manifest: &RepairManifest) -> ApplyRepairRequest {
+        ApplyRepairRequest::try_new(
+            manifest.manifest_id().to_string(),
+            manifest.manifest_digest().clone(),
+        )
+        .unwrap()
+    }
+
+    async fn target_memory_types(db: &MemoryDB) -> Vec<Option<String>> {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT memory_type FROM memories
+                 WHERE source='memory' AND source_id='mem_target'
+                 ORDER BY chunk_index,id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            output.push(row.get(0).unwrap());
+        }
+        output
+    }
+
+    #[tokio::test]
+    async fn wrong_approval_or_stale_target_performs_zero_writes() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let before = fingerprint(&db).await;
+        let wrong = ApplyRepairRequest::try_new(
+            manifest.manifest_id().to_string(),
+            RepairDigest::parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(apply_repair(&db, &store, wrong, 1_721_000_001)
+            .await
+            .is_err());
+        assert_eq!(before, fingerprint(&db).await);
+
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE memories SET title='stale' WHERE id='row-target'",
+                (),
+            )
+            .await
+            .unwrap();
+        let stale_before = fingerprint(&db).await;
+        assert!(matches!(
+            apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001).await,
+            Err(WenlanError::Conflict(message)) if message == "repair_target_stale"
+        ));
+        assert_eq!(stale_before, fingerprint(&db).await);
+        assert!(!store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join("apply-receipt.json")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn successful_apply_changes_only_declared_owner_closure() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+
+        let receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            target_memory_types(&db).await,
+            vec![Some("decision".to_string()), Some("decision".to_string())]
+        );
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT memory_type FROM memories WHERE id='row-other'", ())
+            .await
+            .unwrap();
+        let other: Option<String> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        drop(rows);
+        drop(conn);
+        assert_eq!(other.as_deref(), Some("fact"));
+        assert_eq!(receipt.manifest_digest(), manifest.manifest_digest());
+        assert!(store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join("apply-receipt.json")
+            .is_file());
+    }
+
+    #[tokio::test]
+    async fn effect_escape_rolls_back_target_and_trigger_side_effect() {
+        let (db, _db_dir) = fixture().await;
+        db.conn
+            .lock()
+            .await
+            .execute_batch(
+                "CREATE TABLE repair_escape (value TEXT NOT NULL);
+                 CREATE TRIGGER repair_escape_trigger AFTER UPDATE OF memory_type ON memories
+                 WHEN NEW.source_id='mem_target'
+                 BEGIN INSERT INTO repair_escape(value) VALUES ('escaped'); END;",
+            )
+            .await
+            .unwrap();
+        let repair_root = tempfile::tempdir().unwrap();
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let manifest =
+            prepare_memory_reclassification(&db, &store, request(&db).await, 1_721_000_000)
+                .await
+                .unwrap();
+        let before = fingerprint(&db).await;
+
+        let result = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001).await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::VectorDb(message)) if message.contains("repair_effect_escape")
+        ));
+        assert_eq!(before, fingerprint(&db).await);
+        assert_eq!(target_memory_types(&db).await, vec![None, None]);
     }
 
     #[test]

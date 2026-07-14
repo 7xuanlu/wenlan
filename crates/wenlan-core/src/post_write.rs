@@ -9,6 +9,7 @@ use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use std::{collections::HashSet, path::Path, str::FromStr};
 use wenlan_types::{
+    repair::RepairDigest,
     requests::{
         AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
         UpdatePageRequest,
@@ -35,6 +36,107 @@ pub struct MemoryUpdate<'a> {
     pub space: Option<Option<&'a str>>,
     pub confirm: bool,
     pub memory_type: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepairWriteProof {
+    before_target_receipt: RepairDigest,
+    after_target_receipt: RepairDigest,
+    non_target_before: RepairDigest,
+    non_target_after: RepairDigest,
+}
+
+impl RepairWriteProof {
+    pub fn before_target_receipt(&self) -> &RepairDigest {
+        &self.before_target_receipt
+    }
+
+    pub fn after_target_receipt(&self) -> &RepairDigest {
+        &self.after_target_receipt
+    }
+
+    pub fn non_target_before(&self) -> &RepairDigest {
+        &self.non_target_before
+    }
+
+    pub fn non_target_after(&self) -> &RepairDigest {
+        &self.non_target_after
+    }
+}
+
+pub async fn reclassify_memory_cas(
+    db: &MemoryDB,
+    source_id: &str,
+    expected_receipt: &RepairDigest,
+    expected_space: Option<&str>,
+    after_memory_type: MemoryType,
+) -> Result<RepairWriteProof, WenlanError> {
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let result = async {
+        crate::repair::validate_target_space_on_connection(&conn, source_id, expected_space)
+            .await?;
+        let (before_target_receipt, target_rows) =
+            crate::repair::target_receipt_on_connection(&conn, source_id).await?;
+        if &before_target_receipt != expected_receipt {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let non_target_before =
+            crate::repair::non_target_fingerprint_on_connection(&conn, source_id).await?;
+        let affected = conn
+            .execute(
+                "UPDATE memories SET memory_type=?1
+                 WHERE source='memory' AND source_id=?2",
+                libsql::params![after_memory_type.to_string(), source_id],
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair reclassify: {error}")))?;
+        if affected != target_rows {
+            return Err(WenlanError::VectorDb(
+                "repair_target_row_count_changed".to_string(),
+            ));
+        }
+        let (after_target_receipt, after_rows) =
+            crate::repair::target_receipt_on_connection(&conn, source_id).await?;
+        if after_rows != target_rows || after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let non_target_after =
+            crate::repair::non_target_fingerprint_on_connection(&conn, source_id).await?;
+        if non_target_after != non_target_before {
+            return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
+        }
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "{error}; repair rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
+        }
+    };
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let _ = conn.execute("ROLLBACK", ()).await;
+        return Err(WenlanError::VectorDb(format!(
+            "repair commit failed: {error}"
+        )));
+    }
+    Ok(proof)
 }
 
 pub async fn update_memory(

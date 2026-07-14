@@ -1517,11 +1517,25 @@ pub async fn handle_reclassify_memory(
         .map_err(ServerError::ValidationError)?;
     let mt = parsed.to_string();
 
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.update_column_by_source_id("memory", &source_id, "memory_type", &mt)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    match wenlan_core::post_write::update_memory(
+        &db,
+        &source_id,
+        wenlan_core::post_write::MemoryUpdate {
+            content: None,
+            space: None,
+            confirm: false,
+            memory_type: Some(&mt),
+        },
+    )
+    .await
+    {
+        Ok(()) | Err(wenlan_core::WenlanError::NotFound(_)) => {}
+        Err(error) => return Err(ServerError::from(error)),
+    }
 
     Ok(Json(ReclassifyMemoryResponse {
         source_id,
@@ -2775,6 +2789,53 @@ mod update_memory_endpoint_tests {
     use wenlan_types::sources::RawDocument;
 
     use crate::state::ServerState;
+
+    #[tokio::test]
+    async fn reclassify_keeps_response_shape_and_uses_canonical_update() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "reclassify-canonical".to_string(),
+            title: "Reclassify".to_string(),
+            content: "This memory changes type through the canonical boundary.".to_string(),
+            memory_type: Some("fact".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/reclassify/reclassify-canonical")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"memory_type":"decision"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            db.get_memory_detail("reclassify-canonical")
+                .await
+                .unwrap()
+                .unwrap()
+                .memory_type
+                .as_deref(),
+            Some("decision")
+        );
+    }
 
     #[tokio::test]
     async fn invalid_memory_type_rejects_the_whole_update_before_mutation() {
