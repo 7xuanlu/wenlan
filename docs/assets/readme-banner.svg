@@ -1,16 +1,16 @@
-<svg width="1280" height="180" viewBox="0 0 1280 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="1280" height="240" viewBox="0 0 1280 240" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
   <desc id="desc">Wenlan: a source-backed llm-wiki that stays current.</desc>
 
-  <rect x="1" y="1" width="1278" height="178" rx="18" fill="#101024" stroke="#2F3769" stroke-width="2"/>
+  <rect x="1" y="1" width="1278" height="238" rx="20" fill="#101024" stroke="#2F3769" stroke-width="2"/>
 
-  <g transform="translate(34 26) scale(0.41)">
+  <g transform="translate(34 45) scale(0.48)">
     <rect width="312" height="312" rx="72" fill="#1A1A2E"/>
     <circle cx="156" cy="156" r="98" stroke="url(#ring)" stroke-width="48"/>
     <circle cx="197" cy="97" r="26" fill="url(#orb)"/>
   </g>
 
-  <g transform="translate(192 42)">
+  <g transform="translate(220 62)">
     <text x="0" y="22" fill="#93E3F2" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="700" letter-spacing="0">
       WENLAN
     </text>
