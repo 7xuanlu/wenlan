@@ -60,7 +60,10 @@ pub async fn compile_queue_depth(db: &MemoryDB) -> Result<usize, WenlanError> {
         .unwrap_or(0))
 }
 
-fn on_device_compile_preferred() -> bool {
+/// Whether on-device models may serve synthesis/compile work. Gated behind
+/// `WENLAN_PREFER_ON_DEVICE_COMPILE` because on-device synthesis is slow and
+/// lower quality; the daemon and the config PATCH validation both consult this.
+pub fn on_device_compile_preferred() -> bool {
     std::env::var("WENLAN_PREFER_ON_DEVICE_COMPILE")
         .ok()
         .map(|v| {
@@ -91,6 +94,18 @@ impl EverydaySource {
             EverydaySource::Basic => "basic",
         }
     }
+
+    /// Parse a config `everyday_source` pin. `Basic` is not a pinnable source
+    /// (it means "no LLM"), so only the three real sources map; anything else
+    /// (including `None`) yields no pin.
+    pub fn parse(s: Option<&str>) -> Option<Self> {
+        match s {
+            Some("anthropic") => Some(EverydaySource::Anthropic),
+            Some("external") => Some(EverydaySource::External),
+            Some("on_device") => Some(EverydaySource::OnDevice),
+            _ => None,
+        }
+    }
 }
 
 /// Resolved everyday route: the chosen provider plus the source that named it.
@@ -99,14 +114,16 @@ pub struct EverydayRoute<'a> {
     pub llm: Option<&'a Arc<dyn LlmProvider>>,
 }
 
-/// Resolve the everyday inference chain: Anthropic (api) → external → on-device.
+/// AUTO fallback for everyday routing: Anthropic (api) → external → on-device.
 ///
-/// Single source of truth for everyday routing. Both the refinery phases
-/// (recap, entity extraction) and the resolved-routing endpoint derive from
-/// this one function so display and behavior cannot drift. The order is
-/// deliberate: a provider the user connected (`external_llm`) outranks the
-/// built-in on-device model, but Anthropic — when a key is configured — stays
-/// first (fastest, most accurate for routine JSON/title work).
+/// This order is a MIGRATION FALLBACK for configs that predate explicit per-job
+/// source pins — it is NOT a product statement that Anthropic deserves priority
+/// over any other peer cloud model. When an `everyday_source` pin is set (the
+/// path new UI always writes), [`resolve_everyday`] honors it and only falls
+/// back to this chain when the pinned source is unavailable. The order here is
+/// retained purely so pre-pin configs behave as they did before, and it matches
+/// the chain the desktop app historically displayed. Callers that must respect
+/// a pin call [`resolve_everyday`], not this function directly.
 pub fn everyday_llm<'a>(
     api_llm: Option<&'a Arc<dyn LlmProvider>>,
     external_llm: Option<&'a Arc<dyn LlmProvider>>,
@@ -152,6 +169,19 @@ impl SynthesisSource {
             SynthesisSource::External => "external",
             SynthesisSource::OnDevice => "on_device",
             SynthesisSource::None => "none",
+        }
+    }
+
+    /// Parse a config `synthesis_source` pin. `None` (the "nothing resolved"
+    /// label) is not a pinnable source. `on_device` is only meaningful behind
+    /// the compile gate; PATCH validation rejects it otherwise, and
+    /// [`resolve_synthesis`] re-checks the gate at resolution time.
+    pub fn parse(s: Option<&str>) -> Option<Self> {
+        match s {
+            Some("anthropic") => Some(SynthesisSource::Anthropic),
+            Some("external") => Some(SynthesisSource::External),
+            Some("on_device") => Some(SynthesisSource::OnDevice),
+            _ => None,
         }
     }
 }
@@ -206,6 +236,135 @@ pub fn synthesis_route<'a>(
     SynthesisRoute {
         source: SynthesisSource::None,
         llm: None,
+    }
+}
+
+/// How a resolved route was chosen: an explicit pin, a pin that degraded to the
+/// auto chain because its source was unavailable, or no pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteMode {
+    Pinned,
+    PinnedDegraded,
+    Auto,
+}
+
+impl RouteMode {
+    /// snake_case label for the resolved-routing endpoint.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RouteMode::Pinned => "pinned",
+            RouteMode::PinnedDegraded => "pinned_degraded",
+            RouteMode::Auto => "auto",
+        }
+    }
+}
+
+/// Resolved everyday route plus how it was chosen.
+pub struct EverydayResolution<'a> {
+    pub source: EverydaySource,
+    pub llm: Option<&'a Arc<dyn LlmProvider>>,
+    pub mode: RouteMode,
+}
+
+/// Resolve everyday routing, honoring an optional per-job source pin.
+///
+/// - pin set and its slot present → that source, mode `Pinned`.
+/// - pin set but its slot absent → the [`everyday_llm`] auto chain, mode
+///   `PinnedDegraded`.
+/// - no pin → the auto chain, mode `Auto`.
+///
+/// "Present" matches the auto chain's own notion of availability — a slot is
+/// only built when its source is configured. This is the single entry point
+/// the refinery everyday phases and the resolved-routing endpoint both call,
+/// so pinned behavior and its display cannot drift.
+pub fn resolve_everyday<'a>(
+    pin: Option<EverydaySource>,
+    api_llm: Option<&'a Arc<dyn LlmProvider>>,
+    external_llm: Option<&'a Arc<dyn LlmProvider>>,
+    on_device: Option<&'a Arc<dyn LlmProvider>>,
+) -> EverydayResolution<'a> {
+    if let Some(pinned) = pin {
+        let slot = match pinned {
+            EverydaySource::Anthropic => api_llm,
+            EverydaySource::External => external_llm,
+            EverydaySource::OnDevice => on_device,
+            EverydaySource::Basic => None,
+        };
+        if let Some(llm) = slot {
+            return EverydayResolution {
+                source: pinned,
+                llm: Some(llm),
+                mode: RouteMode::Pinned,
+            };
+        }
+        let auto = everyday_llm(api_llm, external_llm, on_device);
+        return EverydayResolution {
+            source: auto.source,
+            llm: auto.llm,
+            mode: RouteMode::PinnedDegraded,
+        };
+    }
+    let auto = everyday_llm(api_llm, external_llm, on_device);
+    EverydayResolution {
+        source: auto.source,
+        llm: auto.llm,
+        mode: RouteMode::Auto,
+    }
+}
+
+/// Resolved synthesis route plus how it was chosen.
+pub struct SynthesisResolution<'a> {
+    pub source: SynthesisSource,
+    pub llm: Option<&'a Arc<dyn LlmProvider>>,
+    pub mode: RouteMode,
+}
+
+/// Resolve synthesis routing, honoring an optional per-job source pin.
+///
+/// The `anthropic` pin maps to the dedicated synthesis slot when present, else
+/// the routine Anthropic slot (both are the Anthropic source). The `on_device`
+/// pin is honored only behind the compile gate AND when the slot is available,
+/// mirroring [`synthesis_route`]'s own on-device branch. A pinned-but-
+/// unavailable source degrades to the [`synthesis_route`] auto chain.
+pub fn resolve_synthesis<'a>(
+    pin: Option<SynthesisSource>,
+    synthesis_llm: Option<&'a Arc<dyn LlmProvider>>,
+    api_llm: Option<&'a Arc<dyn LlmProvider>>,
+    external_llm: Option<&'a Arc<dyn LlmProvider>>,
+    on_device: Option<&'a Arc<dyn LlmProvider>>,
+) -> SynthesisResolution<'a> {
+    if let Some(pinned) = pin {
+        let slot = match pinned {
+            SynthesisSource::Anthropic => synthesis_llm.or(api_llm),
+            SynthesisSource::External => external_llm,
+            SynthesisSource::OnDevice => {
+                if on_device_compile_preferred() {
+                    on_device.filter(|provider| provider.is_available())
+                } else {
+                    None
+                }
+            }
+            SynthesisSource::None => None,
+        };
+        if let Some(llm) = slot {
+            return SynthesisResolution {
+                source: pinned,
+                llm: Some(llm),
+                mode: RouteMode::Pinned,
+            };
+        }
+        let auto = synthesis_route(synthesis_llm, api_llm, external_llm, on_device);
+        return SynthesisResolution {
+            source: auto.source,
+            llm: auto.llm,
+            mode: RouteMode::PinnedDegraded,
+        };
+    }
+    let auto = synthesis_route(synthesis_llm, api_llm, external_llm, on_device);
+    SynthesisResolution {
+        source: auto.source,
+        llm: auto.llm,
+        mode: RouteMode::Auto,
     }
 }
 
@@ -457,6 +616,10 @@ pub async fn run_periodic_steep_with_api(
 ) -> Result<SteepResult, WenlanError> {
     let steep_start = std::time::Instant::now();
     let deadline = trigger.deadline_secs(tuning.steep_deadline_secs);
+    // Per-job everyday source pin — read once per cycle from config; drives both
+    // the recap and entity-extraction phases below. Absent/unknown → auto chain.
+    let everyday_pin =
+        EverydaySource::parse(crate::config::load_config().everyday_source.as_deref());
     let mut phases: Vec<PhaseResult> = Vec::new();
     #[allow(unused_assignments)]
     let mut deadline_hit = false; // track if we've logged the first skip
@@ -503,8 +666,9 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 2: Recap generation (everyday chain: Anthropic → external → on-device)
-    let recap_llm = everyday_llm(api_llm, external_llm, llm).llm;
+    // Phase 2: Recap generation (everyday job — honors the everyday_source pin,
+    // else the auto chain Anthropic → external → on-device).
+    let recap_llm = resolve_everyday(everyday_pin, api_llm, external_llm, llm).llm;
     if trigger.runs_phase(Phase::Recaps) {
         let phase = run_phase(Phase::Recaps, || async {
             let generated =
@@ -586,9 +750,9 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 5: Entity extraction — everyday chain (Anthropic → external → on-device);
-    // Anthropic first for better JSON accuracy, external before the built-in 4B.
-    let extract_llm = everyday_llm(api_llm, external_llm, llm).llm;
+    // Phase 5: Entity extraction — everyday job (honors the everyday_source pin,
+    // else the auto chain Anthropic → external → on-device).
+    let extract_llm = resolve_everyday(everyday_pin, api_llm, external_llm, llm).llm;
     if trigger.runs_phase(Phase::EntityExtraction)
         && {
             let elapsed = steep_start.elapsed().as_secs();
@@ -1531,6 +1695,110 @@ mod tests {
         // No cloud, no on-device → none regardless of gate.
         let r = synthesis_route(None, None, None, None);
         assert_eq!(r.source, SynthesisSource::None);
+    }
+
+    #[test]
+    fn resolve_everyday_pin_on_device_while_anthropic_configured() {
+        // THE headline case: everyday pinned to on-device even though an
+        // Anthropic key is configured. Pre-pin, api_llm always won and this mix
+        // was unreachable; the pin now makes it work.
+        let api = RouteTestProvider::arc(LlmBackend::Api, "claude-haiku");
+        let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+        let r = resolve_everyday(Some(EverydaySource::OnDevice), Some(&api), None, Some(&dev));
+        assert_eq!(r.source, EverydaySource::OnDevice);
+        assert_eq!(r.mode, RouteMode::Pinned);
+        assert_eq!(r.llm.unwrap().model_id(), "qwen3-4b");
+    }
+
+    #[test]
+    fn resolve_everyday_pin_absent_source_degrades_to_auto() {
+        // Pinned to external, but no external provider is configured → the auto
+        // chain runs (Anthropic here) and the mode reports the degrade.
+        let api = RouteTestProvider::arc(LlmBackend::Api, "claude-haiku");
+        let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+        let r = resolve_everyday(Some(EverydaySource::External), Some(&api), None, Some(&dev));
+        assert_eq!(r.source, EverydaySource::Anthropic);
+        assert_eq!(r.mode, RouteMode::PinnedDegraded);
+        assert_eq!(r.llm.unwrap().model_id(), "claude-haiku");
+    }
+
+    #[test]
+    fn resolve_everyday_no_pin_is_auto() {
+        let api = RouteTestProvider::arc(LlmBackend::Api, "claude-haiku");
+        let ext = RouteTestProvider::arc(LlmBackend::Api, "ollama-llama3");
+        let r = resolve_everyday(None, Some(&api), Some(&ext), None);
+        assert_eq!(r.source, EverydaySource::Anthropic);
+        assert_eq!(r.mode, RouteMode::Auto);
+    }
+
+    #[test]
+    fn resolve_synthesis_pin_external_over_anthropic() {
+        let synth = RouteTestProvider::arc(LlmBackend::Api, "claude-sonnet");
+        let ext = RouteTestProvider::arc(LlmBackend::Api, "ollama-llama3");
+        let r = resolve_synthesis(
+            Some(SynthesisSource::External),
+            Some(&synth),
+            None,
+            Some(&ext),
+            None,
+        );
+        assert_eq!(r.source, SynthesisSource::External);
+        assert_eq!(r.mode, RouteMode::Pinned);
+        assert_eq!(r.llm.unwrap().model_id(), "ollama-llama3");
+    }
+
+    #[test]
+    fn resolve_synthesis_pin_on_device_requires_gate() {
+        let synth = RouteTestProvider::arc(LlmBackend::Api, "claude-sonnet");
+        let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+
+        // Gate OFF: the on-device pin can't be honored → degrades to the auto
+        // chain (the Anthropic synthesis slot).
+        let (source, mode, model) =
+            temp_env::with_var("WENLAN_PREFER_ON_DEVICE_COMPILE", None::<&str>, || {
+                let r = resolve_synthesis(
+                    Some(SynthesisSource::OnDevice),
+                    Some(&synth),
+                    None,
+                    None,
+                    Some(&dev),
+                );
+                (r.source, r.mode, r.llm.map(|l| l.model_id()))
+            });
+        assert_eq!(source, SynthesisSource::Anthropic);
+        assert_eq!(mode, RouteMode::PinnedDegraded);
+        assert_eq!(model.as_deref(), Some("claude-sonnet"));
+
+        // Gate ON: the on-device pin is honored.
+        let (source, mode) =
+            temp_env::with_var("WENLAN_PREFER_ON_DEVICE_COMPILE", Some("1"), || {
+                let r = resolve_synthesis(
+                    Some(SynthesisSource::OnDevice),
+                    Some(&synth),
+                    None,
+                    None,
+                    Some(&dev),
+                );
+                (r.source, r.mode)
+            });
+        assert_eq!(source, SynthesisSource::OnDevice);
+        assert_eq!(mode, RouteMode::Pinned);
+    }
+
+    #[test]
+    fn source_parse_rejects_unknown_and_non_pinnable() {
+        assert_eq!(
+            EverydaySource::parse(Some("on_device")),
+            Some(EverydaySource::OnDevice)
+        );
+        assert_eq!(EverydaySource::parse(Some("basic")), None); // not pinnable
+        assert_eq!(EverydaySource::parse(Some("bogus")), None);
+        assert_eq!(EverydaySource::parse(None), None);
+        assert_eq!(
+            SynthesisSource::parse(Some("external")),
+            Some(SynthesisSource::External)
+        );
+        assert_eq!(SynthesisSource::parse(Some("none")), None); // not pinnable
     }
 
     struct RecordingDistillProvider {

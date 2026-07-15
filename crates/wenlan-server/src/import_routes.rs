@@ -123,6 +123,14 @@ pub async fn handle_chat_export_import(
         )
     };
 
+    // Everyday source pin for the bulk enrichment pass spawned below. Copy, so
+    // it moves into the task; absent/unknown → the auto chain.
+    let everyday_pin = wenlan_core::refinery::EverydaySource::parse(
+        wenlan_core::config::load_config()
+            .everyday_source
+            .as_deref(),
+    );
+
     // 5. Create import_state row.
     let import_id = format!("imp_{}", Uuid::new_v4());
     db.start_import_state(&import_id, batch.vendor, &req.path)
@@ -203,11 +211,11 @@ pub async fn handle_chat_export_import(
         // Abort if we see this many consecutive iterations without progress.
         const MAX_STUCK_ITERS: usize = 3;
 
-        // Everyday enrichment chain: Anthropic → external → on-device. A
-        // connected external provider serves bulk enrichment before the
-        // built-in on-device model (matches recap/extraction routing).
+        // Everyday enrichment — honors the everyday_source pin, else the auto
+        // chain (Anthropic → external → on-device). Matches recap/extraction.
         let prefer_llm: Option<std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>> =
-            wenlan_core::refinery::everyday_llm(
+            wenlan_core::refinery::resolve_everyday(
+                everyday_pin,
                 api_llm.as_ref(),
                 external_llm.as_ref(),
                 llm.as_ref(),

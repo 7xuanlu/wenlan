@@ -239,6 +239,15 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 continue;
             };
 
+            // Everyday source pin — read once per poll; drives document
+            // enrichment and the entity/reconcile/citation sweeps below. Absent
+            // or unknown → the auto chain (api → external → on-device).
+            let everyday_pin = wenlan_core::refinery::EverydaySource::parse(
+                wenlan_core::config::load_config()
+                    .everyday_source
+                    .as_deref(),
+            );
+
             let now = Instant::now();
 
             // --- 0. Filesystem page watcher: md → DB ---
@@ -275,7 +284,8 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             // A paused queue backing off is skipped by claim_next_pending until
             // its next_retry_at elapses (backoff auto-resume). `db`/`llm`/`prompts`
             // are already snapshotted out of the read guard above.
-            let doc_route = wenlan_core::refinery::everyday_llm(
+            let doc_route = wenlan_core::refinery::resolve_everyday(
+                everyday_pin,
                 api_llm.as_ref(),
                 external_llm.as_ref(),
                 llm.as_ref(),
@@ -440,7 +450,8 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             {
                 // Everyday chain: Anthropic → external → on-device. A connected
                 // external provider serves the sweep before the on-device model.
-                let sweep_llm = wenlan_core::refinery::everyday_llm(
+                let sweep_llm = wenlan_core::refinery::resolve_everyday(
+                    everyday_pin,
                     api_llm.as_ref(),
                     external_llm.as_ref(),
                     llm.as_ref(),
@@ -479,7 +490,8 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             if wenlan_core::db::doc_reconcile_enabled()
                 && now.duration_since(last_reconcile_sweep) >= RECONCILE_SWEEP_INTERVAL
             {
-                let sweep_llm = wenlan_core::refinery::everyday_llm(
+                let sweep_llm = wenlan_core::refinery::resolve_everyday(
+                    everyday_pin,
                     api_llm.as_ref(),
                     external_llm.as_ref(),
                     llm.as_ref(),
@@ -523,7 +535,8 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             if wenlan_core::db::citation_backfill_enabled()
                 && now.duration_since(last_citation_sweep) >= CITATION_SWEEP_INTERVAL
             {
-                let sweep_llm = wenlan_core::refinery::everyday_llm(
+                let sweep_llm = wenlan_core::refinery::resolve_everyday(
+                    everyday_pin,
                     api_llm.as_ref(),
                     external_llm.as_ref(),
                     llm.as_ref(),
