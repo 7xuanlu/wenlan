@@ -123,6 +123,14 @@ Wenlan compiles related evidence into source-cited Markdown pages. `/brief` and 
 
 Pages and session notes stay as plain Markdown under `~/.wenlan/`. Distill and handoff workflows commit logical file batches to a local git repository, leaving an inspectable, portable history.
 
+The local history is directly inspectable:
+
+```text
+$ git -C ~/.wenlan log --oneline
+a1b2c3d distill: 4 pages
+9f8e7d6 session: embedding-work
+```
+
 **Already use Obsidian? Keep it.** Wenlan can read your existing vault as a source. To use Wenlan's own pages in Obsidian, symlink `~/.wenlan/pages/` into your vault or export a page from the desktop app. Wenlan treats edits to those pages as human-owned; later machine refreshes become reviewable revisions instead of overwriting your prose.
 
 <a id="what-makes-wenlan-distinct"></a>
@@ -140,6 +148,12 @@ A generated wiki is a snapshot. Wenlan treats it as a maintained knowledge syste
 For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one article that cites both. If either source changes, the article can refresh; if you have edited it, the proposed update waits for review.
 
 This is what Wenlan means by llm-wiki v2: evidence and articles keep improving together, rather than stopping after a one-off generation.
+
+<a id="what-wenlan-is-not"></a>
+
+### Best for work that continues
+
+Wenlan is for software development, research, writing, consulting, product decisions, and client work that spans sessions, projects, and weeks. It is not designed for one-off chats, life-management workflows, or use as a memory SDK inside another product.
 
 ---
 
@@ -196,6 +210,8 @@ The same loop runs every session: capture while you work, let Wenlan refine betw
    Claude Code · Cursor · Codex · Claude Desktop · VS Code · Gemini
 ```
 
+Each pass leaves the store sharper: loose captures can be deduplicated, linked, and distilled into source-backed pages, so the next session returns to knowledge instead of raw history.
+
 Four public workflows drive the system:
 
 1. **Start with context.** `/brief [topic]` loads project status, preferences, and relevant knowledge. MCP-only clients call `context` for the same purpose.
@@ -247,15 +263,27 @@ Runtime, crate, and platform details are documented in [AGENTS.md](AGENTS.md#cro
 
 ## Learn more
 
+More detailed documentation, concepts, and comparisons:
+
+### Docs
+
 - [Get started](https://wenlan.app/docs/get-started): install and verify the first local loop.
 - [Daily workflow](https://wenlan.app/docs/daily-workflow): brief, capture, recall, handoff, distill, lint, and curate.
 - [MCP clients](https://wenlan.app/docs/mcp-clients): connect Claude Code, Codex, Cursor, Claude Desktop, and other clients.
+
+### Concepts
+
 - [Why a living wiki, not just AI memory](https://wenlan.app/learn/ai-work-memory): the problem and product model in depth.
+- [MCP memory server](https://wenlan.app/learn/mcp-memory-server): how Wenlan exposes knowledge across AI tools.
+- [Local-first AI memory](https://wenlan.app/learn/local-first-ai-memory): data, privacy, and control.
 - [Markdown and local index](https://wenlan.app/learn/markdown-local-index-ai-memory): storage, retrieval, and ownership.
+- [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop): carrying work cleanly into the next session.
 
-<a id="what-wenlan-is-not"></a>
+### Comparisons
 
-Wenlan is focused on knowledge created through sustained AI work. It is not a life OS, general workflow suite, memory infrastructure SDK, or a replacement for the note editor you already use.
+- [Wenlan vs Basic Memory](https://wenlan.app/learn/wenlan-vs-basic-memory)
+- [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
+- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
 
 ---
 
