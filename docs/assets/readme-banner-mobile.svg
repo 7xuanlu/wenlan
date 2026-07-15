@@ -1,0 +1,37 @@
+<svg width="720" height="280" viewBox="0 0 720 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Wenlan README mobile banner</title>
+  <desc id="desc">Wenlan: a source-backed llm-wiki that stays current.</desc>
+
+  <rect x="1" y="1" width="718" height="278" rx="20" fill="#101024" stroke="#2F3769" stroke-width="2"/>
+
+  <g transform="translate(36 76) scale(0.41)">
+    <rect width="312" height="312" rx="72" fill="#1A1A2E"/>
+    <circle cx="156" cy="156" r="98" stroke="url(#ring)" stroke-width="48"/>
+    <circle cx="197" cy="97" r="26" fill="url(#orb)"/>
+  </g>
+
+  <g transform="translate(194 59)">
+    <text x="0" y="22" fill="#93E3F2" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="700" letter-spacing="0">
+      WENLAN
+    </text>
+    <text x="0" y="79" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="36" font-weight="760" letter-spacing="0">
+      A source-backed llm-wiki
+    </text>
+    <text x="0" y="123" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="36" font-weight="760" letter-spacing="0">
+      that stays current.
+    </text>
+  </g>
+
+  <defs>
+    <linearGradient id="ring" x1="58" y1="156" x2="254" y2="156" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C63FF"/>
+      <stop offset="0.48" stop-color="#5BA3E6"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(189 87) rotate(52) scale(47)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#A5C4F7"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </radialGradient>
+  </defs>
+</svg>
