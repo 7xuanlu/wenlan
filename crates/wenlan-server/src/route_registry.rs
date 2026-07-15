@@ -182,7 +182,7 @@ const NON_SENSITIVE_PATHS: &[&str] = &[
     "/api/memory/relations", "/api/memory/observations", "/api/memory/link-entity", "/api/spaces/{name}",
     "/api/spaces/{from}/move-to/{to}", "/api/pages/export", "/api/pages/{id}/export", "/api/pages/{id}/archive",
     "/api/refinery/queue/{id}/reject", "/api/refinery/queue/{id}/accept", "/api/sources/{id}", "/api/sources/{id}/sync",
-    "/api/config", "/api/config/skip-apps", "/api/setup/status", "/api/setup/anthropic-key", "/api/on-device-model",
+    "/api/config", "/api/config/skip-apps", "/api/config/routing", "/api/setup/status", "/api/setup/anthropic-key", "/api/on-device-model",
     "/api/on-device-model/download", "/api/chunks/{id}/update", "/api/chunks/time-range", "/api/chunks/delete-bulk",
     "/api/memory/entities/{id}/confirm", "/api/memory/entities/{id}/delete", "/api/memory/entities/{entity_id}/observations",
     "/api/memory/observations/{id}", "/api/memory/observations/{id}/confirm", "/api/spaces/{name}/pin",

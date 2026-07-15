@@ -247,6 +247,139 @@ pub async fn handle_get_setup_status(
     }))
 }
 
+// ── Resolved routing endpoint ───────────────────────────────────────────────
+
+/// Resolved route for one job class: the source that serves it and the model.
+#[derive(Debug, Serialize)]
+pub struct JobRoute {
+    /// everyday: "anthropic" | "external" | "on_device" | "basic";
+    /// synthesis: "anthropic" | "external" | "on_device" | "none".
+    pub source: String,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnthropicPool {
+    pub configured: bool,
+    pub everyday_model: Option<String>,
+    pub synthesis_model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExternalPool {
+    pub endpoint: String,
+    pub model: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OnDevicePool {
+    pub selected: Option<String>,
+    pub loaded: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoutingPool {
+    pub anthropic: AnthropicPool,
+    pub external: Option<ExternalPool>,
+    pub on_device: Option<OnDevicePool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolvedRoutingResponse {
+    pub everyday: JobRoute,
+    pub synthesis: JobRoute,
+    pub pool: RoutingPool,
+}
+
+/// GET /api/config/routing — resolved per-job routing derived at request time
+/// from the live provider slots, using the SAME chain code the refinery runs
+/// (`everyday_llm` / `synthesis_route`) so what the app displays cannot drift
+/// from what the daemon does. Never includes key material.
+pub async fn handle_get_resolved_routing(
+    State(state): State<SharedState>,
+) -> Result<Json<ResolvedRoutingResponse>, ServerError> {
+    let cfg = config::load_config();
+    let s = state.read().await;
+
+    // Live resolution — the exact chains the refinery/import paths run.
+    let everyday_route = wenlan_core::refinery::everyday_llm(
+        s.api_llm.as_ref(),
+        s.external_llm.as_ref(),
+        s.llm.as_ref(),
+    );
+    let everyday = JobRoute {
+        source: everyday_route.source.as_str().to_string(),
+        model: everyday_route.llm.map(|p| p.model_id()),
+    };
+    let synth_route = wenlan_core::refinery::synthesis_route(
+        s.synthesis_llm.as_ref(),
+        s.api_llm.as_ref(),
+        s.external_llm.as_ref(),
+        s.llm.as_ref(),
+    );
+    let synthesis = JobRoute {
+        source: synth_route.source.as_str().to_string(),
+        model: synth_route.llm.map(|p| p.model_id()),
+    };
+
+    // Pool — the configuration view (what each lane WOULD use). Anthropic model
+    // names come from the live slot when loaded, else the configured default,
+    // matching `apply_anthropic_provider`.
+    let anthropic_configured = has_anthropic_key(&cfg);
+    let anthropic = AnthropicPool {
+        configured: anthropic_configured,
+        everyday_model: anthropic_configured.then(|| {
+            s.api_llm.as_ref().map(|p| p.model_id()).unwrap_or_else(|| {
+                cfg.routine_model
+                    .clone()
+                    .unwrap_or_else(|| wenlan_core::llm_provider::DEFAULT_ROUTINE_MODEL.to_string())
+            })
+        }),
+        synthesis_model: anthropic_configured.then(|| {
+            s.synthesis_llm
+                .as_ref()
+                .map(|p| p.model_id())
+                .unwrap_or_else(|| {
+                    cfg.synthesis_model
+                        .clone()
+                        .unwrap_or_else(|| "claude-sonnet-4-6".to_string())
+                })
+        }),
+    };
+    let external = match (&cfg.external_llm_endpoint, &cfg.external_llm_model) {
+        (Some(endpoint), Some(model)) if !endpoint.is_empty() && !model.is_empty() => {
+            Some(ExternalPool {
+                endpoint: endpoint.clone(),
+                model: model.clone(),
+            })
+        }
+        _ => None,
+    };
+    let selected = cfg.on_device_model.as_deref().map(|id| {
+        on_device_models::resolve_or_default(Some(id))
+            .id
+            .to_string()
+    });
+    let on_device = if selected.is_some() || s.loaded_on_device_model.is_some() || s.llm.is_some() {
+        Some(OnDevicePool {
+            selected,
+            loaded: s.loaded_on_device_model.is_some(),
+        })
+    } else {
+        None
+    };
+
+    Ok(Json(ResolvedRoutingResponse {
+        everyday,
+        synthesis,
+        pool: RoutingPool {
+            anthropic,
+            external,
+            on_device,
+        },
+    }))
+}
+
 /// PUT /api/setup/anthropic-key — save and hot-load the Anthropic provider.
 pub async fn handle_set_anthropic_key(
     State(state): State<SharedState>,
@@ -501,6 +634,90 @@ mod setup_status_tests {
         let body = response_json(resp).await;
         assert_eq!(body["external_llm"]["configured"], true);
         assert_eq!(body["external_llm"]["loaded"], true);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_defaults_to_basic_and_none() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["everyday"]["source"], "basic");
+        assert_eq!(body["everyday"]["model"], Value::Null);
+        assert_eq!(body["synthesis"]["source"], "none");
+        assert_eq!(body["pool"]["anthropic"]["configured"], false);
+        assert_eq!(body["pool"]["anthropic"]["everyday_model"], Value::Null);
+        assert_eq!(body["pool"]["external"], Value::Null);
+        assert_eq!(body["pool"]["on_device"], Value::Null);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_reflects_external_provider_and_omits_keys() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        // Hot-swap an external provider via PUT /api/config, including a key.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"external_llm_endpoint":"http://localhost:11434/v1","external_llm_model":"llama3","external_llm_api_key":"sk-secret-should-not-leak"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        // No Anthropic key: external now serves everyday (the un-trap) AND synthesis.
+        assert_eq!(body["everyday"]["source"], "external");
+        assert_eq!(body["everyday"]["model"], "llama3");
+        assert_eq!(body["synthesis"]["source"], "external");
+        assert_eq!(body["pool"]["anthropic"]["configured"], false);
+        assert_eq!(
+            body["pool"]["external"]["endpoint"],
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(body["pool"]["external"]["model"], "llama3");
+        // The API key must never appear anywhere in the response.
+        assert!(!serde_json::to_string(&body).unwrap().contains("sk-secret"));
     }
 
     /// Divergence case: config on disk has endpoint+model set (so `configured`

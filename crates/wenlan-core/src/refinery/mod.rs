@@ -72,6 +72,143 @@ fn on_device_compile_preferred() -> bool {
         .unwrap_or(false)
 }
 
+/// Which slot serves everyday (recap, extraction, bulk-enrich) inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EverydaySource {
+    Anthropic,
+    External,
+    OnDevice,
+    Basic,
+}
+
+impl EverydaySource {
+    /// snake_case label for the resolved-routing endpoint.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EverydaySource::Anthropic => "anthropic",
+            EverydaySource::External => "external",
+            EverydaySource::OnDevice => "on_device",
+            EverydaySource::Basic => "basic",
+        }
+    }
+}
+
+/// Resolved everyday route: the chosen provider plus the source that named it.
+pub struct EverydayRoute<'a> {
+    pub source: EverydaySource,
+    pub llm: Option<&'a Arc<dyn LlmProvider>>,
+}
+
+/// Resolve the everyday inference chain: Anthropic (api) → external → on-device.
+///
+/// Single source of truth for everyday routing. Both the refinery phases
+/// (recap, entity extraction) and the resolved-routing endpoint derive from
+/// this one function so display and behavior cannot drift. The order is
+/// deliberate: a provider the user connected (`external_llm`) outranks the
+/// built-in on-device model, but Anthropic — when a key is configured — stays
+/// first (fastest, most accurate for routine JSON/title work).
+pub fn everyday_llm<'a>(
+    api_llm: Option<&'a Arc<dyn LlmProvider>>,
+    external_llm: Option<&'a Arc<dyn LlmProvider>>,
+    on_device: Option<&'a Arc<dyn LlmProvider>>,
+) -> EverydayRoute<'a> {
+    if let Some(llm) = api_llm {
+        EverydayRoute {
+            source: EverydaySource::Anthropic,
+            llm: Some(llm),
+        }
+    } else if let Some(llm) = external_llm {
+        EverydayRoute {
+            source: EverydaySource::External,
+            llm: Some(llm),
+        }
+    } else if let Some(llm) = on_device {
+        EverydayRoute {
+            source: EverydaySource::OnDevice,
+            llm: Some(llm),
+        }
+    } else {
+        EverydayRoute {
+            source: EverydaySource::Basic,
+            llm: None,
+        }
+    }
+}
+
+/// Which slot serves synthesis (page distillation / emergence) inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SynthesisSource {
+    Anthropic,
+    External,
+    OnDevice,
+    None,
+}
+
+impl SynthesisSource {
+    /// snake_case label for the resolved-routing endpoint.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SynthesisSource::Anthropic => "anthropic",
+            SynthesisSource::External => "external",
+            SynthesisSource::OnDevice => "on_device",
+            SynthesisSource::None => "none",
+        }
+    }
+}
+
+/// Resolved synthesis route: the chosen provider plus the source that named it.
+pub struct SynthesisRoute<'a> {
+    pub source: SynthesisSource,
+    pub llm: Option<&'a Arc<dyn LlmProvider>>,
+}
+
+/// Resolve the synthesis (compile) route for display purposes.
+///
+/// Mirrors the Emergence phase compile routing in
+/// [`run_periodic_steep_with_api`]: prefer any cloud (Api-backed) slot in
+/// `synthesis → api → external` order, otherwise the on-device slot iff the
+/// compile gate (`WENLAN_PREFER_ON_DEVICE_COMPILE`) is set and it is available,
+/// otherwise nothing. On-device is only reachable via the gate branch because
+/// every on-device provider is `OnDevice`-backed, matching the phase for all
+/// real slot configurations. The phase itself is deliberately left inline; this
+/// function exists so the endpoint reflects the same policy without re-deriving
+/// it in the app, and the unit tests lock the two together.
+pub fn synthesis_route<'a>(
+    synthesis_llm: Option<&'a Arc<dyn LlmProvider>>,
+    api_llm: Option<&'a Arc<dyn LlmProvider>>,
+    external_llm: Option<&'a Arc<dyn LlmProvider>>,
+    on_device: Option<&'a Arc<dyn LlmProvider>>,
+) -> SynthesisRoute<'a> {
+    let cloud = [
+        (SynthesisSource::Anthropic, synthesis_llm),
+        (SynthesisSource::Anthropic, api_llm),
+        (SynthesisSource::External, external_llm),
+    ]
+    .into_iter()
+    .find_map(|(source, slot)| {
+        slot.filter(|provider| matches!(provider.backend(), LlmBackend::Api))
+            .map(|provider| (source, provider))
+    });
+    if let Some((source, llm)) = cloud {
+        return SynthesisRoute {
+            source,
+            llm: Some(llm),
+        };
+    }
+    if on_device_compile_preferred() {
+        if let Some(llm) = on_device.filter(|provider| provider.is_available()) {
+            return SynthesisRoute {
+                source: SynthesisSource::OnDevice,
+                llm: Some(llm),
+            };
+        }
+    }
+    SynthesisRoute {
+        source: SynthesisSource::None,
+        llm: None,
+    }
+}
+
 /// What triggered a refinery cycle. Different triggers run different subsets
 /// of phases — the goal is to do the right work at the right time.
 ///
@@ -366,8 +503,8 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 2: Recap generation (prefer API LLM for title generation)
-    let recap_llm = api_llm.or(llm);
+    // Phase 2: Recap generation (everyday chain: Anthropic → external → on-device)
+    let recap_llm = everyday_llm(api_llm, external_llm, llm).llm;
     if trigger.runs_phase(Phase::Recaps) {
         let phase = run_phase(Phase::Recaps, || async {
             let generated =
@@ -449,8 +586,9 @@ pub async fn run_periodic_steep_with_api(
         phases.push(phase);
     }
 
-    // Phase 5: Entity extraction — prefer API LLM (better JSON accuracy), fall back to on-device
-    let extract_llm = api_llm.or(llm);
+    // Phase 5: Entity extraction — everyday chain (Anthropic → external → on-device);
+    // Anthropic first for better JSON accuracy, external before the built-in 4B.
+    let extract_llm = everyday_llm(api_llm, external_llm, llm).llm;
     if trigger.runs_phase(Phase::EntityExtraction)
         && {
             let elapsed = steep_start.elapsed().as_secs();
@@ -1280,6 +1418,120 @@ pub struct SteepResult {
 mod tests {
     use super::*;
     use crate::db::tests::{test_db, EVICT_ENV_LOCK};
+
+    /// Minimal provider for routing-resolution tests: reports a fixed backend
+    /// and model id; `generate` is never exercised by the pure route helpers.
+    struct RouteTestProvider {
+        backend: LlmBackend,
+        model: &'static str,
+    }
+
+    impl RouteTestProvider {
+        fn arc(backend: LlmBackend, model: &'static str) -> Arc<dyn LlmProvider> {
+            Arc::new(Self { backend, model })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RouteTestProvider {
+        async fn generate(
+            &self,
+            _request: crate::llm_provider::LlmRequest,
+        ) -> Result<String, crate::llm_provider::LlmError> {
+            unreachable!("route helpers never call generate()")
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            self.model
+        }
+        fn backend(&self) -> LlmBackend {
+            self.backend
+        }
+        fn model_id(&self) -> String {
+            self.model.to_string()
+        }
+    }
+
+    #[test]
+    fn everyday_prefers_anthropic_over_external_and_on_device() {
+        let api = RouteTestProvider::arc(LlmBackend::Api, "claude-haiku");
+        let ext = RouteTestProvider::arc(LlmBackend::Api, "ollama-llama3");
+        let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+        let route = everyday_llm(Some(&api), Some(&ext), Some(&dev));
+        assert_eq!(route.source, EverydaySource::Anthropic);
+        assert_eq!(route.llm.unwrap().model_id(), "claude-haiku");
+    }
+
+    #[test]
+    fn everyday_uses_external_when_no_anthropic() {
+        // The un-trap: a connected external provider now serves everyday work
+        // instead of falling through to the on-device model.
+        let ext = RouteTestProvider::arc(LlmBackend::Api, "ollama-llama3");
+        let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+        let route = everyday_llm(None, Some(&ext), Some(&dev));
+        assert_eq!(route.source, EverydaySource::External);
+        assert_eq!(route.llm.unwrap().model_id(), "ollama-llama3");
+    }
+
+    #[test]
+    fn everyday_falls_to_on_device_then_basic() {
+        let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+        let route = everyday_llm(None, None, Some(&dev));
+        assert_eq!(route.source, EverydaySource::OnDevice);
+        assert_eq!(route.llm.unwrap().model_id(), "qwen3-4b");
+
+        let none = everyday_llm(None, None, None);
+        assert_eq!(none.source, EverydaySource::Basic);
+        assert!(none.llm.is_none());
+    }
+
+    #[test]
+    fn synthesis_prefers_anthropic_then_external() {
+        let synth = RouteTestProvider::arc(LlmBackend::Api, "claude-sonnet");
+        let api = RouteTestProvider::arc(LlmBackend::Api, "claude-haiku");
+        let ext = RouteTestProvider::arc(LlmBackend::Api, "ollama-llama3");
+
+        // anthropic-only
+        let r = synthesis_route(Some(&synth), Some(&api), None, None);
+        assert_eq!(r.source, SynthesisSource::Anthropic);
+        assert_eq!(r.llm.unwrap().model_id(), "claude-sonnet");
+
+        // anthropic + external → anthropic (synthesis slot wins)
+        let r = synthesis_route(Some(&synth), Some(&api), Some(&ext), None);
+        assert_eq!(r.source, SynthesisSource::Anthropic);
+
+        // external-only → external
+        let r = synthesis_route(None, None, Some(&ext), None);
+        assert_eq!(r.source, SynthesisSource::External);
+        assert_eq!(r.llm.unwrap().model_id(), "ollama-llama3");
+    }
+
+    #[test]
+    fn synthesis_on_device_honors_compile_gate() {
+        let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+
+        // Gate OFF (default): on-device-only synthesis resolves to none.
+        let r = temp_env::with_var("WENLAN_PREFER_ON_DEVICE_COMPILE", None::<&str>, || {
+            let r = synthesis_route(None, None, None, Some(&dev));
+            (r.source, r.llm.map(|l| l.model_id()))
+        });
+        assert_eq!(r.0, SynthesisSource::None);
+        assert!(r.1.is_none());
+
+        // Gate ON: on-device becomes the synthesis provider.
+        let r = temp_env::with_var("WENLAN_PREFER_ON_DEVICE_COMPILE", Some("1"), || {
+            let r = synthesis_route(None, None, None, Some(&dev));
+            (r.source, r.llm.map(|l| l.model_id()))
+        });
+        assert_eq!(r.0, SynthesisSource::OnDevice);
+        assert_eq!(r.1.as_deref(), Some("qwen3-4b"));
+
+        // No cloud, no on-device → none regardless of gate.
+        let r = synthesis_route(None, None, None, None);
+        assert_eq!(r.source, SynthesisSource::None);
+    }
 
     struct RecordingDistillProvider {
         prompts: std::sync::Mutex<Vec<String>>,

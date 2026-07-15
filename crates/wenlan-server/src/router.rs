@@ -286,6 +286,10 @@ pub fn build_router(state: SharedState) -> AppRouter {
             "/api/config/skip-apps",
             get(config_routes::handle_get_skip_apps).put(config_routes::handle_update_skip_apps),
         )
+        .route(
+            "/api/config/routing",
+            get(config_routes::handle_get_resolved_routing),
+        )
         // Setup status + provider key management
         .route(
             "/api/setup/status",
