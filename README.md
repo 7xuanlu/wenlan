@@ -179,6 +179,23 @@ A document, an older conversation, and a new agent decision can all support the 
 
 ## How it works
 
+The same loop runs every session: capture while you work, let Wenlan refine between sessions, and return with current knowledge already in context.
+
+```text
+      ┌──────── loops back · /handoff closes each pass ─────────┐
+      ▼                                                         │
+┌─────┴─────┐    ┌─────────────┐    ┌────────────────┐    ┌─────┴─────┐
+│ CAPTURE   │    │ DAEMON      │    │ ONE STORE      │    │ RECALL +  │
+│  in flow  │ ─▶ │  refines    │ ─▶ │  (local)       │ ─▶ │  BRIEF    │
+│  /capture │    │  between    │    │  · memories    │    │  next     │
+│           │    │  sessions   │    │  · wiki pages  │    │  session  │
+│           │    │  dedup·link │    │  · graph       │    │  /recall  │
+│           │    │  /distill   │    │                │    │  /brief   │
+└───────────┘    └─────────────┘    └────────────────┘    └───────────┘
+   one local daemon · one store · every MCP client reads it
+   Claude Code · Cursor · Codex · Claude Desktop · VS Code · Gemini
+```
+
 Four public workflows drive the system:
 
 1. **Start with context.** `/brief [topic]` loads project status, preferences, and relevant knowledge. MCP-only clients call `context` for the same purpose.
