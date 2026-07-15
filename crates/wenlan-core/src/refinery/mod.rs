@@ -173,9 +173,9 @@ impl SynthesisSource {
     }
 
     /// Parse a config `synthesis_source` pin. `None` (the "nothing resolved"
-    /// label) is not a pinnable source. `on_device` is only meaningful behind
-    /// the compile gate; PATCH validation rejects it otherwise, and
-    /// [`resolve_synthesis`] re-checks the gate at resolution time.
+    /// label) is not a pinnable source. `on_device` is a first-class pin — it
+    /// carries no capability restriction; the compile gate affects only the
+    /// unpinned auto chain.
     pub fn parse(s: Option<&str>) -> Option<Self> {
         match s {
             Some("anthropic") => Some(SynthesisSource::Anthropic),
@@ -323,9 +323,10 @@ pub struct SynthesisResolution<'a> {
 ///
 /// The `anthropic` pin maps to the dedicated synthesis slot when present, else
 /// the routine Anthropic slot (both are the Anthropic source). The `on_device`
-/// pin is honored only behind the compile gate AND when the slot is available,
-/// mirroring [`synthesis_route`]'s own on-device branch. A pinned-but-
-/// unavailable source degrades to the [`synthesis_route`] auto chain.
+/// pin is honored whenever the on-device slot is present — pins carry no
+/// capability restriction, symmetric with [`resolve_everyday`]; the compile
+/// gate governs only the unpinned auto chain in [`synthesis_route`]. A pinned-
+/// but-unavailable source degrades to the [`synthesis_route`] auto chain.
 pub fn resolve_synthesis<'a>(
     pin: Option<SynthesisSource>,
     synthesis_llm: Option<&'a Arc<dyn LlmProvider>>,
@@ -337,13 +338,7 @@ pub fn resolve_synthesis<'a>(
         let slot = match pinned {
             SynthesisSource::Anthropic => synthesis_llm.or(api_llm),
             SynthesisSource::External => external_llm,
-            SynthesisSource::OnDevice => {
-                if on_device_compile_preferred() {
-                    on_device.filter(|provider| provider.is_available())
-                } else {
-                    None
-                }
-            }
+            SynthesisSource::OnDevice => on_device,
             SynthesisSource::None => None,
         };
         if let Some(llm) = slot {
@@ -1748,41 +1743,40 @@ mod tests {
     }
 
     #[test]
-    fn resolve_synthesis_pin_on_device_requires_gate() {
+    fn resolve_synthesis_pin_on_device_while_anthropic_configured() {
+        // THE headline: synthesis pinned to on-device even though an Anthropic
+        // slot is configured. The pin is honored with no compile gate — pins
+        // carry no capability restriction (symmetric with everyday).
         let synth = RouteTestProvider::arc(LlmBackend::Api, "claude-sonnet");
+        let api = RouteTestProvider::arc(LlmBackend::Api, "claude-haiku");
         let dev = RouteTestProvider::arc(LlmBackend::OnDevice, "qwen3-4b");
+        let r = resolve_synthesis(
+            Some(SynthesisSource::OnDevice),
+            Some(&synth),
+            Some(&api),
+            None,
+            Some(&dev),
+        );
+        assert_eq!(r.source, SynthesisSource::OnDevice);
+        assert_eq!(r.mode, RouteMode::Pinned);
+        assert_eq!(r.llm.unwrap().model_id(), "qwen3-4b");
+    }
 
-        // Gate OFF: the on-device pin can't be honored → degrades to the auto
-        // chain (the Anthropic synthesis slot).
-        let (source, mode, model) =
-            temp_env::with_var("WENLAN_PREFER_ON_DEVICE_COMPILE", None::<&str>, || {
-                let r = resolve_synthesis(
-                    Some(SynthesisSource::OnDevice),
-                    Some(&synth),
-                    None,
-                    None,
-                    Some(&dev),
-                );
-                (r.source, r.mode, r.llm.map(|l| l.model_id()))
-            });
-        assert_eq!(source, SynthesisSource::Anthropic);
-        assert_eq!(mode, RouteMode::PinnedDegraded);
-        assert_eq!(model.as_deref(), Some("claude-sonnet"));
-
-        // Gate ON: the on-device pin is honored.
-        let (source, mode) =
-            temp_env::with_var("WENLAN_PREFER_ON_DEVICE_COMPILE", Some("1"), || {
-                let r = resolve_synthesis(
-                    Some(SynthesisSource::OnDevice),
-                    Some(&synth),
-                    None,
-                    None,
-                    Some(&dev),
-                );
-                (r.source, r.mode)
-            });
-        assert_eq!(source, SynthesisSource::OnDevice);
-        assert_eq!(mode, RouteMode::Pinned);
+    #[test]
+    fn resolve_synthesis_pin_on_device_absent_degrades_to_auto() {
+        // Pinned to on-device but no on-device slot loaded → the synthesis auto
+        // chain runs (the Anthropic slot here) and the mode reports the degrade.
+        let synth = RouteTestProvider::arc(LlmBackend::Api, "claude-sonnet");
+        let r = resolve_synthesis(
+            Some(SynthesisSource::OnDevice),
+            Some(&synth),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(r.source, SynthesisSource::Anthropic);
+        assert_eq!(r.mode, RouteMode::PinnedDegraded);
+        assert_eq!(r.llm.unwrap().model_id(), "claude-sonnet");
     }
 
     #[test]
@@ -1797,6 +1791,10 @@ mod tests {
         assert_eq!(
             SynthesisSource::parse(Some("external")),
             Some(SynthesisSource::External)
+        );
+        assert_eq!(
+            SynthesisSource::parse(Some("on_device")),
+            Some(SynthesisSource::OnDevice)
         );
         assert_eq!(SynthesisSource::parse(Some("none")), None); // not pinnable
     }

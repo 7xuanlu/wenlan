@@ -208,21 +208,16 @@ fn validate_everyday_source(v: &str) -> Result<Option<String>, ServerError> {
     }
 }
 
-/// Validate a `synthesis_source` PATCH value. `""` clears; `on_device` is only
-/// accepted behind the compile gate (on-device synthesis is slow/low quality);
-/// anything else is a 4xx.
+/// Validate a `synthesis_source` PATCH value. `""` clears; a known source
+/// stores; anything else is a 4xx. Pins carry no capability restriction —
+/// on-device is a first-class synthesis pin, and the
+/// `WENLAN_PREFER_ON_DEVICE_COMPILE` gate governs only the unpinned auto chain.
 fn validate_synthesis_source(v: &str) -> Result<Option<String>, ServerError> {
     match v {
         "" => Ok(None),
-        "anthropic" | "external" => Ok(Some(v.to_string())),
-        "on_device" if wenlan_core::refinery::on_device_compile_preferred() => {
-            Ok(Some(v.to_string()))
-        }
-        "on_device" => Err(ServerError::ValidationError(
-            "synthesis_source 'on_device' requires WENLAN_PREFER_ON_DEVICE_COMPILE".to_string(),
-        )),
+        "anthropic" | "external" | "on_device" => Ok(Some(v.to_string())),
         other => Err(ServerError::ValidationError(format!(
-            "invalid synthesis_source '{other}' (expected anthropic | external)"
+            "invalid synthesis_source '{other}' (expected anthropic | external | on_device)"
         ))),
     }
 }
@@ -896,6 +891,78 @@ mod setup_status_tests {
         assert_eq!(body["synthesis"]["pin"], Value::Null);
     }
 
+    /// Synthesis counterpart of the headline: pinned to on-device while an
+    /// Anthropic key is configured. Proves GET /api/config/routing reports
+    /// on_device for synthesis with no compile gate.
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_honors_synthesis_on_device_pin() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+
+        // Seed an Anthropic key so the pool reports it configured.
+        let mut cfg = config::load_config();
+        cfg.anthropic_api_key = Some("sk-ant-test-key".to_string());
+        config::save_config(&cfg).unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        {
+            let mut s = state.write().await;
+            s.llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::OnDevice,
+                model: "qwen3-4b",
+            }));
+            s.loaded_on_device_model = Some("qwen3-4b".to_string());
+            s.api_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-haiku",
+            }));
+            s.synthesis_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-sonnet",
+            }));
+        }
+        let app = crate::router::build_router(state.clone());
+
+        // Pin synthesis to on-device through the real PATCH route.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"synthesis_source":"on_device"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        // Synthesis follows the pin to on-device even though Anthropic is present.
+        assert_eq!(body["synthesis"]["source"], "on_device");
+        assert_eq!(body["synthesis"]["mode"], "pinned");
+        assert_eq!(body["synthesis"]["model"], "qwen3-4b");
+        assert_eq!(body["synthesis"]["pin"], "on_device");
+        // Anthropic is still configured; everyday is unpinned (auto chain).
+        assert_eq!(body["pool"]["anthropic"]["configured"], true);
+        assert_eq!(body["everyday"]["pin"], Value::Null);
+    }
+
     /// Divergence case: config on disk has endpoint+model set (so `configured`
     /// is true), but ServerState was built fresh — never hot-swapped by a PUT
     /// /api/config call — so `external_llm` in state is still `None`
@@ -1305,21 +1372,25 @@ mod external_llm_lifecycle_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn patch_rejects_synthesis_on_device_without_compile_gate() {
+    async fn patch_accepts_synthesis_on_device_pin() {
         let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
         let _env = DataDirGuard::new();
-        // The compile gate is unset by default in this test binary, so on-device
-        // synthesis is rejected and nothing persists.
+        // On-device synthesis is a first-class pin — accepted and persisted even
+        // with the compile gate unset (the gate governs only the auto chain).
         std::env::remove_var("WENLAN_PREFER_ON_DEVICE_COMPILE");
         let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
 
-        let (status, _) =
+        let (status, body) =
             put_config(&app, serde_json::json!({"synthesis_source": "on_device"})).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(config::load_config().synthesis_source.is_none());
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            config::load_config().synthesis_source.as_deref(),
+            Some("on_device")
+        );
+        assert_eq!(body["synthesis_source"], "on_device");
     }
 }
