@@ -107,6 +107,10 @@ CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 ## What is this?
 
+<p align="center">
+  <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
+</p>
+
 Wenlan is a local-first llm-wiki with two connected layers: evidence you can inspect and a maintained wiki that compounds over time.
 
 ### Evidence you can inspect
@@ -136,10 +140,6 @@ A generated wiki is a snapshot. Wenlan treats it as a maintained knowledge syste
 For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one article that cites both. If either source changes, the article can refresh; if you have edited it, the proposed update waits for review.
 
 This is what Wenlan means by llm-wiki v2: evidence and articles keep improving together, rather than stopping after a one-off generation.
-
-<p align="center">
-  <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
-</p>
 
 ---
 

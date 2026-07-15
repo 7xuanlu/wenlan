@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=50a4eb96bb4a924a7199bffb0d7fbc893ff2ba02ae67424774b32a418105684d -->
+<!-- README_SYNC: source=README.md sha256=2fc14ca626575e9b4d41fc4fe06e56fafe958ce60a9d1d32e82b27426b1d61cd -->
 
 <p align="center">
   <picture>
@@ -109,6 +109,10 @@ CLI 详细说明：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
 
 ## 这是什么？
 
+<p align="center">
+  <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel，展示有来源支撑的页面、来源检查、graph context、agent capture 与 curation。" width="100%">
+</p>
+
 Wenlan 是一套 local-first llm-wiki，由两个相连的知识层构成：可检查的证据，以及会随时间持续积累的 wiki。
 
 ### 随时可查的证据
@@ -138,10 +142,6 @@ Wenlan 把相关证据汇总成带有来源引用的 Markdown 页面。即使换
 例如，导入一份设计文档，再让 Codex 捕获一次调试决策。Wenlan 可以把两者整理成一篇同时引用两份证据的文章。任一来源变化时，文章可以刷新；如果你已经编辑过文章，更新提案会等待审核。
 
 这就是 Wenlan 所说的 llm-wiki v2：证据与文章会一起持续改善，而不是生成一次就停止。
-
-<p align="center">
-  <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel，展示有来源支撑的页面、来源检查、graph context、agent capture 与 curation。" width="100%">
-</p>
 
 ---
 
