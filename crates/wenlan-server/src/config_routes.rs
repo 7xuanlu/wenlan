@@ -30,6 +30,8 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
             .as_deref()
             .map(|k| !k.trim().is_empty())
             .unwrap_or(false),
+        everyday_source: cfg.everyday_source.clone(),
+        synthesis_source: cfg.synthesis_source.clone(),
     }
 }
 
@@ -293,6 +295,7 @@ pub async fn handle_get_setup_status(
 /// how it was chosen.
 #[derive(Debug, Serialize)]
 pub struct JobRoute {
+    /// The RESOLVED source that serves this job.
     /// everyday: "anthropic" | "external" | "on_device" | "basic";
     /// synthesis: "anthropic" | "external" | "on_device" | "none".
     pub source: String,
@@ -300,6 +303,12 @@ pub struct JobRoute {
     /// "pinned" (explicit source pin honored), "pinned_degraded" (pin set but
     /// its source was unavailable, so the auto chain ran), or "auto" (no pin).
     pub mode: String,
+    /// The raw configured source pin for this job, or `null` when unpinned.
+    /// Distinct from `source` (the RESOLVED source): on a `pinned_degraded`
+    /// result the two differ, letting the app say "Pinned to X — using Y".
+    /// everyday: "anthropic" | "external" | "on_device"; synthesis: "anthropic"
+    /// | "external".
+    pub pin: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -359,6 +368,7 @@ pub async fn handle_get_resolved_routing(
         source: everyday_route.source.as_str().to_string(),
         model: everyday_route.llm.map(|p| p.model_id()),
         mode: everyday_route.mode.as_str().to_string(),
+        pin: cfg.everyday_source.clone(),
     };
     let synthesis_pin =
         wenlan_core::refinery::SynthesisSource::parse(cfg.synthesis_source.as_deref());
@@ -373,6 +383,7 @@ pub async fn handle_get_resolved_routing(
         source: synth_route.source.as_str().to_string(),
         model: synth_route.llm.map(|p| p.model_id()),
         mode: synth_route.mode.as_str().to_string(),
+        pin: cfg.synthesis_source.clone(),
     };
 
     // Pool — the configuration view (what each lane WOULD use). Anthropic model
@@ -743,8 +754,11 @@ mod setup_status_tests {
         assert_eq!(body["everyday"]["source"], "basic");
         assert_eq!(body["everyday"]["model"], Value::Null);
         assert_eq!(body["everyday"]["mode"], "auto");
+        // No pins configured → pin is null on both jobs (present key, null value).
+        assert_eq!(body["everyday"]["pin"], Value::Null);
         assert_eq!(body["synthesis"]["source"], "none");
         assert_eq!(body["synthesis"]["mode"], "auto");
+        assert_eq!(body["synthesis"]["pin"], Value::Null);
         assert_eq!(body["pool"]["anthropic"]["configured"], false);
         assert_eq!(body["pool"]["anthropic"]["everyday_model"], Value::Null);
         assert_eq!(body["pool"]["external"], Value::Null);
@@ -873,10 +887,13 @@ mod setup_status_tests {
         assert_eq!(body["everyday"]["source"], "on_device");
         assert_eq!(body["everyday"]["mode"], "pinned");
         assert_eq!(body["everyday"]["model"], "qwen3-4b");
+        // The raw pin is echoed alongside the resolved source.
+        assert_eq!(body["everyday"]["pin"], "on_device");
         // Anthropic is still configured and still serves synthesis (no pin there).
         assert_eq!(body["pool"]["anthropic"]["configured"], true);
         assert_eq!(body["synthesis"]["source"], "anthropic");
         assert_eq!(body["synthesis"]["mode"], "auto");
+        assert_eq!(body["synthesis"]["pin"], Value::Null);
     }
 
     /// Divergence case: config on disk has endpoint+model set (so `configured`
@@ -1164,6 +1181,21 @@ mod external_llm_lifecycle_tests {
         (status, response_json(resp).await)
     }
 
+    async fn get_config(app: &crate::router::AppRouter) -> Value {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response_json(resp).await
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn external_key_lifecycle_and_hot_swap() {
         let _lock = crate::TEST_DATA_DIR_LOCK
@@ -1240,7 +1272,7 @@ mod external_llm_lifecycle_tests {
 
         // Valid pins persist. No vendor is privileged — on_device is a first-
         // class everyday pin.
-        let (status, _) = put_config(
+        let (status, body) = put_config(
             &app,
             serde_json::json!({"everyday_source": "on_device", "synthesis_source": "external"}),
         )
@@ -1249,11 +1281,22 @@ mod external_llm_lifecycle_tests {
         let cfg = config::load_config();
         assert_eq!(cfg.everyday_source.as_deref(), Some("on_device"));
         assert_eq!(cfg.synthesis_source.as_deref(), Some("external"));
+        // The PUT response (ConfigResponse) echoes the stored pins.
+        assert_eq!(body["everyday_source"], "on_device");
+        assert_eq!(body["synthesis_source"], "external");
 
-        // Empty string clears a pin.
+        // GET /api/config also echoes the pins (the app reads them here).
+        let cfg_body = get_config(&app).await;
+        assert_eq!(cfg_body["everyday_source"], "on_device");
+        assert_eq!(cfg_body["synthesis_source"], "external");
+
+        // Empty string clears a pin — the cleared pin reads null via GET.
         let (status, _) = put_config(&app, serde_json::json!({"everyday_source": ""})).await;
         assert_eq!(status, StatusCode::OK);
         assert!(config::load_config().everyday_source.is_none());
+        let cfg_body = get_config(&app).await;
+        assert_eq!(cfg_body["everyday_source"], Value::Null);
+        assert_eq!(cfg_body["synthesis_source"], "external");
 
         // Unknown value is a 4xx and does not persist.
         let (status, _) = put_config(&app, serde_json::json!({"everyday_source": "gpt4"})).await;
