@@ -7,7 +7,7 @@
 
 Useful work with AI shouldn't disappear when a conversation ends.
 
-Wenlan brings scattered documents, notes, and AI conversations into one wiki that stays current. Important knowledge can be used again across your AI tools, and you can always see where it came from. Wenlan handles routine organization and updates; it involves you only when judgment is needed, such as when sources disagree or your own writing would change.
+Wenlan builds the right pages and keeps them current as sources change, asking only when judgment is needed.
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a>
@@ -111,7 +111,9 @@ CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
   <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
 </p>
 
-Wenlan is a local-first llm-wiki with two connected layers: evidence you can inspect and a maintained wiki that compounds over time.
+Wenlan brings scattered documents, notes, and AI conversations into one local-first knowledge base. This is llm-wiki v2: two connected layers, evidence you can inspect and a maintained wiki that compounds over time.
+
+Knowledge can return across your AI tools without losing its sources. Wenlan handles routine organization and updates in the background; only conflicting sources and proposed changes to your own writing wait for your judgment.
 
 ### Evidence you can inspect
 

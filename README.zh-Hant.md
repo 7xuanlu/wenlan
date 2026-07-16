@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=39d5f12fd6ae2ff279e83081008847c3a3bd25a48784ca53f91354bae7b38a1e -->
+<!-- README_SYNC: source=README.md sha256=e83d5bdc07a08743e44032489a3792122fec2e3adf026c0c9d00d9c60b6e878a -->
 
 <p align="center">
   <picture>
@@ -9,7 +9,7 @@
 
 和 AI 聊出的成果，不該在對話結束後消失。
 
-Wenlan 會把散落的文件、筆記和 AI 對話整理成同一套持續更新的 wiki。重要知識能在不同 AI 工具裡再次派上用場，來源也隨時可查。平常的整理和更新由 Wenlan 處理；只有需要你判斷時才會請你介入，例如來源彼此矛盾，或需要改動你親自寫的內容。
+Wenlan 會建立真正需要的頁面，並在來源變動時讓它們保持最新；只有需要判斷時才找你。
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | 繁體中文
@@ -113,7 +113,9 @@ CLI 詳細說明：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
   <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel，展示有來源支撐的頁面、來源檢查、graph context、agent capture 與 curation。" width="100%">
 </p>
 
-Wenlan 是一套 local-first llm-wiki，由兩個相連的知識層構成：可檢查的證據，以及會隨時間持續累積的 wiki。
+Wenlan 把散落的文件、筆記和 AI 對話匯入同一個 local-first 知識庫。這就是 llm-wiki v2：兩個相連的知識層，一層是隨時可查的證據，另一層是會隨時間持續累積的 wiki。
+
+知識可以在不同 AI 工具裡再次派上用場，又不會失去來源。日常整理和更新由 Wenlan 在背景處理；只有來源彼此矛盾，或需要修改你親自寫的內容時，才會等你判斷。
 
 ### 隨時可查的證據
 
