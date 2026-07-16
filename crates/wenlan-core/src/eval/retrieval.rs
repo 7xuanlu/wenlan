@@ -6,6 +6,7 @@ use crate::error::WenlanError;
 use crate::eval::fixtures::load_fixtures;
 use crate::eval::metrics;
 use crate::events::NoopEmitter;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use crate::tuning::ConfidenceConfig;
 use serde::{Deserialize, Serialize};
@@ -429,12 +430,17 @@ pub async fn run_quality_cost_eval(
 
             let (context_tokens, ndcg, mrr_score, recall5) = match strategy {
                 SearchStrategy::Wenlan => {
+                    let scope = match case.space.as_deref() {
+                        None => ReadScope::Global,
+                        Some("uncategorized") => ReadScope::Uncategorized,
+                        Some(space) => ReadScope::Space(space.to_string()),
+                    };
                     let results = db
                         .search_memory(
                             &case.query,
                             limit,
                             None,
-                            case.space.as_deref(),
+                            &scope,
                             None,
                             Some(1.0), // neutralize confirmation boost — fixture bias
                             Some(1.0), // neutralize recap penalty — fixture bias
@@ -712,12 +718,17 @@ pub async fn run_multi_turn_eval(
         let query = &query_case.query;
 
         // Wenlan: fresh retrieval each turn — constant cost.
+        let scope = match best_case.space.as_deref() {
+            None => ReadScope::Global,
+            Some("uncategorized") => ReadScope::Uncategorized,
+            Some(space) => ReadScope::Space(space.to_string()),
+        };
         let results = db
             .search_memory(
                 query,
                 limit,
                 None,
-                best_case.space.as_deref(),
+                &scope,
                 None,
                 Some(1.0), // neutralize confirmation boost
                 Some(1.0), // neutralize recap penalty
@@ -809,12 +820,17 @@ pub async fn run_native_memory_augmentation(
             .collect();
         db.upsert_documents(all_docs).await?;
 
+        let scope = match case.space.as_deref() {
+            None => ReadScope::Global,
+            Some("uncategorized") => ReadScope::Uncategorized,
+            Some(space) => ReadScope::Space(space.to_string()),
+        };
         let results = db
             .search_memory(
                 &case.query,
                 limit,
                 None,
-                case.space.as_deref(),
+                &scope,
                 None,
                 Some(1.0), // neutralize confirmation boost
                 Some(1.0), // neutralize recap penalty
@@ -1084,12 +1100,17 @@ pub async fn run_pipeline_token_eval_simulated(
             .await?;
             db.upsert_documents(all_docs.clone()).await?;
 
+            let scope = match case.space.as_deref() {
+                None => ReadScope::Global,
+                Some("uncategorized") => ReadScope::Uncategorized,
+                Some(space) => ReadScope::Space(space.to_string()),
+            };
             let results = db
                 .search_memory(
                     &case.query,
                     limit,
                     None,
-                    case.space.as_deref(),
+                    &scope,
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -1173,12 +1194,17 @@ pub async fn run_pipeline_token_eval_simulated(
             .await?;
             db.upsert_documents(distilled_docs).await?;
 
+            let scope = match case.space.as_deref() {
+                None => ReadScope::Global,
+                Some("uncategorized") => ReadScope::Uncategorized,
+                Some(space) => ReadScope::Space(space.to_string()),
+            };
             let results = db
                 .search_memory(
                     &case.query,
                     limit,
                     None,
-                    case.space.as_deref(),
+                    &scope,
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -1264,12 +1290,17 @@ pub async fn run_pipeline_token_eval_simulated(
             .await?;
             db.upsert_documents(concept_docs).await?;
 
+            let scope = match case.space.as_deref() {
+                None => ReadScope::Global,
+                Some("uncategorized") => ReadScope::Uncategorized,
+                Some(space) => ReadScope::Space(space.to_string()),
+            };
             let results = db
                 .search_memory(
                     &case.query,
                     limit,
                     None,
-                    case.space.as_deref(),
+                    &scope,
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -1540,12 +1571,17 @@ pub async fn run_quality_at_scale_eval(
                 .collect();
 
             // Wenlan: hybrid search
+            let scope = match case.space.as_deref() {
+                None => ReadScope::Global,
+                Some("uncategorized") => ReadScope::Uncategorized,
+                Some(space) => ReadScope::Space(space.to_string()),
+            };
             let results = db
                 .search_memory(
                     &case.query,
                     limit,
                     None,
-                    case.space.as_deref(),
+                    &scope,
                     None,
                     Some(1.0), // neutralize confirmation boost — fixture bias
                     Some(1.0), // neutralize recap penalty — fixture bias
@@ -1689,12 +1725,17 @@ pub async fn run_scaling_eval(
             let replay_tokens = count_tokens(&replay_content);
 
             // Wenlan: search and count (neutralize confirmation/recap bias)
+            let scope = match case.space.as_deref() {
+                None => ReadScope::Global,
+                Some("uncategorized") => ReadScope::Uncategorized,
+                Some(space) => ReadScope::Space(space.to_string()),
+            };
             let results = db
                 .search_memory(
                     &case.query,
                     limit,
                     None,
-                    case.space.as_deref(),
+                    &scope,
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -2028,12 +2069,17 @@ pub async fn run_memory_layer_comparison(
                 .collect();
             db.upsert_documents(all_docs).await?;
 
+            let scope = match case.space.as_deref() {
+                None => ReadScope::Global,
+                Some("uncategorized") => ReadScope::Uncategorized,
+                Some(space) => ReadScope::Space(space.to_string()),
+            };
             let results = db
                 .search_memory(
                     &case.query,
                     limit,
                     None,
-                    case.space.as_deref(),
+                    &scope,
                     None,
                     Some(1.0), // neutralize confirmation boost
                     Some(1.0), // neutralize recap penalty
@@ -2686,7 +2732,7 @@ mod tests {
                         &qa.question,
                         search_limit,
                         None,
-                        None,
+                        &ReadScope::Global,
                         None,
                         None,
                         None,
@@ -2847,7 +2893,7 @@ mod tests {
                 query,
                 limit,
                 None,
-                None,
+                &ReadScope::Global,
                 None,
                 Some(1.0), // neutralize confirmation boost
                 Some(1.0), // neutralize recap penalty
@@ -3166,12 +3212,17 @@ mod tests {
 
         db_raw.upsert_documents(all_docs).await.unwrap();
 
+        let scope = match best_case.space.as_deref() {
+            None => ReadScope::Global,
+            Some("uncategorized") => ReadScope::Uncategorized,
+            Some(space) => ReadScope::Space(space.to_string()),
+        };
         let raw_results = db_raw
             .search_memory(
                 &best_case.query,
                 10,
                 None,
-                best_case.space.as_deref(),
+                &scope,
                 None,
                 Some(1.0),
                 Some(1.0),
@@ -3226,7 +3277,7 @@ mod tests {
                 &best_case.query,
                 10,
                 None,
-                best_case.space.as_deref(),
+                &scope,
                 None,
                 Some(1.0),
                 Some(1.0),

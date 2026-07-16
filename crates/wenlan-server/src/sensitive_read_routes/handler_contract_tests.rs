@@ -81,7 +81,7 @@ fn post(uri: &str, header: &str, body: &str) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn list_body_precedes_header_and_unknown_body_falls_back_unscoped() {
+async fn list_body_precedes_header_and_unknown_body_is_rejected() {
     let (app, _tmp) = fixture().await;
     let scoped = json(
         app.clone(),
@@ -95,38 +95,57 @@ async fn list_body_precedes_header_and_unknown_body_falls_back_unscoped() {
     let scoped_ids = source_ids(&scoped["memories"]);
     assert_eq!(scoped_ids, vec!["work-memory"]);
 
-    let fallback = json(
-        app,
-        post(
+    let rejected = app
+        .oneshot(post(
             "/api/memory/list",
             "work",
             r#"{"space":"missing","limit":20}"#,
-        ),
-    )
-    .await;
+        ))
+        .await
+        .expect("response");
     assert_eq!(
-        source_ids(&fallback["memories"]),
-        vec!["personal-memory", "work-memory"]
+        rejected.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
     );
 }
 
 #[tokio::test]
-async fn direct_memory_detail_ignores_conflicting_space_header() {
+async fn direct_memory_detail_hides_conflicting_space_owner() {
     let (app, _tmp) = fixture().await;
-    let payload = json(
-        app,
-        Request::builder()
-            .uri("/api/memory/work-memory/detail")
-            .header("x-wenlan-space", "personal")
-            .body(Body::empty())
-            .expect("request"),
-    )
-    .await;
-    assert_eq!(payload["memory"]["source_id"], "work-memory");
+    let mismatch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/memory/work-memory/detail")
+                .header("x-wenlan-space", "personal")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let missing = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/memory/missing-memory/detail")
+                .header("x-wenlan-space", "personal")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(mismatch.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(missing.status(), axum::http::StatusCode::NOT_FOUND);
+    let mismatch_body = to_bytes(mismatch.into_body(), usize::MAX)
+        .await
+        .expect("mismatch body");
+    let missing_body = to_bytes(missing.into_body(), usize::MAX)
+        .await
+        .expect("missing body");
+    assert_eq!(mismatch_body, missing_body);
 }
 
 #[tokio::test]
-async fn page_search_ignores_space_header_and_returns_cross_scope_rows() {
+async fn page_search_uses_space_header_and_excludes_cross_scope_rows() {
     let (app, _tmp) = fixture().await;
     let payload = json(
         app,
@@ -143,10 +162,64 @@ async fn page_search_ignores_space_header_and_returns_cross_scope_rows() {
         .iter()
         .filter_map(|page| page["workspace"].as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        workspaces,
-        std::collections::BTreeSet::from(["personal", "work"])
-    );
+    assert_eq!(workspaces, std::collections::BTreeSet::from(["work"]));
+}
+
+#[tokio::test]
+async fn bulk_page_export_filters_workspace_before_materializing_files() {
+    let (app, tmp) = fixture().await;
+    let vault = tmp.path().join("bulk-export");
+    let body = serde_json::json!({ "vault_path": vault }).to_string();
+
+    let payload = json(app, post("/api/pages/export", "work", &body)).await;
+
+    assert_eq!(payload["exported"], 1);
+    assert_eq!(payload["failed"], 0);
+    assert!(vault.join("work-scopeprobe.md").is_file());
+    assert!(!vault.join("personal-scopeprobe.md").exists());
+}
+
+#[tokio::test]
+async fn single_page_export_hides_conflicting_workspace_owner() {
+    let (app, tmp) = fixture().await;
+    let personal = json(
+        app.clone(),
+        Request::builder()
+            .uri("/api/pages?space=personal")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    let personal_id = personal["pages"][0]["id"]
+        .as_str()
+        .expect("personal page id");
+    let vault = tmp.path().join("single-export");
+    let body = serde_json::json!({ "vault_path": vault }).to_string();
+
+    let mismatch = app
+        .clone()
+        .oneshot(post(
+            &format!("/api/pages/{personal_id}/export"),
+            "work",
+            &body,
+        ))
+        .await
+        .expect("mismatch response");
+    let missing = app
+        .oneshot(post("/api/pages/missing-page/export", "work", &body))
+        .await
+        .expect("missing response");
+
+    assert_eq!(mismatch.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(missing.status(), axum::http::StatusCode::NOT_FOUND);
+    let mismatch_body = to_bytes(mismatch.into_body(), usize::MAX)
+        .await
+        .expect("mismatch body");
+    let missing_body = to_bytes(missing.into_body(), usize::MAX)
+        .await
+        .expect("missing body");
+    assert_eq!(mismatch_body, missing_body);
+    assert!(!vault.exists());
 }
 
 #[tokio::test]

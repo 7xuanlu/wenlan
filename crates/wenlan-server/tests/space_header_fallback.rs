@@ -7,13 +7,12 @@
 mod common;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderValue, Request, StatusCode};
 use std::sync::OnceLock;
 use tower::ServiceExt;
 use wenlan_types::responses::{
-    ChatContextResponse, CreateEntityResponse, CreatePageResponse, DecisionsResponse,
-    ListMemoriesResponse, NurtureCardsResponse, SearchMemoryResponse, SearchResponse,
-    StoreMemoryResponse,
+    CreateEntityResponse, CreatePageResponse, DecisionsResponse, ListMemoriesResponse,
+    NurtureCardsResponse, SearchMemoryResponse, SearchResponse, StoreMemoryResponse,
 };
 
 fn data_dir_lock() -> &'static tokio::sync::Mutex<()> {
@@ -215,7 +214,8 @@ async fn unregistered_header_space_is_not_stored_or_auto_created() {
 
 #[tokio::test]
 async fn search_memory_header_fallback_returns_200() {
-    let (router, _tmp, _db) = common::test_app().await;
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("career", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -239,16 +239,8 @@ async fn search_memory_header_fallback_returns_200() {
 }
 
 #[tokio::test]
-async fn search_memory_unregistered_header_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    seed_confirmed_memory(
-        &db,
-        "unscoped_search_memory",
-        "unregistered read fallback should find this espresso calibration note",
-        None,
-    )
-    .await;
-
+async fn search_memory_unregistered_header_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/memory/search")
@@ -264,22 +256,35 @@ async fn search_memory_unregistered_header_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "search_memory must return 200"
-    );
-    let body: SearchMemoryResponse = body_as_json(res).await;
-    assert!(
-        body.results
-            .iter()
-            .any(|result| result.source_id == "unscoped_search_memory"),
-        "unregistered space headers must not filter out unscoped search results; got {:?}",
-        body.results
-            .iter()
-            .map(|result| &result.source_id)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn search_memory_malformed_space_headers_are_rejected() {
+    for (preferred, legacy) in [(true, true), (false, true)] {
+        let (router, _tmp, _db) = common::test_app().await;
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/api/memory/search")
+            .header("Content-Type", "application/json");
+        if legacy {
+            builder = builder.header("X-Origin-Space", "career");
+        }
+        let mut request = builder
+            .body(Body::from(r#"{"query":"malformed header canary"}"#))
+            .unwrap();
+        let malformed = HeaderValue::from_bytes(&[0xff]).unwrap();
+        if preferred {
+            request.headers_mut().insert("X-Wenlan-Space", malformed);
+        } else {
+            request.headers_mut().insert("X-Origin-Space", malformed);
+        }
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = body_as_json(response).await;
+        assert_eq!(body["error"], "invalid Space header");
+    }
 }
 
 #[tokio::test]
@@ -341,7 +346,8 @@ async fn search_memory_uncategorized_filter_matches_only_null_space() {
 
 #[tokio::test]
 async fn list_memories_header_fallback_returns_200() {
-    let (router, _tmp, _db) = common::test_app().await;
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("health", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -360,16 +366,8 @@ async fn list_memories_header_fallback_returns_200() {
 }
 
 #[tokio::test]
-async fn list_memories_unregistered_header_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    seed_confirmed_memory(
-        &db,
-        "unscoped_list_memory",
-        "unregistered list fallback should include this clock repair memory",
-        None,
-    )
-    .await;
-
+async fn list_memories_unregistered_header_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/memory/list")
@@ -385,22 +383,7 @@ async fn list_memories_unregistered_header_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "list_memories must return 200"
-    );
-    let body: ListMemoriesResponse = body_as_json(res).await;
-    assert!(
-        body.memories
-            .iter()
-            .any(|memory| memory.source_id == "unscoped_list_memory"),
-        "unregistered space headers must not filter out unscoped list results; got {:?}",
-        body.memories
-            .iter()
-            .map(|memory| &memory.source_id)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -462,7 +445,8 @@ async fn list_memories_uncategorized_filter_matches_only_null_space() {
 
 #[tokio::test]
 async fn search_header_fallback_returns_200() {
-    let (router, _tmp, _db) = common::test_app().await;
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("work", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -486,16 +470,8 @@ async fn search_header_fallback_returns_200() {
 }
 
 #[tokio::test]
-async fn search_unregistered_header_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    seed_confirmed_memory(
-        &db,
-        "unscoped_general_search",
-        "unregistered general search fallback should find this violin resin note",
-        None,
-    )
-    .await;
-
+async fn search_unregistered_header_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/search")
@@ -511,18 +487,7 @@ async fn search_unregistered_header_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "search must return 200");
-    let body: SearchResponse = body_as_json(res).await;
-    assert!(
-        body.results
-            .iter()
-            .any(|result| result.source_id == "unscoped_general_search"),
-        "unregistered space headers must not filter out unscoped general search results; got {:?}",
-        body.results
-            .iter()
-            .map(|result| &result.source_id)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -580,7 +545,8 @@ async fn search_uncategorized_filter_matches_only_null_space() {
 
 #[tokio::test]
 async fn chat_context_header_fallback_returns_200() {
-    let (router, _tmp, _db) = common::test_app().await;
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("personal", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -604,16 +570,8 @@ async fn chat_context_header_fallback_returns_200() {
 }
 
 #[tokio::test]
-async fn chat_context_unregistered_header_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    seed_confirmed_memory(
-        &db,
-        "unscoped_context_memory",
-        "unregistered context fallback should surface this fountain pen ink memory",
-        None,
-    )
-    .await;
-
+async fn chat_context_unregistered_header_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/context")
@@ -629,30 +587,15 @@ async fn chat_context_unregistered_header_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "chat_context must return 200");
-    let body: ChatContextResponse = body_as_json(res).await;
-    assert!(
-        body.context.contains("fountain pen ink memory")
-            || body
-                .knowledge
-                .relevant_memories
-                .iter()
-                .any(|result| result.source_id == "unscoped_context_memory"),
-        "unregistered space headers must not filter out unscoped context results; context={:?}, ids={:?}",
-        body.context,
-        body.knowledge
-            .relevant_memories
-            .iter()
-            .map(|result| &result.source_id)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 // ===== /api/memory/entities (handle_list_entities) =====
 
 #[tokio::test]
 async fn list_entities_header_fallback_returns_200() {
-    let (router, _tmp, _db) = common::test_app().await;
+    let (router, _tmp, db) = common::test_app().await;
+    db.create_space("work", None, false).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -671,12 +614,8 @@ async fn list_entities_header_fallback_returns_200() {
 }
 
 #[tokio::test]
-async fn list_entities_unregistered_header_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    db.store_entity("Unscoped Space Fallback Entity", "person", None, None, None)
-        .await
-        .expect("seed entity must store");
-
+async fn list_entities_unregistered_header_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("POST")
         .uri("/api/memory/entities/list")
@@ -686,39 +625,14 @@ async fn list_entities_unregistered_header_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "list_entities must return 200"
-    );
-    let body: serde_json::Value = body_as_json(res).await;
-    let names = body["entities"]
-        .as_array()
-        .expect("entities must be an array")
-        .iter()
-        .filter_map(|entity| entity["name"].as_str())
-        .collect::<Vec<_>>();
-    assert!(
-        names.contains(&"Unscoped Space Fallback Entity"),
-        "unregistered space headers must not filter out unscoped entities; got {names:?}"
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 // ===== GET /api/memory/nurture (handle_get_nurture_cards) =====
 
 #[tokio::test]
-async fn nurture_unregistered_query_space_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    seed_memory_with_stability(
-        &db,
-        "unscoped_nurture_memory",
-        "unregistered nurture fallback should include this telescope collimation memory",
-        "fact",
-        "new",
-        None,
-    )
-    .await;
-
+async fn nurture_unregistered_query_space_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/memory/nurture?space=ghost-nurture-space&limit=10")
@@ -726,18 +640,7 @@ async fn nurture_unregistered_query_space_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "nurture must return 200");
-    let body: NurtureCardsResponse = body_as_json(res).await;
-    assert!(
-        body.cards
-            .iter()
-            .any(|card| card.source_id == "unscoped_nurture_memory"),
-        "unregistered query spaces must not filter out unscoped nurture cards; got {:?}",
-        body.cards
-            .iter()
-            .map(|card| &card.source_id)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -831,20 +734,38 @@ async fn list_pages_uncategorized_filter_matches_only_null_space() {
         &db,
         "Uncategorized Page",
         "uncategorized page body",
-        None,
+        Some("decision"),
         &[],
         "authored",
     )
     .await;
+    db.set_page_workspace(&uncategorized_id, None)
+        .await
+        .unwrap();
     let alpha_id = common::create_page_fixture(
         &db,
         "Alpha Page",
         "alpha page body",
-        Some("alpha"),
+        Some("recap"),
         &[],
         "authored",
     )
     .await;
+    db.set_page_workspace(&alpha_id, Some("alpha"))
+        .await
+        .unwrap();
+    let literal_id = common::create_page_fixture(
+        &db,
+        "Literal Uncategorized Workspace Page",
+        "literal uncategorized workspace page body",
+        Some("decision"),
+        &[],
+        "authored",
+    )
+    .await;
+    db.set_page_workspace(&literal_id, Some("uncategorized"))
+        .await
+        .unwrap();
 
     let req = Request::builder()
         .method("GET")
@@ -852,7 +773,7 @@ async fn list_pages_uncategorized_filter_matches_only_null_space() {
         .body(Body::empty())
         .unwrap();
 
-    let res = router.oneshot(req).await.unwrap();
+    let res = router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK, "list pages must return 200");
     let body: serde_json::Value = body_as_json(res).await;
     let ids = body["pages"]
@@ -869,23 +790,32 @@ async fn list_pages_uncategorized_filter_matches_only_null_space() {
         !ids.contains(&alpha_id.as_str()),
         "uncategorized must not become unscoped and include registered-space pages; got {ids:?}"
     );
+    assert!(
+        !ids.contains(&literal_id.as_str()),
+        "the reserved selector must match NULL, not a literal workspace value; got {ids:?}"
+    );
+
+    let global = Request::builder()
+        .method("GET")
+        .uri("/api/pages?limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let global: serde_json::Value = body_as_json(router.oneshot(global).await.unwrap()).await;
+    assert!(
+        global["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|page| page["id"] == literal_id),
+        "Global must retain a Page whose literal workspace is uncategorized"
+    );
 }
 
 // ===== GET /api/decisions (handle_list_decisions) =====
 
 #[tokio::test]
-async fn decisions_unregistered_query_space_falls_back_to_unscoped() {
-    let (router, _tmp, db) = common::test_app().await;
-    seed_memory_with_stability(
-        &db,
-        "unscoped_decision_memory",
-        "unregistered decision fallback should include this parser combinator decision",
-        "decision",
-        "confirmed",
-        None,
-    )
-    .await;
-
+async fn decisions_unregistered_query_space_is_rejected() {
+    let (router, _tmp, _db) = common::test_app().await;
     let req = Request::builder()
         .method("GET")
         .uri("/api/decisions?space=ghost-decision-space&limit=10")
@@ -893,18 +823,7 @@ async fn decisions_unregistered_query_space_falls_back_to_unscoped() {
         .unwrap();
 
     let res = router.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "decisions must return 200");
-    let body: DecisionsResponse = body_as_json(res).await;
-    assert!(
-        body.decisions
-            .iter()
-            .any(|decision| decision.source_id == "unscoped_decision_memory"),
-        "unregistered query spaces must not filter out unscoped decisions; got {:?}",
-        body.decisions
-            .iter()
-            .map(|decision| &decision.source_id)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

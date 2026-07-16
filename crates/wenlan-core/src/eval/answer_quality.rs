@@ -7,6 +7,7 @@ use crate::eval::fixtures::load_fixtures;
 use crate::eval::judge::JudgmentTuple;
 use crate::eval::shared::{count_tokens, eval_shared_embedder, run_entity_extraction_for_eval};
 use crate::events::NoopEmitter;
+use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
 use crate::tuning::ConfidenceConfig;
 use serde::{Deserialize, Serialize};
@@ -217,12 +218,17 @@ pub async fn run_e2e_answer_eval(
                 .map(|seed| crate::eval::runner::seed_to_doc(seed, &confidence_cfg))
                 .collect();
             db.upsert_documents(docs).await?;
+            let scope = match case.space.as_deref() {
+                None => ReadScope::Global,
+                Some("uncategorized") => ReadScope::Uncategorized,
+                Some(space) => ReadScope::Space(space.to_string()),
+            };
             let results = db
                 .search_memory(
                     &case.query,
                     limit,
                     None,
-                    case.space.as_deref(),
+                    &scope,
                     None,
                     Some(1.0),
                     Some(1.0),
@@ -531,12 +537,13 @@ pub async fn run_e2e_locomo_eval(
 
             // ---- Wenlan approach: hybrid search ----
             let origin_context = {
+                let scope = ReadScope::Space("conversation".to_string());
                 let results = db
                     .search_memory(
                         &qa.question,
                         search_top_k,
                         None,
-                        Some("conversation"),
+                        &scope,
                         None,
                         None,
                         None,
@@ -784,17 +791,9 @@ async fn generate_e2e_answers_for_question(
     let mut tuples = Vec::new();
 
     // --- Flat context: search_memory only ---
+    let scope = ReadScope::Space("conversation".to_string());
     let flat_results = db
-        .search_memory(
-            question,
-            search_limit,
-            None,
-            Some("conversation"),
-            None,
-            None,
-            None,
-            None,
-        )
+        .search_memory(question, search_limit, None, &scope, None, None, None, None)
         .await?;
     let flat_context: String = flat_results
         .iter()
@@ -1215,13 +1214,18 @@ async fn build_structured_context(
     retrieval: CtxRetrieval,
     include_pages: bool,
 ) -> Result<(String, usize), WenlanError> {
+    let scope = match domain {
+        None => ReadScope::Global,
+        Some("uncategorized") => ReadScope::Uncategorized,
+        Some(space) => ReadScope::Space(space.to_string()),
+    };
     let results = match retrieval {
         CtxRetrieval::Quick => {
-            db.search_memory(question, search_limit, None, domain, None, None, None, None)
+            db.search_memory(question, search_limit, None, &scope, None, None, None, None)
                 .await?
         }
         CtxRetrieval::CrossRerank(reranker) => {
-            db.search_memory_cross_rerank(question, search_limit, None, domain, None, reranker)
+            db.search_memory_cross_rerank(question, search_limit, None, &scope, None, reranker)
                 .await?
         }
     };

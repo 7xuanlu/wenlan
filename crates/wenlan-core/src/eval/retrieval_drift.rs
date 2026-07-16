@@ -13,6 +13,7 @@ use std::sync::Arc;
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::events::NoopEmitter;
+use crate::read_scope::ReadScope;
 
 #[allow(dead_code)]
 const TOP_K: usize = 10;
@@ -113,12 +114,17 @@ pub async fn capture_rankings(
             .collect();
         db.upsert_documents(all_docs).await?;
         // EXACT mirror of the `Wenlan` strategy call in run_quality_cost_eval:
+        let scope = match case.space.as_deref() {
+            None => ReadScope::Global,
+            Some("uncategorized") => ReadScope::Uncategorized,
+            Some(space) => ReadScope::Space(space.to_string()),
+        };
         let results = db
             .search_memory(
                 &case.query,
                 top_k,
                 None,
-                case.space.as_deref(),
+                &scope,
                 None,
                 Some(1.0), // neutralize confirmation boost — fixture bias
                 Some(1.0), // neutralize recap penalty — fixture bias

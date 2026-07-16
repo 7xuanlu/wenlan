@@ -141,11 +141,8 @@ pub async fn handle_search(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<SearchRequest>,
+    Json(req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let start = std::time::Instant::now();
 
     let (db, reranker_light) = {
@@ -153,7 +150,9 @@ pub async fn handle_search(
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (db, s.reranker_light.clone())
     };
-    req.space = crate::memory_routes::registered_read_space(&db, &req.space, "search").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
 
     let results = if req.source_filter.as_deref() == Some("memory") {
         match reranker_light {
@@ -166,44 +165,21 @@ pub async fn handle_search(
                 // and the light path isn't an eval-sweep surface. (review note)
                 let pool = wenlan_core::db::compute_rerank_fetch_pool(req.limit, None, None);
                 let pooled = db
-                    .search_memory(
-                        &req.query,
-                        pool,
-                        None,
-                        req.space.as_deref(),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
+                    .search_memory(&req.query, pool, None, &scope, None, None, None, None)
                     .await
                     .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
                 wenlan_core::db::rerank_results_light(reranker, &req.query, pooled, req.limit).await
             }
             // mode=off (default): byte-identical to the pre-mode path.
             None => db
-                .search_memory(
-                    &req.query,
-                    req.limit,
-                    None,
-                    req.space.as_deref(),
-                    None,
-                    None,
-                    None,
-                    None,
-                )
+                .search_memory(&req.query, req.limit, None, &scope, None, None, None, None)
                 .await
                 .map_err(|e| ServerError::SearchFailed(e.to_string()))?,
         }
     } else {
-        db.search(
-            &req.query,
-            req.limit,
-            req.source_filter.as_deref(),
-            req.space.as_deref(),
-        )
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?
+        db.search(&req.query, req.limit, req.source_filter.as_deref(), &scope)
+            .await
+            .map_err(|e| ServerError::SearchFailed(e.to_string()))?
     };
 
     let took_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -234,13 +210,13 @@ pub async fn handle_search(
                 .unwrap_or_else(|| "unknown".to_string())
         };
         let raw = db
-            .search_pages(&req.query, 3, None)
+            .search_pages_scoped(&req.query, 3, None, &scope)
             .await
             .unwrap_or_default();
         let ids: std::collections::HashSet<String> =
             results.iter().map(|r| r.source_id.clone()).collect();
         let visible = db
-            .select_visible_pages(raw, req.space.as_deref(), &ids, &trust_level, 3)
+            .select_visible_pages_scoped(raw, &scope, &ids, &trust_level, 3)
             .await;
         if visible.is_empty() {
             None
@@ -268,11 +244,8 @@ pub async fn handle_context(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<ChatContextRequest>,
+    Json(req): Json<ChatContextRequest>,
 ) -> Result<Json<ChatContextResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let start = std::time::Instant::now();
 
     let query = req
@@ -297,7 +270,12 @@ pub async fn handle_context(
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (db, s.access_tracker.clone(), s.reranker_light.clone())
     }; // guard dropped here
-    req.space = crate::memory_routes::registered_read_space(&db_arc, &req.space, "context").await?;
+    let scope = crate::read_scope::effective_read_scope(
+        &db_arc,
+        req.space.as_deref(),
+        header_space.as_deref(),
+    )
+    .await?;
     let db = db_arc.as_ref();
 
     let agent_trust = if agent_name == "unknown" {
@@ -312,19 +290,14 @@ pub async fn handle_context(
     };
 
     let classification = classify_query(query, agent_name, &agent_trust, true);
-    // classification.space fallback removed (wire-gap fix #3): classifier never
-    // populated it, so the .or() chain was dead code. Callers must now supply
-    // space explicitly via req.space.
-    let space_filter = req.space.as_deref();
-
     // Tier 1 (identity + preferences)
     let (identity, preferences) = if tier_allowed(&classification.trust_level, 1) {
         let id_mems = db
-            .load_memories_by_type("identity", 10, space_filter)
+            .load_memories_by_type_scoped("identity", 10, &scope)
             .await
             .unwrap_or_default();
         let pref_mems = db
-            .load_memories_by_type("preference", 10, space_filter)
+            .load_memories_by_type_scoped("preference", 10, &scope)
             .await
             .unwrap_or_default();
 
@@ -349,7 +322,7 @@ pub async fn handle_context(
     let goals: Vec<String> = Vec::new();
 
     let decisions: Vec<String> = if tier_allowed(&classification.trust_level, 2) {
-        db.load_memories_by_type("decision", 5, space_filter)
+        db.load_memories_by_type_scoped("decision", 5, &scope)
             .await
             .unwrap_or_default()
             .iter()
@@ -360,7 +333,7 @@ pub async fn handle_context(
     };
 
     let corrections = if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
-        db.search_corrections_by_topic(query, 5, space_filter)
+        db.search_corrections_by_topic_scoped(query, 5, &scope)
             .await
             .unwrap_or_default()
             .iter()
@@ -378,23 +351,14 @@ pub async fn handle_context(
         Some(reranker) => {
             let pool = wenlan_core::db::compute_rerank_fetch_pool(req.max_chunks, None, None);
             let pooled = db
-                .search_memory(query, pool, None, space_filter, None, None, None, None)
+                .search_memory(query, pool, None, &scope, None, None, None, None)
                 .await
                 .unwrap_or_default();
             wenlan_core::db::rerank_results_light(reranker.clone(), query, pooled, req.max_chunks)
                 .await
         }
         None => db
-            .search_memory(
-                query,
-                req.max_chunks,
-                None,
-                space_filter,
-                None,
-                None,
-                None,
-                None,
-            )
+            .search_memory(query, req.max_chunks, None, &scope, None, None, None, None)
             .await
             .unwrap_or_default(),
     };
@@ -415,7 +379,10 @@ pub async fn handle_context(
 
     let page_results: Vec<String> =
         if tier_allowed(&classification.trust_level, 2) && query != "recent context" {
-            let raw_pages = db.search_pages(query, 3, None).await.unwrap_or_default();
+            let raw_pages = db
+                .search_pages_scoped(query, 3, None, &scope)
+                .await
+                .unwrap_or_default();
             // Space-scope + effective-tier gate (the ONE shared visibility helper):
             // drop pages whose dedicated workspace is a different caller's space
             // (with no source-memory overlap) and pages whose effective read-tier
@@ -424,9 +391,9 @@ pub async fn handle_context(
             // Closes the cross-space + tier-declassification leaks the un-gated
             // `select_pages_for_context` selector had on this shipped path.
             let pages = db
-                .select_visible_pages(
+                .select_visible_pages_scoped(
                     raw_pages,
-                    space_filter,
+                    &scope,
                     &search_source_ids,
                     &classification.trust_level,
                     3,
@@ -451,16 +418,12 @@ pub async fn handle_context(
     // unless WENLAN_ENABLE_GLOBAL_PRELUDE is on, so the default response shape
     // is byte-identical to pre-T18.
     let corpus_overview: Vec<String> = if wenlan_core::db::global_prelude_enabled() {
-        let nodes = db.search_summary_nodes(query, 3).await.unwrap_or_default();
+        let nodes = db
+            .search_summary_nodes_scoped(query, 3, &scope)
+            .await
+            .unwrap_or_default();
         let mut out = Vec::new();
         for node in nodes {
-            // Source-overlap gate when a space filter is active.
-            if space_filter.is_some() {
-                match db.get_summary_node_sources(&node.id).await {
-                    Ok(srcs) if srcs.iter().any(|s| search_source_ids.contains(s)) => {}
-                    _ => continue,
-                }
-            }
             out.push(format!("**{}**: {}", node.title, node.body));
         }
         out
@@ -1132,6 +1095,7 @@ pub struct RecentLimitQuery {
 /// GET /api/retrievals/recent - Recent agent retrieval events joined to page titles.
 pub async fn handle_recent_retrievals(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<RecentLimitQuery>,
 ) -> Result<Json<Vec<wenlan_types::RetrievalEvent>>, ServerError> {
     let limit = q.limit.unwrap_or(10).clamp(1, 100);
@@ -1140,8 +1104,9 @@ pub async fn handle_recent_retrievals(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let events = db
-        .list_recent_retrievals(limit)
+        .list_recent_retrievals_scoped(limit, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(events))
@@ -1150,6 +1115,7 @@ pub async fn handle_recent_retrievals(
 /// GET /api/pages/recent-changes - Recent page created/revised events.
 pub async fn handle_recent_page_changes(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<RecentLimitQuery>,
 ) -> Result<Json<Vec<wenlan_types::PageChange>>, ServerError> {
     let limit = q.limit.unwrap_or(10).clamp(1, 100);
@@ -1158,8 +1124,9 @@ pub async fn handle_recent_page_changes(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let changes = db
-        .list_recent_changes(limit)
+        .list_recent_changes_scoped(limit, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(changes))
@@ -1169,6 +1136,7 @@ pub async fn handle_recent_page_changes(
 /// `since_ms` scopes badge derivation only; the feed is always top-N by recency.
 pub async fn handle_recent_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<crate::memory_routes::RecentActivityQuery>,
 ) -> Result<Json<Vec<wenlan_types::RecentActivityItem>>, ServerError> {
     let db = {
@@ -1176,8 +1144,9 @@ pub async fn handle_recent_pages(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let items = db
-        .list_recent_pages_with_badges(q.limit.unwrap_or(10), q.since_ms)
+        .list_recent_pages_with_badges_scoped(q.limit.unwrap_or(10), q.since_ms, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(items))
@@ -2070,6 +2039,7 @@ mod context_page_selection_tests {
         let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
             .await
             .expect("MemoryDB::new");
+        db.create_space("work", None, false).await.unwrap();
 
         // A tier-2 caller: trust "review" allows tier 2, denies tier 1.
         db.register_agent("test-agent").await.unwrap();
@@ -2250,6 +2220,7 @@ mod search_supplemental_pages_tests {
         let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
             .await
             .expect("MemoryDB::new");
+        db.create_space("work", None, false).await.unwrap();
 
         // tier-2 caller: trust "review" allows tier 2, denies tier 1; "unknown"
         // (no header) denies tier 2.

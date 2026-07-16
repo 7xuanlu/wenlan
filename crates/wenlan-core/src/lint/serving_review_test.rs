@@ -1,10 +1,14 @@
 use super::super::{
-    routes::{route, Capability, DirectIdGate, Method, SelectorPrecedence, UnknownScopePolicy},
+    routes::{
+        route, sensitive_read_routes, Capability, Method, ScopeBinding, SelectionGate,
+        SelectorPrecedence, UnknownScopePolicy,
+    },
     CHANNEL_EPISODE_ID, CHANNEL_PAGE_ID, OBSERVABILITY_ID, RERANKER_ID, ROUTE_SCOPE_ID,
 };
 use crate::db::tests::test_db;
 use crate::lint::context::{CancellationToken, LintClock};
 use crate::lint::runner::LintRunner;
+use std::collections::BTreeSet;
 use wenlan_types::lint::{
     LintApplicability, LintMetricCode, LintMetricValue, LintOutcome, LintQuery,
 };
@@ -17,23 +21,120 @@ fn route_contract_records_observed_scope_and_trust_semantics() {
         SelectorPrecedence::BodyThenHeader
     );
     assert_eq!(search.capability, Capability::CallerAssertedAgentTrust);
-    assert_eq!(search.unknown_scope, UnknownScopePolicy::FallsBackUnscoped);
+    assert_eq!(search.unknown_scope, UnknownScopePolicy::Rejected);
+    assert!(!search.scope_contract_violation());
 
     let page_search = route(Method::Post, "/api/pages/search").expect("page search row");
-    assert_eq!(page_search.selector_precedence, SelectorPrecedence::None);
-    assert!(page_search.scope_contract_violation());
+    assert_eq!(
+        page_search.selector_precedence,
+        SelectorPrecedence::BodyThenHeader
+    );
+    assert!(!page_search.scope_contract_violation());
 
-    for path in [
-        "/api/memory/{id}/detail",
-        "/api/memory/by-ids",
-        "/api/memory/{id}/versions",
-        "/api/chunks/{source_id}",
-        "/api/snapshots/{id}/captures-with-content",
+    for (path, gate) in [
+        ("/api/memory/{id}/detail", SelectionGate::SingleId404),
+        ("/api/memory/by-ids", SelectionGate::BatchFiltered),
+        ("/api/memory/{id}/versions", SelectionGate::SingleId404),
+        ("/api/chunks/{source_id}", SelectionGate::SingleId404),
     ] {
         let row = route(Method::Get, path).expect("direct read row");
-        assert_eq!(row.direct_id_gate, DirectIdGate::Missing);
-        assert!(row.scope_contract_violation());
+        assert_eq!(row.selection_gate, gate);
+        assert!(!row.scope_contract_violation());
     }
+
+    let snapshot =
+        route(Method::Get, "/api/snapshots/{id}/captures-with-content").expect("snapshot read row");
+    assert_eq!(
+        snapshot.selection_gate,
+        SelectionGate::ParentCollectionFiltered
+    );
+    assert!(!snapshot.scope_contract_violation());
+}
+
+#[test]
+fn route_catalog_freezes_exact_global_and_scoped_keys() {
+    const GLOBAL: &[(Method, &str)] = &[
+        (Method::Get, "/api/profile"),
+        (Method::Get, "/api/agents"),
+        (Method::Get, "/api/agents/{name}"),
+        (Method::Get, "/api/memory/stats"),
+        (Method::Get, "/api/spaces"),
+        (Method::Get, "/api/sources"),
+        (Method::Get, "/api/profile/narrative"),
+        (Method::Get, "/api/knowledge/count"),
+        (Method::Get, "/api/onboarding/milestones"),
+        (Method::Get, "/api/import/state"),
+        (Method::Get, "/api/memory/rejections"),
+        (Method::Get, "/api/refinery/queue"),
+        (Method::Get, "/api/capture-stats"),
+        (Method::Get, "/api/decisions/domains"),
+        (Method::Get, "/api/snapshots"),
+    ];
+    const SCOPED: &[(Method, &str)] = &[
+        (Method::Post, "/api/search"),
+        (Method::Post, "/api/context"),
+        (Method::Get, "/api/memory/recent"),
+        (Method::Get, "/api/memory/unconfirmed"),
+        (Method::Post, "/api/memory/search"),
+        (Method::Post, "/api/memory/list"),
+        (Method::Get, "/api/memory/nurture"),
+        (Method::Get, "/api/memory/pinned"),
+        (Method::Get, "/api/retrievals/recent"),
+        (Method::Get, "/api/home-stats"),
+        (Method::Get, "/api/memory/{source_id}/enrichment-status"),
+        (Method::Get, "/api/memory/{id}/revisions"),
+        (Method::Get, "/api/indexed-files"),
+        (Method::Get, "/api/chunks/{source_id}"),
+        (Method::Get, "/api/activities"),
+        (Method::Get, "/api/tags"),
+        (Method::Get, "/api/suggest-tags"),
+        (Method::Get, "/api/memory/{id}/detail"),
+        (Method::Get, "/api/memory/by-ids"),
+        (Method::Get, "/api/memory/{id}/versions"),
+        (Method::Get, "/api/decisions"),
+        (Method::Get, "/api/briefing"),
+        (Method::Get, "/api/memory/pending-revisions"),
+        (Method::Get, "/api/memory/pending-revision/{source_id}"),
+        (Method::Get, "/api/snapshots/{id}/captures"),
+        (Method::Get, "/api/snapshots/{id}/captures-with-content"),
+        (Method::Get, "/api/pages/recent"),
+        (Method::Get, "/api/pages/recent-changes"),
+        (Method::Get, "/api/pages"),
+        (Method::Post, "/api/pages/search"),
+        (Method::Post, "/api/pages/export"),
+        (Method::Get, "/api/pages/orphan-links"),
+        (Method::Get, "/api/pages/{id}"),
+        (Method::Post, "/api/pages/{id}/export"),
+        (Method::Get, "/api/pages/{id}/sources"),
+        (Method::Get, "/api/pages/{id}/links"),
+        (Method::Get, "/api/pages/{id}/revisions"),
+        (Method::Post, "/api/memory/entities/list"),
+        (Method::Post, "/api/memory/entities/search"),
+        (Method::Get, "/api/memory/entities/{entity_id}"),
+        (Method::Get, "/api/memory/entity-suggestions"),
+        (Method::Get, "/api/knowledge/recent-relations"),
+    ];
+
+    let rows = sensitive_read_routes().collect::<Vec<_>>();
+    let keys = rows
+        .iter()
+        .map(|row| (row.method, row.path))
+        .collect::<BTreeSet<_>>();
+    let global = rows
+        .iter()
+        .filter(|row| row.scope_binding == ScopeBinding::Global)
+        .map(|row| (row.method, row.path))
+        .collect::<BTreeSet<_>>();
+    let scoped = rows
+        .iter()
+        .filter(|row| row.scope_binding != ScopeBinding::Global)
+        .map(|row| (row.method, row.path))
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(rows.len(), 57);
+    assert_eq!(keys.len(), 57, "duplicate sensitive route key");
+    assert_eq!(global, GLOBAL.iter().copied().collect());
+    assert_eq!(scoped, SCOPED.iter().copied().collect());
 }
 
 #[tokio::test]
@@ -41,11 +142,10 @@ async fn route_scope_result_is_derived_from_canonical_contract() {
     let (db, _tmp) = test_db().await;
     let report = run(&db, None).await;
     let result = check(&report, ROUTE_SCOPE_ID);
-    let defects = super::super::routes::scope_contract_violations().count() as u64;
-    assert!(
-        defects > 6,
-        "review proved more than the old fixed six defects"
-    );
+    let violations = super::super::routes::scope_contract_violations().collect::<Vec<_>>();
+    let defects = violations.len() as u64;
+    assert!(violations.is_empty());
+    assert_eq!(defects, 0);
     assert_eq!(metric(result, LintMetricCode::AffectedRecords), defects);
 }
 

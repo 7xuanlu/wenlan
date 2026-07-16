@@ -105,29 +105,19 @@ pub fn select_pages_for_context(
     selected
 }
 
-/// Hard space-scope for the additive page path. Mirrors the RRF gate
-/// (`db.rs:9146-9185`) but is pure: a page survives a *scoped* recall iff its
-/// dedicated `workspace` equals the caller's space OR ≥1 of its source memories
-/// is in the memory result set. NULL workspace never matches a filter. With no
-/// space filter active, all pages pass (caller is unscoped).
+/// Hard workspace scope for the additive Page path. Source-memory overlap is
+/// a relevance signal only and can never override the Page's workspace.
 pub fn scope_filter_pages(
     pages: Vec<Page>,
     caller_space: Option<&str>,
-    memory_source_ids: &std::collections::HashSet<String>,
+    _memory_source_ids: &std::collections::HashSet<String>,
 ) -> Vec<Page> {
     let Some(space) = caller_space else {
         return pages;
     };
     pages
         .into_iter()
-        .filter(|page| {
-            if page.workspace.as_deref() == Some(space) {
-                return true;
-            }
-            page.source_memory_ids
-                .iter()
-                .any(|sid| memory_source_ids.contains(sid.as_str()))
-        })
+        .filter(|page| page.workspace.as_deref() == Some(space))
         .collect()
 }
 
@@ -301,6 +291,20 @@ mod tests {
     }
 
     #[test]
+    fn search_pages_scope_does_not_allow_source_overlap_to_override_workspace() {
+        let mut personal = make_page("personal", &["work-memory"]);
+        personal.workspace = Some("personal".to_string());
+        let work_sources = HashSet::from(["work-memory".to_string()]);
+
+        let kept = scope_filter_pages(vec![personal], Some("work"), &work_sources);
+
+        assert!(
+            kept.is_empty(),
+            "a source-memory overlap must not expose a Page from another workspace"
+        );
+    }
+
+    #[test]
     fn select_keeps_zero_overlap_page_when_score_high() {
         let pages = vec![
             make_page_with("low_overlap", &["m1"], 0.25, "confirmed"),
@@ -382,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_drops_cross_space_page_with_no_source_overlap() {
+    fn scope_requires_matching_workspace_even_with_source_overlap() {
         let mut p_other = make_page("p_other", &["x1"]); // workspace None, sources disjoint
         p_other.workspace = Some("personal".to_string());
         let mut p_match = make_page("p_match", &["x2"]);
@@ -392,7 +396,7 @@ mod tests {
         let kept = scope_filter_pages(vec![p_other, p_match, p_overlap], Some("work"), &ids);
         let kept_ids: Vec<_> = kept.iter().map(|p| p.id.as_str()).collect();
         assert!(kept_ids.contains(&"p_match")); // workspace == caller space
-        assert!(kept_ids.contains(&"p_overlap")); // source overlap
+        assert!(!kept_ids.contains(&"p_overlap")); // source overlap cannot override workspace
         assert!(!kept_ids.contains(&"p_other")); // cross-space, no overlap → dropped
     }
 
