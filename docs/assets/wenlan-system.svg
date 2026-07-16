@@ -1,0 +1,161 @@
+<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">How Wenlan turns ongoing work into knowledge that stays current</title>
+  <desc id="desc">Documents, notes, and AI conversations become traceable evidence and maintained pages. Wenlan handles routine organization and asks for judgment only on conflicts or changes to human writing. A daily brief, capture, handoff, and refinement loop returns current knowledge to every supported tool.</desc>
+
+  <rect width="1600" height="1000" fill="#F7F8FC"/>
+
+  <g transform="translate(80 58)">
+    <g transform="translate(1368 0)">
+      <circle cx="36" cy="36" r="29" stroke="url(#brandRing)" stroke-width="14"/>
+      <circle cx="48" cy="19" r="8" fill="#4AC8E8"/>
+    </g>
+    <text x="0" y="42" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="42" font-weight="760" letter-spacing="0">From scattered work to knowledge that stays current</text>
+    <text x="0" y="82" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="500" letter-spacing="0">Sources become traceable evidence, evidence becomes maintained pages, and the right knowledge returns wherever you work.</text>
+  </g>
+
+  <g transform="translate(80 168)">
+    <rect width="440" height="414" rx="12" fill="#EAF4FF" stroke="#5BA3E6" stroke-width="2"/>
+    <text x="30" y="48" fill="#245F9C" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="750" letter-spacing="0">1 · BRING IN YOUR WORK</text>
+    <text x="30" y="84" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">Wenlan starts where your</text>
+    <text x="30" y="114" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">knowledge already lives</text>
+
+    <g transform="translate(30 136)">
+      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
+      <circle cx="28" cy="25" r="8" fill="#5BA3E6"/>
+      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Documents and PDFs</text>
+    </g>
+    <g transform="translate(30 194)">
+      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
+      <circle cx="28" cy="25" r="8" fill="#4AC8E8"/>
+      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Obsidian and Markdown notes</text>
+    </g>
+    <g transform="translate(30 252)">
+      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
+      <circle cx="28" cy="25" r="8" fill="#6C63FF"/>
+      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Past AI conversations</text>
+    </g>
+    <g transform="translate(30 310)">
+      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
+      <circle cx="28" cy="25" r="8" fill="#F0A43A"/>
+      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Live work with AI</text>
+    </g>
+    <text x="30" y="392" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="560" letter-spacing="0">Nothing has to start in Wenlan.</text>
+  </g>
+
+  <g transform="translate(580 168)">
+    <rect width="440" height="414" rx="12" fill="#EAF8F2" stroke="#3CB878" stroke-width="2"/>
+    <text x="30" y="48" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="750" letter-spacing="0">2 · TWO LINKED LIFECYCLES</text>
+    <text x="30" y="84" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">Evidence and pages</text>
+    <text x="30" y="114" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">improve together</text>
+
+    <g transform="translate(20 136)">
+      <rect width="190" height="218" rx="10" fill="#FFFFFF" stroke="#A9DDC4"/>
+      <text x="20" y="39" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="720" letter-spacing="0">Evidence</text>
+      <text x="20" y="76" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Keeps its source</text>
+      <text x="20" y="111" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Confirms and connects</text>
+      <text x="20" y="146" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Records corrections</text>
+      <text x="20" y="181" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Preserves history</text>
+    </g>
+
+    <path d="M211 245H228" stroke="#3CB878" stroke-width="3" stroke-linecap="round"/>
+    <path d="M222 237L230 245L222 253" stroke="#3CB878" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g transform="translate(230 136)">
+      <rect width="190" height="218" rx="10" fill="#FFFFFF" stroke="#A9DDC4"/>
+      <text x="20" y="39" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="720" letter-spacing="0">Pages</text>
+      <text x="20" y="76" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Builds with citations</text>
+      <text x="20" y="111" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Knows what is stale</text>
+      <text x="20" y="146" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Refreshes the right page</text>
+      <text x="20" y="181" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Protects your writing</text>
+    </g>
+    <text x="30" y="392" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="560" letter-spacing="0">When knowledge changes, affected pages know.</text>
+  </g>
+
+  <g transform="translate(1080 168)">
+    <rect width="440" height="414" rx="12" fill="#FFF5E5" stroke="#F0A43A" stroke-width="2"/>
+    <text x="30" y="48" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="750" letter-spacing="0">3 · USE CURRENT KNOWLEDGE</text>
+    <text x="30" y="84" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">Current knowledge returns</text>
+    <text x="30" y="114" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">wherever you work</text>
+
+    <g transform="translate(30 136)">
+      <rect width="380" height="66" rx="8" fill="#FFFFFF" stroke="#F0D3A8"/>
+      <text x="20" y="27" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="720" letter-spacing="0">READ AND CURATE</text>
+      <text x="20" y="54" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20" font-weight="620" letter-spacing="0">Wenlan app · Obsidian</text>
+    </g>
+    <g transform="translate(30 212)">
+      <rect width="380" height="66" rx="8" fill="#FFFFFF" stroke="#F0D3A8"/>
+      <text x="20" y="27" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="720" letter-spacing="0">WORK WITH AI</text>
+      <text x="20" y="54" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20" font-weight="620" letter-spacing="0">Claude · Codex · Cursor · Gemini</text>
+    </g>
+    <g transform="translate(30 288)">
+      <rect width="380" height="66" rx="8" fill="#FFFFFF" stroke="#F0D3A8"/>
+      <text x="20" y="27" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="720" letter-spacing="0">BRING IT BACK</text>
+      <text x="20" y="54" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20" font-weight="620" letter-spacing="0">Brief · Recall · Pages · MCP</text>
+    </g>
+    <text x="30" y="392" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="560" letter-spacing="0">One local store, available across tools.</text>
+  </g>
+
+  <g transform="translate(80 616)">
+    <rect width="1440" height="152" rx="12" fill="#101024"/>
+    <line x1="720" y1="30" x2="720" y2="122" stroke="#343858" stroke-width="2"/>
+
+    <g transform="translate(34 28)">
+      <circle cx="18" cy="18" r="18" fill="#3CB878"/>
+      <path d="M10 18L16 24L27 12" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="52" y="23" fill="#93E3F2" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="750" letter-spacing="0">WENLAN HANDLES THE BOOKKEEPING</text>
+      <text x="52" y="65" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="650" letter-spacing="0">Organize · deduplicate · connect · cite · refresh</text>
+      <text x="52" y="96" fill="#A9AEC5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="520" letter-spacing="0">Routine maintenance continues without turning your work into an approval queue.</text>
+    </g>
+
+    <g transform="translate(754 28)">
+      <circle cx="18" cy="18" r="18" fill="#F0A43A"/>
+      <path d="M18 9V20" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="18" cy="27" r="2" fill="#FFFFFF"/>
+      <text x="52" y="23" fill="#FFD89B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="750" letter-spacing="0">YOUR JUDGMENT STAYS IN THE RIGHT PLACE</text>
+      <text x="52" y="65" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="650" letter-spacing="0">Conflicting sources · changes to your writing</text>
+      <text x="52" y="96" fill="#A9AEC5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="520" letter-spacing="0">Wenlan proposes; you decide only where intent or truth cannot be inferred safely.</text>
+    </g>
+  </g>
+
+  <g transform="translate(80 804)">
+    <rect width="1440" height="142" rx="12" fill="#FFFFFF" stroke="#D9DCE8" stroke-width="2"/>
+    <text x="28" y="39" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="750" letter-spacing="0">DAILY WORKFLOW</text>
+
+    <g transform="translate(28 60)">
+      <rect width="210" height="54" rx="8" fill="#EAF4FF" stroke="#5BA3E6"/>
+      <text x="105" y="34" fill="#245F9C" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">BRIEF</text>
+    </g>
+    <path d="M250 87H282" stroke="#8B90A4" stroke-width="2.5"/>
+    <path d="M276 80L284 87L276 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(292 60)">
+      <rect width="260" height="54" rx="8" fill="#F0EEFF" stroke="#6C63FF"/>
+      <text x="130" y="34" fill="#5048C8" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">WORK + CAPTURE</text>
+    </g>
+    <path d="M564 87H596" stroke="#8B90A4" stroke-width="2.5"/>
+    <path d="M590 80L598 87L590 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(606 60)">
+      <rect width="210" height="54" rx="8" fill="#FFF5E5" stroke="#F0A43A"/>
+      <text x="105" y="34" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">HANDOFF</text>
+    </g>
+    <path d="M828 87H860" stroke="#8B90A4" stroke-width="2.5"/>
+    <path d="M854 80L862 87L854 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(870 60)">
+      <rect width="230" height="54" rx="8" fill="#EAF8F2" stroke="#3CB878"/>
+      <text x="115" y="34" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">REFINE + DISTILL</text>
+    </g>
+    <path d="M1112 87H1144" stroke="#8B90A4" stroke-width="2.5"/>
+    <path d="M1138 80L1146 87L1138 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(1154 60)">
+      <rect width="258" height="54" rx="8" fill="#EAF4FF" stroke="#5BA3E6"/>
+      <text x="129" y="34" fill="#245F9C" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">CURRENT KNOWLEDGE</text>
+    </g>
+  </g>
+
+  <defs>
+    <linearGradient id="brandRing" x1="7" y1="36" x2="65" y2="36" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C63FF"/>
+      <stop offset="0.5" stop-color="#5BA3E6"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </linearGradient>
+  </defs>
+</svg>

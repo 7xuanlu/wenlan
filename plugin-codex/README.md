@@ -4,11 +4,11 @@ The Codex plugin wraps the shared `wenlan-mcp` server with Codex slash skills.
 Use it when you want the session workflow commands in Codex, not just raw MCP
 tools.
 
-## Install from this repo
+## Install
 
 ```bash
 npx -y wenlan setup
-codex plugin marketplace add .
+codex plugin marketplace add 7xuanlu/wenlan
 codex plugin add wenlan@7xuanlu-wenlan
 ```
 

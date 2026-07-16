@@ -5,9 +5,7 @@
   </picture>
 </p>
 
-Useful work with AI shouldn't disappear when a conversation ends.
-
-Wenlan builds the right pages and keeps them current as sources change, asking only when judgment is needed.
+Useful work with AI shouldn't disappear when a conversation ends. Wenlan builds the right pages and keeps them current as sources change, asking only when judgment is needed.
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a>
@@ -23,7 +21,7 @@ Wenlan builds the right pages and keeps them current as sources change, asking o
   <a href="#start-in-30-seconds">Get&nbsp;started</a> ·
   <a href="#what-does-wenlan-build">What&nbsp;is&nbsp;this?</a> ·
   <a href="#what-can-it-do">Capabilities</a> ·
-  <a href="#how-does-it-work">How&nbsp;it&nbsp;works</a> ·
+  <a href="#how-does-it-work">Daily&nbsp;workflow</a> ·
   <a href="#evaluation">Evaluation</a> ·
   <a href="#learn-more">Learn&nbsp;more</a>
 </p>
@@ -44,61 +42,42 @@ Wenlan builds the right pages and keeps them current as sources change, asking o
 
 ### Desktop app
 
-The desktop app is the fastest way to see the complete workflow: read pages, inspect their sources, and curate the knowledge system. Download the latest macOS Apple Silicon DMG from [wenlan-app releases](https://github.com/7xuanlu/wenlan-app/releases/latest), open Wenlan, and follow the built-in setup wizard. The app brings its own local runtime and can configure detected AI tools, so no terminal setup is required.
+The desktop app is the fastest way to see the complete workflow: read pages, inspect their sources, and curate the knowledge system. The current macOS Apple Silicon preview is not yet notarized, so this installer verifies the GitHub release, installs Wenlan, clears quarantine for this app only, and opens it without changing macOS security settings:
 
-App source: [wenlan-app](https://github.com/7xuanlu/wenlan-app). Product and docs: [wenlan.app](https://wenlan.app).
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
+```
+
+The [installer is inspectable](scripts/install-macos-app.sh). It checks the release archive against GitHub's published SHA-256 before replacing an existing app. Prefer the DMG or want to inspect the app source? See [wenlan-app releases](https://github.com/7xuanlu/wenlan-app/releases/latest) and [wenlan-app](https://github.com/7xuanlu/wenlan-app).
 
 <a id="claude-code-in-30-seconds"></a>
 
-### Claude Code
-
-```text
-/plugin marketplace add 7xuanlu/wenlan
-/plugin install wenlan@7xuanlu-wenlan
-/setup
-```
-
-If Claude Code asks for a restart after installing, restart once, then run `/setup`. The plugin sets up the local runtime, MCP connection, knowledge store, and first round-trip check.
-
-Plugin commands and workflows: [plugin/](plugin/.claude-plugin/README.md).
-
 <a id="codex-plugin"></a>
-
-### Codex plugin
-
-```bash
-npx -y wenlan setup
-codex plugin marketplace add .
-codex plugin add wenlan@7xuanlu-wenlan
-```
-
-Start a new Codex thread after installing so the plugin and MCP server load. Plugin details: [plugin-codex/](plugin-codex/README.md).
 
 <a id="mcp-setup"></a>
 <a id="mcp-clients"></a>
 
-### Headless and other MCP clients
+### Set up with your AI
 
-Prefer a terminal-only setup, or use a client without Wenlan's GUI?
+Paste this into Claude Code, Codex, or another tool that can follow a setup guide:
+
+```text
+Set up Wenlan for this AI client by following:
+https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
+
+Install only what this client needs. Then verify the local runtime,
+its Wenlan connection, and a capture/recall round trip.
+```
+
+The guide detects which client you are using and keeps client-specific commands out of this README. It does not configure every AI tool unless you ask it to.
+
+Need only the headless runtime?
 
 ```bash
 npx -y wenlan setup
-wenlan connect claude-code  # or: codex, cursor, claude-desktop, vscode, gemini
 ```
 
-The core tools are `context`, `capture`, `recall`, `pages`, and `doctor`. Every connected client talks to the same local daemon and store.
-
-<a id="cli"></a>
-
-Prefer the CLI directly?
-
-```bash
-wenlan status
-wenlan recall <query>
-wenlan capture <text>
-```
-
-CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
+Manual and client-specific instructions: [AI-assisted setup](docs/setup-with-ai.md) · [Claude Code plugin](plugin/.claude-plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI and MCP](crates/wenlan-cli/README.md).
 
 ---
 
@@ -107,13 +86,20 @@ CLI details: [crates/wenlan-cli](crates/wenlan-cli/README.md).
 
 ## What is this?
 
+Wenlan turns documents, notes, and AI conversations into a source-backed knowledge base that keeps improving as your work continues. New information strengthens or corrects what you already know, and the pages that depend on it stay current.
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
+    <img src="./docs/assets/wenlan-system.png" alt="Wenlan turns documents, notes, and AI conversations into traceable evidence and maintained pages, handles routine knowledge maintenance, and returns current knowledge across AI tools through a daily brief, capture, handoff, and refinement loop." width="100%">
+  </picture>
+</p>
+
+This is Wenlan's implementation of llm-wiki v2: evidence and pages have separate, linked lifecycles. Wenlan handles the bookkeeping and asks only when sources conflict or an update would change something you wrote.
+
 <p align="center">
   <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
 </p>
-
-Wenlan brings scattered documents, notes, and AI conversations into one local-first knowledge base. This is llm-wiki v2: two connected layers, evidence you can inspect and a maintained wiki that compounds over time.
-
-Knowledge can return across your AI tools without losing its sources. Wenlan handles routine organization and updates in the background; only conflicting sources and proposed changes to your own writing wait for your judgment.
 
 ### Evidence you can inspect
 
@@ -193,33 +179,16 @@ A document, an older conversation, and a new agent decision can all support the 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
 
-## How it works
+## Daily workflow
 
-The same loop runs every session: capture while you work, let Wenlan refine between sessions, and return with current knowledge already in context.
+The system above becomes a small daily loop: start with relevant knowledge, capture what matters while you work, close with a handoff, and let Wenlan refine what should return next time. Each pass leaves the same knowledge base sharper instead of creating another disconnected history.
 
-```text
-      ┌──────── loops back · /handoff closes each pass ─────────┐
-      ▼                                                         │
-┌─────┴─────┐    ┌─────────────┐    ┌────────────────┐    ┌─────┴─────┐
-│ CAPTURE   │    │ DAEMON      │    │ ONE STORE      │    │ RECALL +  │
-│  in flow  │ ─▶ │  refines    │ ─▶ │  (local)       │ ─▶ │  BRIEF    │
-│  /capture │    │  between    │    │  · memories    │    │  next     │
-│           │    │  sessions   │    │  · wiki pages  │    │  session  │
-│           │    │  dedup·link │    │  · graph       │    │  /recall  │
-│           │    │  /distill   │    │                │    │  /brief   │
-└───────────┘    └─────────────┘    └────────────────┘    └───────────┘
-   one local daemon · one store · every MCP client reads it
-   Claude Code · Cursor · Codex · Claude Desktop · VS Code · Gemini
-```
+The loop has four steps:
 
-Each pass leaves the store sharper: loose captures can be deduplicated, linked, and distilled into source-backed pages, so the next session returns to knowledge instead of raw history.
-
-Four public workflows drive the system:
-
-1. **Start with context.** `/brief [topic]` loads project status, preferences, and relevant knowledge. MCP-only clients call `context` for the same purpose.
-2. **Capture and look up knowledge in flow.** `/capture <thing>` stores a decision, lesson, gotcha, or fact with typed provenance. `/recall <query>` retrieves the relevant slice instead of loading the whole history.
+1. **Start with context.** `/brief [topic]` brings in project status, preferences, and the relevant pages and memories. Clients without plugin commands use the equivalent `context` tool.
+2. **Capture and find knowledge while you work.** `/capture <thing>` saves a decision, lesson, gotcha, or fact with its source. `/recall <query>` retrieves only what is relevant instead of loading your whole history.
 3. **Close the loop.** `/handoff` records what changed, what remains open, and where the next session should continue.
-4. **Maintain the wiki.** `/distill` deliberately creates or refreshes pages. Background passes can enrich captures, link entities, deduplicate overlaps, and refresh eligible pages between sessions. `/lint` and `/curate` expose integrity and review work.
+4. **Keep the wiki current.** `/distill` deliberately creates or refreshes pages. Between sessions, background passes can enrich captures, connect related entities, merge overlaps, and refresh eligible pages. `/lint` checks knowledge health; `/curate` brings conflicts and proposed revisions to you.
 
 ### Choose how Wenlan thinks
 
