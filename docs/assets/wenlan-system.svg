@@ -1,161 +1,140 @@
-<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">How Wenlan turns ongoing work into knowledge that stays current</title>
-  <desc id="desc">Documents, notes, and AI conversations become traceable evidence and maintained pages. Wenlan handles routine organization and asks for judgment only on conflicts or changes to human writing. A daily brief, capture, handoff, and refinement loop returns current knowledge to every supported tool.</desc>
-
-  <rect width="1600" height="1000" fill="#F7F8FC"/>
-
-  <g transform="translate(80 58)">
-    <g transform="translate(1368 0)">
-      <circle cx="36" cy="36" r="29" stroke="url(#brandRing)" stroke-width="14"/>
-      <circle cx="48" cy="19" r="8" fill="#4AC8E8"/>
-    </g>
-    <text x="0" y="42" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="42" font-weight="760" letter-spacing="0">From scattered work to knowledge that stays current</text>
-    <text x="0" y="82" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="500" letter-spacing="0">Sources become traceable evidence, evidence becomes maintained pages, and the right knowledge returns wherever you work.</text>
+<svg width="1600" height="1040" viewBox="0 0 1600 1040" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">From scattered work to knowledge you can use again</title>
+  <desc id="desc">Sources, what your work teaches you, and the pages they support stay connected.</desc>
+  <rect width="1600" height="1040" fill="#F7F8FC"/>
+  <g transform="translate(80 48) scale(0.140625)">
+    <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="url(#overview-en-desktop-ring)" stroke-width="76"/>
+    <circle cx="322" cy="160" r="42" fill="url(#overview-en-desktop-orb)"/>
   </g>
+  <text x="180" y="80" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="40" font-weight="740" text-anchor="start" letter-spacing="0">From scattered work to knowledge you can use again</text>
+  <text x="180" y="119" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="21" font-weight="520" text-anchor="start" letter-spacing="0">Sources, what your work teaches you, and the pages they support stay connected.</text>
 
-  <g transform="translate(80 168)">
-    <rect width="440" height="414" rx="12" fill="#EAF4FF" stroke="#5BA3E6" stroke-width="2"/>
-    <text x="30" y="48" fill="#245F9C" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="750" letter-spacing="0">1 · BRING IN YOUR WORK</text>
-    <text x="30" y="84" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">Wenlan starts where your</text>
-    <text x="30" y="114" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">knowledge already lives</text>
+  <path d="M 430 310 C 470 310 466 215 500 215" fill="none" stroke="#5BA3E6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
+  <path d="M 430 590 C 470 590 466 235 500 235" fill="none" stroke="#6C63FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
+  <path d="M 740 250 V 278" fill="none" stroke="#3CB878" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
+  <path d="M 1040 500 H 1090" fill="none" stroke="#F0A43A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
 
-    <g transform="translate(30 136)">
-      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
-      <circle cx="28" cy="25" r="8" fill="#5BA3E6"/>
-      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Documents and PDFs</text>
-    </g>
-    <g transform="translate(30 194)">
-      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
-      <circle cx="28" cy="25" r="8" fill="#4AC8E8"/>
-      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Obsidian and Markdown notes</text>
-    </g>
-    <g transform="translate(30 252)">
-      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
-      <circle cx="28" cy="25" r="8" fill="#6C63FF"/>
-      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Past AI conversations</text>
-    </g>
-    <g transform="translate(30 310)">
-      <rect width="380" height="50" rx="8" fill="#FFFFFF" stroke="#B9D9F5"/>
-      <circle cx="28" cy="25" r="8" fill="#F0A43A"/>
-      <text x="50" y="32" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="620" letter-spacing="0">Live work with AI</text>
-    </g>
-    <text x="30" y="392" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="560" letter-spacing="0">Nothing has to start in Wenlan.</text>
-  </g>
+  <rect x="80" y="180" width="350" height="260" rx="14" fill="#EAF4FF" stroke="#5BA3E6" stroke-width="2"/>
+  <text x="110" y="220" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="1.4">SOURCES</text>
+  <text x="110" y="258" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="25" font-weight="700" text-anchor="start" letter-spacing="0">What you already have</text>
+  <rect x="110" y="282" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="1.5"/>
+      <circle cx="134" cy="302" r="7" fill="#5BA3E6"/>
+      <text x="154" y="308.12" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="620" text-anchor="start" letter-spacing="0">Documents and PDFs</text>
+<rect x="110" y="332" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="1.5"/>
+      <circle cx="134" cy="352" r="7" fill="#5BA3E6"/>
+      <text x="154" y="358.12" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="620" text-anchor="start" letter-spacing="0">Obsidian and Markdown notes</text>
+<rect x="110" y="382" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="1.5"/>
+      <circle cx="134" cy="402" r="7" fill="#5BA3E6"/>
+      <text x="154" y="408.12" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="620" text-anchor="start" letter-spacing="0">Past AI conversations</text>
 
-  <g transform="translate(580 168)">
-    <rect width="440" height="414" rx="12" fill="#EAF8F2" stroke="#3CB878" stroke-width="2"/>
-    <text x="30" y="48" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="750" letter-spacing="0">2 · TWO LINKED LIFECYCLES</text>
-    <text x="30" y="84" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">Evidence and pages</text>
-    <text x="30" y="114" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">improve together</text>
+  <rect x="80" y="460" width="350" height="260" rx="14" fill="#F0EEFF" stroke="#6C63FF" stroke-width="2"/>
+  <text x="110" y="500" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="1.4">MEMORIES</text>
+  <text x="110" y="538" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="23" font-weight="700" text-anchor="start" letter-spacing="0">What ongoing work teaches you</text>
+  <rect x="110" y="548" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.5"/>
+      <circle cx="134" cy="568" r="7" fill="#6C63FF"/>
+      <text x="154" y="574.46" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">Decisions and lessons</text>
+<rect x="110" y="598" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.5"/>
+      <circle cx="134" cy="618" r="7" fill="#6C63FF"/>
+      <text x="154" y="624.46" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">Corrections and preferences</text>
+<rect x="110" y="648" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.5"/>
+      <circle cx="134" cy="668" r="7" fill="#6C63FF"/>
+      <text x="154" y="674.46" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">Project context worth reusing</text>
+  <text x="110" y="704" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">Selective knowledge, not another transcript</text>
 
-    <g transform="translate(20 136)">
-      <rect width="190" height="218" rx="10" fill="#FFFFFF" stroke="#A9DDC4"/>
-      <text x="20" y="39" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="720" letter-spacing="0">Evidence</text>
-      <text x="20" y="76" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Keeps its source</text>
-      <text x="20" y="111" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Confirms and connects</text>
-      <text x="20" y="146" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Records corrections</text>
-      <text x="20" y="181" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Preserves history</text>
-    </g>
+  <rect x="500" y="180" width="480" height="70" rx="35" fill="#EAF8F2" stroke="#3CB878" stroke-width="2"/>
+  <circle cx="535" cy="215" r="13" fill="#3CB878"/>
+  <path d="M529 215L534 220L543 209" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="560" y="210" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="17" font-weight="760" text-anchor="start" letter-spacing="1.2">TRACEABLE EVIDENCE</text>
+  <text x="560" y="234" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="560" text-anchor="start" letter-spacing="0">Every claim keeps its source and links</text>
 
-    <path d="M211 245H228" stroke="#3CB878" stroke-width="3" stroke-linecap="round"/>
-    <path d="M222 237L230 245L222 253" stroke="#3CB878" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="480" y="280" width="560" height="440" rx="12" fill="#FFFFFF" stroke="#3CB878" stroke-width="2.5"/>
+  <text x="520" y="320" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="17" font-weight="760" text-anchor="start" letter-spacing="1.1">ONE MAINTAINED PAGE</text>
+  <rect x="838" y="296" width="92" height="36" rx="18" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="884" y="318.9" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">CURRENT</text>
+  <rect x="938" y="296" width="82" height="36" rx="18" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
+  <text x="979" y="317.5" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="10" font-weight="720" text-anchor="middle" letter-spacing="0">SOURCE-CITED</text>
+  <text x="520" y="374" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="34" font-weight="740" text-anchor="start" letter-spacing="0">Launch strategy</text>
+  <text x="520" y="414" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="19" font-weight="700" text-anchor="start" letter-spacing="0">What we know now</text>
+  <circle cx="520" cy="449" r="7" fill="#3CB878"/>
+      <text x="540" y="456" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="570" text-anchor="start" letter-spacing="0">Early users need continuity, not more notes.</text>
+<circle cx="520" cy="485" r="7" fill="#3CB878"/>
+      <text x="540" y="492" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="570" text-anchor="start" letter-spacing="0">Lead with work that returns across AI tools.</text>
+<circle cx="520" cy="521" r="7" fill="#3CB878"/>
+      <text x="540" y="528" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="570" text-anchor="start" letter-spacing="0">Ask only when sources or intent conflict.</text>
+  <line x1="520" y1="562" x2="1000" y2="562" stroke="#D9DCE8" stroke-width="2"/>
+  <text x="520" y="590" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="760" text-anchor="start" letter-spacing="1">SOURCES USED</text>
+  <rect x="520" y="605" width="148" height="42" rx="21" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
+  <text x="594" y="630.9" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">1 · Product brief</text>
+<rect x="682" y="605" width="148" height="42" rx="21" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
+  <text x="756" y="630.9" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">2 · Past AI conversation</text>
+<rect x="844" y="605" width="148" height="42" rx="21" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
+  <text x="918" y="630.9" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">3 · Project decision</text>
+  <text x="520" y="687" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="760" text-anchor="start" letter-spacing="1">LINKED</text>
+  <text x="598" y="687" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="17" font-weight="600" text-anchor="start" letter-spacing="0">beta users · launch plan · pricing</text>
 
-    <g transform="translate(230 136)">
-      <rect width="190" height="218" rx="10" fill="#FFFFFF" stroke="#A9DDC4"/>
-      <text x="20" y="39" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="720" letter-spacing="0">Pages</text>
-      <text x="20" y="76" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Builds with citations</text>
-      <text x="20" y="111" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Knows what is stale</text>
-      <text x="20" y="146" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Refreshes the right page</text>
-      <text x="20" y="181" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="600" letter-spacing="0">Protects your writing</text>
-    </g>
-    <text x="30" y="392" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="560" letter-spacing="0">When knowledge changes, affected pages know.</text>
-  </g>
+  <rect x="1100" y="180" width="420" height="540" rx="14" fill="#FFF5E5" stroke="#F0A43A" stroke-width="2"/>
+  <text x="1130" y="225" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="1.4">USE IT AGAIN</text>
+  <text x="1130" y="270" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="27" font-weight="720" text-anchor="start" letter-spacing="0">Current knowledge returns</text>
+<text x="1130" y="304" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="27" font-weight="720" text-anchor="start" letter-spacing="0">to the work</text>
+  <rect x="1130" y="322" width="360" height="60" rx="8" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.5"/>
+      <circle cx="1154" cy="352" r="7" fill="#F0A43A"/>
+      <text x="1174" y="358.46" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">Brief + Recall</text>
+<rect x="1130" y="392" width="360" height="60" rx="8" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.5"/>
+      <circle cx="1154" cy="422" r="7" fill="#F0A43A"/>
+      <text x="1174" y="428.46" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">Pages you can inspect</text>
+<rect x="1130" y="462" width="360" height="60" rx="8" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.5"/>
+      <circle cx="1154" cy="492" r="7" fill="#F0A43A"/>
+      <text x="1174" y="498.46" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">Claude · Codex · Cursor · MCP</text>
+  <text x="1130" y="576" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="650" text-anchor="start" letter-spacing="0">One local knowledge base</text>
+  <text x="1130" y="610" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="560" text-anchor="start" letter-spacing="0">Available wherever you work</text>
+  <path d="M1160 655H1460" stroke="#F0D3A8" stroke-width="2"/>
+  <text x="1310" y="690" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="700" text-anchor="middle" letter-spacing="0">Brief · Recall · Pages · MCP</text>
 
-  <g transform="translate(1080 168)">
-    <rect width="440" height="414" rx="12" fill="#FFF5E5" stroke="#F0A43A" stroke-width="2"/>
-    <text x="30" y="48" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="750" letter-spacing="0">3 · USE CURRENT KNOWLEDGE</text>
-    <text x="30" y="84" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">Current knowledge returns</text>
-    <text x="30" y="114" fill="#17182E" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="740" letter-spacing="0">wherever you work</text>
+  <rect x="80" y="760" width="1440" height="150" rx="14" fill="#101024" stroke="#101024" stroke-width="2"/>
+  <line x1="800" y1="790" x2="800" y2="880" stroke="#343858" stroke-width="2"/>
+  <circle cx="125" cy="807" r="17" fill="#3CB878"/>
+  <path d="M117 807L123 813L134 800" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="160" y="814" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="25" font-weight="700" text-anchor="start" letter-spacing="0">Wenlan handles routine maintenance</text>
+  <text x="160" y="855" fill="#93E3F2" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="20" font-weight="600" text-anchor="start" letter-spacing="0">Organize · connect · cite · refresh</text>
+  <text x="160" y="884" fill="#A9AEC5" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="17" font-weight="520" text-anchor="start" letter-spacing="0">No manual wiki upkeep loop</text>
+  <circle cx="845" cy="807" r="17" fill="#F0A43A"/>
+  <path d="M845 798V810" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="845" cy="817" r="2" fill="#FFFFFF"/>
+  <text x="880" y="814" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="25" font-weight="700" text-anchor="start" letter-spacing="0">You decide when judgment is needed</text>
+  <text x="880" y="855" fill="#FFD89B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="20" font-weight="600" text-anchor="start" letter-spacing="0">Conflicting sources · changes to your writing</text>
+  <text x="880" y="884" fill="#A9AEC5" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="17" font-weight="520" text-anchor="start" letter-spacing="0">Wenlan proposes; you keep authority</text>
 
-    <g transform="translate(30 136)">
-      <rect width="380" height="66" rx="8" fill="#FFFFFF" stroke="#F0D3A8"/>
-      <text x="20" y="27" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="720" letter-spacing="0">READ AND CURATE</text>
-      <text x="20" y="54" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20" font-weight="620" letter-spacing="0">Wenlan app · Obsidian</text>
-    </g>
-    <g transform="translate(30 212)">
-      <rect width="380" height="66" rx="8" fill="#FFFFFF" stroke="#F0D3A8"/>
-      <text x="20" y="27" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="720" letter-spacing="0">WORK WITH AI</text>
-      <text x="20" y="54" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20" font-weight="620" letter-spacing="0">Claude · Codex · Cursor · Gemini</text>
-    </g>
-    <g transform="translate(30 288)">
-      <rect width="380" height="66" rx="8" fill="#FFFFFF" stroke="#F0D3A8"/>
-      <text x="20" y="27" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="720" letter-spacing="0">BRING IT BACK</text>
-      <text x="20" y="54" fill="#25283B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20" font-weight="620" letter-spacing="0">Brief · Recall · Pages · MCP</text>
-    </g>
-    <text x="30" y="392" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="560" letter-spacing="0">One local store, available across tools.</text>
-  </g>
-
-  <g transform="translate(80 616)">
-    <rect width="1440" height="152" rx="12" fill="#101024"/>
-    <line x1="720" y1="30" x2="720" y2="122" stroke="#343858" stroke-width="2"/>
-
-    <g transform="translate(34 28)">
-      <circle cx="18" cy="18" r="18" fill="#3CB878"/>
-      <path d="M10 18L16 24L27 12" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="52" y="23" fill="#93E3F2" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="750" letter-spacing="0">WENLAN HANDLES THE BOOKKEEPING</text>
-      <text x="52" y="65" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="650" letter-spacing="0">Organize · deduplicate · connect · cite · refresh</text>
-      <text x="52" y="96" fill="#A9AEC5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="520" letter-spacing="0">Routine maintenance continues without turning your work into an approval queue.</text>
-    </g>
-
-    <g transform="translate(754 28)">
-      <circle cx="18" cy="18" r="18" fill="#F0A43A"/>
-      <path d="M18 9V20" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="18" cy="27" r="2" fill="#FFFFFF"/>
-      <text x="52" y="23" fill="#FFD89B" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="750" letter-spacing="0">YOUR JUDGMENT STAYS IN THE RIGHT PLACE</text>
-      <text x="52" y="65" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="650" letter-spacing="0">Conflicting sources · changes to your writing</text>
-      <text x="52" y="96" fill="#A9AEC5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="520" letter-spacing="0">Wenlan proposes; you decide only where intent or truth cannot be inferred safely.</text>
-    </g>
-  </g>
-
-  <g transform="translate(80 804)">
-    <rect width="1440" height="142" rx="12" fill="#FFFFFF" stroke="#D9DCE8" stroke-width="2"/>
-    <text x="28" y="39" fill="#565B73" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="750" letter-spacing="0">DAILY WORKFLOW</text>
-
-    <g transform="translate(28 60)">
-      <rect width="210" height="54" rx="8" fill="#EAF4FF" stroke="#5BA3E6"/>
-      <text x="105" y="34" fill="#245F9C" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">BRIEF</text>
-    </g>
-    <path d="M250 87H282" stroke="#8B90A4" stroke-width="2.5"/>
-    <path d="M276 80L284 87L276 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <g transform="translate(292 60)">
-      <rect width="260" height="54" rx="8" fill="#F0EEFF" stroke="#6C63FF"/>
-      <text x="130" y="34" fill="#5048C8" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">WORK + CAPTURE</text>
-    </g>
-    <path d="M564 87H596" stroke="#8B90A4" stroke-width="2.5"/>
-    <path d="M590 80L598 87L590 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <g transform="translate(606 60)">
-      <rect width="210" height="54" rx="8" fill="#FFF5E5" stroke="#F0A43A"/>
-      <text x="105" y="34" fill="#9B5A0A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">HANDOFF</text>
-    </g>
-    <path d="M828 87H860" stroke="#8B90A4" stroke-width="2.5"/>
-    <path d="M854 80L862 87L854 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <g transform="translate(870 60)">
-      <rect width="230" height="54" rx="8" fill="#EAF8F2" stroke="#3CB878"/>
-      <text x="115" y="34" fill="#187347" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">REFINE + DISTILL</text>
-    </g>
-    <path d="M1112 87H1144" stroke="#8B90A4" stroke-width="2.5"/>
-    <path d="M1138 80L1146 87L1138 94" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <g transform="translate(1154 60)">
-      <rect width="258" height="54" rx="8" fill="#EAF4FF" stroke="#5BA3E6"/>
-      <text x="129" y="34" fill="#245F9C" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="720" text-anchor="middle" letter-spacing="0">CURRENT KNOWLEDGE</text>
-    </g>
-  </g>
+  <rect x="80" y="940" width="1440" height="80" rx="12" fill="#FFFFFF" stroke="#D9DCE8" stroke-width="2"/>
+  <text x="108" y="986" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="760" text-anchor="start" letter-spacing="1">DAILY WORKFLOW</text>
+  <rect x="300" y="956" width="142" height="48" rx="24" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
+  <text x="371" y="985.6" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Brief</text>
+<path d="M 450 980 H 480" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
+<rect x="490" y="956" width="210" height="48" rx="24" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="595" y="985.6" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Work + Capture</text>
+<path d="M 708 980 H 738" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
+<rect x="748" y="956" width="150" height="48" rx="24" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="823" y="985.6" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Handoff</text>
+<path d="M 906 980 H 936" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
+<rect x="946" y="956" width="210" height="48" rx="24" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="1051" y="985.6" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Refine + Distill</text>
+<path d="M 1164 980 H 1194" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-en-desktop-arrow)"/>
+<rect x="1204" y="956" width="210" height="48" rx="24" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
+  <text x="1309" y="985.6" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Current knowledge</text>
 
   <defs>
-    <linearGradient id="brandRing" x1="7" y1="36" x2="65" y2="36" gradientUnits="userSpaceOnUse">
+    <linearGradient id="overview-en-desktop-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6C63FF"/>
       <stop offset="0.5" stop-color="#5BA3E6"/>
       <stop offset="1" stop-color="#4AC8E8"/>
     </linearGradient>
+    <radialGradient id="overview-en-desktop-orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(310 144) rotate(52.125) scale(76.0263)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#A5C4F7"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </radialGradient>
+    <marker id="overview-en-desktop-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8B90A4"/>
+    </marker>
   </defs>
 </svg>

@@ -1,35 +1,23 @@
-<svg width="720" height="320" viewBox="0 0 720 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Wenlan README mobile banner</title>
+<svg width="720" height="300" viewBox="0 0 720 300" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Wenlan README banner</title>
   <desc id="desc">Wenlan: your source-backed knowledge base, built to compound.</desc>
-
-  <rect width="720" height="320" fill="#101024"/>
-  <rect x="24" y="16" width="672" height="288" rx="24" fill="#101024" stroke="#2F3769"/>
-
-  <g transform="translate(54 101) scale(0.38)">
-    <rect width="312" height="312" rx="72" fill="#1A1A2E"/>
-    <circle cx="156" cy="156" r="98" stroke="url(#ring)" stroke-width="48"/>
-    <circle cx="197" cy="97" r="26" fill="url(#orb)"/>
+  <rect width="720" height="300" fill="#101024"/>
+  <rect x="24" y="16" width="672" height="268" rx="24" fill="#101024" stroke="#2F3769"/>
+  <g transform="translate(294 30) scale(0.2578125)">
+    <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="url(#banner-mobile-ring)" stroke-width="76"/>
+    <circle cx="322" cy="160" r="42" fill="url(#banner-mobile-orb)"/>
   </g>
-
-  <g transform="translate(195 77)">
-    <text x="0" y="22" fill="#93E3F2" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="700" letter-spacing="3">
-      WENLAN
-    </text>
-    <text x="0" y="70" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="760" letter-spacing="0">
-      Your source-backed knowledge
-    </text>
-    <text x="0" y="106" fill="#F7F8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="760" letter-spacing="0">
-      base, built to compound.
-    </text>
-  </g>
-
+  <text x="360" y="190" fill="#93E3F2" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="28" font-weight="700" text-anchor="middle" letter-spacing="4">WENLAN</text>
+  <text x="360" y="232" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="34" font-weight="700" text-anchor="middle">Your source-backed knowledge base,</text>
+  <text x="360" y="270" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="34" font-weight="700" text-anchor="middle">built to compound.</text>
   <defs>
-    <linearGradient id="ring" x1="58" y1="156" x2="254" y2="156" gradientUnits="userSpaceOnUse">
+    <linearGradient id="banner-mobile-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6C63FF"/>
-      <stop offset="0.48" stop-color="#5BA3E6"/>
+      <stop offset="0.5" stop-color="#5BA3E6"/>
       <stop offset="1" stop-color="#4AC8E8"/>
     </linearGradient>
-    <radialGradient id="orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(189 87) rotate(52) scale(47)">
+    <radialGradient id="banner-mobile-orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(310 144) rotate(52.125) scale(76.0263)">
       <stop stop-color="#FFFFFF"/>
       <stop offset="0.45" stop-color="#A5C4F7"/>
       <stop offset="1" stop-color="#4AC8E8"/>

@@ -1,0 +1,199 @@
+<svg width="1800" height="1260" viewBox="0 0 1800 1260" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Wenlan 如何讓知識持續更新，又不抹掉歷史</title>
+  <desc id="desc">依據改變，頁面隨之更新；只有無法安全判斷的事才會交給你。</desc>
+  <rect width="1800" height="1260" fill="#F7F8FC"/>
+  <g transform="translate(70 42) scale(0.140625)">
+    <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="url(#lifecycle-zh-Hant-desktop-ring)" stroke-width="76"/>
+    <circle cx="322" cy="160" r="42" fill="url(#lifecycle-zh-Hant-desktop-orb)"/>
+  </g>
+  <text x="170" y="76" fill="#17182E" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="38" font-weight="740" text-anchor="start" letter-spacing="0">Wenlan 如何讓知識持續更新，又不抹掉歷史</text>
+  <text x="170" y="116" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="20" font-weight="520" text-anchor="start" letter-spacing="0">依據改變，頁面隨之更新；只有無法安全判斷的事才會交給你。</text>
+  <rect x="1000" y="54" width="88" height="34" rx="17" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="1044" y="75.9" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">核心流程</text>
+<rect x="1102" y="54" width="88" height="34" rx="17" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="1146" y="75.9" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">LLM 輔助</text>
+<rect x="1204" y="54" width="88" height="34" rx="17" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="1248" y="75.9" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">人工判斷</text>
+<rect x="1306" y="54" width="115" height="34" rx="17" fill="#F4F5F8" stroke="#8B90A4" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="1363.5" y="75.9" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">可選 · 預設關閉</text>
+
+  <rect x="60" y="160" width="1680" height="350" rx="16" fill="#F4F1FF" stroke="#C8C2FA" stroke-width="2"/>
+  <text x="90" y="205" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="22" font-weight="780" text-anchor="start" letter-spacing="0">1 · 依據與記憶</text>
+  <text x="90" y="240" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="560" text-anchor="start" letter-spacing="0">保留重要知識、它的來</text>
+<text x="90" y="264" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="560" text-anchor="start" letter-spacing="0">源，以及後來發生的變化。</text>
+  <path d="M 550 267 H 570" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+<path d="M 825 267 H 845" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+<path d="M 1100 267 H 1120" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+<path d="M 1375 267 H 1395" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+  <rect x="300" y="215" width="250" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="318" y="246" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">捕獲 / 匯入</text>
+  <text x="318" y="273" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">來源資料 + 進行中的 AI 工作</text>
+  <rect x="478" y="282" width="58" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="507" y="300.2" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">核心</text>
+<rect x="575" y="215" width="250" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="593" y="246" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">分類 + 抽取</text>
+  <text x="593" y="273" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">類型 · 事實 · 重要性</text>
+  <rect x="753" y="282" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="782" y="300.2" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="850" y="215" width="250" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="868" y="246" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">豐富 + 標籤</text>
+  <text x="868" y="273" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">脈絡 · 可信度 · 關聯</text>
+  <rect x="1028" y="282" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="1057" y="300.2" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="1125" y="215" width="250" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="1143" y="246" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">實體關聯</text>
+  <text x="1143" y="273" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">人物 · 專案 · 概念</text>
+  <rect x="1303" y="282" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="1332" y="300.2" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="1400" y="215" width="250" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="1418" y="246" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">穩定度</text>
+  <text x="1418" y="273" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">new → learned → confirmed</text>
+  <rect x="1578" y="282" width="58" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="1607" y="300.2" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">核心</text>
+  <text x="1400" y="343" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">沒有矛盾時晉級；經檢查後確認</text>
+
+  <path d="M 1525 320 C 1525 340 515 334 515 350" fill="none" stroke="#3CB878" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+  <path d="M 1525 320 C 1525 340 960 334 960 350" fill="none" stroke="#D75A62" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+  <rect x="300" y="360" width="420" height="125" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="318" y="391" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">更正 + 取代</text>
+  <text x="318" y="418" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">舊說法與取代它的新說法保持關聯</text>
+  <rect x="648" y="447" width="58" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="677" y="465.2" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">核心</text>
+  <rect x="745" y="360" width="420" height="125" rx="10" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.8"/>
+  <text x="763" y="391" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">矛盾審查</text>
+  <text x="763" y="418" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">受保護內容衝突時絕不自動改寫</text>
+  <rect x="1093" y="447" width="58" height="28" rx="14" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="1122" y="465.2" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">人工</text>
+  <rect x="1190" y="360" width="490" height="125" rx="10" fill="#F8F8FA" stroke="#8B90A4" stroke-width="1.8" stroke-dasharray="9 7"/>
+  <text x="1210" y="392" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0">雙池解析</text>
+  <text x="1210" y="421" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">近似重複 + 同主題矛盾</text>
+  <text x="1210" y="448" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="13" font-weight="600" text-anchor="start" letter-spacing="0">只軟隱藏、不刪除；受保護知識保持不動</text>
+  <rect x="1560" y="372" width="58" height="28" rx="14" fill="#F4F5F8" stroke="#8B90A4" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="1589" y="390.2" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">可選</text>
+
+  <path d="M 900 510 V 566" fill="none" stroke="#3CB878" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+  <rect x="610" y="521" width="580" height="42" rx="21" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="900" y="547.6" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">依據改變後，受影響的頁面會被標記為過時</text>
+
+  <rect x="60" y="570" width="1680" height="310" rx="16" fill="#EFF8F4" stroke="#A9DDC4" stroke-width="2"/>
+  <text x="90" y="615" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="22" font-weight="780" text-anchor="start" letter-spacing="0">2 · 持續維護的頁面</text>
+  <text x="90" y="650" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="560" text-anchor="start" letter-spacing="0">從引用建立，按需更新，</text>
+<text x="90" y="674" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="560" text-anchor="start" letter-spacing="0">同時保護作者身分。</text>
+  <path d="M 552 667 H 570" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+<path d="M 824 667 H 842" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+<path d="M 1096 667 H 1114" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+<path d="M 1368 667 H 1386" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+  <rect x="300" y="615" width="252" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="318" y="646" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="740" text-anchor="start" letter-spacing="0.3">附加 / 新建 / 擴寫</text>
+  <text x="318" y="673" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">把依據送到正確頁面</text>
+  <rect x="480" y="682" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="509" y="700.2" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="572" y="615" width="252" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="590" y="646" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="740" text-anchor="start" letter-spacing="0.3">來源連結 + 引用</text>
+  <text x="590" y="673" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">每個結論都可檢查</text>
+  <rect x="752" y="682" width="58" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="781" y="700.2" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">核心</text>
+<rect x="844" y="615" width="252" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="862" y="646" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="740" text-anchor="start" letter-spacing="0.3">過時</text>
+  <text x="862" y="673" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">知道哪些來源變了</text>
+  <rect x="1024" y="682" width="58" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="1053" y="700.2" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">核心</text>
+<rect x="1116" y="615" width="252" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="1134" y="646" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="740" text-anchor="start" letter-spacing="0.3">重新蒸餾 + 驗證</text>
+  <text x="1134" y="673" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">只更新有依據的結論</text>
+  <rect x="1296" y="682" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="1325" y="700.2" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="1388" y="615" width="252" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="1406" y="646" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="740" text-anchor="start" letter-spacing="0.3">穩定身分</text>
+  <text x="1406" y="673" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">版本 + 變更歷史</text>
+  <rect x="1568" y="682" width="58" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="1597" y="700.2" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">核心</text>
+  <path d="M 1242 720 C 1242 735 790 730 790 740" fill="none" stroke="#F0A43A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+  <rect x="540" y="740" width="520" height="105" rx="10" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.8"/>
+  <text x="558" y="771" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">人工編輯的頁面</text>
+  <text x="558" y="798" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">機器改動會變成待審修訂</text>
+  <rect x="988" y="807" width="58" height="28" rx="14" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="1017" y="825.2" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">人工</text>
+  <path d="M 1060 792 H 1090" fill="none" stroke="#F0A43A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
+  <rect x="1110" y="740" width="570" height="105" rx="10" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.8"/>
+  <text x="1128" y="771" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="740" text-anchor="start" letter-spacing="0.3">接受 / 忽略</text>
+  <text x="1128" y="798" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">你的文字絕不會被靜默覆蓋</text>
+  <rect x="1608" y="807" width="58" height="28" rx="14" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="1637" y="825.2" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">人工</text>
+  <text x="1110" y="868" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="15" font-weight="650" text-anchor="start" letter-spacing="0">透過 Brief · Recall · Pages · MCP 回到後續工作</text>
+
+  <rect x="60" y="900" width="1680" height="320" rx="16" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="2"/>
+  <text x="90" y="940" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="21" font-weight="780" text-anchor="start" letter-spacing="0">3 · 後台精煉</text>
+  <text x="90" y="978" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="560" text-anchor="start" letter-spacing="0">在合適時機做合適維護</text>
+<text x="90" y="1001" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="560" text-anchor="start" letter-spacing="0">；Backstop 補上遺漏的工作。</text>
+
+  <rect x="300" y="935" width="250" height="250" rx="12" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="2"/>
+  <text x="325" y="974" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">工作結束後</text>
+  <circle cx="327" cy="1005" r="6" fill="#6C63FF"/>
+      <text x="345" y="1010" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="600" text-anchor="start" letter-spacing="0">工作回顧 (Recaps)</text>
+<circle cx="327" cy="1033" r="6" fill="#6C63FF"/>
+      <text x="345" y="1038" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="600" text-anchor="start" letter-spacing="0">精煉佇列</text>
+
+  <rect x="570" y="935" width="350" height="250" rx="12" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="2"/>
+  <text x="595" y="974" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">閒置時</text>
+  <circle cx="597" cy="1002" r="6" fill="#3CB878"/>
+      <text x="615" y="1007" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">社群偵測</text>
+<circle cx="597" cy="1026" r="6" fill="#3CB878"/>
+      <text x="615" y="1031" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">頁面候選偵測</text>
+<circle cx="597" cy="1050" r="6" fill="#6C63FF"/>
+      <text x="615" y="1055" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">新頁面湧現</text>
+<circle cx="597" cy="1074" r="6" fill="none" stroke="#8B90A4" stroke-width="2" stroke-dasharray="3 2"/>
+      <text x="615" y="1079" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">摘要彙總¹</text>
+<circle cx="597" cy="1098" r="6" fill="#6C63FF"/>
+      <text x="615" y="1103" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">重新蒸餾</text>
+<circle cx="597" cy="1122" r="6" fill="#6C63FF"/>
+      <text x="615" y="1127" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">Overview 更新</text>
+<circle cx="597" cy="1146" r="6" fill="#6C63FF"/>
+      <text x="615" y="1151" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">決策日誌</text>
+
+  <rect x="940" y="935" width="430" height="250" rx="12" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="2"/>
+  <text x="965" y="974" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">每天</text>
+  <circle cx="967" cy="997" r="6" fill="#3CB878"/>
+      <text x="985" y="1002" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">信心衰減</text>
+<circle cx="967" cy="1018" r="6" fill="#3CB878"/>
+      <text x="985" y="1023" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">晉級</text>
+<circle cx="967" cy="1039" r="6" fill="#3CB878"/>
+      <text x="985" y="1044" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">重織關聯</text>
+<circle cx="967" cy="1060" r="6" fill="#3CB878"/>
+      <text x="985" y="1065" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">重新嵌入</text>
+<circle cx="967" cy="1081" r="6" fill="#6C63FF"/>
+      <text x="985" y="1086" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">實體抽取</text>
+<circle cx="967" cy="1102" r="6" fill="#6C63FF"/>
+      <text x="985" y="1107" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">Overview 更新</text>
+<circle cx="967" cy="1123" r="6" fill="#3CB878"/>
+      <text x="985" y="1128" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">清理拒絕記錄</text>
+<circle cx="967" cy="1144" r="6" fill="none" stroke="#8B90A4" stroke-width="2" stroke-dasharray="3 2"/>
+      <text x="985" y="1149" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">封存²</text>
+<circle cx="967" cy="1165" r="6" fill="#6C63FF"/>
+      <text x="985" y="1170" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">KG 重思</text>
+
+  <rect x="1390" y="935" width="300" height="250" rx="12" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="2"/>
+  <text x="1415" y="974" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">BACKSTOP</text>
+  <circle cx="1417" cy="1005" r="6" fill="#3CB878"/>
+      <text x="1435" y="1010" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">全部階段</text>
+<circle cx="1417" cy="1033" r="6" fill="#3CB878"/>
+      <text x="1435" y="1038" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start" letter-spacing="0">週期性安全網</text>
+  <text x="1415" y="1115" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="15" font-weight="600" text-anchor="start" letter-spacing="0">執行完整階段集合</text>
+  <text x="300" y="1212" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="15" font-weight="600" text-anchor="start" letter-spacing="0">¹ Summary rollup：可選、預設關閉   ·   ² Eviction：可選、預設關閉；只封存，絕不刪除</text>
+  <defs>
+    <linearGradient id="lifecycle-zh-Hant-desktop-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C63FF"/>
+      <stop offset="0.5" stop-color="#5BA3E6"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </linearGradient>
+    <radialGradient id="lifecycle-zh-Hant-desktop-orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(310 144) rotate(52.125) scale(76.0263)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#A5C4F7"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </radialGradient>
+    <marker id="lifecycle-zh-Hant-desktop-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8B90A4"/>
+    </marker>
+  </defs>
+</svg>

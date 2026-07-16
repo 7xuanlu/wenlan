@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=40fd2d6624df606e8470598cdc74e97978cbc6d547319565db46b761b33d8e91 -->
+<!-- README_SYNC: source=README.md sha256=a6204734668fa784a7fac85c76d08ab696d22dfa5bf681160942e963a65b6c93 -->
 
 <p align="center">
   <picture>
@@ -92,8 +92,8 @@ Wenlan 把文档、笔记和 AI 对话整理成可追溯来源、会随工作持
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Wenlan 把文档、笔记和 AI 对话整理成可追溯的证据与持续维护的页面，自动处理日常知识维护，并通过 brief、capture、handoff 和 refinement 循环，让最新知识回到不同 AI 工具。" width="100%">
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-zh-Hans-mobile.png">
+    <img src="./docs/assets/wenlan-system-zh-Hans.png" alt="Wenlan 把文档、Obsidian 笔记和 AI 对话等来源，与工作中值得保留的决策、经验和修正连起来，维护有引用的页面，并让最新知识回到下一次 AI 工作。" width="100%">
   </picture>
 </p>
 
@@ -130,6 +130,13 @@ a1b2c3d distill: 4 pages
 ### llm-wiki v2：两套相连的生命周期
 
 生成出来的 wiki 只是一份快照。Wenlan 把它当作持续维护的知识体系，让证据与由它整理成的文章各自演进，又彼此相连。
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-zh-Hans-mobile.png">
+    <img src="./docs/assets/wenlan-lifecycle-zh-Hans.png" alt="Wenlan 的双生命周期：依据会被捕获、丰富、关联、更正与审核；有来源引用的页面会识别过时内容并更新，同时保护人工文字；后台精炼阶段持续维护体系，并明确标示默认关闭的可选行为。" width="100%">
+  </picture>
+</p>
 
 - **记忆生命周期：** 证据可以被确认、连接、修正或取代，而不失去原有历史。近似重复可以安静合并；矛盾则等待审核。
 - **文章生命周期：** 每篇文章都保留引用，也知道来源何时变化。由 Wenlan 维护的文章可以刷新；你亲自编辑过的文章只会收到修订提案，不会被静默改写。

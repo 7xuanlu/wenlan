@@ -1,0 +1,196 @@
+<svg width="720" height="2380" viewBox="0 0 720 2380" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">How Wenlan keeps knowledge current without erasing its history</title>
+  <desc id="desc">Evidence changes, pages respond, and only ambiguous decisions reach you.</desc>
+  <rect width="720" height="2380" fill="#F7F8FC"/>
+  <g transform="translate(40 38) scale(0.1484375)">
+    <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="url(#lifecycle-en-mobile-ring)" stroke-width="76"/>
+    <circle cx="322" cy="160" r="42" fill="url(#lifecycle-en-mobile-orb)"/>
+  </g>
+  <text x="138" y="68" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="28" font-weight="740" text-anchor="start" letter-spacing="0">How Wenlan keeps knowledge current</text>
+<text x="138" y="102" fill="#17182E" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="28" font-weight="740" text-anchor="start" letter-spacing="0">without erasing its history</text>
+  <text x="138" y="136" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="520" text-anchor="start" letter-spacing="0">Evidence changes, pages respond, and only</text>
+<text x="138" y="159" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="520" text-anchor="start" letter-spacing="0">ambiguous decisions reach you.</text>
+  <rect x="40" y="174" width="88" height="34" rx="17" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="84" y="195.9" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">Core</text>
+<rect x="360" y="174" width="142" height="34" rx="17" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="431" y="195.9" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">LLM-assisted</text>
+<rect x="40" y="218" width="160" height="34" rx="17" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="120" y="239.9" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">Human judgment</text>
+<rect x="360" y="218" width="232" height="34" rx="17" fill="#F4F5F8" stroke="#8B90A4" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="476" y="239.9" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">Optional · default off</text>
+
+  <rect x="24" y="270" width="672" height="690" rx="16" fill="#F4F1FF" stroke="#C8C2FA" stroke-width="2"/>
+  <text x="40" y="313" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="22" font-weight="780" text-anchor="start" letter-spacing="0">1 · EVIDENCE + MEMORY</text>
+  <text x="40" y="346" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="560" text-anchor="start" letter-spacing="0">Keep what matters, where it came from, and what changed.</text>
+  <path d="M 340 432 H 375" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <path d="M 530 485 C 530 493 190 493 190 497" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <path d="M 340 552 H 375" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <rect x="40" y="380" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="58" y="411" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="740" text-anchor="start" letter-spacing="0.3">CAPTURE / IMPORT</text>
+  <text x="58" y="438" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">Sources + live AI work</text>
+  <rect x="266" y="447" width="60" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="296" y="465.2" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">CORE</text>
+<rect x="380" y="380" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="398" y="411" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="740" text-anchor="start" letter-spacing="0.3">CLASSIFY + EXTRACT</text>
+  <text x="398" y="438" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">type · facts · importance</text>
+  <rect x="608" y="447" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="637" y="465.2" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="40" y="500" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="58" y="531" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="740" text-anchor="start" letter-spacing="0.3">ENRICH + TAG</text>
+  <text x="58" y="558" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">context · confidence · links</text>
+  <rect x="268" y="567" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="297" y="585.2" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="380" y="500" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="398" y="531" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="740" text-anchor="start" letter-spacing="0.3">ENTITY LINK</text>
+  <text x="398" y="558" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">people · projects · concepts</text>
+  <rect x="608" y="567" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="637" y="585.2" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+  <path d="M 360 605 V 620" fill="none" stroke="#3CB878" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <rect x="40" y="625" width="640" height="95" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="58" y="656" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="17" font-weight="740" text-anchor="start" letter-spacing="0.3">STABILITY</text>
+  <text x="58" y="683" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="13" font-weight="560" text-anchor="start" letter-spacing="0">new → learned → confirmed</text>
+<text x="58" y="701" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="13" font-weight="560" text-anchor="start" letter-spacing="0">Promote when uncontradicted; confirm by review</text>
+  <rect x="606" y="682" width="60" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="636" y="700.2" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">CORE</text>
+  <rect x="40" y="740" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="58" y="771" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="740" text-anchor="start" letter-spacing="0.3">CORRECT + SUPERSEDE</text>
+  <text x="58" y="798" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">Keep the old claim and its</text>
+<text x="58" y="815" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">replacement linked</text>
+  <rect x="266" y="807" width="60" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="296" y="825.2" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">CORE</text>
+  <rect x="380" y="740" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.8"/>
+  <text x="398" y="771" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="740" text-anchor="start" letter-spacing="0.3">CONTRADICTION REVIEW</text>
+  <text x="398" y="798" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">Protected collisions never</text>
+<text x="398" y="815" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">auto-mutate</text>
+  <rect x="597" y="807" width="69" height="28" rx="14" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="631.5" y="825.2" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">HUMAN</text>
+  <rect x="40" y="865" width="640" height="72" rx="10" fill="#F8F8FA" stroke="#8B90A4" stroke-width="1.8" stroke-dasharray="9 7"/>
+  <text x="58" y="895" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="700" text-anchor="start" letter-spacing="0">DUAL-POOL RESOLVE · Near duplicates + same-subject contradictions</text>
+  <text x="58" y="920" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">Soft-suppress, never delete; protected knowledge stays untouched</text>
+  <rect x="575" y="887" width="96" height="28" rx="14" fill="#F4F5F8" stroke="#8B90A4" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="623" y="905.2" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">OPTIONAL</text>
+
+  <path d="M 360 960 V 990" fill="none" stroke="#3CB878" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <rect x="105" y="968" width="510" height="42" rx="21" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="360" y="993.9" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">Evidence changes mark affected pages stale</text>
+
+  <rect x="24" y="1010" width="672" height="525" rx="16" fill="#EFF8F4" stroke="#A9DDC4" stroke-width="2"/>
+  <text x="40" y="1052" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="22" font-weight="780" text-anchor="start" letter-spacing="0">2 · MAINTAINED PAGES</text>
+  <text x="40" y="1080" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="560" text-anchor="start" letter-spacing="0">Build from citations, refresh selectively, preserve authorship.</text>
+  <path d="M 340 1142 H 375" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <path d="M 530 1195 C 530 1203 190 1203 190 1207" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <path d="M 340 1262 H 375" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <path d="M 530 1315 C 530 1323 190 1323 190 1327" fill="none" stroke="#8B90A4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <rect x="40" y="1090" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="58" y="1121" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="740" text-anchor="start" letter-spacing="0.3">ATTACH / CREATE / GROW</text>
+  <text x="58" y="1148" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="11.5" font-weight="560" text-anchor="start" letter-spacing="0">Route evidence to the right page</text>
+  <rect x="268" y="1157" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="297" y="1175.2" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="380" y="1090" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="398" y="1121" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="740" text-anchor="start" letter-spacing="0.3">SOURCE LINKS + CITATIONS</text>
+  <text x="398" y="1148" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="11.5" font-weight="560" text-anchor="start" letter-spacing="0">Claims stay inspectable</text>
+  <rect x="606" y="1157" width="60" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="636" y="1175.2" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">CORE</text>
+<rect x="40" y="1210" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="58" y="1241" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="740" text-anchor="start" letter-spacing="0.3">STALE</text>
+  <text x="58" y="1268" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="11.5" font-weight="560" text-anchor="start" letter-spacing="0">Know which sources changed</text>
+  <rect x="266" y="1277" width="60" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="296" y="1295.2" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">CORE</text>
+<rect x="380" y="1210" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.8"/>
+  <text x="398" y="1241" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="740" text-anchor="start" letter-spacing="0.3">RE-DISTILL + VERIFY</text>
+  <text x="398" y="1268" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="11.5" font-weight="560" text-anchor="start" letter-spacing="0">Refresh only supported claims</text>
+  <rect x="608" y="1277" width="58" height="28" rx="14" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
+  <text x="637" y="1295.2" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">LLM</text>
+<rect x="40" y="1330" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="1.8"/>
+  <text x="58" y="1361" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="740" text-anchor="start" letter-spacing="0.3">STABLE IDENTITY</text>
+  <text x="58" y="1388" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="11.5" font-weight="560" text-anchor="start" letter-spacing="0">Version + changelog history</text>
+  <rect x="266" y="1397" width="60" height="28" rx="14" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
+  <text x="296" y="1415.2" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">CORE</text>
+  <path d="M 340 1382 H 375" fill="none" stroke="#F0A43A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <rect x="380" y="1330" width="300" height="105" rx="10" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.8"/>
+  <text x="398" y="1361" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="16" font-weight="740" text-anchor="start" letter-spacing="0.3">HUMAN-OWNED PAGE</text>
+  <text x="398" y="1388" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">Machine changes become a</text>
+<text x="398" y="1405" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="560" text-anchor="start" letter-spacing="0">pending revision</text>
+  <rect x="597" y="1397" width="69" height="28" rx="14" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="631.5" y="1415.2" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">HUMAN</text>
+  <path d="M 530 1435 V 1445" fill="none" stroke="#F0A43A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lifecycle-en-mobile-arrow)"/>
+  <rect x="40" y="1450" width="640" height="64" rx="10" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="2"/>
+  <text x="60" y="1478" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="17" font-weight="740" text-anchor="start" letter-spacing="0">ACCEPT / DISMISS</text>
+  <text x="60" y="1502" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12.5" font-weight="600" text-anchor="start" letter-spacing="0">Accepted knowledge returns through Brief · Recall · Pages · MCP</text>
+  <rect x="578" y="1467" width="69" height="28" rx="14" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
+  <text x="612.5" y="1485.2" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="12" font-weight="720" text-anchor="middle" letter-spacing="0">HUMAN</text>
+
+  <rect x="24" y="1560" width="672" height="790" rx="16" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="2"/>
+  <text x="40" y="1602" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="22" font-weight="780" text-anchor="start" letter-spacing="0">3 · BACKGROUND REFINERY</text>
+  <text x="40" y="1630" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="13" font-weight="560" text-anchor="start" letter-spacing="0">The right maintenance runs at the right moment; backstop catches missed work.</text>
+
+  <rect x="40" y="1650" width="640" height="105" rx="12" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="2"/>
+  <text x="60" y="1683" fill="#5048C8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">AFTER WORK</text>
+  <circle cx="62" cy="1708" r="6" fill="#6C63FF"/>
+      <text x="80" y="1713" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="600" text-anchor="start" letter-spacing="0">Recaps</text>
+<circle cx="62" cy="1733" r="6" fill="#6C63FF"/>
+      <text x="80" y="1738" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="600" text-anchor="start" letter-spacing="0">Refinement queue</text>
+
+  <rect x="40" y="1770" width="640" height="185" rx="12" fill="#FFFFFF" stroke="#A9DDC4" stroke-width="2"/>
+  <text x="60" y="1803" fill="#187347" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">WHEN IDLE</text>
+  <circle cx="62" cy="1826" r="6" fill="#3CB878"/>
+      <text x="80" y="1831" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Community detection</text>
+<circle cx="62" cy="1844" r="6" fill="#3CB878"/>
+      <text x="80" y="1849" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Detect page candidates</text>
+<circle cx="62" cy="1862" r="6" fill="#6C63FF"/>
+      <text x="80" y="1867" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Emergence</text>
+<circle cx="62" cy="1880" r="6" fill="none" stroke="#8B90A4" stroke-width="2" stroke-dasharray="3 2"/>
+      <text x="80" y="1885" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Summary rollup¹</text>
+<circle cx="62" cy="1898" r="6" fill="#6C63FF"/>
+      <text x="80" y="1903" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Re-distill</text>
+<circle cx="62" cy="1916" r="6" fill="#6C63FF"/>
+      <text x="80" y="1921" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Overview</text>
+<circle cx="62" cy="1934" r="6" fill="#6C63FF"/>
+      <text x="80" y="1939" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Decision logs</text>
+
+  <rect x="40" y="1970" width="640" height="215" rx="12" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="2"/>
+  <text x="60" y="2003" fill="#245F9C" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">DAILY</text>
+  <circle cx="62" cy="2026" r="6" fill="#3CB878"/>
+      <text x="80" y="2031" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Confidence decay</text>
+<circle cx="62" cy="2044" r="6" fill="#3CB878"/>
+      <text x="80" y="2049" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Promote</text>
+<circle cx="62" cy="2062" r="6" fill="#3CB878"/>
+      <text x="80" y="2067" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Reweave links</text>
+<circle cx="62" cy="2080" r="6" fill="#3CB878"/>
+      <text x="80" y="2085" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Re-embed</text>
+<circle cx="62" cy="2098" r="6" fill="#6C63FF"/>
+      <text x="80" y="2103" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Entity extraction</text>
+<circle cx="62" cy="2116" r="6" fill="#6C63FF"/>
+      <text x="80" y="2121" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Overview</text>
+<circle cx="62" cy="2134" r="6" fill="#3CB878"/>
+      <text x="80" y="2139" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Prune rejections</text>
+<circle cx="62" cy="2152" r="6" fill="none" stroke="#8B90A4" stroke-width="2" stroke-dasharray="3 2"/>
+      <text x="80" y="2157" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">Eviction²</text>
+<circle cx="62" cy="2170" r="6" fill="#6C63FF"/>
+      <text x="80" y="2175" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="14" font-weight="600" text-anchor="start" letter-spacing="0">KG rethink</text>
+
+  <rect x="40" y="2200" width="640" height="100" rx="12" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="2"/>
+  <text x="60" y="2233" fill="#9B5A0A" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">BACKSTOP</text>
+  <circle cx="62" cy="2258" r="6" fill="#3CB878"/>
+      <text x="80" y="2263" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="600" text-anchor="start" letter-spacing="0">All phases</text>
+<circle cx="62" cy="2282" r="6" fill="#3CB878"/>
+      <text x="80" y="2287" fill="#25283B" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="15" font-weight="600" text-anchor="start" letter-spacing="0">Periodic safety net</text>
+  <text x="40" y="2323" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="11.5" font-weight="600" text-anchor="start" letter-spacing="0">¹ Summary rollup: optional, default off   ·   ² Eviction: optional,</text>
+<text x="40" y="2342" fill="#62677D" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="11.5" font-weight="600" text-anchor="start" letter-spacing="0">default off; archive, never delete</text>
+  <defs>
+    <linearGradient id="lifecycle-en-mobile-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C63FF"/>
+      <stop offset="0.5" stop-color="#5BA3E6"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </linearGradient>
+    <radialGradient id="lifecycle-en-mobile-orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(310 144) rotate(52.125) scale(76.0263)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#A5C4F7"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </radialGradient>
+    <marker id="lifecycle-en-mobile-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8B90A4"/>
+    </marker>
+  </defs>
+</svg>

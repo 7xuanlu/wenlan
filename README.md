@@ -129,6 +129,13 @@ a1b2c3d distill: 4 pages
 
 A generated wiki is a snapshot. Wenlan treats it as a maintained knowledge system, with separate but connected lifecycles for evidence and the articles built from it.
 
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="Wenlan's linked lifecycles: evidence is captured, enriched, connected, corrected, and reviewed; source-cited pages become stale and refresh without overwriting human writing; background refinery phases maintain the system, with optional behavior clearly marked." width="100%">
+  </picture>
+</p>
+
 - **Memory lifecycle:** Evidence can be confirmed, connected, corrected, or superseded without losing its history. Near-duplicates can merge quietly; contradictions wait for review.
 - **Article lifecycle:** Every article keeps its citations and knows when its sources have changed. Wenlan-maintained articles can refresh; articles you have edited receive a proposed revision instead of a silent rewrite.
 - **The link:** When a memory changes, Wenlan knows which articles may now be stale and can update them without breaking the evidence trail.
