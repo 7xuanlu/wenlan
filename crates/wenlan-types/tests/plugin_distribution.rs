@@ -17,6 +17,23 @@ fn read_text(relative: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
 }
 
+fn frontmatter_value(text: &str, key: &str) -> Option<String> {
+    let mut lines = text.lines();
+    if lines.next()? != "---" {
+        return None;
+    }
+    let prefix = format!("{key}:");
+    for line in lines {
+        if line == "---" {
+            return None;
+        }
+        if let Some(value) = line.strip_prefix(&prefix) {
+            return Some(value.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
 #[test]
 fn plugin_setup_repairs_stale_daemon_versions() {
     let setup = read_text("plugin/skills/setup/SKILL.md");
@@ -129,14 +146,17 @@ fn pages_skill_replaces_read() {
 }
 
 #[test]
-fn lint_repair_is_separate_and_approval_gated_on_both_surfaces() {
+fn lint_is_the_only_public_repair_flow_on_both_surfaces() {
     for path in [
-        "plugin/skills/lint-repair/SKILL.md",
-        "plugin-codex/skills/lint-repair/SKILL.md",
+        "plugin/skills/lint/SKILL.md",
+        "plugin-codex/skills/lint/SKILL.md",
     ] {
         let text = read_text(path);
         for needle in [
-            "`/lint` and `/api/lint` remain fully read-only",
+            "/lint repair",
+            "Plain `/lint`, `/lint deep`, the lint MCP tool, and `/api/lint` are fully",
+            "If zero or multiple",
+            "types remain plausible, do not prepare",
             "only one target",
             "apply repair <manifest-id> <manifest-digest>",
             "Never call apply_lint_repair in the same turn as prepare_lint_repair",
@@ -145,5 +165,30 @@ fn lint_repair_is_separate_and_approval_gated_on_both_surfaces() {
         ] {
             assert!(text.contains(needle), "{path} missing guardrail: {needle}");
         }
+        assert_eq!(
+            frontmatter_value(&text, "argument-hint").as_deref(),
+            Some("[deep|repair] [global|uncategorized|space:<name>]"),
+            "{path} exposes the wrong public argument grammar",
+        );
+        assert!(
+            !text.contains("profile:deep"),
+            "{path} exposes profile:deep"
+        );
+        assert!(
+            !text.contains("profile:general"),
+            "{path} exposes profile:general"
+        );
+    }
+    for removed in [
+        "plugin/skills/lint-repair/SKILL.md",
+        "plugin-codex/skills/lint-repair/SKILL.md",
+    ] {
+        assert!(
+            !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(removed)
+                .exists(),
+            "deprecated public skill still exists: {removed}"
+        );
     }
 }

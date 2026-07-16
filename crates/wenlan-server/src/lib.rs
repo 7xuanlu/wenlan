@@ -11,6 +11,7 @@ pub mod ingest_batcher;
 pub mod ingest_routes;
 pub mod knowledge_routes;
 pub mod lint_routes;
+pub mod maintenance_coordinator;
 pub mod memory_routes;
 pub mod onboarding_routes;
 pub mod read_scope;

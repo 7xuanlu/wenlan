@@ -187,29 +187,67 @@ async fn run_daemon() -> anyhow::Result<()> {
     let db_arc = Arc::new(db);
     server_state.db = Some(db_arc.clone());
 
+    // Restore an applied-unverified repair fence before any optional startup
+    // backfill can mutate the database. MemoryDB's schema floor is the only
+    // work allowed before this scan; repair receipts bind the schema in their
+    // content digest, so an incompatible binary fails verification closed.
+    let repair_store = wenlan_core::repair::RepairArtifactStore::new(
+        server_state
+            .repair_root
+            .clone()
+            .expect("repair root configured before startup recovery"),
+    );
+    let pending_repairs = repair_store
+        .pending_verification_manifest_ids()
+        .map_err(|error| anyhow::anyhow!("inspect durable repair state: {error}"))?;
+    match pending_repairs.as_slice() {
+        [] => {}
+        [manifest_id] => {
+            server_state
+                .maintenance_coordinator
+                .rearm_repair(manifest_id)
+                .map_err(|error| anyhow::anyhow!("restore repair writer fence: {error}"))?;
+            tracing::warn!(
+                manifest_id,
+                "restored applied-unverified repair writer fence before startup writers"
+            );
+        }
+        manifest_ids => anyhow::bail!(
+            "multiple applied-unverified repairs require operator resolution before startup: {}",
+            manifest_ids.join(", ")
+        ),
+    }
+    let repair_recovery_pending = !pending_repairs.is_empty();
+
     // Run migration-55 backfill (event_date regex Pass A + memory_entities Pass B)
     // before the HTTP listener binds so no ingest races the backfill. Idempotent.
-    tracing::info!(
-        "Running first-boot data backfill (event dates + knowledge-graph links); \
-         this can take a moment on large databases…"
-    );
-    let m55 = db_arc.run_migration_55().await.map_err(|e| {
-        anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
-    })?;
-    tracing::info!(
-        "First-boot backfill complete: scanned {} memories for dates, inserted {} entity links",
-        m55.event_dates_scanned,
-        m55.entity_links_inserted
-    );
+    if repair_recovery_pending {
+        tracing::warn!("skipping first-boot data backfill until repair verification completes");
+    } else {
+        tracing::info!(
+            "Running first-boot data backfill (event dates + knowledge-graph links); \
+             this can take a moment on large databases…"
+        );
+        let m55 = db_arc.run_migration_55().await.map_err(|e| {
+            anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
+        })?;
+        tracing::info!(
+            "First-boot backfill complete: scanned {} memories for dates, inserted {} entity links",
+            m55.event_dates_scanned,
+            m55.entity_links_inserted
+        );
+    }
 
     // Requeue any document-enrichment rows left `in_progress` by a previous run
     // (a crash / restart mid-enrichment). Their per-chunk checkpoint is
     // preserved, so the scheduler resumes them from where they stopped rather
     // than re-analyzing from scratch — restart-from-checkpoint, no manual step.
-    match db_arc.reset_in_progress_documents().await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!("[doc-enrich] requeued {n} in-progress document(s) for resume"),
-        Err(e) => tracing::warn!("[doc-enrich] reset_in_progress_documents failed: {e}"),
+    if !repair_recovery_pending {
+        match db_arc.reset_in_progress_documents().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("[doc-enrich] requeued {n} in-progress document(s) for resume"),
+            Err(e) => tracing::warn!("[doc-enrich] reset_in_progress_documents failed: {e}"),
+        }
     }
 
     // Consolidate user-facing assets under ~/.wenlan/.
@@ -612,8 +650,8 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // Import any legacy tag data from the pre-PR-B2 spaces.db file.
-    if let Some(ref db_arc) = server_state.db {
-        match wenlan_core::spaces::import_legacy_tags(db_arc).await {
+    if !repair_recovery_pending {
+        match wenlan_core::spaces::import_legacy_tags(&db_arc).await {
             Ok(n) if n > 0 => {
                 tracing::info!("[startup] imported {} legacy tag triples from spaces.db", n)
             }
@@ -635,11 +673,16 @@ async fn run_daemon() -> anyhow::Result<()> {
     {
         let db_for_batcher = db_arc.clone();
         let gate_for_batcher = server_state.quality_gate.clone();
+        let maintenance_for_batcher = server_state.maintenance_coordinator.clone();
         let process: ingest_batcher::BatchProcessFn = Arc::new(
             move |items: Vec<(wenlan_core::sources::RawDocument, usize)>| {
                 let db = db_for_batcher.clone();
                 let gate = gate_for_batcher.clone();
-                Box::pin(async move { ingest_batch_process(db, gate, items).await })
+                let maintenance = maintenance_for_batcher.clone();
+                Box::pin(async move {
+                    let _maintenance_guard = maintenance.begin_background().await;
+                    ingest_batch_process(db, gate, items).await
+                })
             },
         );
         server_state.ingest_batcher = Some(ingest_batcher::IngestBatcher::spawn(
@@ -647,6 +690,8 @@ async fn run_daemon() -> anyhow::Result<()> {
             ingest_batcher::BatcherConfig::default(),
         ));
     }
+
+    server_state.maintenance_coordinator.finish_recovery();
 
     let shared: SharedState = Arc::new(RwLock::new(server_state));
 
@@ -762,13 +807,19 @@ async fn run_daemon() -> anyhow::Result<()> {
     // and use `handle.spawn(...)` from the closure instead.
     {
         let db_for_ready = db_arc.clone();
+        let maintenance_for_ready = {
+            let state = shared.read().await;
+            state.maintenance_coordinator.clone()
+        };
         let emitter_for_ready: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
         let handle = tokio::runtime::Handle::current();
         let hook: wenlan_core::llm_provider::ReadinessHook = Arc::new(move || {
             let db = db_for_ready.clone();
             let emitter = emitter_for_ready.clone();
+            let maintenance = maintenance_for_ready.clone();
             handle.spawn(async move {
+                let _maintenance_guard = maintenance.begin_background().await;
                 let ev = wenlan_core::onboarding::MilestoneEvaluator::new(&db, emitter);
                 if let Err(e) = ev.check_after_llm_ready().await {
                     tracing::warn!(?e, "onboarding: check_after_llm_ready failed");

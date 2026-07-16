@@ -31,11 +31,13 @@ use wenlan_types::{
     },
     repair::{
         ApplyRepairRequest, PrepareRepairRequest, RepairAllowedEffects, RepairApplyReceipt,
-        RepairApplyReceiptDraft, RepairCheckBaseline, RepairDigest, RepairExpectedState,
-        RepairLintScope, RepairManifest, RepairManifestDraft, RepairMutation, RepairPostAssertions,
-        RepairRollbackArtifact, RepairScope, RepairSource, RepairTarget, RepairVerificationReceipt,
-        RepairVerificationReceiptDraft, RepairWriter, VerifyRepairRequest,
-        REPAIR_CLASSIFICATION_CHECK_ID, REPAIR_ROLLBACK_FORMAT_VERSION,
+        RepairApplyReceiptDraft, RepairCheckBaseline, RepairContractError, RepairDigest,
+        RepairExpectedState, RepairLintScope, RepairManifest, RepairManifestDraft, RepairMutation,
+        RepairPostAssertions, RepairRollbackArtifact, RepairScope, RepairSource, RepairTarget,
+        RepairVerificationReceipt, RepairVerificationReceiptDraft, RepairWriter,
+        StoredRepairApplyReceipt, StoredRepairManifest, StoredRepairRollbackArtifact,
+        StoredRepairVerificationReceipt, VerifyRepairRequest, REPAIR_CLASSIFICATION_CHECK_ID,
+        REPAIR_ROLLBACK_FORMAT_VERSION,
     },
     MemoryType,
 };
@@ -70,21 +72,29 @@ impl RepairArtifactStore {
         Ok(self.root.join(manifest_id))
     }
 
-    pub fn load_manifest(&self, manifest_id: &str) -> Result<RepairManifest, WenlanError> {
+    fn read_stored_manifest(&self, manifest_id: &str) -> Result<StoredRepairManifest, WenlanError> {
         let path = self.manifest_dir(manifest_id)?.join(MANIFEST_FILE);
-        let manifest: RepairManifest = serde_json::from_slice(&fs::read(path)?)?;
+        let manifest = StoredRepairManifest::from_slice(&fs::read(path)?)?;
         if manifest.manifest_id() != manifest_id {
             return Err(WenlanError::Validation(
                 "repair_manifest_id_mismatch".to_string(),
             ));
         }
-        let actual = repair_digest(&manifest.canonical_unsigned_bytes()?);
-        if &actual != manifest.manifest_digest() {
-            return Err(WenlanError::Validation(
-                "repair_manifest_digest_mismatch".to_string(),
-            ));
-        }
         Ok(manifest)
+    }
+
+    pub fn load_manifest(&self, manifest_id: &str) -> Result<RepairManifest, WenlanError> {
+        let manifest = self.read_stored_manifest(manifest_id)?;
+        manifest
+            .verify_and_try_into_current(|canonical, expected| {
+                repair_digest(canonical).as_str() == expected.as_str()
+            })
+            .map_err(|error| match error {
+                RepairContractError::InvalidDigest => {
+                    WenlanError::Validation("repair_manifest_digest_mismatch".to_string())
+                }
+                _ => WenlanError::Validation(error.to_string()),
+            })
     }
 
     fn persist_prepared(
@@ -134,17 +144,27 @@ impl RepairArtifactStore {
                 "repair_rollback_digest_mismatch".to_string(),
             ));
         }
-        let rollback: StoredRollbackArtifact = serde_json::from_slice(&bytes)?;
-        if rollback.format_version != REPAIR_ROLLBACK_FORMAT_VERSION
-            || rollback.table != "memories"
-            || rollback.source_id != manifest.target().memory_source_id()
-            || rollback.rows.is_empty()
+        let stored = StoredRepairRollbackArtifact::from_slice(&bytes)?;
+        let rollback = stored.as_v1();
+        if rollback.format_version() != REPAIR_ROLLBACK_FORMAT_VERSION
+            || rollback.table() != "memories"
+            || rollback.source_id() != manifest.target().memory_source_id()
+            || rollback.rows().is_empty()
         {
             return Err(WenlanError::Validation(
                 "repair_rollback_mismatch".to_string(),
             ));
         }
-        Ok((rollback, bytes))
+        Ok((
+            StoredRollbackArtifact {
+                format_version: rollback.format_version(),
+                table: rollback.table().to_string(),
+                source_id: rollback.source_id().to_string(),
+                columns: rollback.columns().to_vec(),
+                rows: rollback.rows().to_vec(),
+            },
+            bytes,
+        ))
     }
 
     fn lock_manifest_operation(
@@ -202,16 +222,8 @@ impl RepairArtifactStore {
         let path = self
             .manifest_dir(manifest.manifest_id())?
             .join(APPLY_RECEIPT_FILE);
-        let receipt: RepairApplyReceipt = serde_json::from_slice(&fs::read(path)?)?;
-        if receipt.manifest_id() != manifest.manifest_id()
-            || receipt.manifest_digest() != manifest.manifest_digest()
-            || repair_digest(&receipt.canonical_unsigned_bytes()?) != *receipt.receipt_digest()
-        {
-            return Err(WenlanError::Validation(
-                "repair_apply_receipt_mismatch".to_string(),
-            ));
-        }
-        Ok(receipt)
+        let receipt = StoredRepairApplyReceipt::from_slice(&fs::read(path)?)?;
+        verify_stored_apply_receipt(receipt, manifest)
     }
 
     fn persist_verification_receipt(
@@ -249,18 +261,103 @@ impl RepairArtifactStore {
         if !path.exists() {
             return Ok(None);
         }
-        let receipt: RepairVerificationReceipt = serde_json::from_slice(&fs::read(path)?)?;
-        if receipt.manifest_id() != manifest.manifest_id()
-            || receipt.manifest_digest() != manifest.manifest_digest()
-            || receipt.apply_receipt_digest() != apply_receipt.receipt_digest()
-            || repair_digest(&receipt.canonical_unsigned_bytes()?) != *receipt.receipt_digest()
-        {
-            return Err(WenlanError::Validation(
-                "repair_verification_receipt_mismatch".to_string(),
-            ));
-        }
-        Ok(Some(receipt))
+        let receipt = StoredRepairVerificationReceipt::from_slice(&fs::read(path)?)?;
+        verify_stored_verification_receipt(receipt, manifest, apply_receipt).map(Some)
     }
+
+    /// Return every durably applied repair that still needs verification.
+    ///
+    /// Startup uses this to restore the daemon-owned writer fence after a
+    /// process restart. Corrupt or mismatched durable artifacts fail closed
+    /// instead of allowing background maintenance to resume.
+    pub fn pending_verification_manifest_ids(&self) -> Result<Vec<String>, WenlanError> {
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(WenlanError::Io(error)),
+        };
+        let mut pending = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() || !entry.path().join(MANIFEST_FILE).is_file() {
+                continue;
+            }
+            let manifest_id = entry.file_name().into_string().map_err(|_| {
+                WenlanError::Validation("invalid_repair_manifest_directory".to_string())
+            })?;
+            let manifest = self.load_manifest(&manifest_id)?;
+            if entry.path().join(APPLY_RECEIPT_PENDING_FILE).is_file() {
+                pending.push(manifest_id);
+                continue;
+            }
+            let apply_path = entry.path().join(APPLY_RECEIPT_FILE);
+            if !apply_path.is_file() {
+                continue;
+            }
+            let apply_receipt = self.load_apply_receipt(&manifest)?;
+            if self
+                .load_verification_receipt(&manifest, &apply_receipt)?
+                .is_none()
+            {
+                pending.push(manifest_id);
+            }
+        }
+        pending.sort();
+        Ok(pending)
+    }
+
+    /// Validate and report whether a repair already has its durable terminal
+    /// receipt. This keeps a lost HTTP verify response safely retryable after
+    /// the in-memory writer fence has been released.
+    pub fn has_completed_verification(&self, manifest_id: &str) -> Result<bool, WenlanError> {
+        let manifest = self.load_manifest(manifest_id)?;
+        let apply_path = self.manifest_dir(manifest_id)?.join(APPLY_RECEIPT_FILE);
+        if !apply_path.is_file() {
+            return Ok(false);
+        }
+        let apply_receipt = self.load_apply_receipt(&manifest)?;
+        Ok(self
+            .load_verification_receipt(&manifest, &apply_receipt)?
+            .is_some())
+    }
+}
+
+fn verify_stored_apply_receipt(
+    receipt: StoredRepairApplyReceipt,
+    manifest: &RepairManifest,
+) -> Result<RepairApplyReceipt, WenlanError> {
+    if receipt.manifest_id() != manifest.manifest_id()
+        || receipt.manifest_digest().as_str() != manifest.manifest_digest().as_str()
+    {
+        return Err(WenlanError::Validation(
+            "repair_apply_receipt_mismatch".to_string(),
+        ));
+    }
+    receipt
+        .verify_and_try_into_current(|canonical, expected| {
+            repair_digest(canonical).as_str() == expected.as_str()
+        })
+        .map_err(|_| WenlanError::Validation("repair_apply_receipt_mismatch".to_string()))
+}
+
+fn verify_stored_verification_receipt(
+    receipt: StoredRepairVerificationReceipt,
+    manifest: &RepairManifest,
+    apply_receipt: &RepairApplyReceipt,
+) -> Result<RepairVerificationReceipt, WenlanError> {
+    if receipt.manifest_id() != manifest.manifest_id()
+        || receipt.manifest_digest().as_str() != manifest.manifest_digest().as_str()
+        || receipt.apply_receipt_digest().as_str() != apply_receipt.receipt_digest().as_str()
+    {
+        return Err(WenlanError::Validation(
+            "repair_verification_receipt_mismatch".to_string(),
+        ));
+    }
+    receipt
+        .verify_and_try_into_current(|canonical, expected| {
+            repair_digest(canonical).as_str() == expected.as_str()
+        })
+        .map_err(|_| WenlanError::Validation("repair_verification_receipt_mismatch".to_string()))
 }
 
 struct ManifestOperationLock {
@@ -328,6 +425,16 @@ pub async fn prepare_memory_reclassification(
     request: PrepareRepairRequest,
     now_epoch: i64,
 ) -> Result<RepairManifest, WenlanError> {
+    prepare_memory_reclassification_with_pages(db, store, request, None, now_epoch).await
+}
+
+pub async fn prepare_memory_reclassification_with_pages(
+    db: &MemoryDB,
+    store: &RepairArtifactStore,
+    request: PrepareRepairRequest,
+    page_root: Option<&Path>,
+    now_epoch: i64,
+) -> Result<RepairManifest, WenlanError> {
     ensure_repair_artifacts_supported()?;
     if now_epoch <= 0 {
         return Err(WenlanError::Validation(
@@ -349,6 +456,19 @@ pub async fn prepare_memory_reclassification(
     let target_receipt = target_receipt(&rollback)?;
     let snapshot_receipt = snapshot.finish().await.map_err(snapshot_error)?;
     validate_source_receipts(&request, snapshot_receipt)?;
+    validate_current_page_receipts(request.general_report(), request.deep_report(), page_root)
+        .await
+        .map_err(|error| match error {
+            WenlanError::Conflict(_) => {
+                WenlanError::Conflict("repair_source_reports_stale".to_string())
+            }
+            other => other,
+        })?;
+    if request.general_report().producer_receipt() != request.deep_report().producer_receipt() {
+        return Err(WenlanError::Conflict(
+            "repair_source_producers_mismatch".to_string(),
+        ));
+    }
 
     let after_memory_type = request.after_memory_type().to_string();
     let mutation =
@@ -477,6 +597,7 @@ pub async fn apply_repair(
                 proof.after_target_receipt().clone(),
                 proof.non_target_before().clone(),
                 proof.non_target_after().clone(),
+                proof.post_apply_db_digest().clone(),
                 manifest.allowed_effects().clone(),
                 manifest.writer(),
             )
@@ -525,20 +646,9 @@ async fn recover_apply_receipt(
         return Ok(None);
     }
     let pending = fs::read(&pending_path)?;
-    let parsed = match serde_json::from_slice::<RepairApplyReceipt>(&pending) {
-        Ok(receipt) => {
-            let receipt_digest = repair_digest(&receipt.canonical_unsigned_bytes()?);
-            if receipt.manifest_id() == manifest.manifest_id()
-                && receipt.manifest_digest() == manifest.manifest_digest()
-                && receipt_digest == *receipt.receipt_digest()
-            {
-                Some(receipt)
-            } else {
-                None
-            }
-        }
-        Err(_) => None,
-    };
+    let parsed = StoredRepairApplyReceipt::from_slice(&pending)
+        .ok()
+        .and_then(|receipt| verify_stored_apply_receipt(receipt, manifest).ok());
     if let Some(receipt) = parsed {
         let (target_now, _) = target_receipt_current(db, manifest).await?;
         if target_now == *receipt.after_target_receipt() {
@@ -598,8 +708,20 @@ pub async fn record_repair_verification(
     }
     let _operation_lock = store.lock_manifest_operation(manifest.manifest_id())?;
     let apply_receipt = store.load_apply_receipt(&manifest)?;
-    if apply_receipt.receipt_digest() != request.apply_receipt_digest()
-        || apply_receipt.actual_effects() != manifest.allowed_effects()
+    if apply_receipt.receipt_digest() != request.apply_receipt_digest() {
+        return Err(WenlanError::Validation(
+            "repair_apply_receipt_mismatch".to_string(),
+        ));
+    }
+    if apply_receipt.post_apply_db_digest().is_none() {
+        if let Some(receipt) = store.load_verification_receipt(&manifest, &apply_receipt)? {
+            return Ok(receipt);
+        }
+        return Err(WenlanError::Validation(
+            "repair_legacy_apply_receipt_unverifiable".to_string(),
+        ));
+    }
+    if apply_receipt.actual_effects() != manifest.allowed_effects()
         || apply_receipt.writer() != manifest.writer()
         || apply_receipt.before_target_receipt() != manifest.expected_state().canonical_receipt()
     {
@@ -610,37 +732,65 @@ pub async fn record_repair_verification(
     if let Some(receipt) = store.load_verification_receipt(&manifest, &apply_receipt)? {
         return Ok(receipt);
     }
+    let post_apply_db_digest = apply_receipt
+        .post_apply_db_digest()
+        .expect("legacy receipts returned above")
+        .clone();
     validate_verification_reports(&manifest, request.general_report(), request.deep_report())?;
     validate_current_page_receipts(request.general_report(), request.deep_report(), page_root)
         .await?;
     let connection = db.conn.lock().await;
-    validate_current_db_receipts(db, request.general_report(), request.deep_report()).await?;
-    validate_target_space_on_connection(
-        &connection,
-        manifest.target().memory_source_id(),
-        manifest.target().scope().space(),
-    )
-    .await?;
-    let (target_now, _) =
-        target_receipt_on_connection(&connection, manifest.target().memory_source_id()).await?;
-    if target_now != *apply_receipt.after_target_receipt() {
-        return Err(WenlanError::Conflict(
-            "repair_verification_state_changed".to_string(),
-        ));
+    connection
+        .execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair verify begin: {error}")))?;
+    let result = async {
+        validate_current_db_receipts(db, request.general_report(), request.deep_report()).await?;
+        let current = database_content_digest(&connection).await?;
+        if current != post_apply_db_digest {
+            return Err(WenlanError::Conflict(
+                "repair_non_target_state_changed".to_string(),
+            ));
+        }
+        validate_target_space_on_connection(
+            &connection,
+            manifest.target().memory_source_id(),
+            manifest.target().scope().space(),
+        )
+        .await?;
+        let (target_now, _) =
+            target_receipt_on_connection(&connection, manifest.target().memory_source_id()).await?;
+        if target_now != *apply_receipt.after_target_receipt() {
+            return Err(WenlanError::Conflict(
+                "repair_verification_state_changed".to_string(),
+            ));
+        }
+        let draft = RepairVerificationReceiptDraft::try_new(
+            manifest.manifest_id().to_string(),
+            manifest.manifest_digest().clone(),
+            apply_receipt.receipt_digest().clone(),
+            now_epoch,
+            request.general_report().snapshots().clone(),
+            request.deep_report().snapshots().clone(),
+        )
+        .map_err(|error| WenlanError::Validation(error.to_string()))?;
+        let receipt_digest = repair_digest(&draft.canonical_bytes()?);
+        let receipt = RepairVerificationReceipt::from_draft(draft, receipt_digest);
+        store.persist_verification_receipt(&receipt)?;
+        Ok(receipt)
     }
-    let draft = RepairVerificationReceiptDraft::try_new(
-        manifest.manifest_id().to_string(),
-        manifest.manifest_digest().clone(),
-        apply_receipt.receipt_digest().clone(),
-        now_epoch,
-        request.general_report().snapshots().clone(),
-        request.deep_report().snapshots().clone(),
-    )
-    .map_err(|error| WenlanError::Validation(error.to_string()))?;
-    let receipt_digest = repair_digest(&draft.canonical_bytes()?);
-    let receipt = RepairVerificationReceipt::from_draft(draft, receipt_digest);
-    store.persist_verification_receipt(&receipt)?;
-    drop(connection);
+    .await;
+    let receipt = match result {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let _ = connection.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+    };
+    connection
+        .execute("COMMIT", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair verify commit: {error}")))?;
     Ok(receipt)
 }
 
@@ -660,6 +810,7 @@ fn validate_verification_reports(
         || general.scope() != manifest.source().report_scope()
         || deep.scope() != manifest.source().report_scope()
         || deep.agent_work().is_none()
+        || general.producer_receipt() != deep.producer_receipt()
         || !stable_report_snapshot(general)
         || !stable_report_snapshot(deep)
     {
@@ -667,16 +818,41 @@ fn validate_verification_reports(
             "repair_verification_report_mismatch".to_string(),
         ));
     }
-    validate_check_deltas(
-        manifest.post_assertions().general_baseline(),
-        general,
-        manifest.post_assertions().allowed_non_target_check_deltas(),
-    )?;
-    validate_check_deltas(
-        manifest.post_assertions().deep_baseline(),
-        deep,
-        manifest.post_assertions().allowed_non_target_check_deltas(),
-    )?;
+    let general_baseline = manifest.post_assertions().general_baseline();
+    let deep_baseline = manifest.post_assertions().deep_baseline();
+    if manifest
+        .post_assertions()
+        .verification_policy()
+        .requires_whole_reports()
+        && (!general.complete() || !deep.complete())
+    {
+        return Err(WenlanError::Validation(
+            "repair_legacy_verification_not_clean".to_string(),
+        ));
+    }
+    if general_baseline.is_empty() && deep_baseline.is_empty() {
+        // The first durable v1 producer predated baseline binding. Preserve
+        // those manifests without inventing unapproved baseline state: their
+        // post-repair reports must instead be conservatively clean.
+        if [general, deep].iter().any(|report| {
+            report.totals().actionable_findings() != 0 || report.totals().incomplete() != 0
+        }) {
+            return Err(WenlanError::Validation(
+                "repair_legacy_verification_not_clean".to_string(),
+            ));
+        }
+    } else {
+        validate_check_deltas(
+            general_baseline,
+            general,
+            manifest.post_assertions().allowed_non_target_check_deltas(),
+        )?;
+        validate_check_deltas(
+            deep_baseline,
+            deep,
+            manifest.post_assertions().allowed_non_target_check_deltas(),
+        )?;
+    }
     let target_survives = deep
         .checks()
         .iter()
@@ -798,8 +974,17 @@ fn validate_check_deltas(
             "repair_verification_catalog_mismatch".to_string(),
         ));
     }
-    for (before, after) in baseline.iter().zip(report.checks()) {
-        if before.check_id() != after.check_id() || before.gate_effect() != after.gate_effect() {
+    for before in baseline {
+        let Some(after) = report
+            .checks()
+            .iter()
+            .find(|check| check.check_id() == before.check_id())
+        else {
+            return Err(WenlanError::Validation(
+                "repair_verification_catalog_mismatch".to_string(),
+            ));
+        };
+        if before.gate_effect() != after.gate_effect() {
             return Err(WenlanError::Validation(
                 "repair_verification_catalog_mismatch".to_string(),
             ));
@@ -820,6 +1005,19 @@ fn validate_check_deltas(
         if new_actionable {
             return Err(WenlanError::Validation(
                 "repair_new_actionable_finding".to_string(),
+            ));
+        }
+        let after_incomplete = matches!(
+            after.outcome(),
+            LintOutcome::NotRunPrerequisite
+                | LintOutcome::InconsistentSnapshot
+                | LintOutcome::FailedToRun
+        );
+        if after_incomplete
+            && (before.outcome() != after.outcome() || before.evidence() != after.evidence())
+        {
+            return Err(WenlanError::Validation(
+                "repair_new_incomplete_check".to_string(),
             ));
         }
     }
@@ -1117,13 +1315,136 @@ fn lint_digest(bytes: [u8; 32]) -> LintDigest {
     ))
 }
 
-fn repair_digest(bytes: &[u8]) -> RepairDigest {
+pub(crate) fn repair_digest(bytes: &[u8]) -> RepairDigest {
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(64);
     for byte in digest {
         write!(&mut encoded, "{byte:02x}").expect("write to string");
     }
     RepairDigest::parse(&encoded).expect("sha256 is lowercase hex")
+}
+
+/// Logical digest of every ordinary SQLite table, streamed one row at a time.
+/// This is intentionally separate from lint's cheap structural snapshot: a
+/// repair verification must detect in-place updates that preserve schema and
+/// row counts without loading the whole database into memory.
+pub(crate) async fn database_content_digest(
+    connection: &libsql::Connection,
+) -> Result<RepairDigest, WenlanError> {
+    let mut digest = Sha256::new();
+    digest_len_bytes(&mut digest, b"wenlan-repair-db-content-v1")?;
+
+    let mut schema_rows = connection
+        .query(
+            "SELECT type, name, COALESCE(sql, '')
+             FROM sqlite_schema
+             WHERE type IN ('index', 'table', 'trigger', 'view')
+               AND name NOT LIKE 'sqlite_%'
+             ORDER BY type, name",
+            (),
+        )
+        .await
+        .map_err(database_error)?;
+    let mut ordinary_tables = Vec::new();
+    while let Some(row) = schema_rows.next().await.map_err(database_error)? {
+        let object_type = row.get::<String>(0).map_err(database_error)?;
+        let name = row.get::<String>(1).map_err(database_error)?;
+        let sql = row.get::<String>(2).map_err(database_error)?;
+        digest_len_bytes(&mut digest, object_type.as_bytes())?;
+        digest_len_bytes(&mut digest, name.as_bytes())?;
+        digest_len_bytes(&mut digest, sql.as_bytes())?;
+        if object_type == "table"
+            && !sql
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("create virtual table")
+        {
+            ordinary_tables.push((name, sql));
+        }
+    }
+    drop(schema_rows);
+
+    for (table, create_sql) in ordinary_tables {
+        digest_len_bytes(&mut digest, table.as_bytes())?;
+        let order_by = if create_sql.to_ascii_lowercase().contains("without rowid") {
+            without_rowid_order(connection, &table).await?
+        } else {
+            "_rowid_".to_string()
+        };
+        let query = format!(
+            "SELECT * FROM {} ORDER BY {order_by}",
+            quote_identifier(&table)
+        );
+        let mut rows = connection.query(&query, ()).await.map_err(database_error)?;
+        let column_count = rows.column_count();
+        digest.update(i64::from(column_count).to_le_bytes());
+        while let Some(row) = rows.next().await.map_err(database_error)? {
+            digest.update(b"row");
+            for column in 0..column_count {
+                digest_sql_value(&mut digest, row.get_value(column).map_err(database_error)?)?;
+            }
+        }
+    }
+
+    Ok(repair_digest(&digest.finalize()))
+}
+
+async fn without_rowid_order(
+    connection: &libsql::Connection,
+    table: &str,
+) -> Result<String, WenlanError> {
+    let query = format!("PRAGMA table_info({})", quote_identifier(table));
+    let mut rows = connection.query(&query, ()).await.map_err(database_error)?;
+    let mut primary_key = Vec::new();
+    while let Some(row) = rows.next().await.map_err(database_error)? {
+        let name = row.get::<String>(1).map_err(database_error)?;
+        let position = row.get::<i64>(5).map_err(database_error)?;
+        if position > 0 {
+            primary_key.push((position, name));
+        }
+    }
+    primary_key.sort_by_key(|(position, _)| *position);
+    if primary_key.is_empty() {
+        return Err(WenlanError::VectorDb(format!(
+            "repair db digest: WITHOUT ROWID table {table} has no primary key"
+        )));
+    }
+    Ok(primary_key
+        .into_iter()
+        .map(|(_, name)| quote_identifier(&name))
+        .collect::<Vec<_>>()
+        .join(","))
+}
+
+fn digest_sql_value(digest: &mut Sha256, value: libsql::Value) -> Result<(), WenlanError> {
+    match value {
+        libsql::Value::Null => digest.update(b"n"),
+        libsql::Value::Integer(value) => {
+            digest.update(b"i");
+            digest.update(value.to_le_bytes());
+        }
+        libsql::Value::Real(value) => {
+            digest.update(b"r");
+            digest.update(value.to_bits().to_le_bytes());
+        }
+        libsql::Value::Text(value) => {
+            digest.update(b"t");
+            digest_len_bytes(digest, value.as_bytes())?;
+        }
+        libsql::Value::Blob(value) => {
+            digest.update(b"b");
+            digest_len_bytes(digest, &value)?;
+        }
+    }
+    Ok(())
+}
+
+fn digest_len_bytes(digest: &mut Sha256, value: &[u8]) -> Result<(), WenlanError> {
+    let length = u64::try_from(value.len())
+        .map_err(|_| WenlanError::Validation("repair_db_digest_value_too_large".to_string()))?;
+    digest.update(length.to_le_bytes());
+    digest.update(value);
+    Ok(())
 }
 
 fn quote_identifier(identifier: &str) -> String {
@@ -1151,6 +1472,18 @@ fn publish_no_replace(
     final_path: &Path,
     exists_error: &str,
 ) -> Result<(), WenlanError> {
+    publish_no_replace_with_hook(pending_path, final_path, exists_error, || {})
+}
+
+fn publish_no_replace_with_hook<F>(
+    pending_path: &Path,
+    final_path: &Path,
+    exists_error: &str,
+    after_final_sync: F,
+) -> Result<(), WenlanError>
+where
+    F: FnOnce(),
+{
     fs::hard_link(pending_path, final_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             WenlanError::Conflict(exists_error.to_string())
@@ -1158,6 +1491,10 @@ fn publish_no_replace(
             WenlanError::Io(error)
         }
     })?;
+    if let Some(parent) = final_path.parent() {
+        sync_dir(parent)?;
+    }
+    after_final_sync();
     fs::remove_file(pending_path)?;
     if let Some(parent) = final_path.parent() {
         sync_dir(parent)?;
@@ -1251,6 +1588,26 @@ mod tests {
         },
         MemoryType,
     };
+
+    #[test]
+    fn receipt_publication_keeps_pending_link_through_final_directory_sync() {
+        let root = tempfile::tempdir().unwrap();
+        let pending = root.path().join("pending.json");
+        let final_path = root.path().join("final.json");
+        std::fs::write(&pending, b"receipt").unwrap();
+        let mut observed = false;
+
+        publish_no_replace_with_hook(&pending, &final_path, "already_exists", || {
+            assert!(pending.is_file());
+            assert!(final_path.is_file());
+            observed = true;
+        })
+        .unwrap();
+
+        assert!(observed);
+        assert!(!pending.exists());
+        assert_eq!(std::fs::read(final_path).unwrap(), b"receipt");
+    }
 
     async fn fixture() -> (MemoryDB, tempfile::TempDir) {
         let (db, dir) = test_db().await;
@@ -1406,6 +1763,59 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    fn fail_deep_check(
+        report: wenlan_types::lint::LintReport,
+        classification: bool,
+    ) -> wenlan_types::lint::LintReport {
+        let mut value = serde_json::to_value(report).unwrap();
+        let checks = value["checks"].as_array_mut().unwrap();
+        let check = checks
+            .iter_mut()
+            .find(|check| {
+                (check["check_id"] == REPAIR_CLASSIFICATION_CHECK_ID) == classification
+                    && matches!(check["outcome"].as_str(), Some("pass" | "finding"))
+            })
+            .expect("eligible Deep check");
+        check["outcome"] = serde_json::json!("failed_to_run");
+        check["severity"] = serde_json::json!("error");
+        check["applicability"] = serde_json::json!("applicable");
+        check["precondition"] = serde_json::json!("ready");
+        let passed = checks
+            .iter()
+            .filter(|check| check["outcome"] == "pass")
+            .count();
+        let findings = checks
+            .iter()
+            .filter(|check| check["outcome"] == "finding")
+            .count();
+        let actionable_findings = checks
+            .iter()
+            .filter(|check| check["outcome"] == "finding" && check["gate_effect"] == "actionable")
+            .count();
+        let incomplete = checks.len() - passed - findings;
+        value["totals"] = serde_json::json!({
+            "checks": checks.len(),
+            "passed": passed,
+            "findings": findings,
+            "actionable_findings": actionable_findings,
+            "advisory_findings": findings - actionable_findings,
+            "incomplete": incomplete
+        });
+        value["complete"] = serde_json::json!(false);
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn with_incomplete_deep(
+        request: PrepareRepairRequest,
+        classification: bool,
+    ) -> Result<PrepareRepairRequest, serde_json::Error> {
+        let mut value = serde_json::to_value(request).unwrap();
+        let deep: wenlan_types::lint::LintReport =
+            serde_json::from_value(value["deep_report"].take()).unwrap();
+        value["deep_report"] = serde_json::to_value(fail_deep_check(deep, classification)).unwrap();
+        serde_json::from_value(value)
+    }
+
     async fn fingerprint(db: &MemoryDB) -> [u8; 32] {
         let snapshot = LintReadSnapshot::open(&db._db).await.unwrap();
         let fingerprint = snapshot.analysis_digest().unwrap().as_bytes();
@@ -1434,12 +1844,137 @@ mod tests {
         let manifest_dir = repair_root.path().join(manifest.manifest_id());
         assert!(manifest_dir.join("manifest.json").is_file());
         assert!(manifest_dir.join("rollback-v1.json").is_file());
+        assert!(matches!(
+            RepairArtifactStore::new(repair_root.path().to_path_buf())
+                .read_stored_manifest(manifest.manifest_id())
+                .unwrap(),
+            wenlan_types::repair::StoredRepairManifest::V2(_)
+        ));
         assert_eq!(
             RepairArtifactStore::new(repair_root.path().to_path_buf())
                 .load_manifest(manifest.manifest_id())
                 .unwrap(),
             manifest
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_accepts_complete_classification_with_unrelated_incomplete_deep_check() {
+        let (db, _db_dir) = fixture().await;
+        let repair_root = tempfile::tempdir().unwrap();
+        let request = with_incomplete_deep(request(&db).await, false)
+            .expect("unrelated Deep incompleteness remains a valid repair request");
+
+        let manifest = prepare_memory_reclassification(
+            &db,
+            &RepairArtifactStore::new(repair_root.path().to_path_buf()),
+            request,
+            1_721_000_000,
+        )
+        .await
+        .expect("classification repair remains applicable");
+
+        assert_eq!(manifest.target().memory_source_id(), "mem_target");
+    }
+
+    #[tokio::test]
+    async fn prepare_rejects_incomplete_classification_check() {
+        let (db, _db_dir) = fixture().await;
+
+        assert!(with_incomplete_deep(request(&db).await, true).is_err());
+    }
+
+    #[test]
+    fn artifact_store_loads_the_first_durable_v1_manifest_shape() {
+        let repair_root = tempfile::tempdir().unwrap();
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let manifest_dir = repair_root.path().join(manifest_id);
+        std::fs::create_dir(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join(MANIFEST_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/manifest-pre-baseline.json"),
+        )
+        .unwrap();
+
+        let manifest = RepairArtifactStore::new(repair_root.path().to_path_buf())
+            .load_manifest(manifest_id)
+            .expect("the first daemon-persisted v1 shape remains loadable");
+
+        assert!(manifest.post_assertions().general_baseline().is_empty());
+        assert!(manifest.post_assertions().deep_baseline().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pre_baseline_v1_verification_requires_conservatively_clean_reports() {
+        let repair_root = tempfile::tempdir().unwrap();
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let manifest_dir = repair_root.path().join(manifest_id);
+        std::fs::create_dir(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join(MANIFEST_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/manifest-pre-baseline.json"),
+        )
+        .unwrap();
+        let manifest = RepairArtifactStore::new(repair_root.path().to_path_buf())
+            .load_manifest(manifest_id)
+            .unwrap();
+        let (db, _db_dir) = fixture().await;
+        let before = request(&db).await;
+
+        assert!(matches!(
+            validate_verification_reports(
+                &manifest,
+                before.general_report(),
+                before.deep_report()
+            ),
+            Err(WenlanError::Validation(code)) if code == "repair_legacy_verification_not_clean"
+        ));
+    }
+
+    #[tokio::test]
+    async fn unverified_v1_apply_receipt_cannot_claim_v2_non_target_proof() {
+        let repair_root = tempfile::tempdir().unwrap();
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let manifest_dir = repair_root.path().join(manifest_id);
+        std::fs::create_dir(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join(MANIFEST_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/manifest.json"),
+        )
+        .unwrap();
+        std::fs::write(
+            manifest_dir.join(APPLY_RECEIPT_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/apply-receipt.json"),
+        )
+        .unwrap();
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let manifest = store.load_manifest(manifest_id).unwrap();
+        let apply_receipt = store.load_apply_receipt(&manifest).unwrap();
+        assert!(apply_receipt.post_apply_db_digest().is_none());
+        let (db, _db_dir) = fixture().await;
+        let (general, deep) = verification_reports(&db).await;
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            VerifyRepairRequest::try_new(
+                manifest_id.to_string(),
+                manifest.manifest_digest().clone(),
+                apply_receipt.receipt_digest().clone(),
+                general,
+                deep,
+            )
+            .unwrap(),
+            None,
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Validation(message))
+                if message == "repair_legacy_apply_receipt_unverifiable"
+        ));
     }
 
     #[tokio::test]
@@ -1466,6 +2001,54 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+        assert_eq!(std::fs::read_dir(repair_root.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn prepare_rejects_reports_from_different_runtime_producers() {
+        let (db, _db_dir) = fixture().await;
+        let repair_root = tempfile::tempdir().unwrap();
+        let mut value = serde_json::to_value(request(&db).await).unwrap();
+        value["deep_report"]["producer_receipt"]["runtime_commit"] =
+            serde_json::json!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let mixed: PrepareRepairRequest = serde_json::from_value(value).unwrap();
+
+        let result = prepare_memory_reclassification(
+            &db,
+            &RepairArtifactStore::new(repair_root.path().to_path_buf()),
+            mixed,
+            1_721_000_000,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message))
+                if message == "repair_source_producers_mismatch"
+        ));
+        assert_eq!(std::fs::read_dir(repair_root.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn prepare_rejects_reports_from_a_different_page_projection() {
+        let (db, _db_dir) = fixture().await;
+        let repair_root = tempfile::tempdir().unwrap();
+        let page_root = tempfile::tempdir().unwrap();
+        std::fs::write(page_root.path().join("changed.md"), "# changed").unwrap();
+
+        let result = prepare_memory_reclassification_with_pages(
+            &db,
+            &RepairArtifactStore::new(repair_root.path().to_path_buf()),
+            request(&db).await,
+            Some(page_root.path()),
+            1_721_000_000,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message)) if message == "repair_source_reports_stale"
+        ));
         assert_eq!(std::fs::read_dir(repair_root.path()).unwrap().count(), 0);
     }
 
@@ -1843,6 +2426,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn post_repair_general_and_deep_must_share_one_producer() {
+        let (db, _db_dir, _repair_root, manifest) = prepared_fixture().await;
+        let (general, deep) = verification_reports(&db).await;
+        let mut deep_value = serde_json::to_value(deep).unwrap();
+        let replacement_commit = if general
+            .producer_receipt()
+            .runtime_commit()
+            .is_some_and(|commit| commit.as_str() == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        {
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        } else {
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        };
+        deep_value["producer_receipt"]["runtime_commit"] = serde_json::json!(replacement_commit);
+        let mixed_deep: wenlan_types::lint::LintReport =
+            serde_json::from_value(deep_value).unwrap();
+
+        assert!(
+            VerifyRepairRequest::try_new(
+                manifest.manifest_id().to_string(),
+                manifest.manifest_digest().clone(),
+                RepairDigest::parse(
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .unwrap(),
+                general.clone(),
+                mixed_deep.clone(),
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            validate_verification_reports(&manifest, &general, &mixed_deep),
+            Err(WenlanError::Validation(message))
+                if message == "repair_verification_report_mismatch"
+        ));
+    }
+
+    #[tokio::test]
+    async fn pending_verification_manifest_ids_tracks_apply_until_verify() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        assert!(store
+            .pending_verification_manifest_ids()
+            .unwrap()
+            .is_empty());
+
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.pending_verification_manifest_ids().unwrap(),
+            vec![manifest.manifest_id().to_string()]
+        );
+
+        let (general, deep) = verification_reports(&db).await;
+        record_repair_verification(
+            &db,
+            &store,
+            VerifyRepairRequest::try_new(
+                manifest.manifest_id().to_string(),
+                manifest.manifest_digest().clone(),
+                apply_receipt.receipt_digest().clone(),
+                general,
+                deep,
+            )
+            .unwrap(),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+        assert!(store
+            .pending_verification_manifest_ids()
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .has_completed_verification(manifest.manifest_id())
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn verification_retry_returns_the_existing_receipt() {
         let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
         let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
@@ -1963,7 +2627,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_allows_unrelated_write_after_apply_when_reports_are_fresh() {
+    async fn verification_rejects_unrelated_write_after_apply_even_when_reports_are_fresh() {
         let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
         let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
         let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
@@ -1980,17 +2644,49 @@ mod tests {
             .unwrap();
         let (general, deep) = verification_reports(&db).await;
 
-        let receipt = record_repair_verification(
+        let result = record_repair_verification(
             &db,
             &store,
             exact_verify(&manifest, &apply_receipt, general, deep),
             None,
             1_721_000_002,
         )
-        .await
-        .unwrap();
+        .await;
 
-        assert_eq!(receipt.manifest_id(), manifest.manifest_id());
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message)) if message == "repair_non_target_state_changed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_in_place_metadata_update_that_preserves_row_counts() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        db.set_app_metadata("repair_digest_probe", "before")
+            .await
+            .unwrap();
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        db.set_app_metadata("repair_digest_probe", "after")
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Conflict(message)) if message == "repair_non_target_state_changed"
+        ));
     }
 
     #[tokio::test]
@@ -2105,6 +2801,59 @@ mod tests {
         assert!(matches!(
             result,
             Err(WenlanError::Validation(message)) if message == "repair_new_actionable_finding"
+        ));
+    }
+
+    #[tokio::test]
+    async fn verification_accepts_unchanged_unrelated_deep_incomplete_baseline() {
+        let (db, _db_dir) = fixture().await;
+        let repair_root = tempfile::tempdir().unwrap();
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let request = with_incomplete_deep(request(&db).await, false).unwrap();
+        let manifest = prepare_memory_reclassification(&db, &store, request, 1_721_000_000)
+            .await
+            .unwrap();
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        let deep = fail_deep_check(deep, false);
+
+        let receipt = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(receipt.manifest_id(), manifest.manifest_id());
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_new_unrelated_deep_incomplete_check() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        let deep = fail_deep_check(deep, false);
+
+        let result = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(WenlanError::Validation(message)) if message == "repair_new_incomplete_check"
         ));
     }
 

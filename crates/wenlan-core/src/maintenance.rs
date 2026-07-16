@@ -116,9 +116,6 @@ pub async fn run_maintenance_tick(
             knowledge_path,
         )
         .await?;
-        if outcome.wrote || outcome.gated {
-            db.clear_page_staleness(&page.id).await?;
-        }
         if human_owned || outcome.gated {
             result.stale_human_cards += usize::from(outcome.gated);
         } else {

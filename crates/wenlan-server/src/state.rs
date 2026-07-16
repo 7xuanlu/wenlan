@@ -2,6 +2,7 @@
 //! Server state — shared application state for the standalone HTTP daemon.
 
 use crate::ingest_batcher::IngestBatcher;
+use crate::maintenance_coordinator::MaintenanceCoordinator;
 use crate::reflection_debounce::ReflectionDebouncer;
 use crate::scheduler::WriteSignal;
 use std::path::PathBuf;
@@ -115,6 +116,8 @@ pub struct ServerState {
     pub watch_paths: Vec<PathBuf>,
     /// Write-event tracker for the event-driven steep scheduler.
     pub write_signal: WriteSignal,
+    /// Excludes daemon-owned background writers from an approved apply-to-verify window.
+    pub maintenance_coordinator: MaintenanceCoordinator,
     /// Per-agent debouncer for background reflection (T22). Coalesces
     /// mid-burst enrichment spawns when `WENLAN_ENABLE_REFLECTION_DEBOUNCE`
     /// is truthy; inert (never consulted) when the flag is unset/0.
@@ -153,6 +156,7 @@ impl Default for ServerState {
             quality_gate: QualityGate::new(wenlan_core::tuning::GateConfig::default()),
             watch_paths: Vec::new(),
             write_signal: WriteSignal::new(),
+            maintenance_coordinator: MaintenanceCoordinator::default(),
             reflection_debouncer: ReflectionDebouncer::new(),
             ingest_batcher: None,
             repair_root: None,

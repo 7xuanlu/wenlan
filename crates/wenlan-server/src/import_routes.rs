@@ -106,7 +106,7 @@ pub async fn handle_chat_export_import(
 
     // 4. Snapshot Arc<MemoryDB> + LLM providers + enrichment config out of the
     //    RwLock guard before any awaits.
-    let (db, llm, api_llm, prompts, tuning) = {
+    let (db, llm, api_llm, prompts, tuning, maintenance) = {
         let guard = state.read().await;
         let db = guard
             .db
@@ -119,6 +119,7 @@ pub async fn handle_chat_export_import(
             guard.api_llm.clone(),
             guard.prompts.clone(),
             guard.tuning.clone(),
+            guard.maintenance_coordinator.clone(),
         )
     };
 
@@ -196,6 +197,7 @@ pub async fn handle_chat_export_import(
     let db_for_enrich = db.clone();
     let import_id_for_enrich = import_id.clone();
     tokio::spawn(async move {
+        let _maintenance_guard = maintenance.begin_background().await;
         use futures::stream::{self, StreamExt};
         const BATCH: usize = 100;
         const CONCURRENCY: usize = 8;

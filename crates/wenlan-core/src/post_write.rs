@@ -28,6 +28,8 @@ pub struct WriteResult {
     pub revision_card_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub gated: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub acknowledged: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +46,7 @@ pub struct RepairWriteProof {
     after_target_receipt: RepairDigest,
     non_target_before: RepairDigest,
     non_target_after: RepairDigest,
+    post_apply_db_digest: RepairDigest,
 }
 
 impl RepairWriteProof {
@@ -61,6 +64,10 @@ impl RepairWriteProof {
 
     pub fn non_target_after(&self) -> &RepairDigest {
         &self.non_target_after
+    }
+
+    pub fn post_apply_db_digest(&self) -> &RepairDigest {
+        &self.post_apply_db_digest
     }
 }
 
@@ -116,11 +123,13 @@ where
         if non_target_after != non_target_before {
             return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
         }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
         Ok(RepairWriteProof {
             before_target_receipt,
             after_target_receipt,
             non_target_before,
             non_target_after,
+            post_apply_db_digest,
         })
     }
     .await;
@@ -204,6 +213,7 @@ pub enum PageWrite<'a> {
         req: UpdatePageRequest,
         edited_by: &'a str,
         require_stale: bool,
+        expected_source_revision: Option<i64>,
         knowledge_path: Option<&'a Path>,
         citations: Option<(String, String)>,
     },
@@ -253,6 +263,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             req,
             edited_by,
             require_stale,
+            expected_source_revision,
             knowledge_path,
             citations,
         } => {
@@ -262,6 +273,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 req,
                 edited_by,
                 require_stale,
+                expected_source_revision,
                 knowledge_path,
                 citations,
             )
@@ -336,6 +348,7 @@ async fn replace_source_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        acknowledged: false,
     })
 }
 
@@ -357,6 +370,7 @@ async fn attach_page_sources_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        acknowledged: false,
     })
 }
 
@@ -427,6 +441,7 @@ pub async fn create_entity(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            acknowledged: false,
         });
     }
 
@@ -441,6 +456,7 @@ pub async fn create_entity(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            acknowledged: false,
         });
     }
 
@@ -460,6 +476,7 @@ pub async fn create_entity(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                acknowledged: false,
             });
         }
     }
@@ -478,6 +495,7 @@ pub async fn create_entity(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                acknowledged: false,
             });
         }
     }
@@ -568,6 +586,7 @@ pub async fn create_entity(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        acknowledged: false,
     })
 }
 
@@ -613,6 +632,7 @@ pub async fn create_relation(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                acknowledged: false,
             });
         }
     }
@@ -715,6 +735,7 @@ pub async fn create_relation(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        acknowledged: false,
     })
 }
 
@@ -777,6 +798,7 @@ pub async fn add_observation(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        acknowledged: false,
     })
 }
 
@@ -1111,6 +1133,7 @@ async fn create_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        acknowledged: false,
     })
 }
 
@@ -1220,6 +1243,7 @@ pub async fn stage_page_revision_card(
         wrote: false,
         revision_card_id: Some(revision_card_id),
         gated: true,
+        acknowledged: false,
     })
 }
 
@@ -1270,6 +1294,33 @@ pub async fn update_page(
             req,
             edited_by,
             require_stale,
+            expected_source_revision: None,
+            knowledge_path,
+            citations,
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn update_page_at_source_revision(
+    db: &MemoryDB,
+    page_id: &str,
+    req: UpdatePageRequest,
+    edited_by: &str,
+    require_stale: bool,
+    expected_source_revision: i64,
+    knowledge_path: Option<&Path>,
+    citations: Option<(String, String)>,
+) -> Result<WriteResult, WenlanError> {
+    page_write(
+        db,
+        PageWrite::Update {
+            page_id,
+            req,
+            edited_by,
+            require_stale,
+            expected_source_revision: Some(expected_source_revision),
             knowledge_path,
             citations,
         },
@@ -1284,6 +1335,7 @@ async fn update_page_impl(
     req: UpdatePageRequest,
     edited_by: &str,
     require_stale: bool,
+    expected_source_revision: Option<i64>,
     knowledge_path: Option<&Path>,
     citations: Option<(String, String)>,
 ) -> Result<WriteResult, WenlanError> {
@@ -1321,15 +1373,36 @@ async fn update_page_impl(
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
+    if require_stale && current.stale_reason.is_none() {
+        return Ok(WriteResult {
+            id: page_id.to_string(),
+            attached_to: None,
+            warnings: vec![],
+            wrote: false,
+            revision_card_id: None,
+            gated: false,
+            acknowledged: false,
+        });
+    }
     if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
-        return stage_page_revision_card(
+        let mut result = stage_page_revision_card(
             db,
             &current,
             &req.content,
             &req.source_memory_ids,
             edited_by,
         )
-        .await;
+        .await?;
+        if result.gated && require_stale {
+            result.acknowledged = db
+                .clear_page_staleness_at_source_revision(
+                    page_id,
+                    current.version,
+                    expected_source_revision,
+                )
+                .await?;
+        }
+        return Ok(result);
     }
     let current_version = current.version;
     let new_version = current_version + 1;
@@ -1381,6 +1454,12 @@ async fn update_page_impl(
 
     // Early return: identical content and identical source set — nothing to write.
     if delta_summary.is_none() && old_set == new_set {
+        let acknowledged = if require_stale {
+            db.acknowledge_page_compile(page_id, current_version, expected_source_revision)
+                .await?
+        } else {
+            false
+        };
         return Ok(WriteResult {
             id: page_id.to_string(),
             attached_to: None,
@@ -1388,6 +1467,7 @@ async fn update_page_impl(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            acknowledged,
         });
     }
 
@@ -1423,8 +1503,20 @@ async fn update_page_impl(
     });
     // citations: None -> resets `citations` to '[]' (no fresh citation source
     // for this write; a stale claim-map must not survive a content change).
-    let wrote = db
-        .try_update_page_content_with_changelog(
+    let wrote = if let Some(expected_source_revision) = expected_source_revision {
+        db.try_update_page_content_with_changelog_at_source_revision(
+            page_id,
+            &req.content,
+            &source_refs,
+            edited_by,
+            require_stale,
+            &new_changelog,
+            citations.as_ref().map(|(json, _)| json.as_str()),
+            expected_source_revision,
+        )
+        .await?
+    } else {
+        db.try_update_page_content_with_changelog(
             page_id,
             &req.content,
             &source_refs,
@@ -1433,7 +1525,8 @@ async fn update_page_impl(
             &new_changelog,
             citations.as_ref().map(|(json, _)| json.as_str()),
         )
-        .await?;
+        .await?
+    };
 
     if !wrote {
         // CAS skipped — page was not stale; return empty warnings (no-op)
@@ -1444,6 +1537,7 @@ async fn update_page_impl(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            acknowledged: false,
         });
     }
 
@@ -1470,6 +1564,7 @@ async fn update_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        acknowledged: false,
     })
 }
 
@@ -2936,6 +3031,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn page_write_attach_marks_page_source_updated() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem_attach_a", "first explicit source").await;
+        seed_memory(&db, "mem_attach_b", "second explicit source").await;
+        let page_id = seed_page(&db, "mem_attach_a", "first explicit source").await;
+
+        page_write(
+            &db,
+            PageWrite::Attach {
+                page_id: &page_id,
+                source_memory_ids: &["mem_attach_b".to_string()],
+                link_reason: "topic_overlap",
+                agent: "test",
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.get_page_stale_reason(&page_id).await.unwrap(),
+            Some("source_updated".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn update_page_round_trip() {
         let (db, _dir) = test_db().await;
         let mem_id = "mem-rpt-1";
@@ -3003,6 +3123,196 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_revision_cas_preserves_source_attached_during_synthesis() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem-refresh-a", "first source").await;
+        seed_memory(&db, "mem-refresh-b", "second source").await;
+        let page_id = seed_page(&db, "mem-refresh-a", "first source").await;
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+
+        page_write(
+            &db,
+            PageWrite::Attach {
+                page_id: &page_id,
+                source_memory_ids: &["mem-refresh-b".to_string()],
+                link_reason: "attached_during_synthesis",
+                agent: "test",
+            },
+        )
+        .await
+        .unwrap();
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "compiled from only the first source".to_string(),
+                source_memory_ids: vec!["mem-refresh-a".to_string()],
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote);
+        assert!(!result.acknowledged);
+        assert_eq!(
+            db.get_page_sources(&page_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["mem-refresh-a".to_string(), "mem-refresh-b".to_string()]
+                .into_iter()
+                .collect()
+        );
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, 1);
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+    }
+
+    #[tokio::test]
+    async fn identical_refresh_cannot_acknowledge_a_new_source_revision() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem-ack-a", "first source").await;
+        seed_memory(&db, "mem-ack-b", "second source").await;
+        let page_id = seed_page(&db, "mem-ack-a", "first source").await;
+        db.set_page_stale(&page_id, "source_updated").await.unwrap();
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+        db.link_page_source(&page_id, "mem-ack-b", "attached_during_synthesis")
+            .await
+            .unwrap();
+
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "first source".to_string(),
+                source_memory_ids: vec!["mem-ack-a".to_string()],
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote);
+        assert!(!result.acknowledged);
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(page.sources_updated_count, 1);
+        assert_eq!(
+            db.get_page_source_revision(&page_id).await.unwrap(),
+            expected_revision + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_revision_cas_rejects_sources_updated_count_aba() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem-aba-a", "first source").await;
+        seed_memory(&db, "mem-aba-b", "second source").await;
+        seed_memory(&db, "mem-aba-c", "third source").await;
+        let page_id = seed_page(&db, "mem-aba-a", "first source").await;
+
+        db.link_page_source(&page_id, "mem-aba-b", "first_pending_attach")
+            .await
+            .unwrap();
+        let stale_snapshot = db.get_page(&page_id).await.unwrap().unwrap();
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+        assert_eq!(stale_snapshot.sources_updated_count, 1);
+
+        assert!(db
+            .acknowledge_page_compile(&page_id, stale_snapshot.version, Some(expected_revision))
+            .await
+            .unwrap());
+        db.link_page_source(&page_id, "mem-aba-c", "attached_after_ack")
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_page(&page_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .sources_updated_count,
+            1
+        );
+
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "compiled without the third source".to_string(),
+                source_memory_ids: vec!["mem-aba-a".to_string(), "mem-aba-b".to_string()],
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote);
+        assert_eq!(
+            db.get_page_sources(&page_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "mem-aba-a".to_string(),
+                "mem-aba-b".to_string(),
+                "mem-aba-c".to_string(),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_identical_refresh_acknowledges_compile_without_retry() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-identical";
+        let content = "Rust ownership keeps references memory safe";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+        db.set_page_stale(&page_id, "source_updated").await.unwrap();
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+
+        let result = update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+            },
+            "re_distill",
+            true,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+
+        assert!(!result.wrote);
+        assert!(result.acknowledged);
+        assert_eq!(after.version, before.version);
+        assert!(after.stale_reason.is_none());
+        assert!(after.last_compiled >= before.last_compiled);
+    }
+
+    #[tokio::test]
     async fn update_page_cas_writes_when_stale() {
         let (db, _dir) = test_db().await;
         let mem_id = "mem-cas-write";
@@ -3025,6 +3335,11 @@ mod tests {
 
         let page = db.get_page(&page_id).await.unwrap().unwrap();
         assert_eq!(page.version, 2, "version should bump on CAS write");
+        assert!(
+            page.stale_reason.is_none(),
+            "successful CAS clears staleness"
+        );
+        assert_eq!(page.sources_updated_count, 0);
         assert!(result.wrote, "wrote must be true on CAS write");
         assert!(
             !result.warnings.is_empty(),
@@ -3295,6 +3610,7 @@ mod tests {
                 },
                 edited_by: "fs_edit",
                 require_stale: false,
+                expected_source_revision: None,
                 knowledge_path: None,
                 citations: None,
             },
@@ -3320,6 +3636,7 @@ mod tests {
                 },
                 edited_by: "re_distill",
                 require_stale: false,
+                expected_source_revision: None,
                 knowledge_path: None,
                 citations: None,
             },
@@ -3419,6 +3736,74 @@ mod tests {
         assert_eq!(structured["page_version"], before.version);
         assert_eq!(structured["edited_by"], "re_distill");
         assert_eq!(structured["source_memory_ids"], serde_json::json!([mem_id]));
+    }
+
+    #[tokio::test]
+    async fn gated_refresh_does_not_clear_a_newer_source_revision() {
+        let (db, _dir) = test_db().await;
+        for (source_id, content) in [
+            (
+                "mem-gated-revision-a",
+                "Rust ownership keeps memory safety rules explicit in systems code",
+            ),
+            (
+                "mem-gated-revision-b",
+                "Borrow checking rejects invalid aliasing before runtime",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let page_id = seed_page(
+            &db,
+            "mem-gated-revision-a",
+            "Rust ownership keeps memory safety rules explicit in systems code",
+        )
+        .await;
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "Human-owned notes about Rust ownership and memory safety".to_string(),
+                source_memory_ids: vec!["mem-gated-revision-a".to_string()],
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale(&page_id, "source_updated").await.unwrap();
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+
+        db.link_page_source(
+            &page_id,
+            "mem-gated-revision-b",
+            "attached_during_synthesis",
+        )
+        .await
+        .unwrap();
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "Machine proposal based on the old source snapshot".to_string(),
+                source_memory_ids: vec!["mem-gated-revision-a".to_string()],
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.gated);
+        assert!(!result.acknowledged);
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(page.sources_updated_count, 1);
     }
 
     // ── accept_pending_revision ──────────────────────────────────────────────

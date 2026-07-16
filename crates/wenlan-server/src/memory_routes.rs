@@ -724,7 +724,7 @@ pub async fn handle_store_memory(
         let run_reflection =
             move |cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>| async move {
                 // Snapshot everything we need, then drop the guard.
-                let (db, llm, prompts, refinery, distillation, knowledge_path) = {
+                let (db, llm, prompts, refinery, distillation, knowledge_path, maintenance) = {
                     let s = state_clone.read().await;
                     let Some(db) = s.db.clone() else {
                         return;
@@ -736,8 +736,10 @@ pub async fn handle_store_memory(
                         s.tuning.refinery.clone(),
                         s.tuning.distillation.clone(),
                         Some(wenlan_core::config::load_config().knowledge_path_or_default()),
+                        s.maintenance_coordinator.clone(),
                     )
                 }; // read guard dropped here — writers may proceed
+                let _maintenance_guard = maintenance.begin_background().await;
 
                 // Canonical post-store enrichment (Phase 1 classify/extract/
                 // apply_enrichment/tags + Phase 2 post-ingest + Phase 3 dual-pool)
@@ -809,9 +811,9 @@ pub async fn handle_store_memory(
     // `record_milestone` in the DB and surfaced to the UI through the
     // /api/onboarding/* endpoints.
     {
-        let db_for_ms = {
+        let (db_for_ms, maintenance) = {
             let s = state.read().await;
-            s.db.clone()
+            (s.db.clone(), s.maintenance_coordinator.clone())
         };
         if let Some(db_for_ms) = db_for_ms {
             let emitter_for_ms: Arc<dyn wenlan_core::events::EventEmitter> =
@@ -819,6 +821,7 @@ pub async fn handle_store_memory(
             let source_for_ms = agent_for_activity.clone();
             let memory_id_for_ms = source_id.clone();
             tokio::spawn(async move {
+                let _maintenance_guard = maintenance.begin_background().await;
                 let ev =
                     wenlan_core::onboarding::MilestoneEvaluator::new(&db_for_ms, emitter_for_ms);
                 if let Err(e) = ev

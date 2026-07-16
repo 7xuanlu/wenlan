@@ -17,6 +17,7 @@ pub mod narrative;
 pub mod onboarding;
 pub mod pages;
 pub mod repair;
+pub mod repair_plan;
 pub mod requests;
 pub mod responses;
 pub mod sources;
@@ -41,6 +42,7 @@ pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRI
 pub use narrative::NarrativeResponse;
 pub use pages::{Page, PageEvidence};
 pub use repair::*;
+pub use repair_plan::*;
 pub use requests::AcceptRefinementRequest;
 pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
@@ -97,6 +99,10 @@ pub fn version() -> &'static str {
 #[cfg(test)]
 #[path = "repair_tests.rs"]
 mod repair_tests;
+
+#[cfg(test)]
+#[path = "repair_plan_tests.rs"]
+mod repair_plan_tests;
 
 #[cfg(test)]
 mod tests {

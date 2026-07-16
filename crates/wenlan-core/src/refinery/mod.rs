@@ -19,12 +19,9 @@ pub use crate::kg::entity_extraction::{commit_kg, extract_kg, extract_single_mem
 pub use crate::kg::reweave::reweave_entity_links;
 
 // Internal re-imports for refinery code that still calls into the moved
-// distillation helpers (distill_one_cluster + refine_clusters_with_llm +
-// recompile_single_page from other refinery phases).
+// distillation helpers (distill_one_cluster + refine_clusters_with_llm).
 use crate::synthesis::detect::detect_page_candidates;
-use crate::synthesis::distill::{
-    distill_pages_scoped_gated, recompile_single_page, refresh_page, RefreshReason,
-};
+use crate::synthesis::distill::{distill_pages_scoped_gated, refresh_page, RefreshReason};
 use crate::synthesis::refinement_queue::process_refinement_queue;
 
 use crate::activity::ACTIVITY_GAP_SECS;
@@ -629,10 +626,13 @@ pub async fn run_periodic_steep_with_api(
         }
     {
         let phase = run_phase(Phase::ReDistill, || async {
-            let changed = redistill_changed_pages(db_ref, compile_llm, prompts, kp_ref).await?;
-            // Also re-distill concepts explicitly marked stale by topic-key upserts.
+            let enqueued = enqueue_changed_pages(db_ref).await?;
+            if enqueued > 0 {
+                log::info!("[re-distill] queued {enqueued} pages with changed explicit sources");
+            }
+            // Re-distill every explicitly stale page through the single CAS writer.
             let stale = re_distill_stale_pages(db_ref, compile_llm, prompts, kp_ref).await?;
-            let count = changed + stale;
+            let count = stale;
             let (nudge, headline) = classify_redistill(count);
             Ok(PhaseOutput {
                 items_processed: count,
@@ -898,47 +898,26 @@ pub(crate) async fn extract_entities_from_memories(
     Ok(total_created)
 }
 
-/// Re-distill concepts whose source memories have changed.
-/// Called by the steep cycle — only refreshes concepts with meaningful input changes.
-pub(crate) async fn redistill_changed_pages(
-    db: &MemoryDB,
-    llm: Option<&Arc<dyn LlmProvider>>,
-    prompts: &PromptRegistry,
-    knowledge_path: Option<&std::path::Path>,
-) -> Result<usize, WenlanError> {
-    let llm = match llm {
-        Some(l) if l.is_available() => l,
-        _ => return Ok(0),
-    };
-
+/// Mark pages whose explicit source memories changed. The stale-page sweep is
+/// the sole LLM executor, so every refresh reaches the same stale-only CAS.
+pub(crate) async fn enqueue_changed_pages(db: &MemoryDB) -> Result<usize, WenlanError> {
     let all_active = db.list_pages("active", 200, 0).await?;
-    let mut recompiled = 0usize;
+    let mut enqueued = 0usize;
 
     for page in &all_active {
         let changed = db.has_page_sources_changed(page).await.unwrap_or(false);
         if !changed {
             continue;
         }
-
-        match recompile_single_page(db, llm, prompts, page, knowledge_path).await {
-            Ok(true) => recompiled += 1,
-            Ok(false) => {}
-            Err(e) => log::warn!("[re-distill] failed for '{}': {}", page.title, e),
-        }
+        db.set_page_stale(&page.id, "source_updated").await?;
+        enqueued += 1;
     }
-
-    if recompiled > 0 {
-        log::info!(
-            "[re-distill] refreshed {} concepts with changed inputs",
-            recompiled
-        );
-    }
-    Ok(recompiled)
+    Ok(enqueued)
 }
 
 /// Re-distill concepts explicitly marked stale by topic-key upserts.
 ///
-/// Distinct from `redistill_changed_pages` (which checks last_modified timestamps):
+/// Distinct from `enqueue_changed_pages` (which checks last_modified timestamps):
 /// this targets concepts whose source memories were updated in-place and thus didn't
 /// change their last_modified. The `stale_reason` field is set by the topic-match
 /// upsert path in handle_store_memory.
@@ -990,15 +969,17 @@ pub(crate) async fn re_distill_stale_pages(
         .await
         {
             Ok(outcome) => {
-                if outcome.wrote || outcome.gated {
-                    db.clear_page_staleness(&page.id).await?;
-                }
                 if outcome.wrote {
                     recompiled += 1;
                     log::info!("[re-distill-stale] refreshed page '{}'", page.title);
                 } else if outcome.gated {
                     log::info!(
                         "[re-distill-stale] '{}' human-owned; staged revision card, cleared staleness",
+                        page.title
+                    );
+                } else if outcome.acknowledged {
+                    log::info!(
+                        "[re-distill-stale] '{}' verified unchanged; acknowledged compile watermark",
                         page.title
                     );
                 } else {
@@ -1021,7 +1002,7 @@ pub(crate) async fn re_distill_stale_pages(
 /// Spec §5.3: refresh the reserved, machine-owned Overview page as part of
 /// the maintenance re-distill phase — the "wiki is alive" signal. No-op
 /// (returns 0, creates nothing) when no LLM lane is available, mirroring the
-/// `redistill_changed_pages` guard above: a steep cycle with no LLM must not
+/// `enqueue_changed_pages` guard above: a steep cycle with no LLM must not
 /// create the placeholder row just to leave it unrefreshed.
 async fn maybe_refresh_overview_page(
     db: &MemoryDB,
@@ -1280,6 +1261,42 @@ pub struct SteepResult {
 mod tests {
     use super::*;
     use crate::db::tests::{test_db, EVICT_ENV_LOCK};
+
+    #[tokio::test]
+    async fn changed_explicit_source_is_enqueued_without_running_an_llm() {
+        let (db, _dir) = test_db().await;
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  pending_revision,is_recap,supersede_mode)
+                 VALUES ('row-source','source','memory','mem_source','source',0,200,
+                         'text',0,0,'hide')",
+                (),
+            )
+            .await
+            .unwrap();
+        db.insert_page(
+            "page_changed",
+            "Changed",
+            None,
+            "old content",
+            None,
+            None,
+            &["mem_source"],
+            "1970-01-01T00:01:40+00:00",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(enqueue_changed_pages(&db).await.unwrap(), 1);
+        assert_eq!(
+            db.get_page_stale_reason("page_changed").await.unwrap(),
+            Some("source_updated".to_string())
+        );
+    }
 
     struct RecordingDistillProvider {
         prompts: std::sync::Mutex<Vec<String>>,

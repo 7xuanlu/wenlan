@@ -870,8 +870,8 @@ mod tests {
     async fn backfill_happy_path_preserves_source_memory_ids() {
         // Regression: the annotate-success path must not clobber
         // `source_memory_ids` with an empty array (it broke
-        // `recompile_single_page` / `max_source_trust_tier` / page-growth
-        // append, which all read the page's linked sources back).
+        // page refresh / `max_source_trust_tier` / page-growth append, which
+        // all read the page's linked sources back).
         let (db, _dir) = crate::db::tests::test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
         db.insert_page(
