@@ -1,7 +1,6 @@
 # Total Lint Repair Resolution Design
 
-**Status:** Product direction approved on 2026-07-15; written-spec review
-pending.
+**Status:** Approved for implementation by Lucian on 2026-07-15.
 
 ## Problem
 
