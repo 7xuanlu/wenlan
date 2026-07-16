@@ -1,9 +1,9 @@
-<!-- README_SYNC: source=README.md sha256=c048eaf38866f5591fafc10de39bf9f01830718b8735749396d9d693db9a3a01 -->
+<!-- README_SYNC: source=README.md sha256=39d5f12fd6ae2ff279e83081008847c3a3bd25a48784ca53f91354bae7b38a1e -->
 
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-mobile.png">
-    <img src="./docs/assets/readme-banner.png" alt="Wenlan：有来源支撑、持续更新的 llm-wiki。" width="100%">
+    <img src="./docs/assets/readme-banner.png" alt="Wenlan：有来源支撑、会持续积累的知识库。" width="100%">
   </picture>
 </p>
 

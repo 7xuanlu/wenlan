@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-mobile.png">
-    <img src="./docs/assets/readme-banner.png" alt="Wenlan: a source-backed llm-wiki that stays current." width="100%">
+    <img src="./docs/assets/readme-banner.png" alt="Wenlan: your source-backed knowledge base, built to compound." width="100%">
   </picture>
 </p>
 
