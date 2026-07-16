@@ -217,6 +217,7 @@ pub(crate) fn generate_simple_recap(
 mod tests {
     use super::*;
     use crate::db::tests::test_db;
+    use crate::read_scope::ReadScope;
     use crate::sources::RawDocument;
 
     fn make_memory(source_id: &str, content: &str, memory_type: &str, space: &str) -> RawDocument {
@@ -284,7 +285,7 @@ mod tests {
                 "Wenlan project feature",
                 10,
                 Some("fact"),
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,
@@ -327,7 +328,7 @@ mod tests {
                 "auth module debugging",
                 10,
                 Some("fact"),
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,

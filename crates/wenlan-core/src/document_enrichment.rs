@@ -621,6 +621,7 @@ mod tests {
     use super::*;
     use crate::events::NoopEmitter;
     use crate::llm_provider::{LlmBackend, LlmError, SequencedMockProvider};
+    use crate::read_scope::ReadScope;
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -809,7 +810,16 @@ mod tests {
 
         // Searchable: the unique document token retrieves this document's chunks.
         let results = db
-            .search_memory("Wenlanborg", 30, None, None, None, None, None, None)
+            .search_memory(
+                "Wenlanborg",
+                30,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(

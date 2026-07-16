@@ -239,6 +239,15 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 continue;
             };
 
+            // Everyday source pin — read once per poll; drives document
+            // enrichment and the entity/reconcile/citation sweeps below. Absent
+            // or unknown → the auto chain (api → external → on-device).
+            let everyday_pin = wenlan_core::refinery::EverydaySource::parse(
+                wenlan_core::config::load_config()
+                    .everyday_source
+                    .as_deref(),
+            );
+
             let now = Instant::now();
 
             // --- 0. Filesystem page watcher: md → DB ---
@@ -275,7 +284,13 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             // A paused queue backing off is skipped by claim_next_pending until
             // its next_retry_at elapses (backoff auto-resume). `db`/`llm`/`prompts`
             // are already snapshotted out of the read guard above.
-            let doc_llm = api_llm.as_ref().or(llm.as_ref());
+            let doc_route = wenlan_core::refinery::resolve_everyday(
+                everyday_pin,
+                api_llm.as_ref(),
+                external_llm.as_ref(),
+                llm.as_ref(),
+            );
+            let doc_llm = doc_route.llm;
             let processed =
                 run_directory_sync_tick(&db, doc_llm, &prompts, MAX_DOC_ENRICH_PER_POLL).await;
             if processed > 0 {
@@ -433,9 +448,16 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             if wenlan_core::db::entity_sweep_enabled()
                 && now.duration_since(last_enrichment_sweep) >= ENRICHMENT_SWEEP_INTERVAL
             {
-                // Pick the best available LLM: prefer api_llm (cloud, reliable),
-                // fall back to on-device llm.
-                let sweep_llm = api_llm.as_ref().or(llm.as_ref()).cloned();
+                // Everyday chain: Anthropic → external → on-device. A connected
+                // external provider serves the sweep before the on-device model.
+                let sweep_llm = wenlan_core::refinery::resolve_everyday(
+                    everyday_pin,
+                    api_llm.as_ref(),
+                    external_llm.as_ref(),
+                    llm.as_ref(),
+                )
+                .llm
+                .cloned();
                 if let Some(provider) = sweep_llm {
                     let db_ref = db.clone();
                     let prompts_ref = prompts.clone();
@@ -468,7 +490,14 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             if wenlan_core::db::doc_reconcile_enabled()
                 && now.duration_since(last_reconcile_sweep) >= RECONCILE_SWEEP_INTERVAL
             {
-                let sweep_llm = api_llm.as_ref().or(llm.as_ref()).cloned();
+                let sweep_llm = wenlan_core::refinery::resolve_everyday(
+                    everyday_pin,
+                    api_llm.as_ref(),
+                    external_llm.as_ref(),
+                    llm.as_ref(),
+                )
+                .llm
+                .cloned();
                 if let Some(provider) = sweep_llm {
                     let db_ref = db.clone();
                     let prompts_ref = prompts.clone();
@@ -506,7 +535,14 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             if wenlan_core::db::citation_backfill_enabled()
                 && now.duration_since(last_citation_sweep) >= CITATION_SWEEP_INTERVAL
             {
-                let sweep_llm = api_llm.as_ref().or(llm.as_ref()).cloned();
+                let sweep_llm = wenlan_core::refinery::resolve_everyday(
+                    everyday_pin,
+                    api_llm.as_ref(),
+                    external_llm.as_ref(),
+                    llm.as_ref(),
+                )
+                .llm
+                .cloned();
                 if let Some(provider) = sweep_llm {
                     let db_ref = db.clone();
                     let prompts_ref = prompts.clone();
@@ -1120,7 +1156,16 @@ mod tests {
         );
 
         let results = db
-            .search_memory("Wenlanborg", 30, None, None, None, None, None, None)
+            .search_memory(
+                "Wenlanborg",
+                30,
+                None,
+                &wenlan_core::read_scope::ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(

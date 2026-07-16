@@ -58,7 +58,7 @@ fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
     let plugin = read_json("plugin/.claude-plugin/plugin.json");
     assert_eq!(json_string(&plugin, "name"), "wenlan");
     assert_eq!(json_string(&plugin, "license"), "Apache-2.0");
-    assert_eq!(json_string(&plugin, "category"), "memory");
+    assert_eq!(json_string(&plugin, "category"), "productivity");
 
     let keywords = plugin["keywords"].as_array().expect("keywords array");
     for keyword in ["claude-code", "memory", "mcp", "local-first"] {

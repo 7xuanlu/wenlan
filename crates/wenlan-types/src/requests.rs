@@ -281,6 +281,8 @@ pub struct SearchPagesRequest {
     pub limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 // ===== Ingest =====
@@ -374,6 +376,16 @@ pub struct UpdateConfigRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub external_llm_api_key: Option<Option<String>>,
+    /// Per-job source pin for everyday work: `"anthropic"` | `"external"` |
+    /// `"on_device"`. Omitted = preserve; `""` = clear; other values are
+    /// validated by the config route.
+    #[serde(default)]
+    pub everyday_source: Option<String>,
+    /// Per-job source pin for synthesis: `"anthropic"` | `"external"`
+    /// (`"on_device"` only when the compile gate is set). Omitted = preserve;
+    /// `""` = clear; validated by the config route.
+    #[serde(default)]
+    pub synthesis_source: Option<String>,
 }
 
 // ===== Chunks / indexed files =====
@@ -587,6 +599,16 @@ mod search_pages_page_type_test {
         let json = r#"{"query":"foo","limit":10}"#;
         let parsed: SearchPagesRequest = serde_json::from_str(json).unwrap();
         assert!(parsed.page_type.is_none());
+    }
+
+    #[test]
+    fn search_pages_request_accepts_optional_space() {
+        let json = r#"{"query":"foo","space":"work"}"#;
+        let parsed: SearchPagesRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.space.as_deref(), Some("work"));
+
+        let omitted: SearchPagesRequest = serde_json::from_str(r#"{"query":"foo"}"#).unwrap();
+        assert!(omitted.space.is_none());
     }
 }
 

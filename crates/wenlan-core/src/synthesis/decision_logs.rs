@@ -135,6 +135,7 @@ mod tests {
     use super::*;
     use crate::db::tests::test_db;
     use crate::prompts::PromptRegistry;
+    use crate::read_scope::ReadScope;
     use crate::sources::RawDocument;
 
     fn make_memory(source_id: &str, content: &str, memory_type: &str, space: &str) -> RawDocument {
@@ -199,7 +200,7 @@ mod tests {
                 "backend refactor approach",
                 10,
                 Some("decision"),
-                None,
+                &ReadScope::Global,
                 None,
                 None,
                 None,

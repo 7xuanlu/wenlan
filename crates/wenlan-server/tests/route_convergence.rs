@@ -471,30 +471,13 @@ async fn refresh_page_machine_owned_page_goes_through_page_write_changelog() {
     );
 }
 
-/// Non-existent source_id returns 200 with an empty entries array.
-/// walk_supersede_chain returns [] for unknown ids; the handler wraps that.
+/// Non-existent source_id uses the same static 404 as a scope mismatch.
 #[tokio::test]
-async fn memory_revisions_unknown_id_returns_empty_chain() {
+async fn memory_revisions_unknown_id_returns_404() {
     let (app, _dir) = test_app().await;
     let (status, body) = json_get(&app, "/api/memory/nonexistent_mem_id/revisions").await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert_eq!(
-        body["current_source_id"].as_str(),
-        Some("nonexistent_mem_id"),
-        "envelope current_source_id mismatch: {body}"
-    );
-    assert_eq!(
-        body["chain_depth"].as_i64(),
-        Some(0),
-        "chain_depth should be 0 for unknown id: {body}"
-    );
-    assert!(
-        body["entries"]
-            .as_array()
-            .map(|a| a.is_empty())
-            .unwrap_or(false),
-        "entries should be empty for unknown id: {body}"
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert_eq!(body, serde_json::json!({"error": "memory not found"}));
 }
 
 /// Non-existent page id returns 404.

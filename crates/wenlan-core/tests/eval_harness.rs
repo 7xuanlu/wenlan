@@ -2281,6 +2281,7 @@ async fn seed_scenario_dbs_complete() {
     use wenlan_core::eval::seed_contract::{assert_seed_contract, SeedExpectations};
     use wenlan_core::eval::shared::run_classification_for_eval_concurrent;
     use wenlan_core::prompts::PromptRegistry;
+    use wenlan_core::read_scope::ReadScope;
     use wenlan_core::tuning::DistillationConfig;
 
     // Route distill's per-cluster log::warn!/info! skip reasons to stderr so the
@@ -5520,7 +5521,16 @@ async fn smoke_fullpipeline() {
     // Phase 4: Context collection - check flat vs structured differ
     let qa = &sample.qa[0];
     let flat_results = db
-        .search_memory(&qa.question, 10, None, None, None, None, None, None)
+        .search_memory(
+            &qa.question,
+            10,
+            None,
+            &ReadScope::Global,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     let flat_ctx: String = flat_results
@@ -5698,7 +5708,16 @@ async fn smoke_per_scenario_locomo() {
 
         // Retrieval scoped to own conv: every result must come from this sample's source_id prefix
         let results = db
-            .search_memory("anything", 50, None, None, None, None, None, None)
+            .search_memory(
+                "anything",
+                50,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("search_memory");
         let expected_prefix = format!("locomo_{}_obs_", sample.sample_id);
@@ -6132,7 +6151,16 @@ async fn smoke_per_scenario_locomo_cli() {
 
     // Verify retrieval is scoped to this sample.
     let results = db
-        .search_memory("anything", 50, None, None, None, None, None, None)
+        .search_memory(
+            "anything",
+            50,
+            None,
+            &ReadScope::Global,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("search_memory");
     let expected_prefix = format!("locomo_{}_obs_", sample.sample_id);
@@ -6430,7 +6458,16 @@ async fn smoke_per_scenario_lme() {
 
         // Retrieval scoped to own scenario
         let results = db
-            .search_memory("anything", 50, None, None, None, None, None, None)
+            .search_memory(
+                "anything",
+                50,
+                None,
+                &ReadScope::Global,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("search_memory");
         let expected_prefix = format!("lme_{}_", sample.question_id);
@@ -6993,7 +7030,7 @@ async fn probe_overlap_gate() {
         for (i, (cat, q)) in questions.iter().enumerate() {
             // Real search_memory (top-10, no domain filter — matches eval pipeline)
             let results = match db
-                .search_memory(q, 10, None, None, None, None, None, None)
+                .search_memory(q, 10, None, &ReadScope::Global, None, None, None, None)
                 .await
             {
                 Ok(r) => r,

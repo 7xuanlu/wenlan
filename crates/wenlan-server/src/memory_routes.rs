@@ -49,17 +49,6 @@ pub(crate) async fn registered_request_space(
     Ok(registered)
 }
 
-pub(crate) async fn registered_read_space(
-    db: &wenlan_core::db::MemoryDB,
-    requested: &Option<String>,
-    context: &str,
-) -> Result<Option<String>, ServerError> {
-    if requested.as_deref().map(str::trim) == Some("uncategorized") {
-        return Ok(Some("uncategorized".to_string()));
-    }
-    registered_request_space(db, requested, context).await
-}
-
 // ===== Profile Types =====
 
 #[derive(Debug, Serialize)]
@@ -897,11 +886,8 @@ pub async fn handle_search_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<SearchMemoryRequest>,
+    Json(req): Json<SearchMemoryRequest>,
 ) -> Result<Json<SearchMemoryResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let start = std::time::Instant::now();
     let (db, reranker) = {
         // Snapshot the Arcs we need before any await so we never hold the
@@ -912,7 +898,9 @@ pub async fn handle_search_memory(
         let reranker = s.reranker.clone();
         (db, reranker)
     };
-    req.space = registered_read_space(&db, &req.space, "search_memory").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
 
     let results = {
         if req.rerank {
@@ -925,7 +913,7 @@ pub async fn handle_search_memory(
                 &req.query,
                 req.limit,
                 req.memory_type.as_deref(),
-                req.space.as_deref(),
+                &scope,
                 req.source_agent.as_deref(),
                 reranker,
             )
@@ -936,7 +924,7 @@ pub async fn handle_search_memory(
                 &req.query,
                 req.limit,
                 req.memory_type.as_deref(),
-                req.space.as_deref(),
+                &scope,
                 req.source_agent.as_deref(),
                 None,
                 None,
@@ -1032,13 +1020,13 @@ pub async fn handle_search_memory(
                         .unwrap_or_else(|| "unknown".to_string())
                 };
                 let raw = db
-                    .search_pages(&req.query, 3, None)
+                    .search_pages_scoped(&req.query, 3, None, &scope)
                     .await
                     .unwrap_or_default();
                 let ids: std::collections::HashSet<String> =
                     results.iter().map(|r| r.source_id.clone()).collect();
                 let visible = db
-                    .select_visible_pages(raw, req.space.as_deref(), &ids, &trust_level, 3)
+                    .select_visible_pages_scoped(raw, &scope, &ids, &trust_level, 3)
                     .await;
                 if visible.is_empty() {
                     None
@@ -1087,21 +1075,20 @@ pub async fn handle_confirm_memory(
 pub async fn handle_list_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<ListMemoriesRequest>,
+    Json(req): Json<ListMemoriesRequest>,
 ) -> Result<Json<ListMemoriesResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     }; // guard dropped here
-    req.space = registered_read_space(&db, &req.space, "list_memories").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let memories = db
-        .list_filtered_confirmed(
+        .list_filtered_confirmed_scoped(
             Some("memory"),
             req.memory_type.as_deref(),
-            req.space.as_deref(),
+            &scope,
             req.confirmed,
             req.limit,
         )
@@ -1401,18 +1388,17 @@ pub struct ListEntitiesResponse {
 pub async fn handle_list_entities(
     State(state): State<Arc<RwLock<ServerState>>>,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-    Json(mut req): Json<ListEntitiesRequest>,
+    Json(req): Json<ListEntitiesRequest>,
 ) -> Result<Json<ListEntitiesResponse>, ServerError> {
-    if req.space.is_none() {
-        req.space = header_space;
-    }
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    req.space = registered_read_space(&db, &req.space, "list_entities").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let entities = db
-        .list_entities(req.entity_type.as_deref(), req.space.as_deref())
+        .list_entities_scoped(req.entity_type.as_deref(), &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(ListEntitiesResponse { entities }))
@@ -1420,14 +1406,15 @@ pub async fn handle_list_entities(
 
 pub async fn handle_get_entity_detail(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(entity_id): Path<String>,
 ) -> Result<Json<wenlan_core::db::EntityDetail>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    let detail = db
-        .get_entity_detail(&entity_id)
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let detail = db.get_entity_detail_scoped(&entity_id, &scope).await?;
     Ok(Json(detail))
 }
 
@@ -1436,6 +1423,8 @@ pub struct SearchEntitiesRequest {
     pub query: String,
     #[serde(default = "default_entity_search_limit")]
     pub limit: usize,
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
 }
 
 fn default_entity_search_limit() -> usize {
@@ -1449,12 +1438,18 @@ pub struct SearchEntitiesResponse {
 
 pub async fn handle_search_entities(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(req): Json<SearchEntitiesRequest>,
 ) -> Result<Json<SearchEntitiesResponse>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let results = db
-        .search_entities_by_vector(&req.query, req.limit)
+        .search_entities_by_vector_scoped(&req.query, req.limit, &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(SearchEntitiesResponse { results }))
@@ -1484,13 +1479,15 @@ pub async fn handle_get_memory_stats(
 /// memories into a single `HomeStats` payload.
 pub async fn handle_get_home_stats(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_types::HomeStats>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let stats = db
-        .get_home_stats()
+        .get_home_stats_scoped(&scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(stats))
@@ -1594,25 +1591,20 @@ pub async fn handle_dismiss_contradiction(
 /// Returns the enrichment step history and summary for a given memory.
 pub async fn handle_get_enrichment_status(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(source_id): Path<String>,
 ) -> Result<Json<wenlan_types::EnrichmentStatusResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let steps = db
-        .get_enrichment_steps(&source_id)
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let status = db
+        .get_enrichment_status_scoped(&source_id, &scope)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let summary = db
-        .get_enrichment_summary(&source_id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(wenlan_types::EnrichmentStatusResponse {
-        source_id,
-        summary,
-        steps,
-    }))
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
+    Ok(Json(status))
 }
 
 // ===== Entity Suggestions =====
@@ -1628,11 +1620,15 @@ pub struct EntitySuggestion {
 
 pub async fn handle_get_entity_suggestions(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<Vec<EntitySuggestion>>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let pending = db
-        .get_pending_refinements()
+        .list_entity_suggestions_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 
@@ -1828,15 +1824,21 @@ pub struct NurtureCardsResponse {
 
 pub async fn handle_get_nurture_cards(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(query): axum::extract::Query<NurtureCardsQuery>,
 ) -> Result<Json<NurtureCardsResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let space = registered_read_space(&db, &query.space, "nurture").await?;
+    let scope = crate::read_scope::effective_read_scope(
+        &db,
+        query.space.as_deref(),
+        header_space.as_deref(),
+    )
+    .await?;
     let cards = db
-        .get_nurture_cards(query.limit, space.as_deref())
+        .get_nurture_cards_scoped(query.limit, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(NurtureCardsResponse { cards }))
@@ -1865,6 +1867,7 @@ pub async fn handle_get_rejections(
 /// GET /api/pages
 pub async fn handle_list_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let status = params.get("status").map(|s| s.as_str()).unwrap_or("active");
@@ -1885,9 +1888,11 @@ pub async fn handle_list_pages(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let space = registered_read_space(&db, &space, "list_pages").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, space.as_deref(), header_space.as_deref())
+            .await?;
     let pages = db
-        .list_pages_by_space(status, space.as_deref(), limit, offset)
+        .list_pages_scoped(status, limit as i64, offset as i64, &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     Ok(Json(serde_json::json!({ "pages": pages })))
@@ -1896,13 +1901,15 @@ pub async fn handle_list_pages(
 /// GET /api/pages/:id
 pub async fn handle_get_page(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    match db.get_page(&id).await {
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    match db.get_page_scoped(&id, &scope).await {
         Ok(Some(page)) => Ok(Json(serde_json::json!({ "page": page }))),
         Ok(None) => Err(ServerError::NotFound("page not found".to_string())),
         Err(e) => Err(ServerError::SearchFailed(e.to_string())),
@@ -1915,6 +1922,7 @@ pub async fn handle_get_page(
 /// enriched with memory metadata for display.
 pub async fn handle_get_page_sources(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<wenlan_types::PageSourceWithMemory>>, ServerError> {
     let db = {
@@ -1922,17 +1930,21 @@ pub async fn handle_get_page_sources(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
-    let sources = db
-        .get_page_sources(&id)
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let sources = db.get_page_sources_scoped(&id, &scope).await?;
 
     let source_id_strings: Vec<String> =
         sources.iter().map(|s| s.memory_source_id.clone()).collect();
-    let memories = db
-        .get_memories_by_source_ids(&source_id_strings)
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
+    let memories = match &scope {
+        wenlan_core::read_scope::ReadScope::Global => {
+            db.get_memories_by_source_ids(&source_id_strings).await
+        }
+        _ => {
+            db.get_memories_by_source_ids_scoped(&source_id_strings, &scope)
+                .await
+        }
+    }
+    .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
 
     let result: Vec<wenlan_types::PageSourceWithMemory> = sources
         .iter()
@@ -2004,15 +2016,22 @@ pub async fn handle_delete_page(
 /// POST /api/pages/search
 pub async fn handle_search_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(req): Json<SearchPagesRequest>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope =
+        crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
+            .await?;
     let results = db
-        .search_pages(
+        .search_pages_scoped(
             &req.query,
             req.limit.unwrap_or(20),
             req.page_type.as_deref(),
+            &scope,
         )
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
@@ -2078,15 +2097,18 @@ pub async fn handle_create_page(
 /// POST /api/pages/export
 pub async fn handle_export_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(req): Json<ExportPagesRequest>,
 ) -> Result<Json<wenlan_types::ExportStats>, ServerError> {
-    let pages = {
+    let db = {
         let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-        db.list_pages("active", 1000, 0)
-            .await
-            .map_err(|e| ServerError::Internal(e.to_string()))?
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let pages = db
+        .list_pages_scoped("active", 1000, 0, &scope)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
     let vault_path = req
         .vault_path
         .unwrap_or_else(|| "~/obsidian-vault/Wenlan/pages".to_string());
@@ -2108,6 +2130,7 @@ pub async fn handle_export_pages(
 /// POST /api/pages/{id}/export
 pub async fn handle_export_page(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(page_id): Path<String>,
     Json(req): Json<wenlan_types::requests::ExportPageRequest>,
 ) -> Result<Json<wenlan_types::responses::ExportPageResponse>, ServerError> {
@@ -2119,11 +2142,12 @@ pub async fn handle_export_page(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let page = db
-        .get_page(&page_id)
+        .get_page_scoped(&page_id, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
-        .ok_or_else(|| ServerError::NotFound(format!("Page not found: {}", page_id)))?;
+        .ok_or_else(|| ServerError::NotFound("page not found".to_string()))?;
 
     let expanded = if let Some(rest) = req.vault_path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -2151,13 +2175,15 @@ pub async fn handle_export_page(
 /// GET /api/indexed-files
 pub async fn handle_list_indexed_files(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_types::responses::IndexedFilesResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let files = db
-        .list_indexed_files()
+        .list_indexed_files_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::IndexedFilesResponse {
@@ -2168,37 +2194,19 @@ pub async fn handle_list_indexed_files(
 /// GET /api/chunks/{source_id}
 pub async fn handle_get_chunks(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(source_id): Path<String>,
 ) -> Result<Json<Vec<wenlan_core::db::MemoryDetail>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    // Fetch all chunks for this source_id by iterating chunk indices
-    let mut chunks = Vec::new();
-    let mut idx = 0i32;
-    loop {
-        match db.get_memory_details("memory", &source_id, idx).await {
-            Ok(Some(detail)) => {
-                chunks.push(detail);
-                idx += 1;
-            }
-            Ok(None) => {
-                // Also try "file" source if no "memory" chunks found
-                if idx == 0 {
-                    let mut file_idx = 0i32;
-                    while let Ok(Some(detail)) =
-                        db.get_memory_details("file", &source_id, file_idx).await
-                    {
-                        chunks.push(detail);
-                        file_idx += 1;
-                    }
-                }
-                break;
-            }
-            Err(_) => break,
-        }
-    }
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let chunks = db
+        .get_chunks_scoped(&source_id, &scope)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
     Ok(Json(chunks))
 }
 
@@ -2459,6 +2467,7 @@ pub async fn handle_set_document_space(
 /// GET /api/activities
 pub async fn handle_list_activities(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Json<wenlan_types::responses::ActivityResponse>, ServerError> {
     let db = {
@@ -2471,8 +2480,9 @@ pub async fn handle_list_activities(
         .unwrap_or(50);
     let agent_name = params.get("agent_name").cloned();
     let since: Option<i64> = params.get("since").and_then(|v| v.parse().ok());
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let activities = db
-        .list_agent_activity(limit, agent_name.as_deref(), since)
+        .list_agent_activity_scoped(limit, agent_name.as_deref(), since, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::ActivityResponse {
@@ -2483,22 +2493,20 @@ pub async fn handle_list_activities(
 /// GET /api/tags
 pub async fn handle_list_tags(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_types::responses::TagsResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let tags = db
-        .list_all_tags()
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let document_tags = db
-        .list_document_tags()
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let projection = db
+        .list_tags_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::TagsResponse {
-        tags,
-        document_tags,
+        tags: projection.tags,
+        document_tags: projection.document_tags,
     }))
 }
 
@@ -2564,6 +2572,7 @@ pub struct SuggestTagsQuery {
 /// name, and with already-assigned tags filtered out.
 pub async fn handle_suggest_tags(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(query): axum::extract::Query<SuggestTagsQuery>,
 ) -> Result<Json<wenlan_types::responses::TagsResponse>, ServerError> {
     // Read phase: clone db Arc, drop guard, then fetch existing tags from DB.
@@ -2571,15 +2580,12 @@ pub async fn handle_suggest_tags(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let existing = db
-        .get_document_tags(&query.source, &query.source_id)
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let (existing, chunks) = db
+        .get_tag_suggestion_inputs_scoped(&query.source, &query.source_id, &scope)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    let chunks = db
-        .get_memories_by_source_id(&query.source, &query.source_id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
 
     let chunk_contents: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
     let title = chunks.first().map(|c| c.title.clone()).unwrap_or_default();
@@ -2647,18 +2653,21 @@ pub async fn handle_capture_stats(
 /// GET /api/memory/{id}/detail
 pub async fn handle_get_memory_detail(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<wenlan_types::responses::MemoryDetailResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let memory = db
-        .get_memory_detail(&id)
+        .get_memory_detail_scoped(&id, &scope)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
     Ok(Json(wenlan_types::responses::MemoryDetailResponse {
-        memory,
+        memory: Some(memory),
     }))
 }
 
@@ -2669,12 +2678,14 @@ pub async fn handle_get_memory_detail(
 /// Used by ConceptDetail to load all source memories at once.
 pub async fn handle_get_memories_by_ids(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<wenlan_types::responses::PinnedMemoriesResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let ids: Vec<String> = params
         .get("ids")
         .map(|s| {
@@ -2685,7 +2696,7 @@ pub async fn handle_get_memories_by_ids(
         })
         .unwrap_or_default();
     let memories = db
-        .get_memories_by_source_ids(&ids)
+        .get_memories_by_source_ids_scoped(&ids, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::PinnedMemoriesResponse {
@@ -2696,16 +2707,19 @@ pub async fn handle_get_memories_by_ids(
 /// GET /api/memory/{id}/versions
 pub async fn handle_get_version_chain(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<wenlan_types::responses::VersionChainResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let versions = db
-        .get_version_chain(&id)
+        .get_version_chain_scoped(&id, &scope)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
     Ok(Json(wenlan_types::responses::VersionChainResponse {
         versions,
     }))
@@ -2966,6 +2980,7 @@ pub async fn handle_correct_memory(
 /// GET /api/decisions
 pub async fn handle_list_decisions(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Json<wenlan_types::responses::DecisionsResponse>, ServerError> {
     let db = {
@@ -2976,13 +2991,15 @@ pub async fn handle_list_decisions(
         .get("space")
         .or_else(|| params.get("domain"))
         .cloned();
-    let space = registered_read_space(&db, &space, "decisions").await?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, space.as_deref(), header_space.as_deref())
+            .await?;
     let limit: usize = params
         .get("limit")
         .and_then(|v| v.parse().ok())
         .unwrap_or(100);
     let decisions = db
-        .list_memories(space.as_deref(), Some("decision"), None, None, limit)
+        .list_memories_scoped(&scope, Some("decision"), None, None, limit)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::DecisionsResponse {
@@ -3011,6 +3028,7 @@ pub async fn handle_list_decision_domains(
 /// GET /api/briefing
 pub async fn handle_get_briefing(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_core::briefing::BriefingResponse>, ServerError> {
     let (db, llm, prompts, tuning) = {
         let s = state.read().await;
@@ -3020,9 +3038,15 @@ pub async fn handle_get_briefing(
         let tuning = s.tuning.briefing.clone();
         (db, llm, prompts, tuning)
     };
-    let briefing = wenlan_core::briefing::generate_briefing(&db, llm.as_deref(), &prompts, &tuning)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let briefing = wenlan_core::briefing::generate_briefing_scoped(
+        &db,
+        llm.as_deref(),
+        &prompts,
+        &tuning,
+        &scope,
+    )
+    .await?;
     Ok(Json(briefing))
 }
 
@@ -3090,13 +3114,15 @@ pub async fn handle_regenerate_narrative(
 /// GET /api/memory/pinned
 pub async fn handle_list_pinned_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<wenlan_types::responses::PinnedMemoriesResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let memories = db
-        .list_pinned_memories()
+        .list_pinned_memories_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(wenlan_types::responses::PinnedMemoriesResponse {
@@ -3147,15 +3173,17 @@ fn default_pending_revisions_limit() -> usize {
 /// GET /api/memory/pending-revisions?limit=N
 pub async fn handle_list_pending_revisions(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<PendingRevisionsQuery>,
 ) -> Result<Json<Vec<wenlan_types::responses::PendingRevisionItem>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let limit = q.limit.clamp(1, 500);
     let items = db
-        .list_pending_revisions(limit)
+        .list_pending_revisions_scoped(limit, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(items))
@@ -3164,17 +3192,20 @@ pub async fn handle_list_pending_revisions(
 /// GET /api/memory/pending-revision/{source_id}
 pub async fn handle_get_pending_revision(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(source_id): Path<String>,
 ) -> Result<Json<Option<wenlan_core::db::PendingRevision>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let revision = db
-        .get_pending_revision_for(&source_id)
+        .get_pending_revision_for_scoped(&source_id, &scope)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(revision))
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
+    Ok(Json(Some(revision)))
 }
 
 /// POST /api/snapshots/{id}/delete
@@ -3241,15 +3272,14 @@ pub async fn handle_list_snapshots(
 pub async fn handle_get_snapshot_captures(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<Vec<wenlan_types::SnapshotCapture>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let rows = db
-        .get_captures_for_snapshot(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let rows = db.get_captures_for_snapshot_scoped(&id, &scope).await?;
     let captures = rows
         .into_iter()
         .map(|c| wenlan_types::SnapshotCapture {
@@ -3266,71 +3296,21 @@ pub async fn handle_get_snapshot_captures(
 /// GET /api/snapshots/{id}/captures-with-content
 ///
 /// Returns captures for a snapshot plus their full chunked text and LLM
-/// summary. Mirrors the pre-split `get_snapshot_captures_with_content`
-/// Tauri command: for each `capture_refs` row, maps the router-side
-/// trigger name (`focus`/`hotkey`/`snip`/`thought`) to the DB-side
-/// source name (`focus_capture`/`hotkey_capture`/`snip_capture`/
-/// `quick_thought`), fetches chunks, joins their content, and looks up
-/// the summary via list_indexed_files.
+/// summary.
 pub async fn handle_get_snapshot_captures_with_content(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
 ) -> Result<Json<Vec<wenlan_types::SnapshotCaptureWithContent>>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let captures = db
-        .get_captures_for_snapshot(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    // list_indexed_files is a single aggregate scan, so fetch once
-    // upfront rather than once per capture.
-    let indexed_files = if captures.is_empty() {
-        Vec::new()
-    } else {
-        db.list_indexed_files().await.unwrap_or_default()
-    };
-
-    let mut results = Vec::with_capacity(captures.len());
-    for c in captures {
-        let vdb_source = match c.source.as_str() {
-            "focus" => "focus_capture",
-            "hotkey" => "hotkey_capture",
-            "snip" => "snip_capture",
-            "thought" => "quick_thought",
-            other => other,
-        };
-
-        let chunks = db
-            .get_memories_by_source_id(vdb_source, &c.source_id)
-            .await
-            .unwrap_or_default();
-        let content = chunks
-            .iter()
-            .map(|ch| ch.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let summary = indexed_files
-            .iter()
-            .find(|f| f.source == vdb_source && f.source_id == c.source_id)
-            .and_then(|f| f.summary.clone());
-
-        results.push(wenlan_types::SnapshotCaptureWithContent {
-            source_id: c.source_id,
-            app_name: c.app_name,
-            window_title: c.window_title,
-            timestamp: c.timestamp,
-            source: c.source,
-            content,
-            summary,
-        });
-    }
-
-    Ok(Json(results))
+        .get_snapshot_captures_with_content_scoped(&id, &scope)
+        .await?;
+    Ok(Json(captures))
 }
 
 /// POST /api/memory/{id}/update-page
@@ -3343,20 +3323,16 @@ pub async fn handle_get_snapshot_captures_with_content(
 /// fetch + parse the full body.
 pub async fn handle_get_page_links(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<wenlan_types::responses::PageLinksResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let outbound_raw = db
-        .get_page_outbound_links(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    let inbound_raw = db
-        .get_page_inbound_links(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let outbound_raw = db.get_page_outbound_links_scoped(&id, &scope).await?;
+    let inbound_raw = db.get_page_inbound_links_scoped(&id, &scope).await?;
     let outbound = outbound_raw
         .into_iter()
         .map(|l| wenlan_types::responses::PageLinkOutbound {
@@ -3394,15 +3370,17 @@ pub struct OrphanLinksQuery {
 /// callers needing more should raise min_count and re-issue.
 pub async fn handle_list_orphan_links(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<OrphanLinksQuery>,
 ) -> Result<Json<wenlan_types::responses::OrphanLinksResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let min_count = q.min_count.unwrap_or(2).max(1);
     let labels = db
-        .list_orphan_link_labels(min_count)
+        .list_orphan_link_labels_scoped(min_count, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     let orphan_labels = labels
@@ -3634,6 +3612,7 @@ pub struct RecentActivityQuery {
 /// `since_ms` scopes badge derivation only; the feed is always top-N by recency.
 pub async fn handle_recent_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<RecentActivityQuery>,
 ) -> Result<Json<Vec<wenlan_types::RecentActivityItem>>, ServerError> {
     let db = {
@@ -3641,8 +3620,9 @@ pub async fn handle_recent_memories(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let items = db
-        .list_recent_memories(q.limit.unwrap_or(10), q.since_ms)
+        .list_recent_memories_scoped(q.limit.unwrap_or(10), q.since_ms, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(items))
@@ -3655,6 +3635,7 @@ pub async fn handle_recent_memories(
 /// when the `lastVisitMs` delta window is too tight to produce a `new` badge.
 pub async fn handle_list_unconfirmed_memories(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     axum::extract::Query(q): axum::extract::Query<RecentActivityQuery>,
 ) -> Result<Json<Vec<wenlan_types::RecentActivityItem>>, ServerError> {
     let db = {
@@ -3662,8 +3643,9 @@ pub async fn handle_list_unconfirmed_memories(
         s.db.as_ref().cloned()
     };
     let db = db.ok_or(ServerError::DbNotInitialized)?;
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let items = db
-        .list_unconfirmed_memories(q.limit.unwrap_or(6))
+        .list_unconfirmed_memories_scoped(q.limit.unwrap_or(6), &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(items))
@@ -4593,6 +4575,7 @@ mod search_quick_path_page_tests {
         let db = wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
             .await
             .expect("MemoryDB::new");
+        db.create_space("work", None, false).await.unwrap();
 
         // Tier-2 caller: "review" allows tier 2, denies tier 1; "unknown" denies tier 2.
         db.register_agent("trusted-agent").await.unwrap();
@@ -4941,16 +4924,19 @@ mod dismiss_revision_tests {
 /// Walk the supersede chain for a memory and return all revision entries.
 pub async fn handle_get_memory_revisions(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<wenlan_types::responses::ListMemoryRevisionsResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let entries = db
-        .walk_supersede_chain(&id)
+        .walk_supersede_chain_scoped(&id, &scope)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
     let chain_depth = entries.last().map(|e| e.depth).unwrap_or(0);
     Ok(Json(wenlan_types::responses::ListMemoryRevisionsResponse {
         current_source_id: id,
@@ -4964,21 +4950,19 @@ pub async fn handle_get_memory_revisions(
 /// Return the changelog entries for a page, plus envelope metadata.
 pub async fn handle_get_page_revisions(
     State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Path(id): Path<String>,
 ) -> Result<Json<wenlan_types::responses::ListPageRevisionsResponse>, ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     let page = db
-        .get_page(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?
-        .ok_or_else(|| ServerError::NotFound(format!("page {id} not found")))?;
-    let changelog_str = db
-        .get_page_changelog(&id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .get_page_scoped(&id, &scope)
+        .await?
+        .ok_or_else(|| ServerError::NotFound("page not found".to_string()))?;
+    let changelog_str = db.get_page_changelog_scoped(&id, &scope).await?;
     let entries: Vec<wenlan_types::responses::PageChangelogEntry> =
         serde_json::from_str(&changelog_str)
             .map_err(|e| ServerError::Internal(format!("parse changelog: {e}")))?;

@@ -185,15 +185,30 @@ HOME="$HOME_DIR" WENLAN_DATA_DIR="$DATA_DIR" WENLAN_HOST="$HOST" \
     "$CLI" --quiet spaces add work
 
 echo "==> Proving real-daemon baseline and producer receipt"
-run_pair baseline "" 1
+run_pair baseline "" 0
 python3 "$PY" assert-report "$WORK/baseline-http.json" --complete true --scope global \
-    --producer "$HEAD" --finding serving.route_scope_contracts
+    --producer "$HEAD"
 
 echo "==> Proving exit 0 with a canonical typed clean fixture"
 python3 "$PY" clean-fixture "$WORK/baseline-http.json" "$WORK/clean.json"
 run_fixture clean "$WORK/clean.json" 0
 
-echo "==> Seeding privacy and path canaries outside the measured lint window"
+echo "==> Proving exit 1 with an independent typed actionable fixture"
+python3 "$PY" actionable-fixture "$WORK/clean.json" "$WORK/actionable.json"
+run_fixture actionable "$WORK/actionable.json" 1
+python3 "$PY" assert-report "$WORK/actionable.json" --complete true --scope global \
+    --producer "$HEAD" --finding serving.route_scope_contracts
+
+echo "==> Proving global, registered, and uncategorized parity"
+run_pair global "" 0
+run_pair registered "?space=work" 0
+run_pair uncategorized "?space=uncategorized" 0
+python3 "$PY" assert-report "$WORK/registered-http.json" --complete true --scope registered \
+    --producer "$HEAD"
+python3 "$PY" assert-report "$WORK/uncategorized-http.json" --complete true \
+    --scope uncategorized --producer "$HEAD"
+
+echo "==> Seeding privacy and path canaries outside the clean scope window"
 mkdir -p "$PAGES/.wenlan" "$PAGES/_sources"
 printf '%s\n' '---' 'origin_id: PRIVATE_MALFORMED_ID_CANARY' 'origin_version: 2' '---' '# PRIVATE_TITLE_CANARY' '' 'PRIVATE_CONTENT_CANARY' >"$PAGES/PRIVATE_FILENAME_CANARY.md"
 printf '%s\n' '---' 'origin_id: PRIVATE_SOURCE_ID_CANARY' '---' 'PRIVATE_SOURCE_CONTENT_CANARY' >"$PAGES/_sources/PRIVATE_SOURCE_FILENAME_CANARY.md"
@@ -205,14 +220,11 @@ CANARIES=(
     PRIVATE_SOURCE_CONTENT_CANARY PRIVATE_STATE_ID_CANARY PRIVATE_ABSOLUTE_PATH_CANARY
 )
 
-echo "==> Proving global, registered, and uncategorized parity"
-run_pair global "" 1
-run_pair registered "?space=work" 1
-run_pair uncategorized "?space=uncategorized" 1
-python3 "$PY" assert-report "$WORK/registered-http.json" --complete true --scope registered \
-    --producer "$HEAD" --finding serving.route_scope_contracts
-python3 "$PY" assert-report "$WORK/uncategorized-http.json" --complete true \
-    --scope uncategorized --producer "$HEAD" --finding serving.route_scope_contracts
+echo "==> Proving projection findings remain private"
+run_pair privacy "" 1
+python3 "$PY" assert-report "$WORK/privacy-http.json" --complete true --scope global \
+    --producer "$HEAD" --finding pages.projection.identity \
+    --finding pages.projection.state_contract
 private_args=()
 for canary in "${CANARIES[@]}"; do private_args+=(--canary "$canary"); done
 echo "==> Proving unknown scope and forbidden wiki surfaces"
@@ -239,7 +251,7 @@ mv "$PAGES" "$PAGES.missing"
 run_pair incomplete "" 2
 python3 "$PY" assert-report "$WORK/incomplete-http.json" --complete false --scope global \
     --producer "$HEAD" --incomplete
-python3 "$PY" precedence-fixture "$WORK/baseline-http.json" \
+python3 "$PY" precedence-fixture "$WORK/actionable.json" \
     "$WORK/incomplete-http.json" "$WORK/precedence.json"
 run_fixture precedence "$WORK/precedence.json" 2
 python3 "$PY" assert-report "$WORK/precedence.json" --complete false --scope global \
@@ -258,6 +270,10 @@ start_daemon "$TARBALL_TARGET/debug/wenlan-server" tarball
 curl --max-time "$HTTP_TIMEOUT" --max-filesize "$MAX_BODY_BYTES" -fsS \
     "$HOST/api/lint" >"$WORK/tarball-http.json"
 python3 "$PY" assert-report "$WORK/tarball-http.json" --complete true --scope global \
+    --producer null
+python3 "$PY" actionable-fixture "$WORK/tarball-http.json" "$WORK/tarball-actionable.json"
+run_fixture tarball-actionable "$WORK/tarball-actionable.json" 1
+python3 "$PY" assert-report "$WORK/tarball-actionable.json" --complete true --scope global \
     --producer null --finding serving.route_scope_contracts
 stop_daemon
 

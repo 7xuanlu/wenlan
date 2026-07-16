@@ -1448,6 +1448,7 @@ impl WenlanMcpServer {
             query: params.query,
             limit: params.limit,
             page_type: params.page_type,
+            space: None,
         };
         let resp: SearchPagesResponse =
             try_call!(self.client.post("/api/pages/search", &req), "search_pages");
@@ -4758,10 +4759,12 @@ mod tests {
             query: params.query,
             limit: params.limit,
             page_type: params.page_type,
+            space: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["query"], "mutex");
         assert_eq!(json["limit"], 7);
+        assert!(json.get("space").is_none());
     }
 
     // --- ListPagesRecentParams ---
