@@ -21268,6 +21268,31 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Persist one stable lint Review Item without overwriting an existing
+    /// open or terminal decision. The deterministic id is the dedupe key;
+    /// `INSERT OR IGNORE` deliberately never resurrects a dismissed item.
+    pub async fn insert_lint_review_if_absent(
+        &self,
+        id: &str,
+        source_ids: &[String],
+        payload: &str,
+    ) -> Result<bool, WenlanError> {
+        let source_ids_json = serde_json::to_string(source_ids)?;
+        let conn = self.conn.lock().await;
+        let changed = conn
+            .execute(
+                "INSERT OR IGNORE INTO refinement_queue
+                     (id, action, source_ids, payload, confidence, status)
+                 VALUES (?1, 'lint_repair_review', ?2, ?3, 1.0, 'awaiting_review')",
+                libsql::params![id.to_string(), source_ids_json, payload.to_string()],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("insert lint repair review: {error}"))
+            })?;
+        Ok(changed == 1)
+    }
+
     /// Get all pending/awaiting_review refinement proposals.
     pub async fn get_pending_refinements(&self) -> Result<Vec<RefinementProposal>, WenlanError> {
         let conn = self.conn.lock().await;
