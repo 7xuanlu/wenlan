@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Build script for origin-core.
 //!
-//! Emits two compile-time env vars used by `ReportEnv` in the eval harness:
+//! Emits three compile-time env vars:
 //!
 //! - `WENLAN_MIGRATIONS_HASH`: 16-char hex prefix of SHA-256 over the
 //!   migration-bearing source files (`src/db.rs` + every file under
-//!   `src/migrations/`). Changes whenever a migration lands, which
-//!   invalidates eval caches that were built against the old schema.
+//!   `src/migrations/`). Used by `ReportEnv` in the eval harness. Changes
+//!   whenever a migration lands, which invalidates eval caches that were built
+//!   against the old schema.
 //!
 //! - `WENLAN_GIT_SHA`: full 40-char git SHA of HEAD. Unset in tarball
 //!   builds where `.git/` is absent (the `option_env!` call-sites handle
 //!   the None case gracefully).
+//!
+//! - `WENLAN_VERSION_SUFFIX`: `+g<sha8>` for a local source build, empty for a
+//!   release build (HEAD on a `v*` tag) or a git-less tarball. Appended to the
+//!   version by `wenlan_core::version()` so the drift nudges can tell a dev
+//!   daemon from a released one. Always emitted (even empty) so `env!` resolves.
 
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -58,20 +64,82 @@ fn main() {
         println!("cargo:rustc-env=WENLAN_MIGRATIONS_HASH=missing");
     }
 
-    // --- git SHA -----------------------------------------------------------
+    // --- git SHA + dev version suffix --------------------------------------
     // Best-effort: silently skipped in tarball / CI checkouts without .git.
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    if let Ok(output) = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
-    {
-        if output.status.success() {
-            let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !sha.is_empty() {
-                println!("cargo:rustc-env=WENLAN_GIT_SHA={}", sha);
-            }
+    //
+    // Rerun when HEAD or the checked-out branch ref moves so the dev suffix
+    // below tracks commits. The old `.git/HEAD` path was package-root-relative
+    // (crates/wenlan-core/.git/HEAD — nonexistent, so it silently reran every
+    // build by accident); resolve the real paths via `git rev-parse --git-path`,
+    // which is worktree-safe. Committing on a branch moves the ref, not HEAD, so
+    // watch the resolved ref too — that's what flips the suffix on/off.
+    if let Some(path) = git_path("HEAD") {
+        println!("cargo:rerun-if-changed={}", path);
+    }
+    if let Some(refname) = git_symbolic_head() {
+        if let Some(path) = git_path(&refname) {
+            println!("cargo:rerun-if-changed={}", path);
         }
     }
+
+    let sha = git_head_sha();
+    if let Some(sha) = &sha {
+        println!("cargo:rustc-env=WENLAN_GIT_SHA={}", sha);
+    }
+
+    // Dev builds carry a `+g<sha8>` build-metadata suffix so the daemon↔plugin
+    // and daemon↔mcp drift nudges can recognize a local source build (its
+    // release-granular CARGO_PKG_VERSION is stale by construction) and stay
+    // quiet. A release build — HEAD exactly on a `v*` tag — reports the bare
+    // version. `+build` metadata is semver-legal and ignored in ordering, so it
+    // never perturbs the mcp handshake `compare()`. Always emit (even empty) so
+    // `env!("WENLAN_VERSION_SUFFIX")` resolves at compile time.
+    let suffix = match (&sha, head_on_release_tag()) {
+        (Some(sha), false) => format!("+g{}", sha.chars().take(8).collect::<String>()),
+        _ => String::new(),
+    };
+    println!("cargo:rustc-env=WENLAN_VERSION_SUFFIX={}", suffix);
+}
+
+/// Run `git <args>` and return trimmed stdout, or None on any failure / empty.
+fn git_output(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Resolve a git path (worktree-safe) — e.g. the real filesystem path of HEAD.
+fn git_path(p: &str) -> Option<String> {
+    git_output(&["rev-parse", "--git-path", p])
+}
+
+/// The ref HEAD points at (e.g. `refs/heads/main`), or None when detached.
+fn git_symbolic_head() -> Option<String> {
+    git_output(&["symbolic-ref", "-q", "HEAD"])
+}
+
+fn git_head_sha() -> Option<String> {
+    git_output(&["rev-parse", "HEAD"])
+}
+
+/// True when HEAD sits exactly on a `v*` version tag — i.e. a release build.
+fn head_on_release_tag() -> bool {
+    git_output(&[
+        "describe",
+        "--tags",
+        "--exact-match",
+        "--match",
+        "v*",
+        "HEAD",
+    ])
+    .is_some()
 }
 
 /// Recursively collect all file paths under `dir` as strings.
