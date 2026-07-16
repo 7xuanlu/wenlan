@@ -376,6 +376,16 @@ pub struct UpdateConfigRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub external_llm_api_key: Option<Option<String>>,
+    /// Per-job source pin for everyday work: `"anthropic"` | `"external"` |
+    /// `"on_device"`. Omitted = preserve; `""` = clear; other values are
+    /// validated by the config route.
+    #[serde(default)]
+    pub everyday_source: Option<String>,
+    /// Per-job source pin for synthesis: `"anthropic"` | `"external"`
+    /// (`"on_device"` only when the compile gate is set). Omitted = preserve;
+    /// `""` = clear; validated by the config route.
+    #[serde(default)]
+    pub synthesis_source: Option<String>,
 }
 
 // ===== Chunks / indexed files =====

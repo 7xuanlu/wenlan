@@ -423,6 +423,15 @@ pub struct ConfigResponse {
     /// never serialized anywhere.
     #[serde(default)]
     pub external_llm_api_key_configured: bool,
+    /// Everyday-job source pin (raw config value): `"anthropic"` | `"external"`
+    /// | `"on_device"`, or absent/null when unpinned. Lets the app show the
+    /// pin the user chose distinctly from the resolved source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub everyday_source: Option<String>,
+    /// Synthesis-job source pin (raw config value): `"anthropic"` |
+    /// `"external"`, or absent/null when unpinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthesis_source: Option<String>,
 }
 
 // ===== On-device model =====
