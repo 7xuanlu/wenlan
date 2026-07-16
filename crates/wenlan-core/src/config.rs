@@ -76,6 +76,16 @@ pub struct Config {
     /// var overrides it. Set with `wenlan models reranker <mode>`.
     #[serde(default)]
     pub reranker_mode: Option<String>,
+    /// Optional per-job routing pin for everyday work (recap, extraction, bulk
+    /// enrich): `"anthropic"` | `"external"` | `"on_device"`. Selects the SOURCE
+    /// only; the model comes from that source's own knobs. Absent → auto chain.
+    #[serde(default)]
+    pub everyday_source: Option<String>,
+    /// Optional per-job routing pin for synthesis (page distillation):
+    /// `"anthropic"` | `"external"` (and `"on_device"` only when the compile gate
+    /// is set). Selects the SOURCE only. Absent → auto chain.
+    #[serde(default)]
+    pub synthesis_source: Option<String>,
 }
 
 /// Generate a source ID slug from a directory path (last component, lowercased, sanitized).

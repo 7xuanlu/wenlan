@@ -30,6 +30,8 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
             .as_deref()
             .map(|k| !k.trim().is_empty())
             .unwrap_or(false),
+        everyday_source: cfg.everyday_source.clone(),
+        synthesis_source: cfg.synthesis_source.clone(),
     }
 }
 
@@ -93,6 +95,14 @@ pub async fn handle_update_config(
                 Some(trimmed.to_string())
             };
         }
+    }
+    // Per-job source pins. Validated before save so an invalid value 4xxes
+    // without persisting; `""` clears the pin, omitted preserves it.
+    if let Some(v) = req.everyday_source {
+        cfg.everyday_source = validate_everyday_source(&v)?;
+    }
+    if let Some(v) = req.synthesis_source {
+        cfg.synthesis_source = validate_synthesis_source(&v)?;
     }
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
     if external_touched {
@@ -185,6 +195,33 @@ fn apply_anthropic_provider(state: &mut crate::state::ServerState, cfg: &config:
     state.synthesis_llm = None;
 }
 
+/// Validate an `everyday_source` PATCH value. `""` clears the pin; a known
+/// source stores; anything else is a 4xx. No vendor is privileged — all three
+/// sources are equally valid pins.
+fn validate_everyday_source(v: &str) -> Result<Option<String>, ServerError> {
+    match v {
+        "" => Ok(None),
+        "anthropic" | "external" | "on_device" => Ok(Some(v.to_string())),
+        other => Err(ServerError::ValidationError(format!(
+            "invalid everyday_source '{other}' (expected anthropic | external | on_device)"
+        ))),
+    }
+}
+
+/// Validate a `synthesis_source` PATCH value. `""` clears; a known source
+/// stores; anything else is a 4xx. Pins carry no capability restriction —
+/// on-device is a first-class synthesis pin, and the
+/// `WENLAN_PREFER_ON_DEVICE_COMPILE` gate governs only the unpinned auto chain.
+fn validate_synthesis_source(v: &str) -> Result<Option<String>, ServerError> {
+    match v {
+        "" => Ok(None),
+        "anthropic" | "external" | "on_device" => Ok(Some(v.to_string())),
+        other => Err(ServerError::ValidationError(format!(
+            "invalid synthesis_source '{other}' (expected anthropic | external | on_device)"
+        ))),
+    }
+}
+
 /// (Re)build or clear the external OpenAI-compatible provider from config.
 /// Mirrors `apply_anthropic_provider` so `PUT /api/config` hot-swaps the slot.
 fn apply_external_provider(state: &mut crate::state::ServerState, cfg: &config::Config) {
@@ -243,6 +280,161 @@ pub async fn handle_get_setup_status(
         external_llm: ExternalLlmStatus {
             configured: external_configured,
             loaded: external_loaded,
+        },
+    }))
+}
+
+// ── Resolved routing endpoint ───────────────────────────────────────────────
+
+/// Resolved route for one job class: the source that serves it, the model, and
+/// how it was chosen.
+#[derive(Debug, Serialize)]
+pub struct JobRoute {
+    /// The RESOLVED source that serves this job.
+    /// everyday: "anthropic" | "external" | "on_device" | "basic";
+    /// synthesis: "anthropic" | "external" | "on_device" | "none".
+    pub source: String,
+    pub model: Option<String>,
+    /// "pinned" (explicit source pin honored), "pinned_degraded" (pin set but
+    /// its source was unavailable, so the auto chain ran), or "auto" (no pin).
+    pub mode: String,
+    /// The raw configured source pin for this job, or `null` when unpinned.
+    /// Distinct from `source` (the RESOLVED source): on a `pinned_degraded`
+    /// result the two differ, letting the app say "Pinned to X — using Y".
+    /// everyday: "anthropic" | "external" | "on_device"; synthesis: "anthropic"
+    /// | "external".
+    pub pin: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnthropicPool {
+    pub configured: bool,
+    pub everyday_model: Option<String>,
+    pub synthesis_model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExternalPool {
+    pub endpoint: String,
+    pub model: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OnDevicePool {
+    pub selected: Option<String>,
+    pub loaded: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoutingPool {
+    pub anthropic: AnthropicPool,
+    pub external: Option<ExternalPool>,
+    pub on_device: Option<OnDevicePool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolvedRoutingResponse {
+    pub everyday: JobRoute,
+    pub synthesis: JobRoute,
+    pub pool: RoutingPool,
+}
+
+/// GET /api/config/routing — resolved per-job routing derived at request time
+/// from the live provider slots, using the SAME chain code the refinery runs
+/// (`everyday_llm` / `synthesis_route`) so what the app displays cannot drift
+/// from what the daemon does. Never includes key material.
+pub async fn handle_get_resolved_routing(
+    State(state): State<SharedState>,
+) -> Result<Json<ResolvedRoutingResponse>, ServerError> {
+    let cfg = config::load_config();
+    let s = state.read().await;
+
+    // Live resolution — the exact pin-aware chains the refinery/import paths run,
+    // so display can't drift from behavior. Pins come from config; on a miss the
+    // resolvers fall back to the auto chain and report mode "pinned_degraded".
+    let everyday_pin = wenlan_core::refinery::EverydaySource::parse(cfg.everyday_source.as_deref());
+    let everyday_route = wenlan_core::refinery::resolve_everyday(
+        everyday_pin,
+        s.api_llm.as_ref(),
+        s.external_llm.as_ref(),
+        s.llm.as_ref(),
+    );
+    let everyday = JobRoute {
+        source: everyday_route.source.as_str().to_string(),
+        model: everyday_route.llm.map(|p| p.model_id()),
+        mode: everyday_route.mode.as_str().to_string(),
+        pin: cfg.everyday_source.clone(),
+    };
+    let synthesis_pin =
+        wenlan_core::refinery::SynthesisSource::parse(cfg.synthesis_source.as_deref());
+    let synth_route = wenlan_core::refinery::resolve_synthesis(
+        synthesis_pin,
+        s.synthesis_llm.as_ref(),
+        s.api_llm.as_ref(),
+        s.external_llm.as_ref(),
+        s.llm.as_ref(),
+    );
+    let synthesis = JobRoute {
+        source: synth_route.source.as_str().to_string(),
+        model: synth_route.llm.map(|p| p.model_id()),
+        mode: synth_route.mode.as_str().to_string(),
+        pin: cfg.synthesis_source.clone(),
+    };
+
+    // Pool — the configuration view (what each lane WOULD use). Anthropic model
+    // names come from the live slot when loaded, else the configured default,
+    // matching `apply_anthropic_provider`.
+    let anthropic_configured = has_anthropic_key(&cfg);
+    let anthropic = AnthropicPool {
+        configured: anthropic_configured,
+        everyday_model: anthropic_configured.then(|| {
+            s.api_llm.as_ref().map(|p| p.model_id()).unwrap_or_else(|| {
+                cfg.routine_model
+                    .clone()
+                    .unwrap_or_else(|| wenlan_core::llm_provider::DEFAULT_ROUTINE_MODEL.to_string())
+            })
+        }),
+        synthesis_model: anthropic_configured.then(|| {
+            s.synthesis_llm
+                .as_ref()
+                .map(|p| p.model_id())
+                .unwrap_or_else(|| {
+                    cfg.synthesis_model
+                        .clone()
+                        .unwrap_or_else(|| "claude-sonnet-4-6".to_string())
+                })
+        }),
+    };
+    let external = match (&cfg.external_llm_endpoint, &cfg.external_llm_model) {
+        (Some(endpoint), Some(model)) if !endpoint.is_empty() && !model.is_empty() => {
+            Some(ExternalPool {
+                endpoint: endpoint.clone(),
+                model: model.clone(),
+            })
+        }
+        _ => None,
+    };
+    let selected = cfg.on_device_model.as_deref().map(|id| {
+        on_device_models::resolve_or_default(Some(id))
+            .id
+            .to_string()
+    });
+    let on_device = if selected.is_some() || s.loaded_on_device_model.is_some() || s.llm.is_some() {
+        Some(OnDevicePool {
+            selected,
+            loaded: s.loaded_on_device_model.is_some(),
+        })
+    } else {
+        None
+    };
+
+    Ok(Json(ResolvedRoutingResponse {
+        everyday,
+        synthesis,
+        pool: RoutingPool {
+            anthropic,
+            external,
+            on_device,
         },
     }))
 }
@@ -415,6 +607,35 @@ mod setup_status_tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    /// Minimal provider for seeding routing slots in endpoint tests: a fixed
+    /// backend + model id, always available; `generate` is never called.
+    struct PinTestProvider {
+        backend: wenlan_core::llm_provider::LlmBackend,
+        model: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl wenlan_core::llm_provider::LlmProvider for PinTestProvider {
+        async fn generate(
+            &self,
+            _request: wenlan_core::llm_provider::LlmRequest,
+        ) -> Result<String, wenlan_core::llm_provider::LlmError> {
+            unreachable!("routing endpoint never calls generate()")
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            self.model
+        }
+        fn backend(&self) -> wenlan_core::llm_provider::LlmBackend {
+            self.backend
+        }
+        fn model_id(&self) -> String {
+            self.model.to_string()
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn setup_status_defaults_to_basic_memory() {
         let _lock = crate::TEST_DATA_DIR_LOCK
@@ -501,6 +722,245 @@ mod setup_status_tests {
         let body = response_json(resp).await;
         assert_eq!(body["external_llm"]["configured"], true);
         assert_eq!(body["external_llm"]["loaded"], true);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_defaults_to_basic_and_none() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["everyday"]["source"], "basic");
+        assert_eq!(body["everyday"]["model"], Value::Null);
+        assert_eq!(body["everyday"]["mode"], "auto");
+        // No pins configured → pin is null on both jobs (present key, null value).
+        assert_eq!(body["everyday"]["pin"], Value::Null);
+        assert_eq!(body["synthesis"]["source"], "none");
+        assert_eq!(body["synthesis"]["mode"], "auto");
+        assert_eq!(body["synthesis"]["pin"], Value::Null);
+        assert_eq!(body["pool"]["anthropic"]["configured"], false);
+        assert_eq!(body["pool"]["anthropic"]["everyday_model"], Value::Null);
+        assert_eq!(body["pool"]["external"], Value::Null);
+        assert_eq!(body["pool"]["on_device"], Value::Null);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_reflects_external_provider_and_omits_keys() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        // Hot-swap an external provider via PUT /api/config, including a key.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"external_llm_endpoint":"http://localhost:11434/v1","external_llm_model":"llama3","external_llm_api_key":"sk-secret-should-not-leak"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        // No Anthropic key: external now serves everyday (the un-trap) AND synthesis.
+        assert_eq!(body["everyday"]["source"], "external");
+        assert_eq!(body["everyday"]["model"], "llama3");
+        assert_eq!(body["everyday"]["mode"], "auto"); // no pin → auto chain
+        assert_eq!(body["synthesis"]["source"], "external");
+        assert_eq!(body["pool"]["anthropic"]["configured"], false);
+        assert_eq!(
+            body["pool"]["external"]["endpoint"],
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(body["pool"]["external"]["model"], "llama3");
+        // The API key must never appear anywhere in the response.
+        assert!(!serde_json::to_string(&body).unwrap().contains("sk-secret"));
+    }
+
+    /// THE headline: everyday pinned to on-device while an Anthropic key is
+    /// configured — a mix that was unreachable before pins (api_llm always won).
+    /// The pin is stored through the real PATCH route, then reflected by GET.
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_honors_everyday_on_device_pin_over_anthropic_key() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+
+        // Seed an Anthropic key on disk so the pool reports it configured.
+        let mut cfg = config::load_config();
+        cfg.anthropic_api_key = Some("sk-ant-test-key".to_string());
+        config::save_config(&cfg).unwrap();
+
+        // Providers can't be built from config alone in a unit test, so seed the
+        // live slots directly: an on-device model plus the Anthropic slots.
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        {
+            let mut s = state.write().await;
+            s.llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::OnDevice,
+                model: "qwen3-4b",
+            }));
+            s.loaded_on_device_model = Some("qwen3-4b".to_string());
+            s.api_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-haiku",
+            }));
+            s.synthesis_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-sonnet",
+            }));
+        }
+        let app = crate::router::build_router(state.clone());
+
+        // Pin everyday to on-device through the real PATCH route.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"everyday_source":"on_device"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        // Everyday follows the pin to on-device even though Anthropic is present.
+        assert_eq!(body["everyday"]["source"], "on_device");
+        assert_eq!(body["everyday"]["mode"], "pinned");
+        assert_eq!(body["everyday"]["model"], "qwen3-4b");
+        // The raw pin is echoed alongside the resolved source.
+        assert_eq!(body["everyday"]["pin"], "on_device");
+        // Anthropic is still configured and still serves synthesis (no pin there).
+        assert_eq!(body["pool"]["anthropic"]["configured"], true);
+        assert_eq!(body["synthesis"]["source"], "anthropic");
+        assert_eq!(body["synthesis"]["mode"], "auto");
+        assert_eq!(body["synthesis"]["pin"], Value::Null);
+    }
+
+    /// Synthesis counterpart of the headline: pinned to on-device while an
+    /// Anthropic key is configured. Proves GET /api/config/routing reports
+    /// on_device for synthesis with no compile gate.
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_honors_synthesis_on_device_pin() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+
+        // Seed an Anthropic key so the pool reports it configured.
+        let mut cfg = config::load_config();
+        cfg.anthropic_api_key = Some("sk-ant-test-key".to_string());
+        config::save_config(&cfg).unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        {
+            let mut s = state.write().await;
+            s.llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::OnDevice,
+                model: "qwen3-4b",
+            }));
+            s.loaded_on_device_model = Some("qwen3-4b".to_string());
+            s.api_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-haiku",
+            }));
+            s.synthesis_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-sonnet",
+            }));
+        }
+        let app = crate::router::build_router(state.clone());
+
+        // Pin synthesis to on-device through the real PATCH route.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"synthesis_source":"on_device"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        // Synthesis follows the pin to on-device even though Anthropic is present.
+        assert_eq!(body["synthesis"]["source"], "on_device");
+        assert_eq!(body["synthesis"]["mode"], "pinned");
+        assert_eq!(body["synthesis"]["model"], "qwen3-4b");
+        assert_eq!(body["synthesis"]["pin"], "on_device");
+        // Anthropic is still configured; everyday is unpinned (auto chain).
+        assert_eq!(body["pool"]["anthropic"]["configured"], true);
+        assert_eq!(body["everyday"]["pin"], Value::Null);
     }
 
     /// Divergence case: config on disk has endpoint+model set (so `configured`
@@ -788,6 +1248,21 @@ mod external_llm_lifecycle_tests {
         (status, response_json(resp).await)
     }
 
+    async fn get_config(app: &crate::router::AppRouter) -> Value {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response_json(resp).await
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn external_key_lifecycle_and_hot_swap() {
         let _lock = crate::TEST_DATA_DIR_LOCK
@@ -850,5 +1325,72 @@ mod external_llm_lifecycle_tests {
         let (_, body) = put_config(&app, serde_json::json!({"external_llm_endpoint": ""})).await;
         assert_eq!(body["external_llm_endpoint"], Value::Null);
         assert!(state.read().await.external_llm.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn patch_stores_valid_source_pins_and_rejects_unknown() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        // Valid pins persist. No vendor is privileged — on_device is a first-
+        // class everyday pin.
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({"everyday_source": "on_device", "synthesis_source": "external"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let cfg = config::load_config();
+        assert_eq!(cfg.everyday_source.as_deref(), Some("on_device"));
+        assert_eq!(cfg.synthesis_source.as_deref(), Some("external"));
+        // The PUT response (ConfigResponse) echoes the stored pins.
+        assert_eq!(body["everyday_source"], "on_device");
+        assert_eq!(body["synthesis_source"], "external");
+
+        // GET /api/config also echoes the pins (the app reads them here).
+        let cfg_body = get_config(&app).await;
+        assert_eq!(cfg_body["everyday_source"], "on_device");
+        assert_eq!(cfg_body["synthesis_source"], "external");
+
+        // Empty string clears a pin — the cleared pin reads null via GET.
+        let (status, _) = put_config(&app, serde_json::json!({"everyday_source": ""})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(config::load_config().everyday_source.is_none());
+        let cfg_body = get_config(&app).await;
+        assert_eq!(cfg_body["everyday_source"], Value::Null);
+        assert_eq!(cfg_body["synthesis_source"], "external");
+
+        // Unknown value is a 4xx and does not persist.
+        let (status, _) = put_config(&app, serde_json::json!({"everyday_source": "gpt4"})).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(config::load_config().everyday_source.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn patch_accepts_synthesis_on_device_pin() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        // On-device synthesis is a first-class pin — accepted and persisted even
+        // with the compile gate unset (the gate governs only the auto chain).
+        std::env::remove_var("WENLAN_PREFER_ON_DEVICE_COMPILE");
+        let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let (status, body) =
+            put_config(&app, serde_json::json!({"synthesis_source": "on_device"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            config::load_config().synthesis_source.as_deref(),
+            Some("on_device")
+        );
+        assert_eq!(body["synthesis_source"], "on_device");
     }
 }

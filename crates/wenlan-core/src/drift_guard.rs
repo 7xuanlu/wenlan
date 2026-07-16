@@ -33,7 +33,9 @@ fn git_ls_files(root: &Path, pattern: &str) -> Vec<String> {
 
 /// The version string carried by each release-please-managed source of truth.
 /// The 4 daemon crates use `version.workspace = true`, so the only Cargo version
-/// is the root workspace one — 3 sources total, not 6.
+/// is the root workspace one. Plus the CC plugin manifest (`plugin.json`), kept on
+/// the same release train via `release-please-config.json` `extra-files` so the
+/// plugin can't silently lag the daemon (the recurring version-drift nag). 4 sources.
 fn version_sources() -> Vec<(String, String)> {
     let root = repo_root();
     let mut out = Vec::new();
@@ -57,6 +59,17 @@ fn version_sources() -> Vec<(String, String)> {
     let re = regex::Regex::new(r#""([0-9]+\.[0-9]+\.[0-9]+[^"]*)""#).unwrap();
     let v = re.captures(line).expect("version literal on marker line")[1].to_string();
     out.push(("Cargo.toml".to_string(), v));
+
+    let pj = std::fs::read_to_string(root.join("plugin/.claude-plugin/plugin.json"))
+        .expect("read plugin.json");
+    let pjj: serde_json::Value = serde_json::from_str(&pj).expect("parse plugin.json");
+    out.push((
+        "plugin/.claude-plugin/plugin.json".to_string(),
+        pjj["version"]
+            .as_str()
+            .expect("plugin.json \"version\" key")
+            .to_string(),
+    ));
 
     out
 }

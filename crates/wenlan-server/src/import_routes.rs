@@ -106,7 +106,7 @@ pub async fn handle_chat_export_import(
 
     // 4. Snapshot Arc<MemoryDB> + LLM providers + enrichment config out of the
     //    RwLock guard before any awaits.
-    let (db, llm, api_llm, prompts, tuning, maintenance) = {
+    let (db, llm, api_llm, external_llm, prompts, tuning, maintenance) = {
         let guard = state.read().await;
         let db = guard
             .db
@@ -117,11 +117,20 @@ pub async fn handle_chat_export_import(
             db,
             guard.llm.clone(),
             guard.api_llm.clone(),
+            guard.external_llm.clone(),
             guard.prompts.clone(),
             guard.tuning.clone(),
             guard.maintenance_coordinator.clone(),
         )
     };
+
+    // Everyday source pin for the bulk enrichment pass spawned below. Copy, so
+    // it moves into the task; absent/unknown → the auto chain.
+    let everyday_pin = wenlan_core::refinery::EverydaySource::parse(
+        wenlan_core::config::load_config()
+            .everyday_source
+            .as_deref(),
+    );
 
     // 5. Create import_state row.
     let import_id = format!("imp_{}", Uuid::new_v4());
@@ -204,9 +213,17 @@ pub async fn handle_chat_export_import(
         // Abort if we see this many consecutive iterations without progress.
         const MAX_STUCK_ITERS: usize = 3;
 
-        // Prefer API LLM for enrichment (faster for bulk); fall back to on-device.
+        // Everyday enrichment — honors the everyday_source pin, else the auto
+        // chain (Anthropic → external → on-device). Matches recap/extraction.
         let prefer_llm: Option<std::sync::Arc<dyn wenlan_core::llm_provider::LlmProvider>> =
-            api_llm.or(llm);
+            wenlan_core::refinery::resolve_everyday(
+                everyday_pin,
+                api_llm.as_ref(),
+                external_llm.as_ref(),
+                llm.as_ref(),
+            )
+            .llm
+            .cloned();
 
         let classify_prompt = prompts.classify_memory_quality.clone();
         let mut stuck_count: usize = 0;

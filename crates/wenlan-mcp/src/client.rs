@@ -255,6 +255,12 @@ impl WenlanClient {
             .ok()?;
         let body: serde_json::Value = resp.json().await.ok()?;
         let daemon_version = body["version"].as_str()?;
+        // A dev daemon reports a `+g<sha>` build-metadata suffix (local source
+        // build). Its release-granular version is stale by construction, so skip
+        // the handshake rather than nag about release-vs-commit drift.
+        if daemon_version.contains("+g") {
+            return None;
+        }
         let mcp_version = env!("CARGO_PKG_VERSION");
 
         match compare(mcp_version, daemon_version) {
