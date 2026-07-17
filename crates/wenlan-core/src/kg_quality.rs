@@ -94,7 +94,8 @@ pub async fn verify_page(
 #[derive(Debug, Default, serde::Serialize)]
 pub struct RethinkReport {
     pub merge_candidates: usize,
-    pub types_normalized: usize,
+    pub relations_healed: usize,
+    pub relations_queued: usize,
     pub embeddings_refreshed: usize,
     pub stale_relations_flagged: usize,
     pub contradictions_found: usize,
@@ -113,9 +114,11 @@ pub async fn run_rethink(
     _llm: Option<&Arc<dyn LlmProvider>>,
     _config: &RefineryConfig,
 ) -> Result<RethinkReport, WenlanError> {
+    let rel = heal_relation_vocabulary(db).await?;
     let report = RethinkReport {
         merge_candidates: find_merge_candidates(db).await?,
-        types_normalized: normalize_non_vocabulary_relations(db).await?,
+        relations_healed: rel.healed,
+        relations_queued: rel.queued,
         embeddings_refreshed: refresh_stale_entity_embeddings(db).await?,
         stale_relations_flagged: detect_stale_relations(db).await?,
         contradictions_found: scan_contradictions(db).await?,
@@ -262,7 +265,15 @@ async fn surface_minhash_merge_candidates(db: &MemoryDB) -> Result<usize, Wenlan
 
 /// Normalize relations whose type isn't canonical in the vocabulary.
 /// Uses `resolve_relation_type` to map aliases to canonical forms.
-pub async fn normalize_non_vocabulary_relations(db: &MemoryDB) -> Result<usize, WenlanError> {
+#[derive(Debug, Default, Clone, Copy)]
+pub struct VocabHealCounts {
+    pub healed: usize,
+    pub queued: usize,
+}
+
+/// Heal non-canonical relation types: auto-fold the deterministically safe ones
+/// (known aliases + safe transforms), queue everything else as a promote candidate.
+pub async fn heal_relation_vocabulary(db: &MemoryDB) -> Result<VocabHealCounts, WenlanError> {
     // First, read all distinct relation types.
     let types_to_check: Vec<String> = {
         let conn = db.conn.lock().await;
@@ -281,26 +292,50 @@ pub async fn normalize_non_vocabulary_relations(db: &MemoryDB) -> Result<usize, 
         types
     };
 
-    let mut normalized = 0usize;
+    let canonicals = db.relation_canonicals().await?;
+    let mut counts = VocabHealCounts::default();
     for rel_type in &types_to_check {
         if rel_type.is_empty() {
             continue;
         }
-        let Some(canonical) = db.resolve_relation_type(rel_type).await? else {
+        // Already canonical? nothing to do.
+        if canonicals.iter().any(|c| c == rel_type) {
             continue;
-        };
-        if canonical != *rel_type {
+        }
+        // Band A1: known alias in the vocabulary -> deterministic fold.
+        if let Some(canonical) = db.resolve_relation_type(rel_type).await? {
             let folded = db.fold_relation_type(rel_type, &canonical).await?;
-            normalized += folded;
+            counts.healed += folded;
             log::info!(
                 "[rethink] folded '{}' -> '{}' ({} relations, ledgered)",
                 rel_type,
                 canonical,
                 folded
             );
+            continue;
+        }
+        // Band A2: deterministic safe transform toward an existing canonical.
+        if let Some(canonical) = crate::vocab::safe_transform::safe_transform(rel_type, &canonicals)
+        {
+            let folded = db.fold_relation_type(rel_type, &canonical).await?;
+            counts.healed += folded;
+            log::info!(
+                "[rethink] folded '{}' -> '{}' ({} relations, ledgered)",
+                rel_type,
+                canonical,
+                folded
+            );
+            continue;
+        }
+        // Band B: semantic / new -> queue one promote candidate.
+        if db
+            .insert_vocab_promote_proposal("relation", rel_type, None)
+            .await?
+        {
+            counts.queued += 1;
         }
     }
-    Ok(normalized)
+    Ok(counts)
 }
 
 /// Refresh embeddings for entities that have accumulated 5+ new observations
@@ -566,9 +601,9 @@ mod tests {
 
         // Rethink should have normalized "working_at" -> "works_on"
         assert!(
-            report.types_normalized >= 1,
+            report.relations_healed >= 1,
             "expected at least 1 type normalized, got {}",
-            report.types_normalized
+            report.relations_healed
         );
 
         // Verify the relation now has the canonical type
@@ -592,7 +627,7 @@ mod tests {
         let report = run_rethink(&db, None, &config).await.unwrap();
         // All zero is fine; the point is it runs without error.
         assert_eq!(report.merge_candidates, 0);
-        assert_eq!(report.types_normalized, 0);
+        assert_eq!(report.relations_healed, 0);
         assert_eq!(report.stale_relations_flagged, 0);
     }
 
@@ -707,7 +742,7 @@ mod tests {
         // Nothing to normalize (already canonical); no duplicates;
         // embedding_refreshed and stale counts should be 0.
         assert_eq!(report.merge_candidates, 0);
-        assert_eq!(report.types_normalized, 0);
+        assert_eq!(report.relations_healed, 0);
     }
 
     // ── Fix 1: Case-insensitive relation resolution ────────────────────────
@@ -1116,5 +1151,62 @@ mod tests {
             );
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn heal_relation_vocabulary_folds_aliases_and_queues_semantics() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .store_entity("A", "person", None, Some("t"), None)
+            .await
+            .unwrap();
+        let e2 = db
+            .store_entity("B", "project", None, Some("t"), None)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().timestamp();
+        {
+            let conn = db.conn.lock().await;
+            // Known alias -> auto-fold to works_on.
+            conn.execute("INSERT INTO relations (id, from_entity, to_entity, relation_type, created_at) VALUES ('r1', ?1, ?2, 'working_at', ?3)",
+                libsql::params![e1.clone(), e2.clone(), now]).await.unwrap();
+            // Semantic new type -> queue promote.
+            conn.execute("INSERT INTO relations (id, from_entity, to_entity, relation_type, created_at) VALUES ('r2', ?1, ?2, 'design_inspiration', ?3)",
+                libsql::params![e1.clone(), e2.clone(), now]).await.unwrap();
+        }
+        let counts = super::heal_relation_vocabulary(&db).await.unwrap();
+        assert!(
+            counts.healed >= 1,
+            "working_at is a known alias, must auto-fold"
+        );
+        assert!(
+            counts.queued >= 1,
+            "design_inspiration must be queued as promote"
+        );
+        // working_at is gone (folded); design_inspiration still present (awaiting human).
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT relation_type FROM relations ORDER BY relation_type",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut types = vec![];
+        while let Some(r) = rows.next().await.unwrap() {
+            types.push(r.get::<String>(0).unwrap());
+        }
+        assert!(types.contains(&"works_on".to_string()));
+        assert!(types.contains(&"design_inspiration".to_string()));
+        assert!(!types.contains(&"working_at".to_string()));
+        drop(rows);
+        drop(conn); // release before get_pending_refinements re-locks conn (non-reentrant mutex)
+                    // And a promote proposal exists for design_inspiration.
+        let pending = db.get_pending_refinements().await.unwrap();
+        assert!(pending.iter().any(|p| p.action == "vocab_promote"
+            && p.payload
+                .as_deref()
+                .unwrap_or("")
+                .contains("design_inspiration")));
     }
 }

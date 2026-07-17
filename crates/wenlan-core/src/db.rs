@@ -15422,6 +15422,27 @@ impl MemoryDB {
         Ok(None)
     }
 
+    /// All canonical relation types (lowercase), for safe-transform matching.
+    pub async fn relation_canonicals(&self) -> Result<Vec<String>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical FROM relation_type_vocabulary ORDER BY canonical",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("relation_canonicals: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(r) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            out.push(r.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
     /// Increment the usage count for a canonical relation type.
     pub async fn increment_relation_type_count(&self, canonical: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
