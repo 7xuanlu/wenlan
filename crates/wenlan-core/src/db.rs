@@ -188,12 +188,92 @@ pub struct Migration55Report {
     pub entity_links_inserted: usize,
 }
 
+/// A `vocab_heal_ledger` row: the full pre-image of rows an auto-heal mutated,
+/// so the fix is reversible.
+#[derive(Debug, Clone)]
+pub struct VocabLedgerEntry {
+    pub id: String,
+    pub kind: String,
+    pub old_value: String,
+    pub new_value: String,
+    pub pre_image: String,
+    pub created_at: i64,
+}
+
+impl MemoryDB {
+    /// Record a vocab auto-heal's full pre-image so the mutation can be undone.
+    /// `affected` (row ids) is provenance only — the caller already folds them
+    /// into `pre_image_json`; it is not stored as a separate column.
+    pub async fn insert_vocab_ledger_entry(
+        &self,
+        kind: &str,
+        old_value: &str,
+        new_value: &str,
+        pre_image_json: &str,
+        affected: &[String],
+    ) -> Result<String, WenlanError> {
+        let id = format!("vheal-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().timestamp();
+        let _ = affected;
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO vocab_heal_ledger (id, kind, old_value, new_value, pre_image, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![id.clone(), kind, old_value, new_value, pre_image_json, now],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_ledger: {e}")))?;
+        Ok(id)
+    }
+
+    /// Look up a vocab ledger entry by id, for reading back the pre-image on undo.
+    pub async fn get_vocab_ledger_entry(
+        &self,
+        id: &str,
+    ) -> Result<Option<VocabLedgerEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, kind, old_value, new_value, pre_image, created_at FROM vocab_heal_ledger WHERE id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_vocab_ledger: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row) => Ok(Some(VocabLedgerEntry {
+                id: row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                kind: row
+                    .get(1)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                old_value: row
+                    .get(2)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                new_value: row
+                    .get(3)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                pre_image: row
+                    .get(4)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                created_at: row
+                    .get(5)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+            })),
+            None => Ok(None),
+        }
+    }
+}
+
 /// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).
 pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 70;
+pub const SCHEMA_VERSION: u32 = 71;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6642,6 +6722,28 @@ impl MemoryDB {
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("migration 70 bump: {e}")))?;
                 log::info!("[migration] Migration 70 applied: entity_type_vocabulary table seeded with 6 live canonicals");
+            }
+
+            // Migration 71: vocab_heal_ledger table. Stores the full pre-image
+            // JSON of rows a vocab auto-heal mutates, so any fix is reversible.
+            if version < 71 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS vocab_heal_ledger (
+                        id TEXT PRIMARY KEY,
+                        kind TEXT NOT NULL,
+                        old_value TEXT NOT NULL,
+                        new_value TEXT NOT NULL,
+                        pre_image TEXT NOT NULL,
+                        created_at INTEGER NOT NULL
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 71 DDL: {e}")))?;
+                conn.execute("PRAGMA user_version = 71", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 71 bump: {e}")))?;
+                log::info!("[migration] Migration 71 applied: vocab_heal_ledger table for reversible auto-heal");
             }
         }
 
@@ -50970,7 +51072,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 70);
+        assert_eq!(uv, 71);
     }
 
     #[tokio::test]
@@ -50987,7 +51089,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 70,
+            uv, 71,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51021,7 +51123,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 70);
+        assert_eq!(uv, 71);
     }
 
     #[tokio::test]
@@ -51038,7 +51140,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 70,
+            uv, 71,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51086,10 +51188,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(
-            uv, 70,
-            "terminal version is 70 after entity_type_vocabulary"
-        );
+        assert_eq!(uv, 71, "terminal version is 71 after vocab_heal_ledger");
     }
 
     #[tokio::test]
@@ -51106,7 +51205,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 70,
+            uv, 71,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -51120,6 +51219,24 @@ pub(crate) mod tests {
             .unwrap();
         let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(present, 1, "child_vectors survives idempotent re-run");
+    }
+
+    #[tokio::test]
+    async fn vocab_ledger_round_trips_pre_image() {
+        let (db, _tmp) = test_db().await;
+        let pre = r#"[{"id":"rel-1","relation_type":"working_at","confidence":0.5}]"#;
+        let id = db
+            .insert_vocab_ledger_entry("relation", "working_at", "works_on", pre, &["rel-1".into()])
+            .await
+            .unwrap();
+        let got = db.get_vocab_ledger_entry(&id).await.unwrap().unwrap();
+        assert_eq!(got.kind, "relation");
+        assert_eq!(got.old_value, "working_at");
+        assert_eq!(got.new_value, "works_on");
+        assert_eq!(
+            got.pre_image, pre,
+            "full pre-image JSON must round-trip for undo"
+        );
     }
 
     // ── T15a: fact-channel producer + retrieval integration ───────────────────
