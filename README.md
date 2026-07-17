@@ -97,7 +97,9 @@ Wenlan turns documents, notes, and past AI conversations into a source-backed kn
   </picture>
 </p>
 
-The term [llm-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) comes from Rohitg00's proposal extending [Karpathy's original LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Wenlan turns that model into a product: traceable Sources, agent-captured Zettelkasten-style atomic Memories (one complete idea each), and maintained Pages built from both.
+[Karpathy's original LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) has three foundations: immutable **Sources**, an AI-maintained Markdown **Wiki**, and a co-evolving **Schema** of rules for structuring and maintaining it. Wenlan ships that baseline as shared product defaults for page shape, provenance, citations, refresh, ownership, and review.
+
+[Rohitg00's llm-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) adds a memory lifecycle. Wenlan makes it concrete with traceable Sources, agent-captured Zettelkasten-style atomic Memories (one complete idea each), and maintained Pages built from both.
 
 **Wenlan's distinctive move:** Sources and atomic Memories are not the end product. Wenlan turns both into Pages you can read and reuse, keeps track of what supports each Page, and preserves superseded knowledge instead of erasing it. Machine-maintained Pages can be rebuilt from current evidence; changes to your writing wait as reviewable revisions.
 

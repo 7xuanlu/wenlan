@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=e4c03751702a190aa7e9e617f18784678f72406616a05948c04573384b5403b1 -->
+<!-- README_SYNC: source=README.md sha256=de84abdc230b88a5ba6068c2da602b6bd818e6b9522f46ef22105f7250078af0 -->
 
 <p align="center">
   <picture>
@@ -99,7 +99,9 @@ Wenlan 把文档、笔记和过去的 AI 对话整理成会随工作持续更新
   </picture>
 </p>
 
-[llm-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) 这个名称来自 Rohitg00 对 [Karpathy 原始 LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 的延伸提案。Wenlan 把这个模型变成可以直接使用的产品：可追溯的来源、由 AI agent 按 Zettelkasten（卡片盒笔记法）捕获的原子记忆（每条只表达一个完整想法），以及同时由两者建立并持续维护的页面。
+[Karpathy 原始 LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 有三层基础：不可变的**来源（Sources）**、由 AI 维护的 Markdown **Wiki**，以及会随你和 AI 一起演进的 **Schema（规则层）**，规定 wiki 的组织与维护方式。Wenlan 把这套基础做成跨工具共用的产品默认规则：页面结构、来源追踪、引用、刷新、归属和审核。
+
+[Rohitg00 的 llm-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) 加入了记忆生命周期。Wenlan 把它做成可以直接使用的产品：可追溯的来源、由 AI agent 按 Zettelkasten（卡片盒笔记法）捕获的原子记忆（每条只表达一个完整想法），以及同时由两者建立并持续维护的页面。
 
 **Wenlan 最独特的做法：** 来源与原子记忆不是终点。Wenlan 把两者整理成可以阅读和反复使用的页面，持续记录每个页面由什么支撑，也保留被取代的旧知识。机器维护的页面可以依当前证据重建；对你文字的改动会等待审核，而不是直接覆盖。
 
