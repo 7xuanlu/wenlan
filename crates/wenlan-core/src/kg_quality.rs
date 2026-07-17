@@ -105,7 +105,8 @@ pub struct RethinkReport {
 ///
 /// Phases:
 /// 1. Entity merge candidates -- find duplicates with identical lowercase names
-/// 2. Relation type normalization -- rewrite non-canonical types to canonical
+/// 2. Relation vocabulary heal -- auto-fold safe non-canonical types (known
+///    aliases + deterministic transforms) to canonical, queue the rest for review
 /// 3. Entity embedding refresh -- re-embed entities with many new observations
 /// 4. Stale relation detection -- relations whose source memory was deleted
 /// 5. Contradiction scan -- log entities with many observations for review
@@ -263,8 +264,9 @@ async fn surface_minhash_merge_candidates(db: &MemoryDB) -> Result<usize, Wenlan
     Ok(enqueued)
 }
 
-/// Normalize relations whose type isn't canonical in the vocabulary.
-/// Uses `resolve_relation_type` to map aliases to canonical forms.
+/// Counts returned by a vocabulary heal pass: how many relations were
+/// auto-folded to a canonical, and how many distinct new types were queued
+/// for human review as promote candidates.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct VocabHealCounts {
     pub healed: usize,
