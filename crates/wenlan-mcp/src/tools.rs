@@ -5016,4 +5016,51 @@ mod tests {
             "space field must be present in capture schema when WENLAN_SPACE is not locked"
         );
     }
+
+    /// Collect `properties.<name>` entries whose schema is a bare boolean.
+    fn boolean_property_schemas(node: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+        match node {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                    for (name, schema) in props {
+                        if schema.is_boolean() {
+                            out.push(format!("{path}.{name}"));
+                        }
+                    }
+                }
+                for value in map.values() {
+                    boolean_property_schemas(value, path, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    boolean_property_schemas(item, path, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// No tool may expose a bare-boolean property schema.
+    ///
+    /// `#[schemars(with = "serde_json::Value")]` renders as the schema `true`. That is
+    /// legal JSON Schema 2020-12, but MCP clients that validate with Zod (Claude Code
+    /// among them) reject it. `tools/list` is all-or-nothing, so ONE such property makes
+    /// the whole listing fail and every tool disappears from the client — the server
+    /// still connects, which is why it presents as "tools fetch failed" rather than a
+    /// crash. Use `serde_json::Map<String, serde_json::Value>` instead: it renders as
+    /// `{"type": "object", "additionalProperties": true}` and validates.
+    #[test]
+    fn tool_schemas_have_no_boolean_property_schemas() {
+        let mut offenders = Vec::new();
+        for tool in WenlanMcpServer::tool_router().list_all() {
+            let schema = serde_json::Value::Object((*tool.input_schema).clone());
+            boolean_property_schemas(&schema, &tool.name, &mut offenders);
+        }
+        assert!(
+            offenders.is_empty(),
+            "bare-boolean property schemas would make Claude Code reject tools/list \
+             entirely, hiding EVERY tool: {offenders:?}"
+        );
+    }
 }
