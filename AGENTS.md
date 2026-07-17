@@ -141,43 +141,9 @@ Tried 90% `cargo llvm-cov` gate in pre-push, removed because:
 
 Pre-push now runs clippy + non-instrumented tests only. Coverage = L5 (PR, informational) or L7 (manual).
 
-### Eval baselines cache
+### Eval cache, baselines & faithfulness benches → `app/eval/AGENTS.md`
 
-The per-scenario DB cache (Phase 1 enrichment + Phase 3 answer cache + judge JSONLs) lives at `<baselines_dir>/`, where `baselines_dir` defaults to `~/.cache/origin-eval` (override with `EVAL_BASELINES_DIR=<path>`):
-
-```bash
-export EVAL_BASELINES_DIR=$HOME/.cache/origin-eval
-```
-
-Path must be writable and local (network mounts not recommended). When set, also chains `EVAL_ENRICHMENT_CACHE_DIR` default to the same dir unless explicitly overridden. Migration: `bash scripts/migrate-eval-cache.sh <source-baselines>`.
-
-### Cached scenario DBs (page-channel + retrieval-only evals)
-
-The PR-B page-channel runners reuse the fullpipeline_*.db seeded DBs without re-ingesting. They live at `~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db`. Repopulate via `bash scripts/seed-scenario-dbs.sh` from the repo root. The `cached_scenario_db_check.rs` integration test (L7 manual) verifies migration replay against current schema; it auto-resolves the root from `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
-
-For full eval discipline (fixture management, baseline layout, env vars, seed scripts, pre-flight checklist, runner conventions), see `app/eval/AGENTS.md` and `crates/wenlan-core/src/eval/AGENTS.md`. The subdir AGENTS.md files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
-
-### Eval pre-flight subset
-
-Set `EVAL_LOCOMO_LIMIT=N` (or `EVAL_LME_LIMIT=N`) to truncate the fixture and run a small-subset eval (~30min) before committing to full 3h runs. Useful for verifying direction on new retrieval variants. Applies to every `run_locomo_eval*` / `run_longmemeval_eval*` variant. Unset (the default) runs the full fixture unchanged.
-
-### TTL policy
-
-Cache directories accumulate fast (1GB+ per full LoCoMo+LME run) and snapshots stay valid only as long as the fixture revision + embedder + provider stack remain unchanged. Rule of thumb:
-
-- **Active cache** (`~/.cache/origin-eval/`): purge whenever (a) `fixture_revision_hash` changes for the bench you're rerunning, (b) embedder weights swap, (c) LLM provider class swaps. Drop the affected `<task>/<fixture>.db` files; keep the JSONL judge cache if the judge model is unchanged.
-- **Archive caches** (`~/.cache/origin-eval.archive-YYYY-MM-DD/`): retain for 30 days after the matching baseline JSON ships to a PR. After that, delete unless the baseline is still actively cited in an open issue or recent release notes. Archives are recreated on demand by re-running the harness.
-- **Don't depend on archive contents for reproducibility** — baselines are reproduced by re-running with the same `ReportEnv` fields, not by replaying cached intermediates.
-
-### KG-faithfulness bench
-
-`app/eval/kg_fixtures/*.toml` hold hand-curated entity + relation ground-truth per source_text case. The `eval::kg_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) extracts KG from each case and scores entity + relation precision/recall/F1 against the expected ground truth. No LLM judge in this bench — string-match faithfulness only. LLM-judge variant is a follow-up plan.
-
-### Page-distillation faithfulness bench
-
-`app/eval/page_fixtures/*.toml` hold hand-curated source memories + a distilled page body per case + an `expected_min_faithfulness` floor. The `eval::page_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) splits each page body into sentences and scores what fraction of sentences have ≥ 50% content-token overlap with the union of source memories. Negative-control fixtures in `seed_hallucinations.toml` carry a high `expected_min` floor specifically to verify the scorer flags hallucinated pages. LLM-judge variant deferred.
-
-**Scope limits.** Token-overlap is lexical, not semantic. Paraphrased faithful claims may fail the 50% floor and hallucinated claims with high keyword overlap may pass. Sentence-level granularity only (no multi-sentence claim composition). Acceptable for the smoke-test floor; a real faithfulness gate needs the LLM-judge variant tracked under C-D-LLM.
+The eval-specific machinery — the baseline/scenario-DB cache (`EVAL_BASELINES_DIR`, TTL/purge policy, `EVAL_ENRICHMENT_CACHE_DIR` chaining, `migrate-eval-cache.sh`), cached scenario DBs (`~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/`, `seed-scenario-dbs.sh`, `cached_scenario_db_check.rs`), the `EVAL_LOCOMO_LIMIT`/`EVAL_LME_LIMIT` pre-flight subset, the full eval env-var table, the KG- and page-distillation faithfulness benches, fixture management, baseline layout, pre-flight checklist, and citation discipline — lives in **`app/eval/AGENTS.md`** and **`crates/wenlan-core/src/eval/AGENTS.md`**. Those subdir `AGENTS.md` files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
 
 ## Releasing (release-please)
 
@@ -273,35 +239,9 @@ The daemon (`wenlan-server`) is the single source of truth. External tools (the 
 - **Daemon**: Rust, Axum 0.8 (HTTP), libSQL (Turso's SQLite fork — vectors, knowledge graph, documents), Tokio, FastEmbed (BGE-Base-EN-v1.5-Q, 768-dim, 512-token max), llama-cpp-2 (Qwen3-4B-Instruct-2507 via Metal GPU; Qwen3.5-9B optional), launchd for process management
 - **CLI** (`wenlan`): Rust, reqwest, clap
 
-### Database: libSQL (owned by wenlan-core)
+### Database & events (owned by wenlan-core)
 
-One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/wenlan/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/wenlan-core/src/db.rs`:
-- **Document chunks**: `chunks` table with `F32_BLOB(768)` vector column, DiskANN indexing (768-dim, BGE-Base-EN-v1.5-Q)
-- **Knowledge graph**: `entities`, `relations`, `observations` tables with FK cascades
-- **Full-text search**: FTS5 virtual table (`chunks_fts`) auto-synced via triggers
-- **Hybrid search**: Vector similarity + FTS combined with Reciprocal Rank Fusion (RRF)
-
-**Connection pattern**: `tokio::sync::Mutex<libsql::Connection>` — `libsql::Connection` is `Send` but not `Sync`, so it's wrapped in an async `Mutex` inside `MemoryDB`.
-
-**Sharing pattern**: `MemoryDB` is wrapped in `Arc<MemoryDB>` at the state layer (`ServerState.db: Option<Arc<MemoryDB>>`). This lets handlers clone the `Arc` out of the `RwLock<ServerState>` guard and drop the guard before performing long-running operations.
-
-### Events: EventEmitter trait (no tauri::Emitter in core)
-
-Instead of passing `tauri::AppHandle` into business logic, `wenlan-core` defines an `EventEmitter` trait:
-
-```rust
-// crates/wenlan-core/src/events.rs
-pub trait EventEmitter: Send + Sync {
-    fn emit(&self, event: &str, payload: &str) -> Result<()>;
-}
-pub struct NoopEmitter;
-```
-
-- The daemon uses `NoopEmitter` (no UI to notify directly)
-- The desktop app (separate `wenlan-app` repo) provides a `TauriEmitter` adapter that wraps `AppHandle::emit`
-- `MemoryDB::new(db_path, emitter: Arc<dyn EventEmitter>)` takes the trait object
-
-This keeps `wenlan-core` framework-agnostic and testable with `NoopEmitter` in unit tests.
+One libSQL database (`MemoryDB` in `crates/wenlan-core/src/db.rs`) holds document chunks + vectors, the knowledge graph, and FTS, combined via Reciprocal Rank Fusion. `wenlan-core` stays framework-agnostic by emitting UI events through an `EventEmitter` trait (`NoopEmitter` in the daemon, `TauriEmitter` in the desktop app) rather than depending on tauri. **Schema, connection/sharing patterns, and the trait definition live in `crates/wenlan-core/AGENTS.md`** (loaded when working under that crate, per the agents.md hierarchical convention).
 
 ### IPC Surface
 
@@ -339,19 +279,9 @@ See `app/eval/AGENTS.md` "eval citation discipline" section for the full rules (
 - **Don't add new HTTP endpoints to the CLI.** Use existing daemon endpoints. If a CLI subcommand needs new data, add a daemon endpoint first.
 - **MCP wrappers in `wenlan-mcp` always typed-deserialize.** Every `_impl` method in `crates/wenlan-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `wenlan-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
 
-### Ingest-path parity (training-serving skew)
-- **All post-store enrichment goes through `wenlan_core::ingest::run_canonical_enrichment`.** It is the ONE shared path for classify + extract + `apply_enrichment` + tags (Phase 1), entity/title/page enrichment (Phase 2), and dual-pool dedup/contradiction resolution (Phase 3). The server `handle_store_memory`, the eval seed pipeline, and the importer all call it. Do NOT re-implement a subset of enrichment in any consumer.
-- **Why.** The eval seed used to re-implement a divergent subset (`enrich_db_for_eval` = entity + title + page only), so every new write-time feature (importance/T8, event_date/T11+T20, episode/T2, fact-channel/T15, dual-pool/T14, summary-nodes/T18) silently lagged in the eval path and shipped merged-but-inert, re-discovered as "starved" each eval cycle. Sharing the code makes seed-vs-production fidelity hold by construction. This is the standard fix for **training-serving skew** — Google "Rules of ML", Rule #32: *"Re-use code between your training pipeline and your serving pipeline whenever possible"* → *"eliminates a source of training-serving skew."* See also 12-Factor X (dev/prod parity) and the technical-debt framing (Cunningham, OOPSLA '92): the eval shortcut was debt never repaid.
-- **New write-time feature checklist.** Add it inside `run_canonical_enrichment` (not in a consumer), then add a seed-completeness assert — a contract test (Fowler, `ContractTest`) — so the seed cache fails loud when the feature's artifact is missing rather than silently absent. A flag merged without its artifact present in the seed is unmeasurable.
+### Enrichment parity & eval-seed contract → `crates/wenlan-core/AGENTS.md`
 
-### Eval seed + eval read: ONE route, ONE contract (no drift)
-
-The recurring failure mode was not any single missing artifact — it was that seeding a cached scenario DB was a *scatter of manual STEP tests* (`seed_inject_event_dates`, `seed_backfill_classify`, entity sweep, `seed_backfill_episodes`, `distill_pages`) run by memory. Miss one and a channel ships starved, then a graph/temporal A/B over it returns a null that gets misread as "the channel doesn't help" — a lie about a dead substrate, re-discovered every cycle.
-
-- **Seed side — the ONE route.** Re-seed cached scenario DBs with the orchestrator `seed_scenario_dbs_complete` (`crates/wenlan-core/tests/eval_harness.rs`). It runs every enrichment step in the correct order (event_date inject → classify → entity/`memory_entities` sweep → episodes → distill) then asserts `SeedExpectations::complete()`. **Never hand-run the individual `seed_*` STEP tests** — they are the orchestrator's internals. Run the one route and the seed is complete *and* contract-verified by construction.
-- **Contract side — teeth, not prose.** `crates/wenlan-core/src/eval/seed_contract.rs` is the single liveness contract. `SeedExpectations::complete()` hard-fails the seed when a channel's substrate is empty: `memory_entities = 0` (graph), `event_date = 0` (temporal), `pages = 0` active (page channel), plus dupes + classification from `strict()`. These are *presence* checks (`> 0`), not coverage percentages — a percentage floor rots (see the L3/coverage note), but zero links means the channel is dead, which is the bug. `strict()` stays lenient (report-only) for minimal seeds; only `complete()` has teeth.
-- **Eval side — refuse, don't lie.** The SAME contract gates the consumer: every per-query eval collector calls `seed_contract::assert_feature_substrate_live(conn, feature)` at entry. A graph A/B over a DB with zero `memory_entities` (or a temporal A/B with zero `event_date`, or a page-channel A/B with zero active `pages`) **errors loud** ("EVAL REFUSED") instead of emitting a null. Producer and consumer share one contract, so neither can drift onto a dead substrate.
-- **Adding a write-time channel.** Add its step to `seed_scenario_dbs_complete`, its presence floor to `SeedExpectations` (+ wire it into `assert_feature_substrate_live` if it has an A/B), and a unit test in `seed_contract.rs`. The contract — not a runbook — is what keeps the seed honest.
+All post-store enrichment goes through the ONE canonical path (`wenlan_core::ingest::run_canonical_enrichment`) so no consumer re-implements a divergent subset (the training-serving-skew fix), and the eval seed + eval read share ONE liveness contract (`seed_contract.rs`) so neither drifts onto a dead substrate. The full rationale, the `seed_scenario_dbs_complete` orchestrator, and the `SeedExpectations` teeth live in **`crates/wenlan-core/AGENTS.md`** (loaded when working under that crate).
 
 ### Async and locking
 - **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/wenlan-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.

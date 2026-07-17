@@ -72,8 +72,8 @@ Tests that depend on `longmemeval_oracle.json`:
 
 Three sibling subdirs live alongside `data/` and are tracked in git:
 
-- `app/eval/kg_fixtures/*.toml` - hand-curated entity + relation ground-truth, consumed by `eval::kg_faithfulness`. See root `AGENTS.md` "KG-faithfulness bench".
-- `app/eval/page_fixtures/*.toml` - hand-curated source memories + distilled page bodies, consumed by `eval::page_faithfulness`. See root `AGENTS.md` "Page-distillation faithfulness bench".
+- `app/eval/kg_fixtures/*.toml` - hand-curated entity + relation ground-truth, consumed by `eval::kg_faithfulness`. See "KG-faithfulness bench" below.
+- `app/eval/page_fixtures/*.toml` - hand-curated source memories + distilled page bodies, consumed by `eval::page_faithfulness`. See "page-distillation faithfulness bench" below.
 - `app/eval/fixtures/*.toml` - 41 LoCoMo/LME fixtures vendored from `7xuanlu/wenlan-app` (PR #148). Used by `eval_harness.rs` integration tests.
 
 ---
@@ -201,3 +201,33 @@ cargo test -p wenlan-core --test eval_harness save_locomo_v2_with_pages_baseline
 The cached consolidated scenario DB introduces cross-conversation noise compared to the per-conversation ephemeral DB used by `save_locomo_cross_rerank_baseline`. So numbers from `save_locomo_v2_with_pages_baseline` are NOT directly comparable to the published 0.684 LoCoMo bar. They are comparable to the OFF variant of the same runner (page-channel unset/default).
 
 The `variant_tag` field (`cross_rerank_v2_pages` vs `cross_rerank_v2_no_pages`) is the load-bearing differentiator on the layered baseline path, because `comparable_env_hash` does not yet hash `flags` (pending Task #30).
+
+---
+
+## cache TTL policy
+
+> Moved from root `AGENTS.md` (index-and-pointer refactor). The cache root defaults to `~/.cache/origin-eval` (override with `EVAL_BASELINES_DIR`; see the env-var table above). The path must be writable and local (network mounts not recommended); setting it also chains `EVAL_ENRICHMENT_CACHE_DIR` to the same dir unless explicitly overridden. Migrate an existing cache with `bash scripts/migrate-eval-cache.sh <source-baselines>`.
+
+Cache directories accumulate fast (1GB+ per full LoCoMo+LME run) and snapshots stay valid only as long as the fixture revision + embedder + provider stack remain unchanged. Rule of thumb:
+
+- **Active cache** (`~/.cache/origin-eval/`): purge whenever (a) `fixture_revision_hash` changes for the bench you're rerunning, (b) embedder weights swap, (c) LLM provider class swaps. Drop the affected `<task>/<fixture>.db` files; keep the JSONL judge cache if the judge model is unchanged.
+- **Archive caches** (`~/.cache/origin-eval.archive-YYYY-MM-DD/`): retain for 30 days after the matching baseline JSON ships to a PR. After that, delete unless the baseline is still actively cited in an open issue or recent release notes. Archives are recreated on demand by re-running the harness.
+- **Don't depend on archive contents for reproducibility** — baselines are reproduced by re-running with the same `ReportEnv` fields, not by replaying cached intermediates.
+
+---
+
+## KG-faithfulness bench
+
+> Moved from root `AGENTS.md` (index-and-pointer refactor); co-located with its `kg_fixtures/` fixtures.
+
+`app/eval/kg_fixtures/*.toml` hold hand-curated entity + relation ground-truth per source_text case. The `eval::kg_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) extracts KG from each case and scores entity + relation precision/recall/F1 against the expected ground truth. No LLM judge in this bench — string-match faithfulness only. LLM-judge variant is a follow-up plan.
+
+---
+
+## page-distillation faithfulness bench
+
+> Moved from root `AGENTS.md` (index-and-pointer refactor); co-located with its `page_fixtures/` fixtures.
+
+`app/eval/page_fixtures/*.toml` hold hand-curated source memories + a distilled page body per case + an `expected_min_faithfulness` floor. The `eval::page_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) splits each page body into sentences and scores what fraction of sentences have ≥ 50% content-token overlap with the union of source memories. Negative-control fixtures in `seed_hallucinations.toml` carry a high `expected_min` floor specifically to verify the scorer flags hallucinated pages. LLM-judge variant deferred.
+
+**Scope limits.** Token-overlap is lexical, not semantic. Paraphrased faithful claims may fail the 50% floor and hallucinated claims with high keyword overlap may pass. Sentence-level granularity only (no multi-sentence claim composition). Acceptable for the smoke-test floor; a real faithfulness gate needs the LLM-judge variant tracked under C-D-LLM.
