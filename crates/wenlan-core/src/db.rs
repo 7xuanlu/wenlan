@@ -21075,6 +21075,40 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Stable fingerprint for a vocab proposal — keyed on (kind, old_value) ONLY,
+    /// never the suggested target. One human dismissal of a value is permanent.
+    fn vocab_proposal_fingerprint(kind: &str, old_value: &str) -> String {
+        format!("vocab_promote::{kind}::{}", old_value.to_lowercase())
+    }
+
+    /// Insert a `vocab_promote` proposal, deduped by fingerprint. Returns true iff
+    /// a new row was created (existing pending/dismissed/resolved rows are kept).
+    pub async fn insert_vocab_promote_proposal(
+        &self,
+        kind: &str,
+        old_value: &str,
+        category: Option<&str>,
+    ) -> Result<bool, WenlanError> {
+        let id = Self::vocab_proposal_fingerprint(kind, old_value);
+        let payload = serde_json::json!({
+            "action": "vocab_promote",
+            "kind": kind,
+            "old_value": old_value,
+            "category": category,
+        })
+        .to_string();
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence) \
+                 VALUES (?1, 'vocab_promote', '[]', ?2, 1.0) ON CONFLICT(id) DO NOTHING",
+                libsql::params![id, payload],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))?;
+        Ok(affected > 0)
+    }
+
     /// Get all pending/awaiting_review refinement proposals.
     pub async fn get_pending_refinements(&self) -> Result<Vec<RefinementProposal>, WenlanError> {
         let conn = self.conn.lock().await;
@@ -46429,6 +46463,52 @@ pub(crate) mod tests {
             r1 + r2,
             1,
             "exactly one caller should see rows=1, got {r1} + {r2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vocab_promote_proposal_is_idempotent_and_respects_dismissal() {
+        let (db, _tmp) = test_db().await;
+        // First insert creates a row.
+        assert!(db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        // Second insert with the same (kind, old_value) is a no-op.
+        assert!(!db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        let pending = db.get_pending_refinements().await.unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .filter(|p| p.action == "vocab_promote")
+                .count(),
+            1
+        );
+
+        // Dismiss it, then re-insert: must stay dismissed (no resurrection).
+        let fp = pending
+            .iter()
+            .find(|p| p.action == "vocab_promote")
+            .unwrap()
+            .id
+            .clone();
+        db.resolve_refinement_if_open(&fp, "dismissed")
+            .await
+            .unwrap();
+        assert!(!db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        let pending2 = db.get_pending_refinements().await.unwrap();
+        assert_eq!(
+            pending2
+                .iter()
+                .filter(|p| p.action == "vocab_promote")
+                .count(),
+            0
         );
     }
 
