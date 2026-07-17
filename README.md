@@ -71,11 +71,13 @@ its Wenlan connection, and a capture/recall round trip.
 
 The guide detects which client you are using and keeps client-specific commands out of this README. It does not configure every AI tool unless you ask it to.
 
-Need only the headless runtime?
+Need only the headless runtime on macOS Apple Silicon?
 
 ```bash
 npx -y wenlan setup
 ```
+
+This downloads the prebuilt CLI, daemon, and MCP connector, starts the local runtime, and verifies it. No Rust toolchain or Cargo is required. Linux x64/ARM64 has an automated [shell setup path](docs/setup-with-ai.md#install-the-runtime); Windows x64 uses the matching archive from [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel currently has [no supported complete-runtime install](crates/wenlan-cli/README.md#macos-intel).
 
 Manual and client-specific instructions: [AI-assisted setup](docs/setup-with-ai.md) · [Claude Code plugin](plugin/.claude-plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI and MCP](crates/wenlan-cli/README.md).
 
@@ -91,11 +93,13 @@ Wenlan turns documents, notes, and past AI conversations into a source-backed kn
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories independently support a maintained Page. A supporting change marks the Page for evidence-backed rebuilding; potential conflicts can surface for review, and changes to human writing wait for the user." width="100%">
+    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories independently support a maintained Page. Wenlan can rebuild a stale Page from its current support; optional conflict review can surface protected conflicts, and changes to human writing wait for the user." width="100%">
   </picture>
 </p>
 
-This is Wenlan's llm-wiki v2 model: Sources and Memories remain distinct, long-lived inputs to Pages. Supporting changes mark related Pages stale for evidence-backed rebuilding; potential contradictions can surface for review, and changes to your writing wait for your judgment.
+The term [llm-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) comes from Rohitg00's proposal extending [Karpathy's original LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Wenlan turns that model into a product: traceable Sources, agent-captured Zettelkasten-style atomic Memories (one complete idea each), and maintained Pages built from both.
+
+**Wenlan's distinctive move:** Sources and atomic Memories are not the end product. Wenlan turns both into Pages you can read and reuse, keeps track of what supports each Page, and preserves superseded knowledge instead of erasing it. Machine-maintained Pages can be rebuilt from current evidence; changes to your writing wait as reviewable revisions.
 
 <p align="center">
   <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
@@ -125,22 +129,46 @@ a1b2c3d distill: 4 pages
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
 
-### llm-wiki v2: two linked lifecycles
+### Two lifecycles, one maintained knowledge system
 
-A generated wiki is a snapshot. Wenlan maintains two connected lifecycles instead: explicit supersession links old and replacement Memories; Pages keep the current synthesis and a bounded record of how it changed. Source records and memories independently support those Pages.
+A generated wiki can go stale; a memory store can fragment into disconnected facts. Wenlan links two lifecycles without collapsing them into one layer.
 
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="An earlier memory remains linked after an explicit superseding capture. A changed source or memory marks supported Pages stale; Wenlan rebuilds an eligible Page from current evidence, records the revision, and stages changes to human writing for review." width="100%">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="An earlier memory remains linked after an explicit superseding capture. When a Page is stale, Wenlan rebuilds it from current Sources and Memories, records the revision, and stages changes to human writing for review." width="100%">
   </picture>
 </p>
 
-- **Memory lifecycle:** Knowledge captured from active work can be enriched, connected, and confirmed. Near-duplicates can be suppressed from retrieval without deletion; explicit superseding captures link old and replacement claims, while direct correction edits the existing Memory in place. Some contradictions can surface for review.
-- **Page lifecycle:** Distilled and refreshed Pages carry citation records and verification status plus a bounded version changelog. When a supporting source or memory changes, the related Page becomes stale; eligible machine-maintained Pages are rebuilt from current evidence and pass a per-claim citation gate. Pages you have edited receive a proposed revision instead of a silent rewrite.
-- **The link:** Wenlan tracks which Pages each source or memory supports, so changes reach the relevant synthesis without breaking its evidence links.
+#### Atomic Memory
 
-For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. If either the document or the decision changes, Wenlan can rebuild the Page from its current support; if you have edited it, the proposed change waits for review.
+`CAPTURE -> CLASSIFY -> ENRICH -> LINK -> RECONCILE`
+
+Capture and explicit supersession are core. Model-backed stages run only when the matching model is configured, and the reconcile pass is off by default.
+
+| Operation | What Wenlan does |
+|---|---|
+| **Capture** | Agents write one complete, self-contained idea per Memory, following the Zettelkasten atomic-note principle instead of saving the whole conversation. |
+| **Classify** | With the on-device model, Wenlan assigns `identity`, `preference`, `decision`, `lesson`, `gotcha`, or `fact`; a precise type supplied by the caller remains authoritative. |
+| **Enrich** | With the on-device model, adds structured fields, retrieval cues, event dates, quality, importance, and tags when available. |
+| **Link** | Retains provenance and, when enrichment is enabled, connects Memories to entities and relations in the knowledge graph. |
+| **Reconcile** | Explicit replacements preserve a `supersedes` chain. An optional on-device pass can queue protected conflicts for review instead of overwriting history; it is off by default and must be explicitly enabled. |
+
+Advanced configuration: set `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` to enable that reconcile pass.
+
+#### Maintained Page
+
+`DISTILL -> CITE -> TRACK -> REFRESH -> REVIEW`
+
+| Operation | What Wenlan does |
+|---|---|
+| **Distill** | Compiles related Sources and Memories into one Markdown Page. |
+| **Cite** | Retains citation records and verification status; automatic refresh discards a draft when its citation-support check fails. |
+| **Track** | Records which evidence supports the Page, why it became stale, and a bounded changelog. |
+| **Refresh** | When a Page is marked stale, rebuilds the eligible machine-maintained Page from current evidence. |
+| **Review** | Turns changes to a Page you edited into a proposed revision instead of a silent rewrite. |
+
+For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. When that Page is refreshed, it rebuilds from its current support; if you have edited it, the proposed change waits for review.
 
 <a id="what-wenlan-is-not"></a>
 
@@ -158,8 +186,8 @@ Wenlan is for software development, research, writing, consulting, product decis
 - **Multi-source knowledge:** import ChatGPT and Claude history, index Obsidian or document folders, accept direct captures, and combine them as evidence for the same pages.
 - **Evidence-backed knowledge:** captured memories retain source agent, confidence, stability, and supersession; distilled and refreshed Pages retain links to source records and memories, citation records and verification status, stale reasons, ownership, and revision state.
 - **Maintained, reviewable pages:** automatic re-distill refreshes fail closed when their citation verification gate fails. Updates to human-owned pages become pending revisions instead of silent rewrites.
-- **Between-session refinement:** with a local model or API provider, background passes can enrich captures, link entities, deduplicate overlaps, and refresh eligible pages before the next session.
-- **Review where it matters:** contradictions and protected-memory collisions can surface for explicit review without turning every capture into an approval queue.
+- **Between-session refinement:** optional model-backed passes can enrich captures, link entities, and distill or refresh eligible Pages while you are away; the exact stages depend on whether you configure an on-device model or an API provider.
+- **Optional conflict review:** when you explicitly enable the on-device reconcile pass, protected-memory conflicts can surface for review without turning every capture into an approval queue.
 - **Hybrid, connected retrieval:** libSQL combines FTS5, vector search, pages, memories, and graph context using reciprocal-rank fusion, with an optional local cross-encoder reranker.
 - **Cross-tool continuity:** Claude Code, Codex, Cursor, the desktop app, and MCP clients query the same local daemon, so context captured in one can return in another.
 - **Explicit spaces:** scope memories, pages, and recall to work, personal, or client contexts, with repo-aware defaults and explicit overrides.
@@ -193,7 +221,7 @@ The loop has four steps:
 1. **Find current knowledge.** Open a relevant Page, search, or use `/recall <query>`; `/brief [topic]` can optionally assemble a broader session-start snapshot. Clients without plugin commands use the equivalent page, search, recall, and context tools.
 2. **Capture and find knowledge while you work.** `/capture <thing>` saves a decision, lesson, gotcha, or fact with its source. `/recall <query>` retrieves only what is relevant instead of loading your whole history.
 3. **Close the loop.** `/handoff` records what changed, what remains open, and where the next session should continue.
-4. **Keep the wiki current.** `/distill` deliberately creates or refreshes pages. Between sessions, background passes can enrich captures, connect related entities, merge overlaps, and refresh eligible pages. `/lint` checks knowledge health; `/curate` brings conflicts and proposed revisions to you.
+4. **Keep the wiki current.** `/distill` deliberately creates or refreshes pages. Between sessions, optional model-backed passes can enrich captures, connect related entities, and refresh eligible pages. `/lint` checks knowledge health; `/curate` brings proposed revisions and any conflict-review items created by the optional reconcile pass to you.
 
 ### Choose how Wenlan thinks
 
@@ -215,23 +243,6 @@ This is a retrieval-only snapshot, not a claim about end-to-end answer quality. 
 | LME_Oracle (500 Q) | 93.6% | 0.857 | 0.883 |
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
-
----
-
-<a id="build-from-source"></a>
-
-## Build from source
-
-Wenlan builds from source on macOS (Apple Silicon and Intel), Linux (x86_64 and ARM64 with glibc), and Windows (x86_64). Current prebuilt releases cover macOS Apple Silicon, Linux x86_64/ARM64 with glibc, and Windows x86_64; macOS Intel remains source-build only. Most users should install through a plugin or `npx`.
-
-```bash
-git clone https://github.com/7xuanlu/wenlan.git
-cd wenlan
-cargo build --workspace
-cargo run -p wenlan-server
-```
-
-Runtime, crate, and platform details are documented in [AGENTS.md](AGENTS.md#cross-platform) and the crate READMEs.
 
 ---
 

@@ -4,13 +4,13 @@ Local daemon for Wenlan. It owns the database, embeddings, search, distill cycle
 
 ## Headless install
 
-Most users install Wenlan through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/setup` runs. This page is for daemon internals. For terminal setup, use the product CLI:
+Most users install Wenlan through the [Claude Code plugin](../../plugin/.claude-plugin/README.md), which auto-runs the install script the first time `/setup` runs. This page is for daemon internals. On macOS Apple Silicon, terminal setup uses the product CLI package:
 
 ```bash
 npx -y wenlan setup
 ```
 
-The installer downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`. Cross-platform: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). The `wenlan` CLI owns setup and service management; `wenlan-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
+The npm installer downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`. Linux x64/ARM64 users can run the automated [shell setup](../../docs/setup-with-ai.md#install-the-runtime); Windows x64 users install the matching archive from [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel currently has no supported complete-runtime install. The `wenlan` CLI owns setup and service management; `wenlan-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
 
 ## Setup modes
 

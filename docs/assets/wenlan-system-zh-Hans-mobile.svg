@@ -127,8 +127,8 @@
     <g data-fit-region="overview-zh-Hans-mobile-changed-support" data-fit-x="254" data-fit-y="1395" data-fit-width="426" data-fit-height="72" data-check-overlap="true">
 
         <path d="M592 1072 C650 1170 652 1340 632 1397" fill="none" stroke="#B5842E" stroke-width="1.5"/>
-        <text x="280" y="1420" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8C5F16" text-anchor="start">依据发生变化</text>
-        <text x="280" y="1454" font-family="&quot;PingFang SC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="25" font-weight="600" fill="#586174" text-anchor="start">受影响的页面会重新构建。</text>
+        <text x="280" y="1420" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8C5F16" text-anchor="start">页面过时后</text>
+        <text x="280" y="1454" font-family="&quot;PingFang SC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="25" font-weight="600" fill="#586174" text-anchor="start">依当前依据重新构建。</text>
 
   </g>
     <g data-fit-region="overview-zh-Hans-mobile-back-to-work" data-fit-x="40" data-fit-y="1500" data-fit-width="640" data-fit-height="270" data-check-overlap="true">

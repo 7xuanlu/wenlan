@@ -1,6 +1,6 @@
 <svg width="1800" height="1120" viewBox="0 0 1800 1120" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">知识会改变，历史仍会保留。</title>
-    <desc id="desc">依据变化会让相关页面过时；Wenlan 会依当前依据重新构建。</desc>
+    <desc id="desc">过时页面依当前依据重建；被取代的知识仍可追溯。</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="1800" height="1120" fill="#FCFCFB"/>
 
@@ -13,7 +13,7 @@
 
         <text x="148" y="84" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">两套相连的生命周期</text>
         <text x="148" y="136" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="46" font-weight="600" fill="#1A1A2E" text-anchor="start">知识会改变，历史仍会保留。</text>
-        <text x="148" y="176" font-family="&quot;PingFang SC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="21" font-weight="400" fill="#586174" text-anchor="start">依据变化会让相关页面过时；Wenlan 会依当前依据重新构建。</text>
+        <text x="148" y="176" font-family="&quot;PingFang SC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="21" font-weight="400" fill="#586174" text-anchor="start">过时页面依当前依据重建；被取代的知识仍可追溯。</text>
 
   </g>
     <g data-fit-region="lifecycle-zh-Hans-desktop-memory-object" data-fit-x="70" data-fit-y="236" data-fit-width="640" data-fit-height="670" data-check-overlap="false">
@@ -73,7 +73,7 @@
     <path d="M798 345v7h6"/>
     <path d="M791 358h9M791 363h9"/>
   </g>
-      <text x="826" y="348" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">来源已变化</text>
+      <text x="826" y="348" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">来源依据</text>
       <text x="826" y="378" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="start">source_11</text>
       <path d="M878 406 V466" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-zh-Hans-desktop-arrow)"/>
       <circle cx="878" cy="578" r="114" fill="#FFFFFF" stroke="#E3E7EE"/>
@@ -91,11 +91,11 @@
       <text x="878" y="726" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">校正</text>
       <text x="738" y="584" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="end">验证</text>
       <path d="M680 728 C728 728 744 660 780 622" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-zh-Hans-desktop-arrow)"/>
-      <text x="704" y="710" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="start">记忆已被取代</text>
+      <text x="704" y="710" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="start">记忆依据</text>
       <path d="M878 692 V782" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-zh-Hans-desktop-warm-arrow)"/>
       <rect x="730" y="798" width="296" height="64" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
-      <text x="878" y="824" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#9F5C32" text-anchor="middle">发现矛盾</text>
-      <text x="878" y="848" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="16" font-weight="600" fill="#1A1A2E" text-anchor="middle">等待你的判断</text>
+      <text x="878" y="824" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#9F5C32" text-anchor="middle">可选冲突审核</text>
+      <text x="878" y="848" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="16" font-weight="600" fill="#1A1A2E" text-anchor="middle">受保护内容等待判断</text>
 
   </g>
     <g data-fit-region="lifecycle-zh-Hans-desktop-page-object" data-fit-x="1044" data-fit-y="236" data-fit-width="686" data-fit-height="680" data-check-overlap="false">
@@ -143,11 +143,11 @@
 
   </g>
     <path d="M992 578 C1076 578 1128 606 1198 614" fill="none" stroke="#6F8F76" stroke-width="2.5" marker-end="url(#lifecycle-zh-Hans-desktop-sage-arrow)"/>
-    <text x="1094" y="532" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#4F7558" text-anchor="middle">受影响的页面</text>
+    <text x="1094" y="532" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#4F7558" text-anchor="middle">待刷新的页面</text>
     <g data-fit-region="lifecycle-zh-Hans-desktop-footer" data-fit-x="74" data-fit-y="966" data-fit-width="1652" data-fit-height="106" data-check-overlap="false">
 
       <line x1="74" y1="966" x2="1726" y2="966" stroke="#E3E7EE"/>
-      <text x="88" y="1007" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">后台精炼</text>
+      <text x="88" y="1007" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">可选模型流程</text>
       <text x="88" y="1043" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">丰富</text>
 <circle cx="138" cy="1037.6" r="2.5" fill="#E3E7EE"/>
 <text x="152" y="1043" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">连接</text>
@@ -155,8 +155,8 @@
 <text x="216" y="1043" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">校正</text>
 <circle cx="266" cy="1037.6" r="2.5" fill="#E3E7EE"/>
 <text x="280" y="1043" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">验证</text>
-      <text x="724" y="1007" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">安静运行</text>
-      <text x="724" y="1043" font-family="&quot;PingFang SC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="start">工作结束后 / 空闲时 / 每日 / 后备检查</text>
+      <text x="724" y="1007" font-family="&quot;PingFang SC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">校正</text>
+      <text x="724" y="1043" font-family="&quot;PingFang SC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="start">本地模型 / 默认关闭 / 明确启用</text>
       <text x="1698" y="1043" font-family="&quot;Songti SC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, serif" font-size="18" font-weight="600" fill="#4F7558" text-anchor="end">只封存，不删除。</text>
 
   </g>

@@ -126,8 +126,8 @@
     <g data-fit-region="overview-en-desktop-changed-support" data-fit-x="1124" data-fit-y="704" data-fit-width="390" data-fit-height="80" data-check-overlap="true">
 
         <path d="M1064 590 C1064 678 1110 710 1142 716" fill="none" stroke="#B5842E" stroke-width="1.5"/>
-        <text x="1154" y="724" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8C5F16" text-anchor="start">Changed support</text>
-        <text x="1154" y="754" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">The affected Page is rebuilt.</text>
+        <text x="1154" y="724" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8C5F16" text-anchor="start">When a Page is stale</text>
+        <text x="1154" y="754" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">It rebuilds from current support.</text>
 
   </g>
     <g data-fit-region="overview-en-desktop-back-to-work" data-fit-x="1208" data-fit-y="308" data-fit-width="326" data-fit-height="390" data-check-overlap="true">

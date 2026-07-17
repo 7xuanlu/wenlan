@@ -6,8 +6,15 @@ tools.
 
 ## Install
 
+Install the runtime using the host-specific path in [Set up Wenlan with your AI client](../docs/setup-with-ai.md). On macOS Apple Silicon, that step is:
+
 ```bash
 npx -y wenlan setup
+```
+
+Then install the Codex plugin:
+
+```bash
 codex plugin marketplace add 7xuanlu/wenlan
 codex plugin add wenlan@7xuanlu-wenlan
 ```

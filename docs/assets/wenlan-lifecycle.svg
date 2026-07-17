@@ -1,6 +1,6 @@
 <svg width="1800" height="1120" viewBox="0 0 1800 1120" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">Knowledge changes. History stays.</title>
-    <desc id="desc">Changes mark supported Pages stale; Wenlan rebuilds them from current evidence.</desc>
+    <desc id="desc">A stale Page rebuilds from current evidence; superseded knowledge remains traceable.</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="1800" height="1120" fill="#FCFCFB"/>
 
@@ -13,7 +13,7 @@
 
         <text x="148" y="84" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">TWO LINKED LIFECYCLES</text>
         <text x="148" y="136" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="48" font-weight="600" fill="#1A1A2E" text-anchor="start">Knowledge changes. History stays.</text>
-        <text x="148" y="176" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="400" fill="#586174" text-anchor="start">Changes mark supported Pages stale; Wenlan rebuilds them from current evidence.</text>
+        <text x="148" y="176" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="400" fill="#586174" text-anchor="start">A stale Page rebuilds from current evidence; superseded knowledge remains traceable.</text>
 
   </g>
     <g data-fit-region="lifecycle-en-desktop-memory-object" data-fit-x="70" data-fit-y="236" data-fit-width="640" data-fit-height="670" data-check-overlap="false">
@@ -73,7 +73,7 @@
     <path d="M798 345v7h6"/>
     <path d="M791 358h9M791 363h9"/>
   </g>
-      <text x="826" y="348" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">SOURCE CHANGED</text>
+      <text x="826" y="348" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">SOURCE SUPPORT</text>
       <text x="826" y="378" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="start">source_11</text>
       <path d="M878 406 V466" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-en-desktop-arrow)"/>
       <circle cx="878" cy="578" r="114" fill="#FFFFFF" stroke="#E3E7EE"/>
@@ -91,11 +91,11 @@
       <text x="878" y="726" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">RECONCILE</text>
       <text x="738" y="584" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="end">VERIFY</text>
       <path d="M680 728 C728 728 744 660 780 622" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-en-desktop-arrow)"/>
-      <text x="704" y="710" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="start">MEMORY SUPERSEDED</text>
+      <text x="704" y="710" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="start">MEMORY SUPPORT</text>
       <path d="M878 692 V782" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-en-desktop-warm-arrow)"/>
       <rect x="730" y="798" width="296" height="64" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
-      <text x="878" y="824" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#9F5C32" text-anchor="middle">CONTRADICTION</text>
-      <text x="878" y="848" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="15" font-weight="600" fill="#1A1A2E" text-anchor="middle">Wait for your judgment</text>
+      <text x="878" y="824" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#9F5C32" text-anchor="middle">OPTIONAL CONFLICT REVIEW</text>
+      <text x="878" y="848" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="15" font-weight="600" fill="#1A1A2E" text-anchor="middle">Protected conflicts wait.</text>
 
   </g>
     <g data-fit-region="lifecycle-en-desktop-page-object" data-fit-x="1044" data-fit-y="236" data-fit-width="686" data-fit-height="680" data-check-overlap="false">
@@ -143,11 +143,11 @@
 
   </g>
     <path d="M992 578 C1076 578 1128 606 1198 614" fill="none" stroke="#6F8F76" stroke-width="2.5" marker-end="url(#lifecycle-en-desktop-sage-arrow)"/>
-    <text x="1094" y="532" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#4F7558" text-anchor="middle">AFFECTED PAGE</text>
+    <text x="1094" y="532" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#4F7558" text-anchor="middle">STALE PAGE</text>
     <g data-fit-region="lifecycle-en-desktop-footer" data-fit-x="74" data-fit-y="966" data-fit-width="1652" data-fit-height="106" data-check-overlap="false">
 
       <line x1="74" y1="966" x2="1726" y2="966" stroke="#E3E7EE"/>
-      <text x="88" y="1007" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">BACKGROUND REFINERY</text>
+      <text x="88" y="1007" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">OPTIONAL MODEL PASSES</text>
       <text x="88" y="1043" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Enrich</text>
 <circle cx="160" cy="1037.6" r="2.5" fill="#E3E7EE"/>
 <text x="174" y="1043" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Link</text>
@@ -155,8 +155,8 @@
 <text x="241" y="1043" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Reconcile</text>
 <circle cx="341" cy="1037.6" r="2.5" fill="#E3E7EE"/>
 <text x="355" y="1043" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Verify</text>
-      <text x="724" y="1007" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">RUNS QUIETLY</text>
-      <text x="724" y="1043" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">After work / when idle / daily / backstop</text>
+      <text x="724" y="1007" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">RECONCILE</text>
+      <text x="724" y="1043" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">On-device / off by default / explicit opt-in</text>
       <text x="1698" y="1043" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="17" font-weight="600" fill="#4F7558" text-anchor="end">Archive, never delete.</text>
 
   </g>
