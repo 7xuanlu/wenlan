@@ -411,6 +411,81 @@ impl MemoryDB {
         }
         Ok(folded)
     }
+
+    /// All canonical entity types (lowercase), for safe-transform matching.
+    pub async fn entity_canonicals(&self) -> Result<Vec<String>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical FROM entity_type_vocabulary ORDER BY canonical",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("entity_canonicals: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(r) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            out.push(r.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
+    /// Fold every entity of `old_type` into `canonical`. Plain rewrite: unlike
+    /// relations, there's no unique constraint on `entities.entity_type`, so no
+    /// collision handling is needed. Every folded row's pre-image is recorded
+    /// to the ledger so the fold is reversible. Returns the number of rows folded.
+    pub async fn fold_entity_type(
+        &self,
+        old_type: &str,
+        canonical: &str,
+    ) -> Result<usize, WenlanError> {
+        // Snapshot the affected ids for the ledger, then rewrite. No unique
+        // constraint on entities.entity_type, so no collision handling needed.
+        let (pre_json, ids) = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM entities WHERE entity_type = ?1",
+                    libsql::params![old_type],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let mut ids = Vec::new();
+            while let Some(r) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                ids.push(r.get::<String>(0).unwrap_or_default());
+            }
+            let pre: Vec<serde_json::Value> = ids
+                .iter()
+                .map(|id| serde_json::json!({"id": id, "entity_type": old_type}))
+                .collect();
+            (
+                serde_json::to_string(&pre).unwrap_or_else(|_| "[]".into()),
+                ids,
+            )
+        };
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "UPDATE entities SET entity_type = ?1 WHERE entity_type = ?2",
+                libsql::params![canonical.to_string(), old_type.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold_entity_type: {e}")))?;
+        }
+        self.insert_vocab_ledger_entry("entity", old_type, canonical, &pre_json)
+            .await?;
+        Ok(ids.len())
+    }
 }
 
 /// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).

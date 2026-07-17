@@ -96,6 +96,8 @@ pub struct RethinkReport {
     pub merge_candidates: usize,
     pub relations_healed: usize,
     pub relations_queued: usize,
+    pub entities_healed: usize,
+    pub entities_queued: usize,
     pub embeddings_refreshed: usize,
     pub stale_relations_flagged: usize,
     pub contradictions_found: usize,
@@ -116,10 +118,13 @@ pub async fn run_rethink(
     _config: &RefineryConfig,
 ) -> Result<RethinkReport, WenlanError> {
     let rel = heal_relation_vocabulary(db).await?;
+    let ent = heal_entity_vocabulary(db).await?;
     let report = RethinkReport {
         merge_candidates: find_merge_candidates(db).await?,
         relations_healed: rel.healed,
         relations_queued: rel.queued,
+        entities_healed: ent.healed,
+        entities_queued: ent.queued,
         embeddings_refreshed: refresh_stale_entity_embeddings(db).await?,
         stale_relations_flagged: detect_stale_relations(db).await?,
         contradictions_found: scan_contradictions(db).await?,
@@ -332,6 +337,74 @@ pub async fn heal_relation_vocabulary(db: &MemoryDB) -> Result<VocabHealCounts, 
         // Band B: semantic / new -> queue one promote candidate.
         if db
             .insert_vocab_promote_proposal("relation", rel_type, None)
+            .await?
+        {
+            counts.queued += 1;
+        }
+    }
+    Ok(counts)
+}
+
+/// Heal non-canonical entity types: auto-fold the deterministically safe ones
+/// (known aliases + safe transforms), queue everything else as a promote candidate.
+pub async fn heal_entity_vocabulary(db: &MemoryDB) -> Result<VocabHealCounts, WenlanError> {
+    // First, read all distinct entity types.
+    let types_to_check: Vec<String> = {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT DISTINCT entity_type FROM entities", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("distinct entity types: {}", e)))?;
+        let mut types = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("entity type row: {}", e)))?
+        {
+            types.push(row.get::<String>(0).unwrap_or_default());
+        }
+        types
+    };
+
+    let canonicals = db.entity_canonicals().await?;
+    let mut counts = VocabHealCounts::default();
+    for entity_type in &types_to_check {
+        if entity_type.is_empty() {
+            continue;
+        }
+        // Already canonical? nothing to do.
+        if canonicals.iter().any(|c| c == entity_type) {
+            continue;
+        }
+        // Band A1: known alias in the vocabulary -> deterministic fold.
+        if let Some(canonical) = db.resolve_entity_type(entity_type).await? {
+            let folded = db.fold_entity_type(entity_type, &canonical).await?;
+            counts.healed += folded;
+            log::info!(
+                "[rethink] folded '{}' -> '{}' ({} entities, ledgered)",
+                entity_type,
+                canonical,
+                folded
+            );
+            continue;
+        }
+        // Band A2: deterministic safe transform toward an existing canonical.
+        if let Some(canonical) =
+            crate::vocab::safe_transform::safe_transform(entity_type, &canonicals)
+        {
+            let folded = db.fold_entity_type(entity_type, &canonical).await?;
+            counts.healed += folded;
+            log::info!(
+                "[rethink] folded '{}' -> '{}' ({} entities, ledgered)",
+                entity_type,
+                canonical,
+                folded
+            );
+            continue;
+        }
+        // Band B: semantic / new -> queue one promote candidate.
+        if db
+            .insert_vocab_promote_proposal("entity", entity_type, None)
             .await?
         {
             counts.queued += 1;
@@ -1210,5 +1283,31 @@ mod tests {
                 .as_deref()
                 .unwrap_or("")
                 .contains("design_inspiration")));
+    }
+
+    #[tokio::test]
+    async fn heal_entity_vocabulary_folds_plural_and_queues_semantic() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("X", "concepts", None, Some("t"), None)
+            .await
+            .unwrap(); // safe: concepts->concept
+        db.store_entity("Y", "interest", None, Some("t"), None)
+            .await
+            .unwrap(); // semantic: queue
+        let counts = super::heal_entity_vocabulary(&db).await.unwrap();
+        assert!(counts.healed >= 1);
+        assert!(counts.queued >= 1);
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT entity_type FROM entities ORDER BY entity_type", ())
+            .await
+            .unwrap();
+        let mut types = vec![];
+        while let Some(r) = rows.next().await.unwrap() {
+            types.push(r.get::<String>(0).unwrap());
+        }
+        assert!(types.contains(&"concept".to_string()));
+        assert!(!types.contains(&"concepts".to_string()));
+        assert!(types.contains(&"interest".to_string())); // unchanged, awaiting human
     }
 }

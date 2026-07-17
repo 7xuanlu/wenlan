@@ -1092,17 +1092,20 @@ pub async fn run_periodic_steep_with_api(
                 let report = crate::kg_quality::run_rethink(db_ref, llm, tuning).await?;
                 let total = report.merge_candidates
                     + report.relations_healed
+                    + report.entities_healed
                     + report.embeddings_refreshed
                     + report.stale_relations_flagged
                     + report.contradictions_found;
                 log::info!(
-                    "[refinery] kg_rethink: {} merges, {} healed, {} queued, {} refreshed, {} stale, {} contradictions",
+                    "[refinery] kg_rethink: {} merges, {} healed, {} queued, {} refreshed, {} stale, {} contradictions, {} entities_healed, {} entities_queued",
                     report.merge_candidates,
                     report.relations_healed,
                     report.relations_queued,
                     report.embeddings_refreshed,
                     report.stale_relations_flagged,
                     report.contradictions_found,
+                    report.entities_healed,
+                    report.entities_queued,
                 );
                 let (nudge, headline) = classify_backfill(total);
                 Ok(PhaseOutput {
