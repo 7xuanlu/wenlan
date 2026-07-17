@@ -11,9 +11,9 @@
   </g>
     <g data-fit-region="overview-zh-Hant-mobile-heading" data-fit-x="122" data-fit-y="44" data-fit-width="558" data-fit-height="190" data-check-overlap="false">
 
-        <text x="122" y="70" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">WENLAN 知識系統</text>
-        <text x="122" y="112" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">你的資料與工作經驗，</text>
-<text x="122" y="155" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">成為持續更新的知識庫。</text>
+        <text x="122" y="70" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">WENLAN 知識系統</text>
+        <text x="122" y="112" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">你的資料與工作經驗，</text>
+<text x="122" y="155" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">成為持續更新的知識庫。</text>
 
   </g>
     <g data-fit-region="overview-zh-Hant-mobile-sources" data-fit-x="40" data-fit-y="280" data-fit-width="304" data-fit-height="300" data-check-overlap="true">
@@ -25,20 +25,20 @@
     <path d="M78 307v7h6"/>
     <path d="M71 320h9M71 325h9"/>
   </g>
-      <text x="104" y="328" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="start">來源</text>
-      <text x="64" y="378" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="start">你已經擁有的材料</text>
-      <text x="64" y="438" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">文件 / 筆記 / AI 對話</text>
+      <text x="104" y="328" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="start">來源</text>
+      <text x="64" y="378" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="start">你已經擁有的材料</text>
+      <text x="64" y="438" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">文件 / 筆記 / AI 對話</text>
       <g>
       <rect x="64" y="490" width="66" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="97" y="515.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">PDF</text>
+      <text x="97" y="515.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">PDF</text>
     </g>
 <g>
       <rect x="138" y="490" width="116" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="196" y="515.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">MARKDOWN</text>
+      <text x="196" y="515.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">MARKDOWN</text>
     </g>
       <g>
       <rect x="64" y="536" width="93" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="110.5" y="561.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">AI 對話</text>
+      <text x="110.5" y="561.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">AI 對話</text>
     </g>
 
   </g>
@@ -50,20 +50,20 @@
     <path d="M403 312c0-3 2-5 5-5 2 0 4 1 5 3 1-2 3-3 5-3 3 0 5 2 5 5v14c0 3-2 5-5 5H408c-3 0-5-2-5-5z"/>
     <path d="M408 314h10M408 319h10M408 324h7"/>
   </g>
-      <text x="440" y="328" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="start">記憶</text>
-      <text x="400" y="378" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="start">工作中值得留下的知識</text>
-      <text x="400" y="438" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">決策 / 修正 / 脈絡</text>
+      <text x="440" y="328" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="start">記憶</text>
+      <text x="400" y="378" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="start">工作中值得留下的知識</text>
+      <text x="400" y="438" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">決策 / 修正 / 脈絡</text>
       <g>
       <rect x="400" y="490" width="66" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="433" y="515.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">決策</text>
+      <text x="433" y="515.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">決策</text>
     </g>
 <g>
       <rect x="474" y="490" width="66" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="507" y="515.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">經驗</text>
+      <text x="507" y="515.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">經驗</text>
     </g>
       <g>
       <rect x="400" y="536" width="66" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="433" y="561.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">脈絡</text>
+      <text x="433" y="561.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">脈絡</text>
     </g>
 
   </g>
@@ -74,91 +74,91 @@
       <g filter="url(#overview-zh-Hant-mobile-page-shadow)">
         <rect x="40" y="650" width="640" height="720" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
       </g>
-      <text x="74" y="696" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">持續維護的頁面</text>
+      <text x="74" y="696" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">持續維護的頁面</text>
       <g>
       <rect x="540" y="674" width="108" height="38" rx="19" fill="#F2F7F3" stroke="#C7DACB"/>
-      <text x="594" y="699.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#4F7558" text-anchor="middle">目前</text>
+      <text x="594" y="699.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#4F7558" text-anchor="middle">目前</text>
     </g>
-      <text x="74" y="768" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">你現在掌握的知識</text>
-      <text x="74" y="808" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">13 小時前更新</text>
+      <text x="74" y="768" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">你現在掌握的知識</text>
+      <text x="74" y="808" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">13 小時前更新</text>
 
-      <text x="74" y="838" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">6 條支撐紀錄</text>
+      <text x="74" y="838" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">6 條支撐紀錄</text>
       <line x1="74" y1="866" x2="646" y2="866" stroke="#E3E7EE"/>
-      <text x="74" y="906" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">目前結論</text>
+      <text x="74" y="906" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">目前結論</text>
       <rect x="74" y="936" width="280" height="9" rx="4.5" fill="#DDE2EA"/>
       <rect x="74" y="960" width="338" height="9" rx="4.5" fill="#E7EAF0"/>
       <g>
       <rect x="526" y="976" width="122" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="587" y="1001.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">source_07</text>
+      <text x="587" y="1001.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">source_07</text>
     </g>
       <g>
       <rect x="526" y="1022" width="96" height="38" rx="19" fill="#F3F2FC" stroke="#D2CFF0"/>
-      <text x="574" y="1047.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#5E58C8" text-anchor="middle">mem_42</text>
+      <text x="574" y="1047.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#5E58C8" text-anchor="middle">mem_42</text>
     </g>
       <rect x="74" y="1066" width="348" height="9" rx="4.5" fill="#DDE2EA"/>
       <rect x="74" y="1090" width="252" height="9" rx="4.5" fill="#E7EAF0"/>
       <g>
       <rect x="526" y="1110" width="122" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="587" y="1135.84" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">source_11</text>
+      <text x="587" y="1135.84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">source_11</text>
     </g>
       <circle cx="592" cy="1126" r="6" fill="#B5842E"/>
       <line x1="592" y1="1134" x2="592" y2="1164" stroke="#B5842E" stroke-width="1.5"/>
-      <text x="74" y="1200" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">相關知識</text>
+      <text x="74" y="1200" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">相關知識</text>
       <g>
       <rect x="74" y="1220" width="100" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="124" y="1246.84" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">專案概覽</text>
+      <text x="124" y="1246.84" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">專案概覽</text>
     </g>
 <g>
       <rect x="182" y="1220" width="100" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="232" y="1246.84" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">決策紀錄</text>
+      <text x="232" y="1246.84" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">決策紀錄</text>
     </g>
 <g>
       <rect x="290" y="1220" width="100" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="340" y="1246.84" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">相關研究</text>
+      <text x="340" y="1246.84" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">相關研究</text>
     </g>
       <line x1="74" y1="1292" x2="646" y2="1292" stroke="#E3E7EE"/>
-      <text x="74" y="1328" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="21" font-weight="600" fill="#586174" text-anchor="start">Markdown</text>
+      <text x="74" y="1328" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="21" font-weight="600" fill="#586174" text-anchor="start">Markdown</text>
 <circle cx="174" cy="1321.7" r="2.5" fill="#E3E7EE"/>
-<text x="184" y="1328" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="21" font-weight="600" fill="#586174" text-anchor="start">引用</text>
+<text x="184" y="1328" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="21" font-weight="600" fill="#586174" text-anchor="start">引用</text>
 <circle cx="236" cy="1321.7" r="2.5" fill="#E3E7EE"/>
-<text x="246" y="1328" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="21" font-weight="600" fill="#586174" text-anchor="start">變更紀錄</text>
+<text x="246" y="1328" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="21" font-weight="600" fill="#586174" text-anchor="start">變更紀錄</text>
 
   </g>
     <g data-fit-region="overview-zh-Hant-mobile-changed-support" data-fit-x="254" data-fit-y="1395" data-fit-width="426" data-fit-height="72" data-check-overlap="true">
 
         <path d="M592 1072 C650 1170 652 1340 632 1397" fill="none" stroke="#B5842E" stroke-width="1.5"/>
-        <text x="280" y="1420" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8C5F16" text-anchor="start">頁面過時後</text>
-        <text x="280" y="1454" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="25" font-weight="600" fill="#586174" text-anchor="start">依目前依據重新構建。</text>
+        <text x="280" y="1420" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8C5F16" text-anchor="start">頁面過時後</text>
+        <text x="280" y="1454" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="25" font-weight="600" fill="#586174" text-anchor="start">依目前依據重新構建。</text>
 
   </g>
     <g data-fit-region="overview-zh-Hant-mobile-back-to-work" data-fit-x="40" data-fit-y="1500" data-fit-width="640" data-fit-height="270" data-check-overlap="true">
 
         <line x1="40" y1="1500" x2="680" y2="1500" stroke="#E3E7EE"/>
-        <text x="40" y="1542" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">回到你的工作</text>
-        <text x="142" y="1608" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="middle">閱讀。</text>
+        <text x="40" y="1542" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">回到你的工作</text>
+        <text x="142" y="1608" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="middle">閱讀。</text>
     <circle cx="142" cy="1652" r="13" fill="#F3F2FC" stroke="#D2CFF0"/>
-    <text x="142" y="1658" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="16" font-weight="500" fill="#5E58C8" text-anchor="middle">1</text>
-    <text x="142" y="1690" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="middle">開啟目前頁面</text>
-<text x="362" y="1608" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="middle">提問。</text>
+    <text x="142" y="1658" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="16" font-weight="500" fill="#5E58C8" text-anchor="middle">1</text>
+    <text x="142" y="1690" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="middle">開啟目前頁面</text>
+<text x="362" y="1608" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="middle">提問。</text>
     <circle cx="362" cy="1652" r="13" fill="#F3F2FC" stroke="#D2CFF0"/>
-    <text x="362" y="1658" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="16" font-weight="500" fill="#5E58C8" text-anchor="middle">2</text>
-    <text x="362" y="1690" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="middle">從 AI 工具中提問</text>
-<text x="582" y="1608" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="middle">繼續使用。</text>
+    <text x="362" y="1658" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="16" font-weight="500" fill="#5E58C8" text-anchor="middle">2</text>
+    <text x="362" y="1690" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="middle">從 AI 工具中提問</text>
+<text x="582" y="1608" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="middle">繼續使用。</text>
     <circle cx="582" cy="1652" r="13" fill="#F3F2FC" stroke="#D2CFF0"/>
-    <text x="582" y="1658" font-family="&quot;PingFang TC&quot;, &quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="16" font-weight="500" fill="#5E58C8" text-anchor="middle">3</text>
-    <text x="582" y="1690" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="middle">帶著完整脈絡繼續</text>
+    <text x="582" y="1658" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, ui-monospace, monospace" font-size="16" font-weight="500" fill="#5E58C8" text-anchor="middle">3</text>
+    <text x="582" y="1690" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="600" fill="#586174" text-anchor="middle">帶著完整脈絡繼續</text>
 
   </g>
     <g data-fit-region="overview-zh-Hant-mobile-authority" data-fit-x="40" data-fit-y="1840" data-fit-width="640" data-fit-height="300" data-check-overlap="true">
 
         <line x1="40" y1="1840" x2="680" y2="1840" stroke="#E3E7EE"/>
         <circle cx="54" cy="1894" r="7" fill="#6F8F76"/>
-        <text x="78" y="1892" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="start">日常維護交給 Wenlan</text>
-        <text x="78" y="1930" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="25" font-weight="400" fill="#586174" text-anchor="start">在背景整理、關聯、引用與更新。</text>
+        <text x="78" y="1892" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="start">日常維護交給 Wenlan</text>
+        <text x="78" y="1930" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="25" font-weight="400" fill="#586174" text-anchor="start">在背景整理、關聯、引用與更新。</text>
         <line x1="78" y1="1995" x2="642" y2="1995" stroke="#E3E7EE"/>
         <circle cx="54" cy="2050" r="7" fill="#B46A3A"/>
-        <text x="78" y="2048" font-family="&quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="start">你保留決定權</text>
-        <text x="78" y="2086" font-family="&quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, sans-serif" font-size="25" font-weight="400" fill="#586174" text-anchor="start">潛在衝突可以浮現；對你文字的改動會等待判斷。</text>
+        <text x="78" y="2048" font-family="&quot;Fraunces&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang TC&quot;, Georgia, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="start">你保留決定權</text>
+        <text x="78" y="2086" font-family="&quot;Instrument Sans&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans CNS&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="25" font-weight="400" fill="#586174" text-anchor="start">潛在衝突可以浮現；對你文字的改動會等待判斷。</text>
 
   </g>
 

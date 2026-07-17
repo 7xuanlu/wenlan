@@ -34,12 +34,12 @@ const FONTS = {
   heading: '"Fraunces", Georgia, serif',
   body: '"Instrument Sans", -apple-system, BlinkMacSystemFont, sans-serif',
   mono: '"JetBrains Mono", ui-monospace, monospace',
-  hansHeading: '"Songti SC", "STSong", "PingFang SC", serif',
-  hansBody: '"PingFang SC", "Hiragino Sans GB", sans-serif',
-  hansMono: '"PingFang SC", "JetBrains Mono", ui-monospace, monospace',
-  hantHeading: '"Songti TC", "STSong", "PingFang TC", serif',
-  hantBody: '"PingFang TC", "Hiragino Sans CNS", sans-serif',
-  hantMono: '"PingFang TC", "JetBrains Mono", ui-monospace, monospace',
+  hansHeading: '"Fraunces", "Songti SC", "STSong", "PingFang SC", Georgia, serif',
+  hansBody: '"Instrument Sans", "PingFang SC", "Hiragino Sans GB", -apple-system, BlinkMacSystemFont, sans-serif',
+  hansMono: '"JetBrains Mono", "PingFang SC", "Hiragino Sans GB", ui-monospace, monospace',
+  hantHeading: '"Fraunces", "Songti TC", "STSong", "PingFang TC", Georgia, serif',
+  hantBody: '"Instrument Sans", "PingFang TC", "Hiragino Sans CNS", -apple-system, BlinkMacSystemFont, sans-serif',
+  hantMono: '"JetBrains Mono", "PingFang TC", "Hiragino Sans CNS", ui-monospace, monospace',
 };
 
 const OVERVIEW_COPY = {
@@ -1518,6 +1518,7 @@ function makeLifecycle(locale, viewport) {
 }
 
 module.exports = {
+  family,
   makeOverview,
   makeLifecycle,
 };

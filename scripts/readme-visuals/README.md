@@ -19,5 +19,8 @@ editable text and geometry, so standalone SVG typography can vary when the
 named fonts are unavailable.
 
 Byte-for-byte checks currently require macOS because the Chinese assets use
-PingFang and Songti. The Latin render fonts are bundled in
-`../readme-visual-fonts/`.
+PingFang and Songti. The locale stacks mirror the Wenlan app's typography:
+Fraunces for headings, Instrument Sans for body copy, and JetBrains Mono for
+labels, followed by native CJK fallbacks per glyph. Keeping the branded Latin
+faces first is important for mixed strings such as `WENLAN`, `Markdown`, and
+record IDs. The Latin render fonts are bundled in `../readme-visual-fonts/`.
