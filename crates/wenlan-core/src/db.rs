@@ -193,7 +193,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 69;
+pub const SCHEMA_VERSION: u32 = 70;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6614,6 +6614,34 @@ impl MemoryDB {
                     .await
                     .map_err(|error| WenlanError::VectorDb(format!("m69 bump: {error}")))?;
                 log::info!("[migration] Migration 69 applied: derived artifact sweep receipts");
+            }
+
+            // Migration 70: entity_type_vocabulary table (mirrors
+            // relation_type_vocabulary from migration 41), seeded with the
+            // 6 live canonical entity types.
+            if version < 70 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS entity_type_vocabulary (
+                        canonical TEXT PRIMARY KEY,
+                        aliases TEXT,
+                        category TEXT,
+                        count INTEGER DEFAULT 0
+                    );
+                    INSERT OR IGNORE INTO entity_type_vocabulary (canonical, aliases, category, count) VALUES
+                        ('concept',      '[]', 'general', 0),
+                        ('technology',   '[]', 'general', 0),
+                        ('project',      '[]', 'general', 0),
+                        ('organization', '[]', 'general', 0),
+                        ('person',       '[]', 'general', 0),
+                        ('place',        '[]', 'general', 0);",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 70 DDL: {e}")))?;
+                conn.execute("PRAGMA user_version = 70", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 70 bump: {e}")))?;
+                log::info!("[migration] Migration 70 applied: entity_type_vocabulary table seeded with 6 live canonicals");
             }
         }
 
@@ -15156,6 +15184,68 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("increment_relation_type_count: {}", e)))?;
+        Ok(())
+    }
+
+    /// Resolve an entity type against the vocabulary. Canonical-first, then a
+    /// deterministic ordered alias scan. Mirrors `resolve_relation_type`.
+    pub async fn resolve_entity_type(
+        &self,
+        entity_type: &str,
+    ) -> Result<Option<String>, WenlanError> {
+        let lower = entity_type.to_lowercase();
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical FROM entity_type_vocabulary WHERE canonical = ?1",
+                libsql::params![lower.clone()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type canonical: {e}")))?;
+        if rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type row: {e}")))?
+            .is_some()
+        {
+            return Ok(Some(lower));
+        }
+        drop(rows);
+        // Deterministic order so resolution can't flip between runs.
+        let mut rows = conn
+            .query(
+                "SELECT canonical, aliases FROM entity_type_vocabulary WHERE aliases IS NOT NULL ORDER BY canonical",
+                libsql::params![],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type aliases: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type alias row: {e}")))?
+        {
+            let canonical = row.get::<String>(0).unwrap_or_default();
+            let aliases_json = row.get::<String>(1).unwrap_or_default();
+            if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&aliases_json) {
+                for v in &arr {
+                    if v.as_str().map(|a| a.to_lowercase()) == Some(lower.clone()) {
+                        return Ok(Some(canonical));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Increment usage count for a canonical entity type.
+    pub async fn increment_entity_type_count(&self, canonical: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE entity_type_vocabulary SET count = count + 1 WHERE canonical = ?1",
+            libsql::params![canonical.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("increment_entity_type_count: {e}")))?;
         Ok(())
     }
 
@@ -43349,6 +43439,34 @@ pub(crate) mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn entity_type_vocabulary_seeded_and_resolves() {
+        let (db, _tmp) = test_db().await;
+        // Canonical resolves to itself.
+        assert_eq!(
+            db.resolve_entity_type("concept").await.unwrap(),
+            Some("concept".into())
+        );
+        // Case-insensitive canonical.
+        assert_eq!(
+            db.resolve_entity_type("Concept").await.unwrap(),
+            Some("concept".into())
+        );
+        // Unknown type is not in the vocabulary.
+        assert_eq!(db.resolve_entity_type("interest").await.unwrap(), None);
+        // Seed count is exactly the 6 live types.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM entity_type_vocabulary", ())
+            .await
+            .unwrap();
+        let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            n, 6,
+            "entity_type_vocabulary should seed exactly the 6 live canonicals"
+        );
+    }
+
     // ==================== Topic-key upsert feature tests ====================
 
     // ---- link_page_source + get_page_sources ----
@@ -50852,7 +50970,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 69);
+        assert_eq!(uv, 70);
     }
 
     #[tokio::test]
@@ -50869,7 +50987,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 69,
+            uv, 70,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -50903,7 +51021,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 69);
+        assert_eq!(uv, 70);
     }
 
     #[tokio::test]
@@ -50920,7 +51038,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 69,
+            uv, 70,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -50969,8 +51087,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 69,
-            "terminal version is 69 after derived sweep receipts"
+            uv, 70,
+            "terminal version is 70 after entity_type_vocabulary"
         );
     }
 
@@ -50988,7 +51106,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 69,
+            uv, 70,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
