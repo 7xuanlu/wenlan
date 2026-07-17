@@ -28,22 +28,21 @@ fn candidate_forms(value: &str) -> Vec<String> {
 /// Returns `Some(canonical)` iff a deterministic transform maps `value` to
 /// exactly one member of `canonicals`. The output is ALWAYS in `canonicals`.
 pub fn safe_transform(value: &str, canonicals: &[String]) -> Option<String> {
-    let canon_lower: std::collections::HashSet<String> =
-        canonicals.iter().map(|c| c.to_lowercase()).collect();
     // An already-canonical value (exact, case-sensitive match) is not "dirty"
-    // — nothing to transform. Compare against the literal list, not the
+    // — nothing to transform. Compare against the literal list, not a
     // casefolded set, so a differently-cased variant (e.g. "Concept") still
     // falls through to the transform below instead of short-circuiting here.
     if canonicals.iter().any(|c| c == value) {
         return None;
     }
-    let hits: Vec<String> = candidate_forms(value)
-        .into_iter()
-        .filter(|f| canon_lower.contains(f))
+    let forms = candidate_forms(value);
+    let hits: Vec<&String> = canonicals
+        .iter()
+        .filter(|c| forms.contains(&c.to_lowercase()))
         .collect();
     // Exactly one canonical target, or refuse (ambiguous or none).
     match hits.as_slice() {
-        [only] => Some(only.clone()),
+        [only] => Some((*only).clone()),
         _ => None,
     }
 }
@@ -85,8 +84,8 @@ mod tests {
 
     #[test]
     fn rejects_ambiguous_singularize() {
-        // If two canonicals could be the singular target, refuse (ambiguous).
-        let c: Vec<String> = ["bus", "buses"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(safe_transform("busses", &c), None);
+        // Genuine ambiguity: "Dogs" -> forms {"dogs","dog"}, both are canonicals.
+        let c: Vec<String> = ["dog", "dogs"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(safe_transform("Dogs", &c), None);
     }
 }
