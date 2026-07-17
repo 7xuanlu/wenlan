@@ -130,6 +130,17 @@ pub async fn run_rethink(
         contradictions_found: scan_contradictions(db).await?,
     };
 
+    let receipt = serde_json::json!({
+        "relations_healed": report.relations_healed,
+        "relations_queued": report.relations_queued,
+        "entities_healed": report.entities_healed,
+        "entities_queued": report.entities_queued,
+    })
+    .to_string();
+    let _ = db
+        .log_agent_activity("daemon", "vocab_heal_receipt", &[], None, &receipt)
+        .await;
+
     Ok(report)
 }
 
@@ -1309,5 +1320,37 @@ mod tests {
         assert!(types.contains(&"concept".to_string()));
         assert!(!types.contains(&"concepts".to_string()));
         assert!(types.contains(&"interest".to_string())); // unchanged, awaiting human
+    }
+
+    #[tokio::test]
+    async fn run_rethink_emits_a_vocab_heal_receipt() {
+        let (db, _dir) = test_db().await;
+        // Seed one queue-able dirty relation.
+        let e1 = db
+            .store_entity("A", "person", None, Some("t"), None)
+            .await
+            .unwrap();
+        let e2 = db
+            .store_entity("B", "project", None, Some("t"), None)
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("INSERT INTO relations (id, from_entity, to_entity, relation_type, created_at) VALUES ('r1', ?1, ?2, 'design_inspiration', 0)",
+                libsql::params![e1, e2]).await.unwrap();
+        }
+        let cfg = crate::tuning::RefineryConfig::default();
+        super::run_rethink(&db, None, &cfg).await.unwrap();
+        // A vocab-heal receipt activity row exists.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM agent_activity WHERE action = 'vocab_heal_receipt'",
+                (),
+            )
+            .await
+            .unwrap();
+        let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(n >= 1, "run_rethink must emit a counted vocab-heal receipt");
     }
 }
