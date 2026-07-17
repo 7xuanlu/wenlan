@@ -864,16 +864,24 @@ mod tests {
             "survivor keeps the higher confidence"
         );
         drop(rows);
-        // The absorbed edge's pre-image is in the ledger (undo is possible).
+        // The absorbed edge's pre-image is in the ledger (undo is possible),
+        // and the pre-image is COMPLETE: it carries created_at so a NOT-NULL
+        // restore is possible on undo.
         let mut led = conn
             .query(
-                "SELECT COUNT(*) FROM vocab_heal_ledger WHERE old_value = 'working_at'",
+                "SELECT COUNT(*), MAX(pre_image) FROM vocab_heal_ledger WHERE old_value = 'working_at'",
                 (),
             )
             .await
             .unwrap();
-        let n: i64 = led.next().await.unwrap().unwrap().get(0).unwrap();
+        let led_row = led.next().await.unwrap().unwrap();
+        let n: i64 = led_row.get(0).unwrap();
+        let pre_image: String = led_row.get(1).unwrap();
         assert!(n >= 1, "the folded loser must be recorded in the ledger");
+        assert!(
+            pre_image.contains("created_at"),
+            "pre-image must include created_at so undo can restore the NOT-NULL column, got {pre_image}"
+        );
     }
 
     // ── hallucination_guard ──────────────────────────────────────────────

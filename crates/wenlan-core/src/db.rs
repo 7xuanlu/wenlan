@@ -278,106 +278,130 @@ impl MemoryDB {
         old_type: &str,
         canonical: &str,
     ) -> Result<usize, WenlanError> {
+        // Self-fold would collide every row with itself and DELETE it: guard first.
+        if old_type == canonical {
+            return Ok(0);
+        }
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("fold begin: {e}")))?;
 
-        // Snapshot every row of old_type (the pre-image, for the ledger + undo).
-        let mut rows = conn
-            .query(
-                "SELECT id, from_entity, to_entity, confidence, explanation, source_memory_id, source_agent, created_at FROM relations WHERE relation_type = ?1",
-                libsql::params![old_type],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("fold snapshot: {e}")))?;
-        let mut pre_image: Vec<serde_json::Value> = Vec::new();
-        #[allow(clippy::type_complexity)]
-        let mut ids: Vec<(
-            String,
-            String,
-            String,
-            Option<f64>,
-            Option<String>,
-            Option<String>,
-        )> = Vec::new();
-        while let Some(r) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-        {
-            let id: String = r.get(0).unwrap_or_default();
-            let from: String = r.get(1).unwrap_or_default();
-            let to: String = r.get(2).unwrap_or_default();
-            let conf: Option<f64> = r.get(3).ok();
-            let expl: Option<String> = r.get(4).ok();
-            let smid: Option<String> = r.get(5).ok();
-            pre_image.push(serde_json::json!({
-                "id": id, "from_entity": from, "to_entity": to, "relation_type": old_type,
-                "confidence": conf, "explanation": expl, "source_memory_id": smid,
-            }));
-            ids.push((id, from, to, conf, expl, smid));
-        }
-        drop(rows);
-
-        let mut folded = 0usize;
-        for (id, from, to, conf, expl, smid) in &ids {
-            // Does a canonical edge already exist for this pair?
-            let mut ex = conn
+        // Run the snapshot + mutation loop in an inner block so any early Err
+        // routes through ROLLBACK below instead of leaking an open transaction
+        // on the shared connection (mirrors the migration-50 pattern).
+        let result: Result<(usize, Vec<serde_json::Value>), WenlanError> = async {
+            // Snapshot every row of old_type (the pre-image, for the ledger + undo).
+            let mut rows = conn
                 .query(
-                    "SELECT id, confidence, explanation, source_memory_id FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
-                    libsql::params![from.clone(), to.clone(), canonical.to_string()],
+                    "SELECT id, from_entity, to_entity, confidence, explanation, source_memory_id, source_agent, created_at FROM relations WHERE relation_type = ?1",
+                    libsql::params![old_type],
                 )
                 .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-            if let Some(sr) = ex
+                .map_err(|e| WenlanError::VectorDb(format!("fold snapshot: {e}")))?;
+            let mut pre_image: Vec<serde_json::Value> = Vec::new();
+            #[allow(clippy::type_complexity)]
+            let mut ids: Vec<(
+                String,
+                String,
+                String,
+                Option<f64>,
+                Option<String>,
+                Option<String>,
+            )> = Vec::new();
+            while let Some(r) = rows
                 .next()
                 .await
                 .map_err(|e| WenlanError::VectorDb(e.to_string()))?
             {
-                let s_conf: Option<f64> = sr.get(1).ok();
-                let s_expl: Option<String> = sr.get(2).ok();
-                let s_smid: Option<String> = sr.get(3).ok();
-                drop(ex);
-                // Merge provenance into the survivor: higher confidence wins; fill nulls.
-                let merged_conf = match (s_conf, conf) {
-                    (Some(a), Some(b)) => Some(a.max(*b)),
-                    (a, b) => a.or(*b),
-                };
-                let merged_expl = s_expl.or_else(|| expl.clone());
-                let merged_smid = s_smid.or_else(|| smid.clone());
-                conn.execute(
-                    "UPDATE relations SET confidence = ?1, explanation = ?2, source_memory_id = ?3 WHERE from_entity = ?4 AND to_entity = ?5 AND relation_type = ?6",
-                    libsql::params![
-                        merged_conf.map(libsql::Value::Real).unwrap_or(libsql::Value::Null),
-                        merged_expl.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
-                        merged_smid.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
-                        from.clone(), to.clone(), canonical.to_string()],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-                // Delete the loser (its pre-image is already captured above).
-                conn.execute(
-                    "DELETE FROM relations WHERE id = ?1",
-                    libsql::params![id.clone()],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
-            } else {
-                drop(ex);
-                conn.execute(
-                    "UPDATE relations SET relation_type = ?1 WHERE id = ?2",
-                    libsql::params![canonical.to_string(), id.clone()],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                let id: String = r.get(0).unwrap_or_default();
+                let from: String = r.get(1).unwrap_or_default();
+                let to: String = r.get(2).unwrap_or_default();
+                let conf: Option<f64> = r.get(3).ok();
+                let expl: Option<String> = r.get(4).ok();
+                let smid: Option<String> = r.get(5).ok();
+                let sagent: Option<String> = r.get(6).ok();
+                let created: Option<i64> = r.get(7).ok();
+                pre_image.push(serde_json::json!({
+                    "id": id, "from_entity": from, "to_entity": to, "relation_type": old_type,
+                    "confidence": conf, "explanation": expl, "source_memory_id": smid,
+                    "source_agent": sagent, "created_at": created,
+                }));
+                ids.push((id, from, to, conf, expl, smid));
             }
-            folded += 1;
-        }
+            drop(rows);
 
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("fold commit: {e}")))?;
+            let mut folded = 0usize;
+            for (id, from, to, conf, expl, smid) in &ids {
+                // Does a canonical edge already exist for this pair?
+                let mut ex = conn
+                    .query(
+                        "SELECT id, confidence, explanation, source_memory_id FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
+                        libsql::params![from.clone(), to.clone(), canonical.to_string()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                if let Some(sr) = ex
+                    .next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+                {
+                    let s_conf: Option<f64> = sr.get(1).ok();
+                    let s_expl: Option<String> = sr.get(2).ok();
+                    let s_smid: Option<String> = sr.get(3).ok();
+                    drop(ex);
+                    // Merge provenance into the survivor: higher confidence wins; fill nulls.
+                    let merged_conf = match (s_conf, conf) {
+                        (Some(a), Some(b)) => Some(a.max(*b)),
+                        (a, b) => a.or(*b),
+                    };
+                    let merged_expl = s_expl.or_else(|| expl.clone());
+                    let merged_smid = s_smid.or_else(|| smid.clone());
+                    conn.execute(
+                        "UPDATE relations SET confidence = ?1, explanation = ?2, source_memory_id = ?3 WHERE from_entity = ?4 AND to_entity = ?5 AND relation_type = ?6",
+                        libsql::params![
+                            merged_conf.map(libsql::Value::Real).unwrap_or(libsql::Value::Null),
+                            merged_expl.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
+                            merged_smid.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
+                            from.clone(), to.clone(), canonical.to_string()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                    // Delete the loser (its pre-image is already captured above).
+                    conn.execute(
+                        "DELETE FROM relations WHERE id = ?1",
+                        libsql::params![id.clone()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                } else {
+                    drop(ex);
+                    conn.execute(
+                        "UPDATE relations SET relation_type = ?1 WHERE id = ?2",
+                        libsql::params![canonical.to_string(), id.clone()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                }
+                folded += 1;
+            }
+
+            Ok((folded, pre_image))
+        }
+        .await;
+
+        let (folded, pre_image) = match result {
+            Ok(v) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("fold commit: {e}")))?;
+                v
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
         drop(conn);
 
         if !pre_image.is_empty() {
