@@ -15470,7 +15470,7 @@ impl MemoryDB {
         // Scan aliases JSON arrays for a case-insensitive match.
         let mut rows = conn
             .query(
-                "SELECT canonical, aliases FROM relation_type_vocabulary WHERE aliases IS NOT NULL",
+                "SELECT canonical, aliases FROM relation_type_vocabulary WHERE aliases IS NOT NULL ORDER BY canonical",
                 libsql::params![],
             )
             .await
@@ -43805,6 +43805,17 @@ pub(crate) mod tests {
             Some("works_on".to_string())
         );
         assert_eq!(db.resolve_relation_type("custom_type").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn promote_rejects_value_colliding_with_existing_alias() {
+        let (db, _tmp) = test_db().await;
+        // 'wrote' is a seeded alias of 'authored'. Promoting it as a NEW canonical
+        // would be shadowed by resolve's canonical-first lookup -> must be rejected.
+        let err = db
+            .promote_vocabulary_canonical("relation", "wrote", None)
+            .await;
+        assert!(err.is_err(), "promoting an existing alias must be rejected");
     }
 
     #[tokio::test]
