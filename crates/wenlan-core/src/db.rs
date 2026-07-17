@@ -493,7 +493,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 71;
+pub const SCHEMA_VERSION: u32 = 72;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6964,6 +6964,27 @@ impl MemoryDB {
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("migration 71 bump: {e}")))?;
                 log::info!("[migration] Migration 71 applied: vocab_heal_ledger table for reversible auto-heal");
+            }
+
+            // Migration 72: retire dedup_merge. One-time dismiss of any legacy
+            // dedup_merge rows still pending/awaiting_review; nothing produces
+            // them anymore (the ProposalAction::DedupMerge parse arms stay for
+            // historical deserialize).
+            if version < 72 {
+                let conn = self.conn.lock().await;
+                conn.execute(
+                    "UPDATE refinement_queue SET status = 'dismissed' \
+                     WHERE action = 'dedup_merge' AND status IN ('pending', 'awaiting_review')",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 72 dismiss: {e}")))?;
+                conn.execute("PRAGMA user_version = 72", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 72 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 72 applied: dismissed deprecated dedup_merge rows"
+                );
             }
         }
 
@@ -51498,7 +51519,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 71);
+        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51515,7 +51536,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 71,
+            uv, 72,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51549,7 +51570,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 71);
+        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51566,7 +51587,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 71,
+            uv, 72,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51614,7 +51635,10 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 71, "terminal version is 71 after vocab_heal_ledger");
+        assert_eq!(
+            uv, 72,
+            "terminal version is 72 after dedup_merge retirement"
+        );
     }
 
     #[tokio::test]
@@ -51631,7 +51655,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 71,
+            uv, 72,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -53402,6 +53426,27 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .contains(&"p1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn dedup_merge_rows_are_dismissed_by_migration() {
+        let (db, _tmp) = test_db().await;
+        // A migration cannot see rows inserted after it runs, so assert the SQL
+        // directly: insert a legacy row, run the same dismiss statement, verify.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES ('legacy-1', 'dedup_merge', '[\"a\",\"b\"]', NULL, 0.5, 'pending')", ()).await.unwrap();
+            conn.execute("UPDATE refinement_queue SET status = 'dismissed' WHERE action = 'dedup_merge' AND status IN ('pending','awaiting_review')", ()).await.unwrap();
+            let mut rows = conn
+                .query(
+                    "SELECT status FROM refinement_queue WHERE id = 'legacy-1'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(status, "dismissed");
+        }
     }
 
     #[test]
