@@ -21077,7 +21077,8 @@ impl MemoryDB {
 
     /// Stable fingerprint for a vocab proposal — keyed on (kind, old_value) ONLY,
     /// never the suggested target. One human dismissal of a value is permanent.
-    fn vocab_proposal_fingerprint(kind: &str, old_value: &str) -> String {
+    /// `pub(crate)` so the refinement_queue tests can reconstruct the id.
+    pub(crate) fn vocab_proposal_fingerprint(kind: &str, old_value: &str) -> String {
         format!("vocab_promote::{kind}::{}", old_value.to_lowercase())
     }
 
@@ -21107,6 +21108,48 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))?;
         Ok(affected > 0)
+    }
+
+    /// Promote a value to a new canonical in the entity/relation vocabulary.
+    /// Rejects a value that collides (casefold) with an existing canonical or alias.
+    pub async fn promote_vocabulary_canonical(
+        &self,
+        kind: &str,
+        old_value: &str,
+        category: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        // Cross-canonical uniqueness guard (Task 11 extends the alias half).
+        // Resolve BEFORE taking the conn lock — `resolve_*` lock `self.conn`
+        // internally and the Mutex is not reentrant.
+        let already = match kind {
+            "entity" => self.resolve_entity_type(old_value).await?,
+            _ => self.resolve_relation_type(old_value).await?,
+        };
+        if already.is_some() {
+            return Err(WenlanError::Validation(format!(
+                "'{old_value}' already resolves to a canonical; cannot promote"
+            )));
+        }
+        let table = if kind == "entity" {
+            "entity_type_vocabulary"
+        } else {
+            "relation_type_vocabulary"
+        };
+        let conn = self.conn.lock().await;
+        conn.execute(
+            &format!(
+                "INSERT OR IGNORE INTO {table} (canonical, aliases, category, count) VALUES (?1, '[]', ?2, 0)"
+            ),
+            libsql::params![
+                old_value.to_lowercase(),
+                category
+                    .map(|c| libsql::Value::Text(c.to_string()))
+                    .unwrap_or(libsql::Value::Null)
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("promote_vocabulary_canonical: {e}")))?;
+        Ok(())
     }
 
     /// Get all pending/awaiting_review refinement proposals.

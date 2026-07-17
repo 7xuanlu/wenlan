@@ -2318,6 +2318,7 @@ impl WenlanMcpServer {
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
             cross_space_discovery: pass `space` to choose the destination space. \
+            vocab_promote: promote a non-canonical entity or relation type to a first-class vocabulary type. \
             Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
             Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
