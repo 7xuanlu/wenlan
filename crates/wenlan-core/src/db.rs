@@ -43877,6 +43877,36 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn prompt_entity_types_match_vocabulary_seed() {
+        let (db, _tmp) = test_db().await;
+        // Entity types named in the extraction prompt.
+        let prompt_types: std::collections::BTreeSet<String> = [
+            "person",
+            "project",
+            "technology",
+            "organization",
+            "place",
+            "concept",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT canonical FROM entity_type_vocabulary", ())
+            .await
+            .unwrap();
+        let mut db_types = std::collections::BTreeSet::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            db_types.insert(r.get::<String>(0).unwrap());
+        }
+        assert_eq!(
+            prompt_types, db_types,
+            "prompt entity types must match entity_type_vocabulary seed exactly"
+        );
+    }
+
+    #[tokio::test]
     async fn create_relation_coerces_unknown_type_to_related_to() {
         let (db, _tmp) = test_db().await;
         let e1 = db.create_entity("Alice", "person", None).await.unwrap();
