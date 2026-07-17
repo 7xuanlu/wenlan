@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
+const { createRequire } = require("node:module");
+const os = require("node:os");
 const path = require("node:path");
 
 const {
@@ -11,6 +14,8 @@ const {
 const ROOT = path.resolve(__dirname, "..");
 const ASSET_DIR = path.join(ROOT, "docs", "assets");
 const FONT_DIR = path.join(__dirname, "readme-visual-fonts");
+const TOOL_DIR = path.join(__dirname, "readme-visuals");
+const visualRequire = createRequire(path.join(TOOL_DIR, "package.json"));
 
 const BANNER_VIEWPORTS = {
   desktop: { width: 1280, height: 440 },
@@ -159,7 +164,17 @@ function selectedAssets(only) {
 }
 
 async function renderSvgToPng(asset, pngPath) {
-  const { chromium } = require("playwright");
+  let chromium;
+  try {
+    ({ chromium } = visualRequire("playwright"));
+  } catch (error) {
+    throw new Error(
+      "Missing README visual dependencies. Run "
+      + "`npm ci --ignore-scripts --prefix scripts/readme-visuals` and "
+      + "`npm run --prefix scripts/readme-visuals install-browser`.",
+      { cause: error },
+    );
+  }
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({
@@ -246,7 +261,57 @@ async function renderSvgToPng(asset, pngPath) {
     if (layoutErrors.length > 0) {
       throw new Error(`${asset.name} layout check failed:\n- ${layoutErrors.join("\n- ")}`);
     }
-    await page.locator("svg").screenshot({ path: pngPath, omitBackground: false });
+    if (
+      asset.name.includes("-zh-Hans-mobile")
+      || asset.name.includes("-zh-Hant-mobile")
+    ) {
+      // Chromium's element screenshot produces scale-sensitive tile artifacts
+      // in the tall CJK SVGs. Offscreen rasterization preserves every glyph.
+      const pngBase64 = await page.evaluate(async ({
+        svgSource,
+        fontCss,
+        width,
+        height,
+        background,
+      }) => {
+        const parsed = new DOMParser().parseFromString(svgSource, "image/svg+xml");
+        const style = parsed.createElementNS("http://www.w3.org/2000/svg", "style");
+        style.textContent = fontCss;
+        parsed.documentElement.prepend(style);
+
+        const serialized = new XMLSerializer().serializeToString(parsed.documentElement);
+        const url = URL.createObjectURL(new Blob([serialized], { type: "image/svg+xml" }));
+        try {
+          const image = new Image();
+          image.src = url;
+          await new Promise((resolve, reject) => {
+            image.onload = resolve;
+            image.onerror = () => reject(new Error("Failed to rasterize README SVG"));
+          });
+
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const context2d = canvas.getContext("2d");
+          if (!context2d) throw new Error("README canvas context is unavailable");
+          context2d.fillStyle = background;
+          context2d.fillRect(0, 0, width, height);
+          context2d.drawImage(image, 0, 0, width, height);
+          return canvas.toDataURL("image/png").split(",", 2)[1];
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }, {
+        svgSource: asset.svg,
+        fontCss: embeddedFonts(),
+        width: asset.width,
+        height: asset.height,
+        background: asset.background,
+      });
+      fs.writeFileSync(pngPath, Buffer.from(pngBase64, "base64"));
+    } else {
+      await page.locator("svg").screenshot({ path: pngPath, omitBackground: false });
+    }
     await context.close();
   } finally {
     await browser.close();
@@ -261,45 +326,70 @@ async function writeAsset(asset) {
   await renderSvgToPng(asset, pngPath);
 }
 
-function parseHex(hex) {
-  const value = hex.replace("#", "");
-  return [0, 2, 4].map((index) => Number.parseInt(value.slice(index, index + 2), 16));
+function shortHash(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 12);
+}
+
+function pngDimensions(buffer) {
+  if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
+    return null;
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
+
+async function checkPngMatchesExpected(currentPath, expectedPath) {
+  if (!fs.existsSync(currentPath)) {
+    return [`missing ${path.relative(ROOT, currentPath)}`];
+  }
+  if (!fs.existsSync(expectedPath)) {
+    return [`missing generated comparison PNG ${expectedPath}`];
+  }
+
+  const current = fs.readFileSync(currentPath);
+  const expected = fs.readFileSync(expectedPath);
+  if (current.equals(expected)) {
+    return [];
+  }
+
+  const currentSize = pngDimensions(current);
+  const expectedSize = pngDimensions(expected);
+  if (
+    currentSize
+    && expectedSize
+    && (
+      currentSize.width !== expectedSize.width
+      || currentSize.height !== expectedSize.height
+    )
+  ) {
+    return [
+      `${path.relative(ROOT, currentPath)} is `
+      + `${currentSize.width}x${currentSize.height}; generated output is `
+      + `${expectedSize.width}x${expectedSize.height}`,
+    ];
+  }
+
+  return [
+    `${path.relative(ROOT, currentPath)} does not match generated output `
+    + `(current ${shortHash(current)}, expected ${shortHash(expected)})`,
+  ];
 }
 
 async function checkPng(asset, pngPath) {
-  const sharp = require("sharp");
-  const errors = [];
   if (!fs.existsSync(pngPath)) {
     return [`missing ${path.relative(ROOT, pngPath)}`];
   }
-  const image = sharp(pngPath);
-  const metadata = await image.metadata();
-  if (metadata.width !== asset.width || metadata.height !== asset.height) {
-    errors.push(
-      `${path.relative(ROOT, pngPath)} is ${metadata.width}x${metadata.height}; `
-      + `expected ${asset.width}x${asset.height}`,
-    );
-    return errors;
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wenlan-readme-visual-"));
+  const expectedPath = path.join(tempDir, `${asset.name}.png`);
+  try {
+    await renderSvgToPng(asset, expectedPath);
+    return await checkPngMatchesExpected(pngPath, expectedPath);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
-  const { data, info } = await image.removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  const expected = parseHex(asset.background);
-  const points = [
-    [0, 0],
-    [info.width - 1, 0],
-    [0, info.height - 1],
-    [info.width - 1, info.height - 1],
-  ];
-  for (const [x, y] of points) {
-    const offset = (y * info.width + x) * info.channels;
-    const actual = Array.from(data.subarray(offset, offset + 3));
-    if (actual.some((channel, index) => channel !== expected[index])) {
-      errors.push(
-        `${path.relative(ROOT, pngPath)} corner ${x},${y} is ${actual.join(",")}; `
-        + `expected ${expected.join(",")}`,
-      );
-    }
-  }
-  return errors;
 }
 
 function compactVisibleSvgText(svg) {
@@ -373,7 +463,13 @@ async function main() {
   console.log(`${only} assets are current`);
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.stack || error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  checkPngMatchesExpected,
+};

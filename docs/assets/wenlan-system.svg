@@ -1,6 +1,6 @@
 <svg width="1600" height="980" viewBox="0 0 1600 980" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">Your sources and working knowledge become a knowledge base that stays current.</title>
-    <desc id="desc">Sources and Memories independently support a maintained Page.</desc>
+    <desc id="desc">Sources and memories independently support a maintained Page.</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="1600" height="980" fill="#FCFCFB"/>
 
@@ -120,14 +120,14 @@
 <circle cx="640" cy="749.5" r="2.5" fill="#E3E7EE"/>
 <text x="652" y="754" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">Inspectable citations</text>
 <circle cx="829" cy="749.5" r="2.5" fill="#E3E7EE"/>
-<text x="841" y="754" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">Versioned history</text>
+<text x="841" y="754" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">Versioned change log</text>
 
   </g>
     <g data-fit-region="overview-en-desktop-changed-support" data-fit-x="1124" data-fit-y="704" data-fit-width="390" data-fit-height="80" data-check-overlap="true">
 
         <path d="M1064 590 C1064 678 1110 710 1142 716" fill="none" stroke="#B5842E" stroke-width="1.5"/>
         <text x="1154" y="724" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8C5F16" text-anchor="start">Changed support</text>
-        <text x="1154" y="754" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">Only the affected claim refreshes.</text>
+        <text x="1154" y="754" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">The affected Page is rebuilt.</text>
 
   </g>
     <g data-fit-region="overview-en-desktop-back-to-work" data-fit-x="1208" data-fit-y="308" data-fit-width="326" data-fit-height="390" data-check-overlap="true">
@@ -157,7 +157,7 @@
       <line x1="802" y1="868" x2="802" y2="925" stroke="#E3E7EE"/>
       <circle cx="844" cy="885" r="7" fill="#B46A3A"/>
       <text x="866" y="882" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="20" font-weight="600" fill="#1A1A2E" text-anchor="start">You keep authority</text>
-      <text x="866" y="912" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="16" font-weight="400" fill="#586174" text-anchor="start">Conflicts and changes to your writing wait for your judgment.</text>
+      <text x="866" y="912" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="16" font-weight="400" fill="#586174" text-anchor="start">Potential conflicts can surface; changes to your writing wait.</text>
 
   </g>
 

@@ -34,13 +34,17 @@ const FONTS = {
   heading: '"Fraunces", Georgia, serif',
   body: '"Instrument Sans", -apple-system, BlinkMacSystemFont, sans-serif',
   mono: '"JetBrains Mono", ui-monospace, monospace',
-  cjkHeading: '"Songti SC", "Songti TC", "STSong", "PingFang SC", "PingFang TC", serif',
-  cjkBody: '"PingFang SC", "PingFang TC", "Hiragino Sans GB", sans-serif',
-  cjkMono: '"JetBrains Mono", "PingFang SC", "PingFang TC", ui-monospace, monospace',
+  hansHeading: '"Songti SC", "STSong", "PingFang SC", serif',
+  hansBody: '"PingFang SC", "Hiragino Sans GB", sans-serif',
+  hansMono: '"PingFang SC", "JetBrains Mono", ui-monospace, monospace',
+  hantHeading: '"Songti TC", "STSong", "PingFang TC", serif',
+  hantBody: '"PingFang TC", "Hiragino Sans CNS", sans-serif',
+  hantMono: '"PingFang TC", "JetBrains Mono", ui-monospace, monospace',
 };
 
 const OVERVIEW_COPY = {
   en: {
+    description: "Sources and memories independently support a maintained Page.",
     eyebrow: "WENLAN KNOWLEDGE SYSTEM",
     title: [
       "Your sources and working knowledge become",
@@ -53,11 +57,15 @@ const OVERVIEW_COPY = {
     ],
     sources: "Sources",
     sourcesLead: "What you already have",
+    mobileSourcesLead: ["What you already have"],
     sourcesDescription: "Documents / notes / AI conversations",
+    mobileSourcesDescription: ["Documents / notes", "AI conversations"],
     sourceTags: ["PDF", "MARKDOWN", "AI CHAT"],
     memories: "Memories",
     memoriesLead: "What ongoing work teaches you",
+    mobileMemoriesLead: ["What ongoing work", "teaches you"],
     memoriesDescription: "Decisions / corrections / context",
+    mobileMemoriesDescription: ["Decisions / corrections", "Context"],
     memoryTags: ["DECISION", "LESSON", "CONTEXT"],
     pageLabel: "MAINTAINED PAGE",
     current: "CURRENT",
@@ -67,7 +75,8 @@ const OVERVIEW_COPY = {
     synthesis: "CURRENT SYNTHESIS",
     linked: "LINKED KNOWLEDGE",
     linkedTags: ["project overview", "decision log", "related research"],
-    pageTraits: ["Plain Markdown", "Inspectable citations", "Versioned history"],
+    pageTraits: ["Plain Markdown", "Inspectable citations", "Versioned change log"],
+    mobilePageTraits: ["Markdown", "Citations", "Change log"],
     backLabel: "BACK TO YOUR WORK",
     backWords: ["Read it.", "Ask it.", "Reuse it."],
     backSteps: [
@@ -76,23 +85,28 @@ const OVERVIEW_COPY = {
       "Continue with full context",
     ],
     changed: "Changed support",
-    changedLead: "Only the affected claim refreshes.",
+    changedLead: "The affected Page is rebuilt.",
     upkeep: "Wenlan handles routine upkeep",
     upkeepLead: "Organize, connect, cite, and refresh in the background.",
     authority: "You keep authority",
-    authorityLead: "Conflicts and changes to your writing wait for your judgment.",
+    authorityLead: "Potential conflicts can surface; changes to your writing wait.",
   },
   "zh-Hans": {
+    description: "来源与记忆分别支撑同一个持续维护的页面。",
     eyebrow: "WENLAN 知识系统",
     title: ["你的资料与工作经验，成为", "持续更新的知识库。"],
     mobileTitle: ["你的资料与工作经验，", "成为持续更新的知识库。"],
     sources: "来源",
     sourcesLead: "你已经拥有的材料",
+    mobileSourcesLead: ["你已经拥有的材料"],
     sourcesDescription: "文档 / 笔记 / AI 对话",
+    mobileSourcesDescription: ["文档 / 笔记 / AI 对话"],
     sourceTags: ["PDF", "MARKDOWN", "AI 对话"],
     memories: "记忆",
     memoriesLead: "工作中值得留下的知识",
+    mobileMemoriesLead: ["工作中值得留下的知识"],
     memoriesDescription: "决策 / 修正 / 脉络",
+    mobileMemoriesDescription: ["决策 / 修正 / 脉络"],
     memoryTags: ["决策", "经验", "脉络"],
     pageLabel: "持续维护的页面",
     current: "当前",
@@ -102,28 +116,34 @@ const OVERVIEW_COPY = {
     synthesis: "当前结论",
     linked: "相关知识",
     linkedTags: ["项目概览", "决策记录", "相关研究"],
-    pageTraits: ["纯 Markdown", "引用可检查", "版本历史"],
+    pageTraits: ["纯 Markdown", "引用可检查", "版本化变更记录"],
+    mobilePageTraits: ["Markdown", "引用", "变更记录"],
     backLabel: "回到你的工作",
     backWords: ["阅读。", "提问。", "继续使用。"],
     backSteps: ["打开当前页面", "从 AI 工具中提问", "带着完整脉络继续"],
     changed: "依据发生变化",
-    changedLead: "只更新受影响的结论。",
+    changedLead: "受影响的页面会重新构建。",
     upkeep: "日常维护交给 Wenlan",
     upkeepLead: "在后台整理、关联、引用与更新。",
     authority: "你保留决定权",
-    authorityLead: "冲突与对你文字的改动，等待你的判断。",
+    authorityLead: "潜在冲突可以浮现；对你文字的改动会等待判断。",
   },
   "zh-Hant": {
+    description: "來源與記憶分別支撐同一個持續維護的頁面。",
     eyebrow: "WENLAN 知識系統",
     title: ["你的資料與工作經驗，成為", "持續更新的知識庫。"],
     mobileTitle: ["你的資料與工作經驗，", "成為持續更新的知識庫。"],
     sources: "來源",
     sourcesLead: "你已經擁有的材料",
+    mobileSourcesLead: ["你已經擁有的材料"],
     sourcesDescription: "文件 / 筆記 / AI 對話",
+    mobileSourcesDescription: ["文件 / 筆記 / AI 對話"],
     sourceTags: ["PDF", "MARKDOWN", "AI 對話"],
     memories: "記憶",
     memoriesLead: "工作中值得留下的知識",
+    mobileMemoriesLead: ["工作中值得留下的知識"],
     memoriesDescription: "決策 / 修正 / 脈絡",
+    mobileMemoriesDescription: ["決策 / 修正 / 脈絡"],
     memoryTags: ["決策", "經驗", "脈絡"],
     pageLabel: "持續維護的頁面",
     current: "目前",
@@ -133,16 +153,17 @@ const OVERVIEW_COPY = {
     synthesis: "目前結論",
     linked: "相關知識",
     linkedTags: ["專案概覽", "決策紀錄", "相關研究"],
-    pageTraits: ["純 Markdown", "引用可檢查", "版本歷史"],
+    pageTraits: ["純 Markdown", "引用可檢查", "版本化變更紀錄"],
+    mobilePageTraits: ["Markdown", "引用", "變更紀錄"],
     backLabel: "回到你的工作",
     backWords: ["閱讀。", "提問。", "繼續使用。"],
     backSteps: ["開啟目前頁面", "從 AI 工具中提問", "帶著完整脈絡繼續"],
     changed: "依據發生變化",
-    changedLead: "只更新受影響的結論。",
+    changedLead: "受影響的頁面會重新構建。",
     upkeep: "日常維護交給 Wenlan",
     upkeepLead: "在背景整理、關聯、引用與更新。",
     authority: "你保留決定權",
-    authorityLead: "衝突與對你文字的改動，等待你的判斷。",
+    authorityLead: "潛在衝突可以浮現；對你文字的改動會等待判斷。",
   },
 };
 
@@ -151,18 +172,18 @@ const LIFECYCLE_COPY = {
     eyebrow: "TWO LINKED LIFECYCLES",
     title: "Knowledge changes. History stays.",
     mobileTitle: ["Knowledge changes.", "History stays."],
-    subtitle: "Sources and memories evolve; Wenlan refreshes only the supported parts of each Page.",
+    subtitle: "Changes mark supported Pages stale; Wenlan rebuilds them from current evidence.",
     mobileSubtitle: [
-      "Sources and memories evolve.",
-      "Only supported parts of each Page refresh.",
+      "Changes mark supported Pages stale.",
+      "Wenlan rebuilds them from current evidence.",
     ],
     memoryLabel: "MEMORY LIFECYCLE",
-    memoryTitle: "Corrected, never erased.",
+    memoryTitle: "Superseded, not erased.",
     earlierMemory: "EARLIER MEMORY",
     earlierState: "LEARNED",
-    correctedMemory: "CORRECTED MEMORY",
+    correctedMemory: "REPLACEMENT MEMORY",
     correctedState: "CONFIRMED",
-    correct: "CORRECT",
+    correct: "REVISE",
     supersedes: "SUPERSEDES",
     oldLinked: "Old claim remains linked",
     enrich: "ENRICH",
@@ -170,9 +191,9 @@ const LIFECYCLE_COPY = {
     connect: "CONNECT",
     connectDetail: "entities / relations",
     sourceChanged: "SOURCE CHANGED",
-    memoryCorrected: "MEMORY CORRECTED",
+    memoryCorrected: "MEMORY SUPERSEDED",
     refinery: "REFINERY",
-    maintain: ["Maintain", "only what changed"],
+    maintain: ["Rebuild", "from current support"],
     ring: {
       understand: "UNDERSTAND",
       connect: "CONNECT",
@@ -181,18 +202,19 @@ const LIFECYCLE_COPY = {
     },
     contradiction: "CONTRADICTION",
     wait: "Wait for your judgment",
-    affectedClaim: "AFFECTED CLAIM",
+    affectedClaim: "AFFECTED PAGE",
     pageLabel: "PAGE LIFECYCLE",
-    pageTitle: "Updated, history preserved.",
+    pageTitle: "Rebuilt, changes recorded.",
     pageVersion: "PAGE v12",
     current: "CURRENT",
     maintainedPage: "Maintained Page",
-    pageMeta: "12 versions / 6 supporting records",
-    verified: "VERIFIED REVISION",
-    prior: "Prior versions remain inspectable",
+    pageMeta: "v12 / 6 supporting records",
+    verified: "VERIFIED REBUILD",
+    prior: "Recent changes remain inspectable",
     versions: "v10 / v11 / v12",
     humanPage: "HUMAN-OWNED PAGE",
     humanLead: "Changes to your prose become a proposed revision.",
+    mobileHumanLead: ["Changes to your prose become", "a proposed revision."],
     background: "BACKGROUND REFINERY",
     phases: ["Enrich", "Link", "Reconcile", "Verify"],
     runs: "RUNS QUIETLY",
@@ -203,15 +225,15 @@ const LIFECYCLE_COPY = {
     eyebrow: "两套相连的生命周期",
     title: "知识会改变，历史仍会保留。",
     mobileTitle: ["知识会改变，", "历史仍会保留。"],
-    subtitle: "来源与记忆持续演进；Wenlan 只更新每个页面中有依据支撑的部分。",
-    mobileSubtitle: ["来源与记忆持续演进；", "只更新页面中有依据支撑的部分。"],
+    subtitle: "依据变化会让相关页面过时；Wenlan 会依当前依据重新构建。",
+    mobileSubtitle: ["依据变化会让相关页面过时；", "Wenlan 会依当前依据重新构建。"],
     memoryLabel: "记忆生命周期",
-    memoryTitle: "被修正，但不会被抹除。",
+    memoryTitle: "被取代，但不会被删除。",
     earlierMemory: "较早的记忆",
     earlierState: "已学习",
-    correctedMemory: "修正后的记忆",
+    correctedMemory: "取代它的新记忆",
     correctedState: "已确认",
-    correct: "更正",
+    correct: "修订",
     supersedes: "取代",
     oldLinked: "旧说法仍保留关联",
     enrich: "丰富",
@@ -219,9 +241,9 @@ const LIFECYCLE_COPY = {
     connect: "连接",
     connectDetail: "实体 / 关系",
     sourceChanged: "来源已变化",
-    memoryCorrected: "记忆已更正",
+    memoryCorrected: "记忆已被取代",
     refinery: "精炼",
-    maintain: ["只维护", "发生变化的部分"],
+    maintain: ["依当前依据", "重新构建"],
     ring: {
       understand: "理解",
       connect: "连接",
@@ -230,18 +252,19 @@ const LIFECYCLE_COPY = {
     },
     contradiction: "发现矛盾",
     wait: "等待你的判断",
-    affectedClaim: "受影响的结论",
+    affectedClaim: "受影响的页面",
     pageLabel: "页面生命周期",
-    pageTitle: "持续更新，历史完整保留。",
+    pageTitle: "重新构建，变化留有记录。",
     pageVersion: "页面 v12",
     current: "当前",
     maintainedPage: "持续维护的页面",
-    pageMeta: "12 个版本 / 6 条支撑记录",
-    verified: "已验证的修订",
-    prior: "较早版本仍可检查",
+    pageMeta: "v12 / 6 条支撑记录",
+    verified: "已验证的重建",
+    prior: "近期变化仍可检查",
     versions: "v10 / v11 / v12",
     humanPage: "人工拥有的页面",
     humanLead: "对你文字的改动会成为修订提案。",
+    mobileHumanLead: ["对你文字的改动会成为修订提案。"],
     background: "后台精炼",
     phases: ["丰富", "连接", "校正", "验证"],
     runs: "安静运行",
@@ -252,15 +275,15 @@ const LIFECYCLE_COPY = {
     eyebrow: "兩套相連的生命週期",
     title: "知識會改變，歷史仍會保留。",
     mobileTitle: ["知識會改變，", "歷史仍會保留。"],
-    subtitle: "來源與記憶持續演進；Wenlan 只更新每個頁面中有依據支撐的部分。",
-    mobileSubtitle: ["來源與記憶持續演進；", "只更新頁面中有依據支撐的部分。"],
+    subtitle: "依據變化會讓相關頁面過時；Wenlan 會依目前依據重新構建。",
+    mobileSubtitle: ["依據變化會讓相關頁面過時；", "Wenlan 會依目前依據重新構建。"],
     memoryLabel: "記憶生命週期",
-    memoryTitle: "被修正，但不會被抹除。",
+    memoryTitle: "被取代，但不會被刪除。",
     earlierMemory: "較早的記憶",
     earlierState: "已學習",
-    correctedMemory: "修正後的記憶",
+    correctedMemory: "取代它的新記憶",
     correctedState: "已確認",
-    correct: "更正",
+    correct: "修訂",
     supersedes: "取代",
     oldLinked: "舊說法仍保留關聯",
     enrich: "豐富",
@@ -268,9 +291,9 @@ const LIFECYCLE_COPY = {
     connect: "連接",
     connectDetail: "實體 / 關係",
     sourceChanged: "來源已變化",
-    memoryCorrected: "記憶已更正",
+    memoryCorrected: "記憶已被取代",
     refinery: "精煉",
-    maintain: ["只維護", "發生變化的部分"],
+    maintain: ["依目前依據", "重新構建"],
     ring: {
       understand: "理解",
       connect: "連接",
@@ -279,18 +302,19 @@ const LIFECYCLE_COPY = {
     },
     contradiction: "發現矛盾",
     wait: "等待你的判斷",
-    affectedClaim: "受影響的結論",
+    affectedClaim: "受影響的頁面",
     pageLabel: "頁面生命週期",
-    pageTitle: "持續更新，歷史完整保留。",
+    pageTitle: "重新構建，變化留有紀錄。",
     pageVersion: "頁面 v12",
     current: "目前",
     maintainedPage: "持續維護的頁面",
-    pageMeta: "12 個版本 / 6 條支撐紀錄",
-    verified: "已驗證的修訂",
-    prior: "較早版本仍可檢查",
+    pageMeta: "v12 / 6 條支撐紀錄",
+    verified: "已驗證的重建",
+    prior: "近期變化仍可檢查",
     versions: "v10 / v11 / v12",
     humanPage: "人工擁有的頁面",
     humanLead: "對你文字的改動會成為修訂提案。",
+    mobileHumanLead: ["對你文字的改動會成為修訂提案。"],
     background: "背景精煉",
     phases: ["豐富", "連接", "校正", "驗證"],
     runs: "安靜執行",
@@ -309,9 +333,10 @@ function esc(value) {
 
 function family(locale, kind) {
   if (locale === "en") return FONTS[kind];
-  if (kind === "heading") return FONTS.cjkHeading;
-  if (kind === "mono") return FONTS.cjkMono;
-  return FONTS.cjkBody;
+  const prefix = locale === "zh-Hant" ? "hant" : "hans";
+  if (kind === "heading") return FONTS[`${prefix}Heading`];
+  if (kind === "mono") return FONTS[`${prefix}Mono`];
+  return FONTS[`${prefix}Body`];
 }
 
 function text({
@@ -546,59 +571,62 @@ function overviewPage({
 }) {
   const pad = mobile ? 34 : 48;
   const titleSize = mobile ? (locale === "en" ? 34 : 36) : (locale === "en" ? 38 : 40);
-  const labelSize = mobile ? 12 : 13;
-  const chipHeight = mobile ? 30 : 30;
+  const labelSize = mobile ? 20 : 13;
+  const chipHeight = mobile ? 38 : 30;
   const currentChip = chip({
     locale,
-    x: x + width - (mobile ? 126 : 142),
+    x: x + width - (mobile ? 140 : 142),
     y: y + 24,
     label: c.current,
-    width: mobile ? 94 : 102,
+    width: mobile ? 108 : 102,
     height: chipHeight,
     fill: C.sageSoft,
     stroke: "#C7DACB",
     color: C.sageDark,
     mono: true,
-    size: mobile ? 12 : 13,
+    size: mobile ? 18 : 13,
   }).markup;
   const linkedRow = chipRow({
     locale,
     x: x + pad,
-    y: y + (mobile ? 505 : 408),
+    y: y + (mobile ? 570 : 408),
     labels: c.linkedTags,
     gap: mobile ? 8 : 12,
-    height: mobile ? 32 : 34,
-    size: mobile ? 13 : 14,
+    height: mobile ? 40 : 34,
+    size: mobile ? 18 : 14,
   }).markup;
   const citationOne = chip({
     locale,
-    x: x + width - (mobile ? 142 : 206),
-    y: y + (mobile ? 300 : 228),
+    x: x + width - (mobile ? 154 : 206),
+    y: y + (mobile ? 326 : 228),
     label: "source_07",
-    width: 106,
-    height: 30,
+    width: mobile ? 122 : 106,
+    height: mobile ? 38 : 30,
     mono: true,
+    size: mobile ? 18 : 14,
   }).markup;
   const citationMemory = chip({
     locale,
-    x: x + width - (mobile ? 142 : 92),
-    y: y + (mobile ? 342 : 228),
+    x: x + width - (mobile ? 154 : 92),
+    y: y + (mobile ? 372 : 228),
     label: "mem_42",
-    width: 84,
-    height: 30,
+    width: mobile ? 96 : 84,
+    height: mobile ? 38 : 30,
     fill: C.indigoSoft,
     stroke: "#D2CFF0",
     color: C.indigo,
     mono: true,
+    size: mobile ? 18 : 14,
   }).markup;
   const citationTwo = chip({
     locale,
-    x: x + width - (mobile ? 142 : 186),
-    y: y + (mobile ? 407 : 296),
+    x: x + width - (mobile ? 154 : 186),
+    y: y + (mobile ? 460 : 296),
     label: "source_11",
-    width: 106,
-    height: 30,
+    width: mobile ? 122 : 106,
+    height: mobile ? 38 : 30,
     mono: true,
+    size: mobile ? 18 : 14,
   }).markup;
   const traitsY = y + height - (mobile ? 42 : 36);
   const traits = mobile
@@ -606,8 +634,8 @@ function overviewPage({
       locale,
       x: x + pad,
       y: traitsY,
-      labels: c.pageTraits,
-      size: locale === "en" ? 13 : 14,
+      labels: c.mobilePageTraits,
+      size: locale === "en" ? 20 : 21,
       gap: 10,
     })
     : dotSeparated({
@@ -633,21 +661,21 @@ function overviewPage({
       ${text({ locale, x: x + pad, y: y + 46, value: c.pageLabel, size: labelSize, kind: "mono", weight: 500, fill: C.tertiary })}
       ${currentChip}
       ${text({ locale, x: x + pad, y: y + (mobile ? 118 : 108), value: c.pageTitle, size: titleSize, kind: "heading", weight: 600 })}
-      ${text({ locale, x: x + pad, y: y + (mobile ? 154 : 140), value: c.revised, size: mobile ? 13 : 14, kind: "mono", weight: 500, fill: C.tertiary })}
-      <circle cx="${x + pad + (mobile ? 156 : 178)}" cy="${y + (mobile ? 149 : 135)}" r="2.5" fill="${C.border}"/>
-      ${text({ locale, x: x + pad + (mobile ? 170 : 190), y: y + (mobile ? 154 : 140), value: c.records, size: mobile ? 13 : 14, kind: "mono", weight: 500, fill: C.tertiary })}
-      <line x1="${x + pad}" y1="${y + (mobile ? 188 : 174)}" x2="${x + width - pad}" y2="${y + (mobile ? 188 : 174)}" stroke="${C.border}"/>
-      ${text({ locale, x: x + pad, y: y + (mobile ? 228 : 210), value: c.synthesis, size: mobile ? 11 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
-      <rect x="${x + pad}" y="${y + (mobile ? 258 : 237)}" width="${mobile ? 280 : 320}" height="9" rx="4.5" fill="#DDE2EA"/>
-      <rect x="${x + pad}" y="${y + (mobile ? 280 : 258)}" width="${mobile ? 338 : 382}" height="9" rx="4.5" fill="#E7EAF0"/>
+      ${text({ locale, x: x + pad, y: y + (mobile ? 158 : 140), value: c.revised, size: mobile ? 20 : 14, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${mobile ? "" : `<circle cx="${x + pad + 178}" cy="${y + 135}" r="2.5" fill="${C.border}"/>`}
+      ${text({ locale, x: mobile ? x + pad : x + pad + 190, y: y + (mobile ? 188 : 140), value: c.records, size: mobile ? 20 : 14, kind: "mono", weight: 500, fill: C.tertiary })}
+      <line x1="${x + pad}" y1="${y + (mobile ? 216 : 174)}" x2="${x + width - pad}" y2="${y + (mobile ? 216 : 174)}" stroke="${C.border}"/>
+      ${text({ locale, x: x + pad, y: y + (mobile ? 256 : 210), value: c.synthesis, size: mobile ? 20 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
+      <rect x="${x + pad}" y="${y + (mobile ? 286 : 237)}" width="${mobile ? 280 : 320}" height="9" rx="4.5" fill="#DDE2EA"/>
+      <rect x="${x + pad}" y="${y + (mobile ? 310 : 258)}" width="${mobile ? 338 : 382}" height="9" rx="4.5" fill="#E7EAF0"/>
       ${citationOne}
       ${citationMemory}
-      <rect x="${x + pad}" y="${y + (mobile ? 365 : 305)}" width="${mobile ? 348 : 402}" height="9" rx="4.5" fill="#DDE2EA"/>
-      <rect x="${x + pad}" y="${y + (mobile ? 387 : 326)}" width="${mobile ? 252 : 278}" height="9" rx="4.5" fill="#E7EAF0"/>
+      <rect x="${x + pad}" y="${y + (mobile ? 416 : 305)}" width="${mobile ? 348 : 402}" height="9" rx="4.5" fill="#DDE2EA"/>
+      <rect x="${x + pad}" y="${y + (mobile ? 440 : 326)}" width="${mobile ? 252 : 278}" height="9" rx="4.5" fill="#E7EAF0"/>
       ${citationTwo}
-      <circle cx="${x + width - (mobile ? 88 : 56)}" cy="${y + (mobile ? 422 : 311)}" r="6" fill="${C.amber}"/>
-      <line x1="${x + width - (mobile ? 88 : 56)}" y1="${y + (mobile ? 430 : 319)}" x2="${x + width - (mobile ? 88 : 56)}" y2="${y + (mobile ? 454 : 344)}" stroke="${C.amber}" stroke-width="1.5"/>
-      ${text({ locale, x: x + pad, y: y + (mobile ? 488 : 388), value: c.linked, size: mobile ? 11 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
+      <circle cx="${x + width - (mobile ? 88 : 56)}" cy="${y + (mobile ? 476 : 311)}" r="6" fill="${C.amber}"/>
+      <line x1="${x + width - (mobile ? 88 : 56)}" y1="${y + (mobile ? 484 : 319)}" x2="${x + width - (mobile ? 88 : 56)}" y2="${y + (mobile ? 514 : 344)}" stroke="${C.amber}" stroke-width="1.5"/>
+      ${text({ locale, x: x + pad, y: y + (mobile ? 550 : 388), value: c.linked, size: mobile ? 20 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
       ${linkedRow}
       <line x1="${x + pad}" y1="${y + height - (mobile ? 78 : 70)}" x2="${x + width - pad}" y2="${y + height - (mobile ? 78 : 70)}" stroke="${C.border}"/>
       ${traits}
@@ -778,23 +806,23 @@ function mobileInput({
   const firstRow = chipRow({
     locale,
     x: x + 24,
-    y: y + 180,
+    y: y + 210,
     labels: tagLines[0],
     gap: 8,
-    height: 30,
+    height: 38,
     mono: true,
-    size: 12,
+    size: 18,
   }).markup;
   const secondRow = tagLines[1]
     ? chipRow({
       locale,
       x: x + 24,
-      y: y + 220,
+      y: y + 256,
       labels: tagLines[1],
       gap: 8,
-      height: 30,
+      height: 38,
       mono: true,
-      size: 12,
+      size: 18,
     }).markup
     : "";
   return region({
@@ -802,14 +830,31 @@ function mobileInput({
     x,
     y,
     width: 304,
-    height: 270,
+    height: 300,
     content: `
-      <rect x="${x}" y="${y}" width="304" height="270" rx="8" fill="${C.surface}" stroke="${C.border}"/>
-      <line x1="${x}" y1="${y + 18}" x2="${x}" y2="${y + 252}" stroke="${C.indigo}" stroke-width="4"/>
+      <rect x="${x}" y="${y}" width="304" height="300" rx="8" fill="${C.surface}" stroke="${C.border}"/>
+      <line x1="${x}" y1="${y + 18}" x2="${x}" y2="${y + 282}" stroke="${C.indigo}" stroke-width="4"/>
       ${glyph({ x: x + 24, y: y + 26 })}
-      ${text({ locale, x: x + 64, y: y + 48, value: title, size: locale === "en" ? 27 : 29, kind: "heading", weight: 600 })}
-      ${text({ locale, x: x + 24, y: y + 98, value: lead, size: locale === "en" ? 16 : 17, weight: 600, fill: C.secondary })}
-      ${text({ locale, x: x + 24, y: y + 134, value: description, size: locale === "en" ? 14 : 16, fill: C.secondary })}
+      ${text({ locale, x: x + 64, y: y + 48, value: title, size: locale === "en" ? 30 : 32, kind: "heading", weight: 600 })}
+      ${lines({
+        locale,
+        x: x + 24,
+        y: y + 98,
+        values: Array.isArray(lead) ? lead : [lead],
+        size: locale === "en" ? 22 : 23,
+        lineHeight: 26,
+        weight: 600,
+        fill: C.secondary,
+      })}
+      ${lines({
+        locale,
+        x: x + 24,
+        y: y + 158,
+        values: Array.isArray(description) ? description : [description],
+        size: locale === "en" ? 22 : 23,
+        lineHeight: 26,
+        fill: C.secondary,
+      })}
       ${firstRow}
       ${secondRow}
     `,
@@ -822,7 +867,7 @@ function overviewMobile(c, locale, prefix) {
     locale,
     c,
     x: 40,
-    y: 630,
+    y: 650,
     width: 640,
     height: 720,
     prefix,
@@ -834,8 +879,8 @@ function overviewMobile(c, locale, prefix) {
     x: 40,
     y: 280,
     title: c.sources,
-    lead: c.sourcesLead,
-    description: c.sourcesDescription,
+    lead: c.mobileSourcesLead,
+    description: c.mobileSourcesDescription,
     tags: c.sourceTags,
     glyph: documentGlyph,
   });
@@ -845,8 +890,8 @@ function overviewMobile(c, locale, prefix) {
     x: 376,
     y: 280,
     title: c.memories,
-    lead: c.memoriesLead,
-    description: c.memoriesDescription,
+    lead: c.mobileMemoriesLead,
+    description: c.mobileMemoriesDescription,
     tags: c.memoryTags,
     glyph: memoryGlyph,
   });
@@ -857,13 +902,13 @@ function overviewMobile(c, locale, prefix) {
       x,
       y: 1608,
       value: word,
-      size: locale === "en" ? 28 : 30,
+      size: locale === "en" ? 30 : 32,
       kind: "heading",
       weight: 600,
       anchor: "middle",
     })}
     <circle cx="${x}" cy="1652" r="13" fill="${C.indigoSoft}" stroke="#D2CFF0"/>
-    ${text({ locale, x, y: 1657, value: String(index + 1), size: 13, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
+    ${text({ locale, x, y: 1658, value: String(index + 1), size: 16, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
     ${lines({
       locale,
       x,
@@ -871,8 +916,8 @@ function overviewMobile(c, locale, prefix) {
       values: locale === "en"
         ? (index === 2 ? ["Continue with", "full context"] : c.backSteps[index].split(index === 0 ? " current " : " your "))
         : [c.backSteps[index]],
-      size: locale === "en" ? 14 : 16,
-      lineHeight: 20,
+      size: locale === "en" ? 22 : 23,
+      lineHeight: 30,
       weight: 600,
       fill: C.secondary,
       anchor: "middle",
@@ -889,25 +934,25 @@ function overviewMobile(c, locale, prefix) {
       height: 190,
       checkOverlap: false,
       content: `
-        ${text({ locale, x: 122, y: 70, value: c.eyebrow, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
+        ${text({ locale, x: 122, y: 70, value: c.eyebrow, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
         ${lines({ locale, x: 122, y: 112, values: c.mobileTitle, size: locale === "en" ? 30 : 34, lineHeight: locale === "en" ? 36 : 43, kind: "heading", weight: 600 })}
       `,
     })}
     ${sources}
     ${memories}
-    <path d="M192 550 C192 586 284 590 330 616" fill="none" stroke="${C.indigo}" stroke-width="2.2" marker-end="url(#${marker})"/>
-    <path d="M528 550 C528 586 436 590 390 616" fill="none" stroke="${C.indigo}" stroke-width="2.2" marker-end="url(#${marker})"/>
+    <path d="M192 580 C192 606 284 612 330 636" fill="none" stroke="${C.indigo}" stroke-width="2.2" marker-end="url(#${marker})"/>
+    <path d="M528 580 C528 606 436 612 390 636" fill="none" stroke="${C.indigo}" stroke-width="2.2" marker-end="url(#${marker})"/>
     ${page}
     ${region({
       id: `${prefix}-changed-support`,
       x: 254,
-      y: 1375,
+      y: 1395,
       width: 426,
       height: 72,
       content: `
-        <path d="M592 1052 C650 1150 652 1320 632 1377" fill="none" stroke="${C.amber}" stroke-width="1.5"/>
-        ${text({ locale, x: 280, y: 1400, value: c.changed, size: 12, kind: "mono", weight: 500, fill: C.amberDark })}
-        ${text({ locale, x: 280, y: 1432, value: c.changedLead, size: locale === "en" ? 16 : 17, weight: 600, fill: C.secondary })}
+        <path d="M592 1072 C650 1170 652 1340 632 1397" fill="none" stroke="${C.amber}" stroke-width="1.5"/>
+        ${text({ locale, x: 280, y: 1420, value: c.changed, size: 20, kind: "mono", weight: 500, fill: C.amberDark })}
+        ${text({ locale, x: 280, y: 1454, value: c.changedLead, size: locale === "en" ? 24 : 25, weight: 600, fill: C.secondary })}
       `,
     })}
     ${region({
@@ -918,7 +963,7 @@ function overviewMobile(c, locale, prefix) {
       height: 270,
       content: `
         <line x1="40" y1="1500" x2="680" y2="1500" stroke="${C.border}"/>
-        ${text({ locale, x: 40, y: 1542, value: c.backLabel, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
+        ${text({ locale, x: 40, y: 1542, value: c.backLabel, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
         ${outputWords}
       `,
     })}
@@ -931,28 +976,28 @@ function overviewMobile(c, locale, prefix) {
       content: `
         <line x1="40" y1="1840" x2="680" y2="1840" stroke="${C.border}"/>
         <circle cx="54" cy="1894" r="7" fill="${C.sage}"/>
-        ${text({ locale, x: 78, y: 1892, value: c.upkeep, size: locale === "en" ? 23 : 25, kind: "heading", weight: 600 })}
+        ${text({ locale, x: 78, y: 1892, value: c.upkeep, size: locale === "en" ? 26 : 28, kind: "heading", weight: 600 })}
         ${lines({
           locale,
           x: 78,
           y: 1930,
           values: locale === "en" ? ["Organize, connect, cite, and refresh", "in the background."] : [c.upkeepLead],
-          size: locale === "en" ? 16 : 17,
-          lineHeight: 25,
+          size: locale === "en" ? 24 : 25,
+          lineHeight: 30,
           fill: C.secondary,
         })}
         <line x1="78" y1="1995" x2="642" y2="1995" stroke="${C.border}"/>
         <circle cx="54" cy="2050" r="7" fill="${C.warm}"/>
-        ${text({ locale, x: 78, y: 2048, value: c.authority, size: locale === "en" ? 23 : 25, kind: "heading", weight: 600 })}
+        ${text({ locale, x: 78, y: 2048, value: c.authority, size: locale === "en" ? 26 : 28, kind: "heading", weight: 600 })}
         ${lines({
           locale,
           x: 78,
           y: 2086,
           values: locale === "en"
-            ? ["Conflicts and changes to your writing", "wait for your judgment."]
+            ? ["Potential conflicts can surface for review;", "changes to your writing wait for judgment."]
             : [c.authorityLead],
-          size: locale === "en" ? 16 : 17,
-          lineHeight: 25,
+          size: locale === "en" ? 24 : 25,
+          lineHeight: 30,
           fill: C.secondary,
         })}
       `,
@@ -972,7 +1017,7 @@ function makeOverview(locale, viewport) {
   const name = `wenlan-system${suffix}${viewport === "mobile" ? "-mobile" : ""}`;
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">${esc(c.title.join(" "))}</title>
-    <desc id="desc">${esc(`${c.sources} and ${c.memories} independently support a maintained Page.`)}</desc>
+    <desc id="desc">${esc(c.description)}</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="${width}" height="${height}" fill="${C.paper}"/>
     ${body}
@@ -1235,37 +1280,36 @@ function memoryObjectMobile(c, locale, prefix) {
     height: 800,
     checkOverlap: false,
     content: `
-      ${text({ locale, x: 40, y: 318, value: c.memoryLabel, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 40, y: 362, value: c.memoryTitle, size: locale === "en" ? 29 : 31, kind: "heading", weight: 600 })}
+      ${text({ locale, x: 40, y: 318, value: c.memoryLabel, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 40, y: 362, value: c.memoryTitle, size: locale === "en" ? 34 : 36, kind: "heading", weight: 600 })}
       <rect x="74" y="408" width="500" height="222" rx="8" fill="${C.raised}" stroke="${C.border}"/>
-      ${text({ locale, x: 104, y: 448, value: c.earlierMemory, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${chip({ locale, x: 434, y: 428, label: c.earlierState, width: locale === "en" ? 104 : 92, height: 28, mono: true, size: 11 }).markup}
-      ${text({ locale, x: 104, y: 500, value: "mem_42", size: 28, kind: "heading", weight: 600 })}
+      ${text({ locale, x: 104, y: 448, value: c.earlierMemory, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${chip({ locale, x: 426, y: 426, label: c.earlierState, width: locale === "en" ? 112 : 98, height: 38, mono: true, size: 18 }).markup}
+      ${text({ locale, x: 104, y: 500, value: "mem_42", size: 32, kind: "heading", weight: 600 })}
       <rect x="104" y="532" width="270" height="9" rx="4.5" fill="#D9DEE7"/>
       <rect x="104" y="555" width="372" height="9" rx="4.5" fill="#E3E7EE"/>
-      ${chip({ locale, x: 104, y: 582, label: "source_07", width: 108, height: 30, fill: C.surface, mono: true }).markup}
+      ${chip({ locale, x: 104, y: 578, label: "source_07", width: 122, height: 36, fill: C.surface, mono: true, size: 18 }).markup}
       <path d="M494 612 C548 636 554 662 554 690" fill="none" stroke="${C.indigo}" stroke-width="2" marker-end="url(#${prefix}-arrow)"/>
-      ${text({ locale, x: 506, y: 650, value: c.correct, size: 11, kind: "mono", weight: 500, fill: C.indigo })}
+      ${text({ locale, x: 492, y: 650, value: c.correct, size: 20, kind: "mono", weight: 500, fill: C.indigo })}
       <g filter="url(#${prefix}-card-shadow)">
         <rect x="126" y="684" width="540" height="270" rx="8" fill="${C.surface}" stroke="${C.border}"/>
       </g>
-      ${text({ locale, x: 158, y: 728, value: c.correctedMemory, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${chip({ locale, x: 518, y: 708, label: c.correctedState, width: locale === "en" ? 112 : 98, height: 28, fill: C.sageSoft, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 11 }).markup}
-      ${text({ locale, x: 158, y: 782, value: "mem_77", size: 30, kind: "heading", weight: 600 })}
+      ${text({ locale, x: 158, y: 728, value: c.correctedMemory, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${chip({ locale, x: 510, y: 706, label: c.correctedState, width: locale === "en" ? 120 : 104, height: 38, fill: C.sageSoft, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 18 }).markup}
+      ${text({ locale, x: 158, y: 782, value: "mem_77", size: 34, kind: "heading", weight: 600 })}
       <rect x="158" y="815" width="294" height="9" rx="4.5" fill="#D9DEE7"/>
       <rect x="158" y="838" width="392" height="9" rx="4.5" fill="#E3E7EE"/>
-      ${text({ locale, x: 158, y: 884, value: c.supersedes, size: 11, kind: "mono", weight: 500, fill: C.indigo })}
+      ${text({ locale, x: 158, y: 884, value: c.supersedes, size: 20, kind: "mono", weight: 500, fill: C.indigo })}
       <path d="M266 880 H354" stroke="${C.indigo}" stroke-width="1.6" marker-end="url(#${prefix}-arrow)"/>
-      ${chip({ locale, x: 372, y: 864, label: "mem_42", width: 88, height: 30, fill: C.indigoSoft, stroke: "#D2CFF0", color: C.indigo, mono: true }).markup}
-      ${text({ locale, x: 158, y: 928, value: c.oldLinked, size: locale === "en" ? 15 : 16, weight: 600, fill: C.sageDark })}
-      <line x1="58" y1="714" x2="104" y2="714" stroke="${C.border}"/>
-      <circle cx="52" cy="714" r="5" fill="${C.indigo}"/>
-      ${text({ locale, x: 40, y: 752, value: c.enrich, size: 10, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 40, y: 776, value: c.enrichDetail, size: locale === "en" ? 13 : 14, weight: 600, fill: C.secondary })}
-      <line x1="58" y1="820" x2="104" y2="820" stroke="${C.border}"/>
-      <circle cx="52" cy="820" r="5" fill="${C.indigo}"/>
-      ${text({ locale, x: 40, y: 858, value: c.connect, size: 10, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 40, y: 882, value: c.connectDetail, size: locale === "en" ? 13 : 14, weight: 600, fill: C.secondary })}
+      ${chip({ locale, x: 372, y: 860, label: "mem_42", width: 96, height: 36, fill: C.indigoSoft, stroke: "#D2CFF0", color: C.indigo, mono: true, size: 18 }).markup}
+      ${text({ locale, x: 158, y: 928, value: c.oldLinked, size: locale === "en" ? 24 : 25, weight: 600, fill: C.sageDark })}
+      <line x1="126" y1="982" x2="666" y2="982" stroke="${C.border}"/>
+      <circle cx="142" cy="1012" r="5" fill="${C.indigo}"/>
+      ${text({ locale, x: 160, y: 1006, value: c.enrich, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 160, y: 1040, value: c.enrichDetail, size: locale === "en" ? 22 : 23, weight: 600, fill: C.secondary })}
+      <circle cx="410" cy="1012" r="5" fill="${C.indigo}"/>
+      ${text({ locale, x: 428, y: 1006, value: c.connect, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 428, y: 1040, value: c.connectDetail, size: locale === "en" ? 22 : 23, weight: 600, fill: C.secondary })}
     `,
   });
 }
@@ -1282,29 +1326,29 @@ function refineryHubMobile(c, locale, prefix) {
       <line x1="40" y1="1090" x2="680" y2="1090" stroke="${C.border}"/>
       <rect x="214" y="1142" width="292" height="94" rx="8" fill="${C.raised}" stroke="${C.border}"/>
       ${documentGlyph({ x: 240, y: 1174, color: C.secondary })}
-      ${text({ locale, x: 282, y: 1178, value: c.sourceChanged, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 282, y: 1210, value: "source_11", size: 20, kind: "heading", weight: 600 })}
+      ${text({ locale, x: 282, y: 1178, value: c.sourceChanged, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 282, y: 1212, value: "source_11", size: 28, kind: "heading", weight: 600 })}
       <path d="M360 1236 V1300" fill="none" stroke="${C.indigo}" stroke-width="2" marker-end="url(#${prefix}-arrow)"/>
       <path d="M310 1092 C310 1150 248 1250 250 1352" fill="none" stroke="${C.indigo}" stroke-width="1.8" marker-end="url(#${prefix}-arrow)"/>
-      ${text({ locale, x: 86, y: 1274, value: c.memoryCorrected, size: 10, kind: "mono", weight: 500, fill: C.indigo })}
+      ${text({ locale, x: 62, y: 1274, value: c.memoryCorrected, size: 20, kind: "mono", weight: 500, fill: C.indigo })}
       <circle cx="360" cy="1420" r="126" fill="${C.surface}" stroke="${C.border}"/>
       <circle cx="360" cy="1420" r="98" fill="none" stroke="${C.indigo}" stroke-width="3" stroke-dasharray="122 30"/>
       <circle cx="360" cy="1420" r="64" fill="${C.indigoSoft}" stroke="#D2CFF0"/>
-      ${text({ locale, x: 360, y: 1408, value: c.refinery, size: 12, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
-      ${text({ locale, x: 360, y: 1438, value: c.maintain[0], size: locale === "en" ? 22 : 24, kind: "heading", weight: 600, anchor: "middle" })}
-      ${text({ locale, x: 360, y: 1466, value: c.maintain[1], size: locale === "en" ? 14 : 15, weight: 600, fill: C.secondary, anchor: "middle" })}
+      ${text({ locale, x: 360, y: 1408, value: c.refinery, size: 20, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
+      ${text({ locale, x: 360, y: 1438, value: c.maintain[0], size: locale === "en" ? 28 : 30, kind: "heading", weight: 600, anchor: "middle" })}
+      ${text({ locale, x: 360, y: 1466, value: c.maintain[1], size: locale === "en" ? 22 : 23, weight: 600, fill: C.secondary, anchor: "middle" })}
       <circle cx="360" cy="1308" r="7" fill="${C.indigo}"/>
       <circle cx="464" cy="1420" r="7" fill="${C.indigo}"/>
       <circle cx="360" cy="1532" r="7" fill="${C.indigo}"/>
       <circle cx="256" cy="1420" r="7" fill="${C.indigo}"/>
-      ${text({ locale, x: 360, y: 1274, value: c.ring.understand, size: 10, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
-      ${text({ locale, x: 496, y: 1426, value: c.ring.connect, size: 10, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 360, y: 1574, value: c.ring.reconcile, size: 10, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
-      ${text({ locale, x: 222, y: 1426, value: c.ring.verify, size: 10, kind: "mono", weight: 500, fill: C.tertiary, anchor: "end" })}
+      ${text({ locale, x: 360, y: 1274, value: c.ring.understand, size: 20, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
+      ${text({ locale, x: 496, y: 1426, value: c.ring.connect, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 360, y: 1574, value: c.ring.reconcile, size: 20, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
+      ${text({ locale, x: 222, y: 1426, value: c.ring.verify, size: 20, kind: "mono", weight: 500, fill: C.tertiary, anchor: "end" })}
       <path d="M360 1546 V1606" fill="none" stroke="${C.warm}" stroke-width="1.8" marker-end="url(#${prefix}-warm-arrow)"/>
       <rect x="170" y="1620" width="380" height="72" rx="8" fill="${C.warmSoft}" stroke="#E6C9B8"/>
-      ${text({ locale, x: 360, y: 1648, value: c.contradiction, size: 11, kind: "mono", weight: 500, fill: C.warmDark, anchor: "middle" })}
-      ${text({ locale, x: 360, y: 1678, value: c.wait, size: locale === "en" ? 17 : 18, kind: "heading", weight: 600, anchor: "middle" })}
+      ${text({ locale, x: 360, y: 1648, value: c.contradiction, size: 20, kind: "mono", weight: 500, fill: C.warmDark, anchor: "middle" })}
+      ${text({ locale, x: 360, y: 1680, value: c.wait, size: locale === "en" ? 26 : 27, kind: "heading", weight: 600, anchor: "middle" })}
     `,
   });
 }
@@ -1315,40 +1359,49 @@ function pageObjectMobile(c, locale, prefix) {
     x: 40,
     y: 1750,
     width: 640,
-    height: 760,
+    height: 780,
     checkOverlap: false,
     content: `
       <line x1="40" y1="1750" x2="680" y2="1750" stroke="${C.border}"/>
-      ${text({ locale, x: 40, y: 1794, value: c.pageLabel, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 40, y: 1842, value: c.pageTitle, size: locale === "en" ? 29 : 31, kind: "heading", weight: 600 })}
+      ${text({ locale, x: 40, y: 1794, value: c.pageLabel, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 40, y: 1842, value: c.pageTitle, size: locale === "en" ? 34 : 36, kind: "heading", weight: 600 })}
       <rect x="92" y="1928" width="520" height="454" rx="8" fill="${C.raised}" stroke="${C.border}"/>
       <rect x="116" y="1898" width="520" height="464" rx="8" fill="#FAFAFA" stroke="${C.border}"/>
       <rect x="70" y="2048" width="58" height="120" rx="8" fill="${C.amberSoft}" stroke="#E5D3AA"/>
-      ${text({ locale, x: 99, y: 2092, value: "v11", size: 10, kind: "mono", weight: 500, fill: C.amberDark, anchor: "middle" })}
-      ${text({ locale, x: 99, y: 2118, value: "STALE", size: 9, kind: "mono", weight: 500, fill: C.amberDark, anchor: "middle" })}
+      ${text({ locale, x: 99, y: 2092, value: "v11", size: 18, kind: "mono", weight: 500, fill: C.amberDark, anchor: "middle" })}
+      ${text({ locale, x: 99, y: 2120, value: "STALE", size: 17, kind: "mono", weight: 500, fill: C.amberDark, anchor: "middle" })}
       <g filter="url(#${prefix}-page-shadow)">
         <rect x="138" y="1870" width="520" height="470" rx="8" fill="${C.surface}" stroke="${C.border}"/>
       </g>
-      ${text({ locale, x: 170, y: 1912, value: c.pageVersion, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${chip({ locale, x: 526, y: 1890, label: c.current, width: locale === "en" ? 100 : 82, height: 28, fill: C.sageSoft, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 11 }).markup}
-      ${text({ locale, x: 170, y: 1970, value: c.maintainedPage, size: locale === "en" ? 34 : 32, kind: "heading", weight: 600 })}
-      ${text({ locale, x: 170, y: 2004, value: c.pageMeta, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 170, y: 1912, value: c.pageVersion, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${chip({ locale, x: 518, y: 1888, label: c.current, width: locale === "en" ? 108 : 88, height: 38, fill: C.sageSoft, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 18 }).markup}
+      ${text({ locale, x: 170, y: 1970, value: c.maintainedPage, size: locale === "en" ? 36 : 34, kind: "heading", weight: 600 })}
+      ${text({ locale, x: 170, y: 2004, value: c.pageMeta, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
       <line x1="170" y1="2032" x2="626" y2="2032" stroke="${C.border}"/>
       <rect x="170" y="2064" width="276" height="9" rx="4.5" fill="#D9DEE7"/>
       <rect x="170" y="2088" width="338" height="9" rx="4.5" fill="#E3E7EE"/>
-      ${chip({ locale, x: 516, y: 2054, label: "source_07", width: 108, height: 30, mono: true }).markup}
+      ${chip({ locale, x: 504, y: 2052, label: "source_07", width: 122, height: 38, mono: true, size: 18 }).markup}
       <rect x="158" y="2130" width="480" height="94" rx="8" fill="${C.sageSoft}" stroke="#C7DACB"/>
-      ${text({ locale, x: 182, y: 2160, value: c.verified, size: 11, kind: "mono", weight: 500, fill: C.sageDark })}
+      ${text({ locale, x: 182, y: 2160, value: c.verified, size: 20, kind: "mono", weight: 500, fill: C.sageDark })}
       <rect x="182" y="2180" width="250" height="8" rx="4" fill="#BFD0C2"/>
       <rect x="182" y="2202" width="316" height="8" rx="4" fill="#D6E2D8"/>
-      ${chip({ locale, x: 516, y: 2167, label: "mem_77", width: 88, height: 30, fill: C.surface, stroke: "#C7DACB", color: C.sageDark, mono: true }).markup}
+      ${chip({ locale, x: 508, y: 2165, label: "mem_77", width: 96, height: 38, fill: C.surface, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 18 }).markup}
       <line x1="170" y1="2264" x2="626" y2="2264" stroke="${C.border}"/>
-      ${text({ locale, x: 170, y: 2300, value: c.prior, size: locale === "en" ? 15 : 16, weight: 600, fill: C.sageDark })}
-      ${text({ locale, x: 612, y: 2324, value: c.versions, size: 12, kind: "mono", weight: 500, fill: C.tertiary, anchor: "end" })}
+      ${text({ locale, x: 170, y: 2300, value: c.prior, size: locale === "en" ? 24 : 25, weight: 600, fill: C.sageDark })}
+      ${text({ locale, x: 612, y: 2326, value: c.versions, size: 20, kind: "mono", weight: 500, fill: C.tertiary, anchor: "end" })}
       <path d="M398 2340 V2400" fill="none" stroke="${C.warm}" stroke-width="1.8" marker-end="url(#${prefix}-warm-arrow)"/>
-      <rect x="90" y="2414" width="568" height="76" rx="8" fill="${C.warmSoft}" stroke="#E6C9B8"/>
-      ${text({ locale, x: 116, y: 2444, value: c.humanPage, size: 11, kind: "mono", weight: 500, fill: C.warmDark })}
-      ${text({ locale, x: 116, y: 2476, value: c.humanLead, size: locale === "en" ? 15 : 16, weight: 600, fill: C.secondary })}
+      <rect x="90" y="2414" width="568" height="106" rx="8" fill="${C.warmSoft}" stroke="#E6C9B8"/>
+      ${text({ locale, x: 116, y: 2444, value: c.humanPage, size: 20, kind: "mono", weight: 500, fill: C.warmDark })}
+      ${lines({
+        locale,
+        x: 116,
+        y: 2478,
+        values: c.mobileHumanLead,
+        size: locale === "en" ? 24 : 25,
+        lineHeight: 28,
+        weight: 600,
+        fill: C.secondary,
+      })}
     `,
   });
 }
@@ -1359,7 +1412,7 @@ function lifecycleFooterMobile(c, locale, prefix) {
     x: 40,
     y: 2622,
     labels: c.phases,
-    size: locale === "en" ? 18 : 19,
+    size: locale === "en" ? 24 : 25,
     kind: "heading",
     weight: 600,
     fill: C.ink,
@@ -1374,11 +1427,11 @@ function lifecycleFooterMobile(c, locale, prefix) {
     checkOverlap: false,
     content: `
       <line x1="40" y1="2550" x2="680" y2="2550" stroke="${C.border}"/>
-      ${text({ locale, x: 40, y: 2590, value: c.background, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 40, y: 2590, value: c.background, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
       ${phases}
-      ${text({ locale, x: 40, y: 2682, value: c.runs, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 40, y: 2716, value: c.schedule, size: locale === "en" ? 16 : 17, weight: 600, fill: C.secondary })}
-      ${text({ locale, x: 680, y: 2760, value: c.archive, size: locale === "en" ? 17 : 18, kind: "heading", weight: 600, fill: C.sageDark, anchor: "end" })}
+      ${text({ locale, x: 40, y: 2682, value: c.runs, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${text({ locale, x: 40, y: 2718, value: c.schedule, size: locale === "en" ? 24 : 25, weight: 600, fill: C.secondary })}
+      ${text({ locale, x: 680, y: 2762, value: c.archive, size: locale === "en" ? 24 : 25, kind: "heading", weight: 600, fill: C.sageDark, anchor: "end" })}
     `,
   });
 }
@@ -1394,16 +1447,16 @@ function lifecycleMobile(c, locale, prefix) {
       height: 210,
       checkOverlap: false,
       content: `
-        ${text({ locale, x: 122, y: 70, value: c.eyebrow, size: 12, kind: "mono", weight: 500, fill: C.tertiary })}
+        ${text({ locale, x: 122, y: 70, value: c.eyebrow, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
         ${lines({ locale, x: 122, y: 116, values: c.mobileTitle, size: locale === "en" ? 34 : 36, lineHeight: 42, kind: "heading", weight: 600 })}
-        ${lines({ locale, x: 122, y: 206, values: c.mobileSubtitle, size: locale === "en" ? 15 : 16, lineHeight: 24, fill: C.secondary })}
+        ${lines({ locale, x: 122, y: 206, values: c.mobileSubtitle, size: locale === "en" ? 24 : 25, lineHeight: 30, fill: C.secondary })}
       `,
     })}
     ${memoryObjectMobile(c, locale, prefix)}
     ${refineryHubMobile(c, locale, prefix)}
     ${pageObjectMobile(c, locale, prefix)}
     <path d="M486 1420 C620 1420 642 1700 628 1866" fill="none" stroke="${C.sage}" stroke-width="2.4" marker-end="url(#${prefix}-sage-arrow)"/>
-    ${text({ locale, x: 596, y: 1584, value: c.affectedClaim, size: 10, kind: "mono", weight: 500, fill: C.sageDark, anchor: "middle" })}
+    ${text({ locale, x: 580, y: 1584, value: c.affectedClaim, size: 20, kind: "mono", weight: 500, fill: C.sageDark, anchor: "middle" })}
     ${lifecycleFooterMobile(c, locale, prefix)}
   `;
 }

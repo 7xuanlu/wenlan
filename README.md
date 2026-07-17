@@ -91,11 +91,11 @@ Wenlan turns documents, notes, and past AI conversations into a source-backed kn
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories independently support a maintained Page. Wenlan refreshes affected claims, returns current knowledge to the work, and leaves conflicts or changes to human writing for the user to judge." width="100%">
+    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories independently support a maintained Page. A supporting change marks the Page for evidence-backed rebuilding; potential conflicts can surface for review, and changes to human writing wait for the user." width="100%">
   </picture>
 </p>
 
-This is Wenlan's llm-wiki v2 model: Sources and Memories remain distinct, long-lived inputs to Pages. Routine changes refresh only the claims they affect; source conflicts and changes to your writing wait for your judgment.
+This is Wenlan's llm-wiki v2 model: Sources and Memories remain distinct, long-lived inputs to Pages. Supporting changes mark related Pages stale for evidence-backed rebuilding; potential contradictions can surface for review, and changes to your writing wait for your judgment.
 
 <p align="center">
   <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
@@ -109,7 +109,7 @@ Source documents and imported conversations remain source records. Decisions, le
 
 Wenlan compiles related sources and memories into source-cited Markdown Pages. Pages, search, and `/recall` bring current knowledge back into later work, even when you switch AI tools; `/brief` is an optional way to assemble a broader session-start snapshot. New material can improve the same Page instead of creating another disconnected answer.
 
-Pages and session notes stay as plain Markdown under `~/.wenlan/`. Distill and handoff workflows commit logical file batches to a local git repository, leaving an inspectable, portable history.
+Pages and session notes stay as plain Markdown under `~/.wenlan/`. Distill and handoff workflows can commit logical file batches to a local git repository, leaving an inspectable, portable history.
 
 The local history is directly inspectable:
 
@@ -127,20 +127,20 @@ a1b2c3d distill: 4 pages
 
 ### llm-wiki v2: two linked lifecycles
 
-A generated wiki is a snapshot. Wenlan maintains two connected lifecycles instead: Memory keeps what the work learned and how it changed; Pages keep the current synthesis and every prior version. Source records and memories independently support those Pages.
+A generated wiki is a snapshot. Wenlan maintains two connected lifecycles instead: explicit supersession links old and replacement Memories; Pages keep the current synthesis and a bounded record of how it changed. Source records and memories independently support those Pages.
 
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="An earlier memory remains linked after correction, while a changed source or memory passes through Wenlan's refinery to update only the affected claim in a new Page version. Prior Page versions stay inspectable, and changes to human writing become proposed revisions." width="100%">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="An earlier memory remains linked after an explicit superseding capture. A changed source or memory marks supported Pages stale; Wenlan rebuilds an eligible Page from current evidence, records the revision, and stages changes to human writing for review." width="100%">
   </picture>
 </p>
 
-- **Memory lifecycle:** Knowledge captured from active work can be enriched, connected, confirmed, corrected, or superseded without losing its history. Near-duplicates can be suppressed from retrieval without deletion; corrections link old and replacement claims; contradictions wait for review.
-- **Page lifecycle:** Every Page keeps its citations and versions. When a supporting source or memory changes, only affected claims become stale and refresh through verification. Pages you have edited receive a proposed revision instead of a silent rewrite.
-- **The link:** Wenlan tracks which claims each source or memory supports, so changes flow to the right Pages without breaking the evidence trail.
+- **Memory lifecycle:** Knowledge captured from active work can be enriched, connected, and confirmed. Near-duplicates can be suppressed from retrieval without deletion; explicit superseding captures link old and replacement claims, while direct correction edits the existing Memory in place. Some contradictions can surface for review.
+- **Page lifecycle:** Distilled and refreshed Pages carry citation records and verification status plus a bounded version changelog. When a supporting source or memory changes, the related Page becomes stale; eligible machine-maintained Pages are rebuilt from current evidence and pass a per-claim citation gate. Pages you have edited receive a proposed revision instead of a silent rewrite.
+- **The link:** Wenlan tracks which Pages each source or memory supports, so changes reach the relevant synthesis without breaking its evidence links.
 
-For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. If either the document or the decision changes, Wenlan can update the Page; if you have edited it, the proposed change waits for review.
+For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. If either the document or the decision changes, Wenlan can rebuild the Page from its current support; if you have edited it, the proposed change waits for review.
 
 <a id="what-wenlan-is-not"></a>
 
@@ -156,8 +156,8 @@ Wenlan is for software development, research, writing, consulting, product decis
 ## Capabilities
 
 - **Multi-source knowledge:** import ChatGPT and Claude history, index Obsidian or document folders, accept direct captures, and combine them as evidence for the same pages.
-- **Evidence-backed knowledge:** captured memories retain source agent, confidence, stability, and supersession; Pages retain links to source records and memories, citation records, stale reasons, ownership, and revision state.
-- **Maintained, reviewable pages:** automatic re-distill refreshes fail closed when their claims cannot be verified. Updates to human-owned pages become pending revisions instead of silent rewrites.
+- **Evidence-backed knowledge:** captured memories retain source agent, confidence, stability, and supersession; distilled and refreshed Pages retain links to source records and memories, citation records and verification status, stale reasons, ownership, and revision state.
+- **Maintained, reviewable pages:** automatic re-distill refreshes fail closed when their citation verification gate fails. Updates to human-owned pages become pending revisions instead of silent rewrites.
 - **Between-session refinement:** with a local model or API provider, background passes can enrich captures, link entities, deduplicate overlaps, and refresh eligible pages before the next session.
 - **Review where it matters:** contradictions and protected-memory collisions can surface for explicit review without turning every capture into an approval queue.
 - **Hybrid, connected retrieval:** libSQL combines FTS5, vector search, pages, memories, and graph context using reciprocal-rank fusion, with an optional local cross-encoder reranker.
@@ -283,7 +283,7 @@ Wenlan is licensed under **Apache-2.0**. This includes the local runtime, CLI, M
 
 Wenlan (文瀾) takes its name from 文瀾閣, an imperial library that held 四庫全書 as part of one of China's largest book collections.
 
-Wenlan draws from the LLM-wiki and agent-memory lineages without claiming complete LLM Wiki v2 parity:
+Wenlan's llm-wiki v2 model is its own product direction, informed by the LLM-wiki and agent-memory lineages:
 
 - [Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) established the raw-source-to-maintained-wiki pattern.
 - [Rohitg00's LLM Wiki v2 proposal](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) extends that pattern with memory lifecycle, confidence, graph, and retrieval mechanisms. [agentmemory](https://github.com/rohitg00/agentmemory) is its concrete agent-memory implementation.

@@ -1,6 +1,6 @@
 <svg width="1800" height="1120" viewBox="0 0 1800 1120" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">Knowledge changes. History stays.</title>
-    <desc id="desc">Sources and memories evolve; Wenlan refreshes only the supported parts of each Page.</desc>
+    <desc id="desc">Changes mark supported Pages stale; Wenlan rebuilds them from current evidence.</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="1800" height="1120" fill="#FCFCFB"/>
 
@@ -13,13 +13,13 @@
 
         <text x="148" y="84" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">TWO LINKED LIFECYCLES</text>
         <text x="148" y="136" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="48" font-weight="600" fill="#1A1A2E" text-anchor="start">Knowledge changes. History stays.</text>
-        <text x="148" y="176" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="400" fill="#586174" text-anchor="start">Sources and memories evolve; Wenlan refreshes only the supported parts of each Page.</text>
+        <text x="148" y="176" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="400" fill="#586174" text-anchor="start">Changes mark supported Pages stale; Wenlan rebuilds them from current evidence.</text>
 
   </g>
     <g data-fit-region="lifecycle-en-desktop-memory-object" data-fit-x="70" data-fit-y="236" data-fit-width="640" data-fit-height="670" data-check-overlap="false">
 
       <text x="88" y="258" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">MEMORY LIFECYCLE</text>
-      <text x="88" y="302" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="start">Corrected, never erased.</text>
+      <text x="88" y="302" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="start">Superseded, not erased.</text>
       <g opacity="0.92">
         <rect x="112" y="362" width="420" height="212" rx="8" fill="#F7F8FA" stroke="#E3E7EE"/>
         <text x="142" y="400" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">EARLIER MEMORY</text>
@@ -36,11 +36,11 @@
     </g>
       </g>
       <path d="M438 552 C494 570 512 592 512 622" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-en-desktop-arrow)"/>
-      <text x="454" y="584" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#5E58C8" text-anchor="start">CORRECT</text>
+      <text x="454" y="584" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#5E58C8" text-anchor="start">REVISE</text>
       <g filter="url(#lifecycle-en-desktop-card-shadow)">
         <rect x="220" y="610" width="460" height="238" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
       </g>
-      <text x="250" y="648" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">CORRECTED MEMORY</text>
+      <text x="250" y="648" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">REPLACEMENT MEMORY</text>
       <g>
       <rect x="538" y="630" width="112" height="28" rx="14" fill="#F2F7F3" stroke="#C7DACB"/>
       <text x="594" y="648.56" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#4F7558" text-anchor="middle">CONFIRMED</text>
@@ -80,8 +80,8 @@
       <circle cx="878" cy="578" r="90" fill="none" stroke="#5E58C8" stroke-width="3" stroke-dasharray="112 26"/>
       <circle cx="878" cy="578" r="58" fill="#F3F2FC" stroke="#D2CFF0"/>
       <text x="878" y="568" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#5E58C8" text-anchor="middle">REFINERY</text>
-      <text x="878" y="596" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="22" font-weight="600" fill="#1A1A2E" text-anchor="middle">Maintain</text>
-      <text x="878" y="620" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="600" fill="#586174" text-anchor="middle">only what changed</text>
+      <text x="878" y="596" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="22" font-weight="600" fill="#1A1A2E" text-anchor="middle">Rebuild</text>
+      <text x="878" y="620" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="600" fill="#586174" text-anchor="middle">from current support</text>
       <circle cx="878" cy="474" r="7" fill="#5E58C8"/>
       <circle cx="974" cy="578" r="7" fill="#5E58C8"/>
       <circle cx="878" cy="682" r="7" fill="#5E58C8"/>
@@ -91,7 +91,7 @@
       <text x="878" y="726" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">RECONCILE</text>
       <text x="738" y="584" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="end">VERIFY</text>
       <path d="M680 728 C728 728 744 660 780 622" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-en-desktop-arrow)"/>
-      <text x="704" y="710" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="start">MEMORY CORRECTED</text>
+      <text x="704" y="710" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="start">MEMORY SUPERSEDED</text>
       <path d="M878 692 V782" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-en-desktop-warm-arrow)"/>
       <rect x="730" y="798" width="296" height="64" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
       <text x="878" y="824" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#9F5C32" text-anchor="middle">CONTRADICTION</text>
@@ -101,7 +101,7 @@
     <g data-fit-region="lifecycle-en-desktop-page-object" data-fit-x="1044" data-fit-y="236" data-fit-width="686" data-fit-height="680" data-check-overlap="false">
 
       <text x="1080" y="258" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">PAGE LIFECYCLE</text>
-      <text x="1080" y="302" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="start">Updated, history preserved.</text>
+      <text x="1080" y="302" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="start">Rebuilt, changes recorded.</text>
       <rect x="1130" y="388" width="500" height="406" rx="8" fill="#F7F8FA" stroke="#E3E7EE"/>
       <rect x="1160" y="356" width="500" height="424" rx="8" fill="#FAFAFA" stroke="#E3E7EE"/>
       <text x="1190" y="394" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">PAGE v11</text>
@@ -117,7 +117,7 @@
       <text x="1619" y="368.56" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#4F7558" text-anchor="middle">CURRENT</text>
     </g>
       <text x="1224" y="424" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">Maintained Page</text>
-      <text x="1224" y="454" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">12 versions / 6 supporting records</text>
+      <text x="1224" y="454" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">v12 / 6 supporting records</text>
       <line x1="1224" y1="482" x2="1670" y2="482" stroke="#E3E7EE"/>
       <rect x="1224" y="514" width="280" height="9" rx="4.5" fill="#D9DEE7"/>
       <rect x="1224" y="536" width="346" height="9" rx="4.5" fill="#E3E7EE"/>
@@ -126,7 +126,7 @@
       <text x="1634" y="525.32" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#586174" text-anchor="middle">source_07</text>
     </g>
       <rect x="1212" y="574" width="470" height="88" rx="8" fill="#F2F7F3" stroke="#C7DACB"/>
-      <text x="1236" y="602" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#4F7558" text-anchor="start">VERIFIED REVISION</text>
+      <text x="1236" y="602" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="11" font-weight="500" fill="#4F7558" text-anchor="start">VERIFIED REBUILD</text>
       <rect x="1236" y="620" width="250" height="8" rx="4" fill="#BFD0C2"/>
       <rect x="1236" y="640" width="322" height="8" rx="4" fill="#D6E2D8"/>
       <g>
@@ -134,7 +134,7 @@
       <text x="1614" y="626.32" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#4F7558" text-anchor="middle">mem_77</text>
     </g>
       <line x1="1224" y1="702" x2="1670" y2="702" stroke="#E3E7EE"/>
-      <text x="1224" y="738" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="15" font-weight="600" fill="#4F7558" text-anchor="start">Prior versions remain inspectable</text>
+      <text x="1224" y="738" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="15" font-weight="600" fill="#4F7558" text-anchor="start">Recent changes remain inspectable</text>
       <text x="1638" y="738" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="end">v10 / v11 / v12</text>
       <path d="M1408 784 V822" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-en-desktop-warm-arrow)"/>
       <rect x="1140" y="838" width="562" height="64" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
@@ -143,7 +143,7 @@
 
   </g>
     <path d="M992 578 C1076 578 1128 606 1198 614" fill="none" stroke="#6F8F76" stroke-width="2.5" marker-end="url(#lifecycle-en-desktop-sage-arrow)"/>
-    <text x="1094" y="532" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#4F7558" text-anchor="middle">AFFECTED CLAIM</text>
+    <text x="1094" y="532" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#4F7558" text-anchor="middle">AFFECTED PAGE</text>
     <g data-fit-region="lifecycle-en-desktop-footer" data-fit-x="74" data-fit-y="966" data-fit-width="1652" data-fit-height="106" data-check-overlap="false">
 
       <line x1="74" y1="966" x2="1726" y2="966" stroke="#E3E7EE"/>

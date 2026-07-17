@@ -1,0 +1,16 @@
+{
+  "name": "wenlan-readme-visuals",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install-browser": "playwright install chromium",
+    "generate": "node ../generate-readme-visuals.cjs --write --only all",
+    "check": "node --test ../generate-readme-visuals.test.cjs && node ../generate-readme-visuals.cjs --check --only all"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}
