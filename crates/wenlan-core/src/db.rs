@@ -202,19 +202,17 @@ pub struct VocabLedgerEntry {
 
 impl MemoryDB {
     /// Record a vocab auto-heal's full pre-image so the mutation can be undone.
-    /// `affected` (row ids) is provenance only — the caller already folds them
-    /// into `pre_image_json`; it is not stored as a separate column.
+    /// Every affected row id already lives inside `pre_image_json`; the ledger
+    /// has no separate `affected` column.
     pub async fn insert_vocab_ledger_entry(
         &self,
         kind: &str,
         old_value: &str,
         new_value: &str,
         pre_image_json: &str,
-        affected: &[String],
     ) -> Result<String, WenlanError> {
         let id = format!("vheal-{}", uuid::Uuid::new_v4());
         let now = chrono::Utc::now().timestamp();
-        let _ = affected;
         let conn = self.conn.lock().await;
         conn.execute(
             "INSERT INTO vocab_heal_ledger (id, kind, old_value, new_value, pre_image, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -265,6 +263,129 @@ impl MemoryDB {
             })),
             None => Ok(None),
         }
+    }
+
+    /// Fold every relation of `old_type` into `canonical`, collision-aware.
+    ///
+    /// Rewrites each `relations` row of `old_type` to `canonical`. On a
+    /// `(from, to, canonical)` collision, merges the loser's provenance into the
+    /// survivor (higher confidence wins; COALESCE explanation/source_memory_id)
+    /// then deletes the loser — never a blind delete. Every folded row's
+    /// pre-image is recorded to the ledger so the whole fold is reversible.
+    /// Returns the number of rows folded.
+    pub async fn fold_relation_type(
+        &self,
+        old_type: &str,
+        canonical: &str,
+    ) -> Result<usize, WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold begin: {e}")))?;
+
+        // Snapshot every row of old_type (the pre-image, for the ledger + undo).
+        let mut rows = conn
+            .query(
+                "SELECT id, from_entity, to_entity, confidence, explanation, source_memory_id, source_agent, created_at FROM relations WHERE relation_type = ?1",
+                libsql::params![old_type],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold snapshot: {e}")))?;
+        let mut pre_image: Vec<serde_json::Value> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut ids: Vec<(
+            String,
+            String,
+            String,
+            Option<f64>,
+            Option<String>,
+            Option<String>,
+        )> = Vec::new();
+        while let Some(r) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            let id: String = r.get(0).unwrap_or_default();
+            let from: String = r.get(1).unwrap_or_default();
+            let to: String = r.get(2).unwrap_or_default();
+            let conf: Option<f64> = r.get(3).ok();
+            let expl: Option<String> = r.get(4).ok();
+            let smid: Option<String> = r.get(5).ok();
+            pre_image.push(serde_json::json!({
+                "id": id, "from_entity": from, "to_entity": to, "relation_type": old_type,
+                "confidence": conf, "explanation": expl, "source_memory_id": smid,
+            }));
+            ids.push((id, from, to, conf, expl, smid));
+        }
+        drop(rows);
+
+        let mut folded = 0usize;
+        for (id, from, to, conf, expl, smid) in &ids {
+            // Does a canonical edge already exist for this pair?
+            let mut ex = conn
+                .query(
+                    "SELECT id, confidence, explanation, source_memory_id FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
+                    libsql::params![from.clone(), to.clone(), canonical.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            if let Some(sr) = ex
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                let s_conf: Option<f64> = sr.get(1).ok();
+                let s_expl: Option<String> = sr.get(2).ok();
+                let s_smid: Option<String> = sr.get(3).ok();
+                drop(ex);
+                // Merge provenance into the survivor: higher confidence wins; fill nulls.
+                let merged_conf = match (s_conf, conf) {
+                    (Some(a), Some(b)) => Some(a.max(*b)),
+                    (a, b) => a.or(*b),
+                };
+                let merged_expl = s_expl.or_else(|| expl.clone());
+                let merged_smid = s_smid.or_else(|| smid.clone());
+                conn.execute(
+                    "UPDATE relations SET confidence = ?1, explanation = ?2, source_memory_id = ?3 WHERE from_entity = ?4 AND to_entity = ?5 AND relation_type = ?6",
+                    libsql::params![
+                        merged_conf.map(libsql::Value::Real).unwrap_or(libsql::Value::Null),
+                        merged_expl.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
+                        merged_smid.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
+                        from.clone(), to.clone(), canonical.to_string()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                // Delete the loser (its pre-image is already captured above).
+                conn.execute(
+                    "DELETE FROM relations WHERE id = ?1",
+                    libsql::params![id.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            } else {
+                drop(ex);
+                conn.execute(
+                    "UPDATE relations SET relation_type = ?1 WHERE id = ?2",
+                    libsql::params![canonical.to_string(), id.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            }
+            folded += 1;
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold commit: {e}")))?;
+        drop(conn);
+
+        if !pre_image.is_empty() {
+            let pre_json = serde_json::to_string(&pre_image).unwrap_or_else(|_| "[]".into());
+            self.insert_vocab_ledger_entry("relation", old_type, canonical, &pre_json)
+                .await?;
+        }
+        Ok(folded)
     }
 }
 
@@ -51349,7 +51470,7 @@ pub(crate) mod tests {
         let (db, _tmp) = test_db().await;
         let pre = r#"[{"id":"rel-1","relation_type":"working_at","confidence":0.5}]"#;
         let id = db
-            .insert_vocab_ledger_entry("relation", "working_at", "works_on", pre, &["rel-1".into()])
+            .insert_vocab_ledger_entry("relation", "working_at", "works_on", pre)
             .await
             .unwrap();
         let got = db.get_vocab_ledger_entry(&id).await.unwrap().unwrap();

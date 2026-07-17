@@ -290,40 +290,13 @@ pub async fn normalize_non_vocabulary_relations(db: &MemoryDB) -> Result<usize, 
             continue;
         };
         if canonical != *rel_type {
-            let conn = db.conn.lock().await;
-            // Use UPDATE OR IGNORE to skip rows that would violate the unique
-            // constraint (from_entity, to_entity, relation_type). Then delete
-            // the orphaned rows that couldn't be updated (they're now duplicates
-            // of the canonical relation that already existed).
-            let affected = conn
-                .execute(
-                    "UPDATE OR IGNORE relations SET relation_type = ?1 WHERE relation_type = ?2",
-                    libsql::params![canonical.clone(), rel_type.clone()],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("normalize relations: {}", e)))?;
-            // Clean up rows that couldn't be updated (still have old type, but
-            // a canonical relation already exists for the same entity pair).
-            let deleted = conn
-                .execute(
-                    "DELETE FROM relations WHERE relation_type = ?1",
-                    libsql::params![rel_type.clone()],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("cleanup dup relations: {}", e)))?;
-            if deleted > 0 {
-                log::info!(
-                    "[rethink] cleaned up {} duplicate relations after normalizing '{}'",
-                    deleted,
-                    rel_type
-                );
-            }
-            normalized += affected as usize;
+            let folded = db.fold_relation_type(rel_type, &canonical).await?;
+            normalized += folded;
             log::info!(
-                "[rethink] normalized '{}' -> '{}' ({} relations)",
+                "[rethink] folded '{}' -> '{}' ({} relations, ledgered)",
                 rel_type,
                 canonical,
-                affected
+                folded
             );
         }
     }
@@ -844,12 +817,11 @@ mod tests {
         }
     }
 
-    // ── Fix 3: normalize_non_vocabulary_relations handles UNIQUE conflicts ─
+    // ── Fix 3: fold_relation_type merges provenance + ledgers the loser ────
 
     #[tokio::test]
-    async fn test_normalize_handles_unique_conflict() {
+    async fn fold_relation_type_merges_provenance_and_ledgers_the_loser() {
         let (db, _dir) = test_db().await;
-
         let e1 = db
             .store_entity("EntityA", "person", None, Some("test"), None)
             .await
@@ -858,67 +830,50 @@ mod tests {
             .store_entity("EntityB", "project", None, Some("test"), None)
             .await
             .unwrap();
-
-        // Insert two relations directly via SQL, bypassing normalization:
-        // one with canonical type "works_on" and one with alias "working_at".
-        // Normalizing "working_at" -> "works_on" would cause a UNIQUE violation
-        // on (from_entity, to_entity, relation_type).
+        let now = chrono::Utc::now().timestamp();
         {
             let conn = db.conn.lock().await;
-            let now = chrono::Utc::now().timestamp();
+            // Survivor: canonical works_on, confidence 0.9.
             conn.execute(
-                "INSERT INTO relations (id, from_entity, to_entity, relation_type, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                libsql::params![
-                    "rel-canonical".to_string(),
-                    e1.clone(),
-                    e2.clone(),
-                    "works_on".to_string(),
-                    now
-                ],
+                "INSERT INTO relations (id, from_entity, to_entity, relation_type, confidence, created_at) VALUES ('rel-canon', ?1, ?2, 'works_on', 0.9, ?3)",
+                libsql::params![e1.clone(), e2.clone(), now]).await.unwrap();
+            // Loser: alias working_at, confidence 0.5, has an explanation.
+            conn.execute(
+                "INSERT INTO relations (id, from_entity, to_entity, relation_type, confidence, explanation, created_at) VALUES ('rel-alias', ?1, ?2, 'working_at', 0.5, 'employed since 2020', ?3)",
+                libsql::params![e1.clone(), e2.clone(), now]).await.unwrap();
+        }
+
+        let folded = db
+            .fold_relation_type("working_at", "works_on")
+            .await
+            .unwrap();
+        assert_eq!(folded, 1);
+
+        let conn = db.conn.lock().await;
+        // Exactly one A->B row survives, canonical, confidence preserved at 0.9,
+        // and the loser's explanation was merged in (survivor had none).
+        let mut rows = conn.query(
+            "SELECT COUNT(*), MAX(confidence) FROM relations WHERE from_entity = ?1 AND to_entity = ?2",
+            libsql::params![e1.clone(), e2.clone()]).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let cnt: i64 = row.get(0).unwrap();
+        let conf: f64 = row.get(1).unwrap();
+        assert_eq!(cnt, 1, "collision must not leave two rows");
+        assert!(
+            (conf - 0.9).abs() < 1e-6,
+            "survivor keeps the higher confidence"
+        );
+        drop(rows);
+        // The absorbed edge's pre-image is in the ledger (undo is possible).
+        let mut led = conn
+            .query(
+                "SELECT COUNT(*) FROM vocab_heal_ledger WHERE old_value = 'working_at'",
+                (),
             )
             .await
             .unwrap();
-            conn.execute(
-                "INSERT INTO relations (id, from_entity, to_entity, relation_type, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                libsql::params![
-                    "rel-alias".to_string(),
-                    e1.clone(),
-                    e2.clone(),
-                    "working_at".to_string(),
-                    now
-                ],
-            )
-            .await
-            .unwrap();
-        }
-
-        // normalize_non_vocabulary_relations should succeed without panicking
-        normalize_non_vocabulary_relations(&db).await.unwrap();
-
-        // After normalization, only 1 relation should remain for A->B
-        {
-            let conn = db.conn.lock().await;
-            let mut rows = conn
-                .query(
-                    "SELECT COUNT(*), relation_type FROM relations WHERE from_entity = ?1 AND to_entity = ?2",
-                    libsql::params![e1.clone(), e2.clone()],
-                )
-                .await
-                .unwrap();
-            let row = rows.next().await.unwrap().expect("should have a row");
-            let cnt: i64 = row.get::<i64>(0).unwrap();
-            let rel_type: String = row.get::<String>(1).unwrap();
-            assert_eq!(
-                cnt, 1,
-                "only 1 relation should remain after normalization resolved the UNIQUE conflict, got {cnt}"
-            );
-            assert_eq!(
-                rel_type, "works_on",
-                "surviving relation should have canonical type 'works_on', got '{rel_type}'"
-            );
-        }
+        let n: i64 = led.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(n >= 1, "the folded loser must be recorded in the ledger");
     }
 
     // ── hallucination_guard ──────────────────────────────────────────────
