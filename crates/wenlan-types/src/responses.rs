@@ -692,6 +692,12 @@ pub enum ProposalAction {
     PageMerge,
     CrossSpaceDiscovery,
     PageKeepOrArchive,
+    /// ponytail: deserialize-only catch-all. Lets a stale client decode a
+    /// newer daemon's action tag instead of failing the whole list. NEVER
+    /// constructed or serialized by the daemon (it only ever holds real
+    /// variants), so serialize-of-Unknown never happens in practice.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -806,6 +812,16 @@ mod refinement_wire_tests {
             let back = serde_json::to_string(&expected).unwrap();
             assert_eq!(back, json, "serialize {expected:?}");
         }
+    }
+
+    #[test]
+    fn proposal_action_unknown_future_variant_deserializes() {
+        // A stale client must decode a NEWER daemon's action tag to Unknown,
+        // never error the whole ListRefinementsResponse.
+        let parsed: ProposalAction = serde_json::from_str("\"vocab_promote\"").unwrap();
+        assert_eq!(parsed, ProposalAction::Unknown);
+        let parsed2: ProposalAction = serde_json::from_str("\"totally_new_action\"").unwrap();
+        assert_eq!(parsed2, ProposalAction::Unknown);
     }
 
     #[test]
