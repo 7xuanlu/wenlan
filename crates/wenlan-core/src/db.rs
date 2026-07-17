@@ -16037,9 +16037,21 @@ impl MemoryDB {
             Some(c) => c,
             None => {
                 log::warn!(
-                    "[create_relation] non-vocabulary type '{}' coerced to 'related_to' (caller should use a canonical type)",
+                    "[create_relation] non-vocabulary type '{}' coerced to 'related_to' (queued as promote candidate)",
                     relation_type
                 );
+                // Capture-at-coercion: keep the review queue fed. Best-effort —
+                // a failed insert must never fail ingest. resolve_relation_type
+                // has released its lock; insert_vocab_promote_proposal takes its
+                // own, and we have not locked self.conn yet.
+                if let Err(e) = self
+                    .insert_vocab_promote_proposal("relation", relation_type, None)
+                    .await
+                {
+                    log::warn!(
+                        "[create_relation] capture-at-coercion insert failed (ignored): {e}"
+                    );
+                }
                 "related_to".to_string()
             }
         };
@@ -43857,6 +43869,45 @@ pub(crate) mod tests {
             stored, "related_to",
             "unknown relation type should be coerced to related_to"
         );
+    }
+
+    #[tokio::test]
+    async fn create_relation_captures_coerced_type_as_promote_candidate() {
+        let (db, _tmp) = test_db().await;
+        let e1 = db.create_entity("Alice", "person", None).await.unwrap();
+        let e2 = db.create_entity("Bob", "person", None).await.unwrap();
+        // Coerced twice -> still exactly one promote proposal (fingerprint dedup).
+        db.create_relation(&e1, &e2, "is_friend_of", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+        let e3 = db.create_entity("Carol", "person", None).await.unwrap();
+        db.create_relation(&e1, &e3, "is_friend_of", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+        let pending = db.get_pending_refinements().await.unwrap();
+        let promos: Vec<_> = pending
+            .iter()
+            .filter(|p| {
+                p.action == "vocab_promote"
+                    && p.payload.as_deref().unwrap_or("").contains("is_friend_of")
+            })
+            .collect();
+        assert_eq!(
+            promos.len(),
+            1,
+            "coerced type should queue exactly one promote candidate"
+        );
+        // The row itself is still related_to (write unchanged).
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT relation_type FROM relations WHERE from_entity = ?1 AND to_entity = ?2",
+                libsql::params![e1.clone(), e2.clone()],
+            )
+            .await
+            .unwrap();
+        let stored: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(stored, "related_to");
     }
 
     #[tokio::test]
