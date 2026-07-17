@@ -27,7 +27,7 @@ Useful work with AI shouldn't disappear when a conversation ends. Wenlan builds 
 </p>
 
 <p align="center">
-  <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan desktop app showing a source-backed wiki page with an inspectable source memory." width="100%">
+  <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan desktop app showing a source-backed wiki page with inspectable citations." width="100%">
 </p>
 
 ---
@@ -86,16 +86,16 @@ Manual and client-specific instructions: [AI-assisted setup](docs/setup-with-ai.
 
 ## What is this?
 
-Wenlan turns documents, notes, and AI conversations into a source-backed knowledge base that keeps improving as your work continues. New information strengthens or corrects what you already know, and the pages that depend on it stay current.
+Wenlan turns documents, notes, and past AI conversations into a source-backed knowledge base that stays current as your work evolves. Sources remain traceable; decisions, lessons, and corrections become durable memories; both can support the same maintained Pages.
 
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Wenlan turns documents, notes, and AI conversations into traceable evidence and maintained pages, handles routine knowledge maintenance, and returns current knowledge across AI tools through a daily brief, capture, handoff, and refinement loop." width="100%">
+    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories independently support a maintained Page. Wenlan refreshes affected claims, returns current knowledge to the work, and leaves conflicts or changes to human writing for the user to judge." width="100%">
   </picture>
 </p>
 
-This is Wenlan's implementation of llm-wiki v2: evidence and pages have separate, linked lifecycles. Wenlan handles the bookkeeping and asks only when sources conflict or an update would change something you wrote.
+This is Wenlan's llm-wiki v2 model: Sources and Memories remain distinct, long-lived inputs to Pages. Routine changes refresh only the claims they affect; source conflicts and changes to your writing wait for your judgment.
 
 <p align="center">
   <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
@@ -103,11 +103,11 @@ This is Wenlan's implementation of llm-wiki v2: evidence and pages have separate
 
 ### Evidence you can inspect
 
-Source documents, imported conversations, and captured decisions remain traceable as memories and source records. They retain where they came from, how stable they are, and what later information revised or superseded them.
+Source documents and imported conversations remain source records. Decisions, lessons, and corrections captured during active work become memories. Both retain where they came from; memories also track confidence, stability, corrections, and supersession.
 
 ### A wiki that compounds
 
-Wenlan compiles related evidence into source-cited Markdown pages. `/brief` and `/recall` bring the current page and its supporting evidence back into later work, even when you switch AI tools. New material can improve the same page instead of creating another disconnected answer.
+Wenlan compiles related sources and memories into source-cited Markdown Pages. Pages, search, and `/recall` bring current knowledge back into later work, even when you switch AI tools; `/brief` is an optional way to assemble a broader session-start snapshot. New material can improve the same Page instead of creating another disconnected answer.
 
 Pages and session notes stay as plain Markdown under `~/.wenlan/`. Distill and handoff workflows commit logical file batches to a local git repository, leaving an inspectable, portable history.
 
@@ -127,22 +127,20 @@ a1b2c3d distill: 4 pages
 
 ### llm-wiki v2: two linked lifecycles
 
-A generated wiki is a snapshot. Wenlan treats it as a maintained knowledge system, with separate but connected lifecycles for evidence and the articles built from it.
+A generated wiki is a snapshot. Wenlan maintains two connected lifecycles instead: Memory keeps what the work learned and how it changed; Pages keep the current synthesis and every prior version. Source records and memories independently support those Pages.
 
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="Wenlan's linked lifecycles: evidence is captured, enriched, connected, corrected, and reviewed; source-cited pages become stale and refresh without overwriting human writing; background refinery phases maintain the system, with optional behavior clearly marked." width="100%">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="An earlier memory remains linked after correction, while a changed source or memory passes through Wenlan's refinery to update only the affected claim in a new Page version. Prior Page versions stay inspectable, and changes to human writing become proposed revisions." width="100%">
   </picture>
 </p>
 
-- **Memory lifecycle:** Evidence can be confirmed, connected, corrected, or superseded without losing its history. Near-duplicates can merge quietly; contradictions wait for review.
-- **Article lifecycle:** Every article keeps its citations and knows when its sources have changed. Wenlan-maintained articles can refresh; articles you have edited receive a proposed revision instead of a silent rewrite.
-- **The link:** When a memory changes, Wenlan knows which articles may now be stale and can update them without breaking the evidence trail.
+- **Memory lifecycle:** Knowledge captured from active work can be enriched, connected, confirmed, corrected, or superseded without losing its history. Near-duplicates can be suppressed from retrieval without deletion; corrections link old and replacement claims; contradictions wait for review.
+- **Page lifecycle:** Every Page keeps its citations and versions. When a supporting source or memory changes, only affected claims become stale and refresh through verification. Pages you have edited receive a proposed revision instead of a silent rewrite.
+- **The link:** Wenlan tracks which claims each source or memory supports, so changes flow to the right Pages without breaking the evidence trail.
 
-For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one article that cites both. If either source changes, the article can refresh; if you have edited it, the proposed update waits for review.
-
-This is what Wenlan means by llm-wiki v2: evidence and articles keep improving together, rather than stopping after a one-off generation.
+For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. If either the document or the decision changes, Wenlan can update the Page; if you have edited it, the proposed change waits for review.
 
 <a id="what-wenlan-is-not"></a>
 
@@ -158,7 +156,7 @@ Wenlan is for software development, research, writing, consulting, product decis
 ## Capabilities
 
 - **Multi-source knowledge:** import ChatGPT and Claude history, index Obsidian or document folders, accept direct captures, and combine them as evidence for the same pages.
-- **Evidence-backed knowledge:** captures retain source agent, confidence, stability, and supersession; pages retain source memories, citation records, stale reasons, ownership, and revision state.
+- **Evidence-backed knowledge:** captured memories retain source agent, confidence, stability, and supersession; Pages retain links to source records and memories, citation records, stale reasons, ownership, and revision state.
 - **Maintained, reviewable pages:** automatic re-distill refreshes fail closed when their claims cannot be verified. Updates to human-owned pages become pending revisions instead of silent rewrites.
 - **Between-session refinement:** with a local model or API provider, background passes can enrich captures, link entities, deduplicate overlaps, and refresh eligible pages before the next session.
 - **Review where it matters:** contradictions and protected-memory collisions can surface for explicit review without turning every capture into an approval queue.
@@ -192,7 +190,7 @@ The system above becomes a small daily loop: start with relevant knowledge, capt
 
 The loop has four steps:
 
-1. **Start with context.** `/brief [topic]` brings in project status, preferences, and the relevant pages and memories. Clients without plugin commands use the equivalent `context` tool.
+1. **Find current knowledge.** Open a relevant Page, search, or use `/recall <query>`; `/brief [topic]` can optionally assemble a broader session-start snapshot. Clients without plugin commands use the equivalent page, search, recall, and context tools.
 2. **Capture and find knowledge while you work.** `/capture <thing>` saves a decision, lesson, gotcha, or fact with its source. `/recall <query>` retrieves only what is relevant instead of loading your whole history.
 3. **Close the loop.** `/handoff` records what changed, what remains open, and where the next session should continue.
 4. **Keep the wiki current.** `/distill` deliberately creates or refreshes pages. Between sessions, background passes can enrich captures, connect related entities, merge overlaps, and refresh eligible pages. `/lint` checks knowledge health; `/curate` brings conflicts and proposed revisions to you.

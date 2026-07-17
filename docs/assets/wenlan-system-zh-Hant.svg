@@ -1,128 +1,168 @@
-<svg width="1600" height="1040" viewBox="0 0 1600 1040" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">讓散落的工作，變成下次真正用得上的知識</title>
-  <desc id="desc">來源、工作中累積的記憶，以及它們支持的頁面，始終連在一起。</desc>
-  <rect width="1600" height="1040" fill="#F7F8FC"/>
-  <g transform="translate(80 48) scale(0.140625)">
+<svg width="1600" height="980" viewBox="0 0 1600 980" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+    <title id="title">你的資料與工作經驗，成為 持續更新的知識庫。</title>
+    <desc id="desc">來源 and 記憶 independently support a maintained Page.</desc>
+    <style>text { font-kerning: normal; }</style>
+    <rect width="1600" height="980" fill="#FCFCFB"/>
+
+    <g transform="translate(64 62) scale(0.11328125)">
     <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
     <circle cx="256" cy="256" r="160" fill="none" stroke="url(#overview-zh-Hant-desktop-ring)" stroke-width="76"/>
     <circle cx="322" cy="160" r="42" fill="url(#overview-zh-Hant-desktop-orb)"/>
   </g>
-  <text x="180" y="80" fill="#17182E" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="38" font-weight="740" text-anchor="start" letter-spacing="0">讓散落的工作，變成下次真正用得上的知識</text>
-  <text x="180" y="119" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="21" font-weight="520" text-anchor="start" letter-spacing="0">來源、工作中累積的記憶，以及它們支持的頁面，始終連在一起。</text>
+    <g data-fit-region="overview-zh-Hant-desktop-heading" data-fit-x="144" data-fit-y="58" data-fit-width="1392" data-fit-height="142" data-check-overlap="false">
 
-  <path d="M 430 310 C 470 310 466 215 500 215" fill="none" stroke="#5BA3E6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
-  <path d="M 430 590 C 470 590 466 235 500 235" fill="none" stroke="#6C63FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
-  <path d="M 740 250 V 278" fill="none" stroke="#3CB878" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
-  <path d="M 1040 500 H 1090" fill="none" stroke="#F0A43A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
+        <text x="144" y="84" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">WENLAN 知識系統</text>
+        <text x="144" y="132" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="44" font-weight="600" fill="#1A1A2E" text-anchor="start">你的資料與工作經驗，成為</text>
+<text x="144" y="178" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="44" font-weight="600" fill="#1A1A2E" text-anchor="start">持續更新的知識庫。</text>
 
-  <rect x="80" y="180" width="350" height="260" rx="14" fill="#EAF4FF" stroke="#5BA3E6" stroke-width="2"/>
-  <text x="110" y="220" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">來源</text>
-  <text x="110" y="258" fill="#17182E" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="25" font-weight="700" text-anchor="start" letter-spacing="0">你已經擁有的材料</text>
-  <rect x="110" y="282" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="1.5"/>
-      <circle cx="134" cy="302" r="7" fill="#5BA3E6"/>
-      <text x="154" y="308.46" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">文件與 PDF</text>
-<rect x="110" y="332" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="1.5"/>
-      <circle cx="134" cy="352" r="7" fill="#5BA3E6"/>
-      <text x="154" y="358.46" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">Obsidian 與 Markdown 筆記</text>
-<rect x="110" y="382" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#A8D0F3" stroke-width="1.5"/>
-      <circle cx="134" cy="402" r="7" fill="#5BA3E6"/>
-      <text x="154" y="408.46" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">過去的 AI 對話</text>
+  </g>
+    <path d="M412 352 C438 352 448 392 470 410" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
+    <path d="M412 610 C438 610 448 572 470 554" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
+    <path d="M1120 474 C1160 474 1176 474 1194 474" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
+    <g data-fit-region="overview-zh-Hant-desktop-sources" data-fit-x="72" data-fit-y="260" data-fit-width="350" data-fit-height="186" data-check-overlap="true">
 
-  <rect x="80" y="460" width="350" height="260" rx="14" fill="#F0EEFF" stroke="#6C63FF" stroke-width="2"/>
-  <text x="110" y="500" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">記憶</text>
-  <text x="110" y="538" fill="#17182E" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="24" font-weight="700" text-anchor="start" letter-spacing="0">持續工作中值得留下的事</text>
-  <rect x="110" y="548" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.5"/>
-      <circle cx="134" cy="568" r="7" fill="#6C63FF"/>
-      <text x="154" y="574.46" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">決策與經驗</text>
-<rect x="110" y="598" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.5"/>
-      <circle cx="134" cy="618" r="7" fill="#6C63FF"/>
-      <text x="154" y="624.46" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">修正與偏好</text>
-<rect x="110" y="648" width="290" height="40" rx="8" fill="#FFFFFF" stroke="#C8C2FA" stroke-width="1.5"/>
-      <circle cx="134" cy="668" r="7" fill="#6C63FF"/>
-      <text x="154" y="674.46" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="19" font-weight="620" text-anchor="start" letter-spacing="0">值得複用的專案脈絡</text>
-  <text x="110" y="704" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="600" text-anchor="start" letter-spacing="0">只保留重要知識，不是再存一份聊天記錄</text>
+      <line x1="72" y1="278" x2="72" y2="426" stroke="#5E58C8" stroke-width="3"/>
+      <g fill="none" stroke="#586174" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M99 285h11l6 6v19H99z"/>
+    <path d="M110 285v7h6"/>
+    <path d="M103 298h9M103 303h9"/>
+  </g>
+      <text x="136" y="306" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="31" font-weight="600" fill="#1A1A2E" text-anchor="start">來源</text>
+      <text x="96" y="348" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="19" font-weight="600" fill="#586174" text-anchor="start">你已經擁有的材料</text>
+      <text x="96" y="378" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="400" fill="#586174" text-anchor="start">文件 / 筆記 / AI 對話</text>
+      <g>
+      <rect x="96" y="397" width="66" height="32" rx="16" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="129" y="417.94" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#586174" text-anchor="middle">PDF</text>
+    </g>
+<g>
+      <rect x="172" y="397" width="92" height="32" rx="16" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="218" y="417.94" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#586174" text-anchor="middle">MARKDOWN</text>
+    </g>
+<g>
+      <rect x="274" y="397" width="75" height="32" rx="16" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="311.5" y="417.94" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#586174" text-anchor="middle">AI 對話</text>
+    </g>
 
-  <rect x="500" y="180" width="480" height="70" rx="35" fill="#EAF8F2" stroke="#3CB878" stroke-width="2"/>
-  <circle cx="535" cy="215" r="13" fill="#3CB878"/>
-  <path d="M529 215L534 220L543 209" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="560" y="210" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="760" text-anchor="start" letter-spacing="0">可追溯依據</text>
-  <text x="560" y="234" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="560" text-anchor="start" letter-spacing="0">每個結論都保留來源與關聯</text>
+  </g>
+    <g data-fit-region="overview-zh-Hant-desktop-memories" data-fit-x="72" data-fit-y="518" data-fit-width="350" data-fit-height="186" data-check-overlap="true">
 
-  <rect x="480" y="280" width="560" height="440" rx="12" fill="#FFFFFF" stroke="#3CB878" stroke-width="2.5"/>
-  <text x="520" y="320" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="760" text-anchor="start" letter-spacing="0">一篇持續維護的頁面</text>
-  <rect x="838" y="296" width="92" height="36" rx="18" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
-  <text x="884" y="318.9" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="720" text-anchor="middle" letter-spacing="0">目前</text>
-  <rect x="938" y="296" width="82" height="36" rx="18" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
-  <text x="979" y="318.55" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="13" font-weight="720" text-anchor="middle" letter-spacing="0">有來源引用</text>
-  <text x="520" y="374" fill="#17182E" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="34" font-weight="740" text-anchor="start" letter-spacing="0">發布策略</text>
-  <text x="520" y="414" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="19" font-weight="700" text-anchor="start" letter-spacing="0">現在已知的事</text>
-  <circle cx="520" cy="449" r="7" fill="#3CB878"/>
-      <text x="540" y="456" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="570" text-anchor="start" letter-spacing="0">早期使用者需要的是延續，而不是更多筆記。</text>
-<circle cx="520" cy="485" r="7" fill="#3CB878"/>
-      <text x="540" y="492" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="570" text-anchor="start" letter-spacing="0">重點是讓成果跨 AI 工具再次出現。</text>
-<circle cx="520" cy="521" r="7" fill="#3CB878"/>
-      <text x="540" y="528" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="570" text-anchor="start" letter-spacing="0">只有來源或意圖衝突時才需要詢問。</text>
-  <line x1="520" y1="562" x2="1000" y2="562" stroke="#D9DCE8" stroke-width="2"/>
-  <text x="520" y="590" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="760" text-anchor="start" letter-spacing="0">引用來源</text>
-  <rect x="520" y="605" width="148" height="42" rx="21" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
-  <text x="594" y="631.6" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">1 · 產品簡報</text>
-<rect x="682" y="605" width="148" height="42" rx="21" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
-  <text x="756" y="631.6" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">2 · 過去的 AI 對話</text>
-<rect x="844" y="605" width="148" height="42" rx="21" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
-  <text x="918" y="631.6" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">3 · 專案決策</text>
-  <text x="520" y="687" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="14" font-weight="760" text-anchor="start" letter-spacing="0">相關聯</text>
-  <text x="598" y="687" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="600" text-anchor="start" letter-spacing="0">測試使用者 · 發布計畫 · 定價</text>
+      <line x1="72" y1="536" x2="72" y2="684" stroke="#5E58C8" stroke-width="3"/>
+      <g fill="none" stroke="#5E58C8" stroke-width="1.7" stroke-linecap="round">
+    <path d="M99 548c0-3 2-5 5-5 2 0 4 1 5 3 1-2 3-3 5-3 3 0 5 2 5 5v14c0 3-2 5-5 5H104c-3 0-5-2-5-5z"/>
+    <path d="M104 550h10M104 555h10M104 560h7"/>
+  </g>
+      <text x="136" y="564" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="31" font-weight="600" fill="#1A1A2E" text-anchor="start">記憶</text>
+      <text x="96" y="606" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="19" font-weight="600" fill="#586174" text-anchor="start">工作中值得留下的知識</text>
+      <text x="96" y="636" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="400" fill="#586174" text-anchor="start">決策 / 修正 / 脈絡</text>
+      <g>
+      <rect x="96" y="655" width="66" height="32" rx="16" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="129" y="675.94" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#586174" text-anchor="middle">決策</text>
+    </g>
+<g>
+      <rect x="172" y="655" width="66" height="32" rx="16" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="205" y="675.94" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#586174" text-anchor="middle">經驗</text>
+    </g>
+<g>
+      <rect x="248" y="655" width="66" height="32" rx="16" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="281" y="675.94" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#586174" text-anchor="middle">脈絡</text>
+    </g>
 
-  <rect x="1100" y="180" width="420" height="540" rx="14" fill="#FFF5E5" stroke="#F0A43A" stroke-width="2"/>
-  <text x="1130" y="225" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="760" text-anchor="start" letter-spacing="0">再次用起來</text>
-  <text x="1130" y="270" fill="#17182E" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="27" font-weight="720" text-anchor="start" letter-spacing="0">最新知識回到實際工作裡</text>
-  <rect x="1130" y="322" width="360" height="60" rx="8" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.5"/>
-      <circle cx="1154" cy="352" r="7" fill="#F0A43A"/>
-      <text x="1174" y="358.12" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="620" text-anchor="start" letter-spacing="0">Brief + Recall</text>
-<rect x="1130" y="392" width="360" height="60" rx="8" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.5"/>
-      <circle cx="1154" cy="422" r="7" fill="#F0A43A"/>
-      <text x="1174" y="428.12" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="620" text-anchor="start" letter-spacing="0">可檢查的 Pages</text>
-<rect x="1130" y="462" width="360" height="60" rx="8" fill="#FFFFFF" stroke="#F0D3A8" stroke-width="1.5"/>
-      <circle cx="1154" cy="492" r="7" fill="#F0A43A"/>
-      <text x="1174" y="498.12" fill="#25283B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="620" text-anchor="start" letter-spacing="0">Claude · Codex · Cursor · MCP</text>
-  <text x="1130" y="576" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="650" text-anchor="start" letter-spacing="0">最新知識回到實際工作裡</text>
-  <text x="1130" y="610" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="560" text-anchor="start" letter-spacing="0">跨工具回到你正在做的事</text>
-  <path d="M1160 655H1460" stroke="#F0D3A8" stroke-width="2"/>
-  <text x="1310" y="690" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="18" font-weight="700" text-anchor="middle" letter-spacing="0">Brief · Recall · Pages · MCP</text>
+  </g>
+    <g data-fit-region="overview-zh-Hant-desktop-page" data-fit-x="470" data-fit-y="246" data-fit-width="650" data-fit-height="544" data-check-overlap="false">
 
-  <rect x="80" y="760" width="1440" height="150" rx="14" fill="#101024" stroke="#101024" stroke-width="2"/>
-  <line x1="800" y1="790" x2="800" y2="880" stroke="#343858" stroke-width="2"/>
-  <circle cx="125" cy="807" r="17" fill="#3CB878"/>
-  <path d="M117 807L123 813L134 800" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="160" y="814" fill="#F7F8FF" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="25" font-weight="700" text-anchor="start" letter-spacing="0">日常維護交給 Wenlan</text>
-  <text x="160" y="855" fill="#93E3F2" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="20" font-weight="600" text-anchor="start" letter-spacing="0">整理 · 連接 · 引用 · 更新</text>
-  <text x="160" y="884" fill="#A9AEC5" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="520" text-anchor="start" letter-spacing="0">不用自己反覆維護整套知識庫</text>
-  <circle cx="845" cy="807" r="17" fill="#F0A43A"/>
-  <path d="M845 798V810" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
-  <circle cx="845" cy="817" r="2" fill="#FFFFFF"/>
-  <text x="880" y="814" fill="#F7F8FF" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="25" font-weight="700" text-anchor="start" letter-spacing="0">需要判斷時由你決定</text>
-  <text x="880" y="855" fill="#FFD89B" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="20" font-weight="600" text-anchor="start" letter-spacing="0">來源衝突 · 改動你的文字</text>
-  <text x="880" y="884" fill="#A9AEC5" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="17" font-weight="520" text-anchor="start" letter-spacing="0">Wenlan 提出建議，最終由你做主</text>
+      <g filter="url(#overview-zh-Hant-desktop-page-shadow)">
+        <rect x="470" y="246" width="650" height="544" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
+      </g>
+      <text x="518" y="292" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">持續維護的頁面</text>
+      <g>
+      <rect x="978" y="270" width="102" height="30" rx="15" fill="#F2F7F3" stroke="#C7DACB"/>
+      <text x="1029" y="289.94" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#4F7558" text-anchor="middle">目前</text>
+    </g>
+      <text x="518" y="354" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="40" font-weight="600" fill="#1A1A2E" text-anchor="start">你現在掌握的知識</text>
+      <text x="518" y="386" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#8B93A3" text-anchor="start">13 小時前更新</text>
+      <circle cx="696" cy="381" r="2.5" fill="#E3E7EE"/>
+      <text x="708" y="386" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#8B93A3" text-anchor="start">6 條支撐紀錄</text>
+      <line x1="518" y1="420" x2="1072" y2="420" stroke="#E3E7EE"/>
+      <text x="518" y="456" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">目前結論</text>
+      <rect x="518" y="483" width="320" height="9" rx="4.5" fill="#DDE2EA"/>
+      <rect x="518" y="504" width="382" height="9" rx="4.5" fill="#E7EAF0"/>
+      <g>
+      <rect x="914" y="474" width="106" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="967" y="494.32" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#586174" text-anchor="middle">source_07</text>
+    </g>
+      <g>
+      <rect x="1028" y="474" width="84" height="30" rx="15" fill="#F3F2FC" stroke="#D2CFF0"/>
+      <text x="1070" y="494.32" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#5E58C8" text-anchor="middle">mem_42</text>
+    </g>
+      <rect x="518" y="551" width="402" height="9" rx="4.5" fill="#DDE2EA"/>
+      <rect x="518" y="572" width="278" height="9" rx="4.5" fill="#E7EAF0"/>
+      <g>
+      <rect x="934" y="542" width="106" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="987" y="562.32" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#586174" text-anchor="middle">source_11</text>
+    </g>
+      <circle cx="1064" cy="557" r="6" fill="#B5842E"/>
+      <line x1="1064" y1="565" x2="1064" y2="590" stroke="#B5842E" stroke-width="1.5"/>
+      <text x="518" y="634" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">相關知識</text>
+      <g>
+      <rect x="518" y="654" width="84" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="560" y="676.32" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">專案概覽</text>
+    </g>
+<g>
+      <rect x="614" y="654" width="84" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="656" y="676.32" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">決策紀錄</text>
+    </g>
+<g>
+      <rect x="710" y="654" width="84" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="752" y="676.32" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">相關研究</text>
+    </g>
+      <line x1="518" y1="720" x2="1072" y2="720" stroke="#E3E7EE"/>
+      <text x="518" y="754" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">純 Markdown</text>
+<circle cx="615" cy="749.5" r="2.5" fill="#E3E7EE"/>
+<text x="627" y="754" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">引用可檢查</text>
+<circle cx="714" cy="749.5" r="2.5" fill="#E3E7EE"/>
+<text x="726" y="754" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">版本歷史</text>
 
-  <rect x="80" y="940" width="1440" height="80" rx="12" fill="#FFFFFF" stroke="#D9DCE8" stroke-width="2"/>
-  <text x="108" y="986" fill="#62677D" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="760" text-anchor="start" letter-spacing="0">日常流程</text>
-  <rect x="300" y="956" width="142" height="48" rx="24" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
-  <text x="371" y="985.6" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Brief</text>
-<path d="M 450 980 H 480" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
-<rect x="490" y="956" width="210" height="48" rx="24" fill="#F0EEFF" stroke="#C8C2FA" stroke-width="1.5"/>
-  <text x="595" y="985.6" fill="#5048C8" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">工作 + Capture</text>
-<path d="M 708 980 H 738" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
-<rect x="748" y="956" width="150" height="48" rx="24" fill="#FFF5E5" stroke="#F0D3A8" stroke-width="1.5"/>
-  <text x="823" y="985.6" fill="#9B5A0A" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Handoff</text>
-<path d="M 906 980 H 936" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
-<rect x="946" y="956" width="210" height="48" rx="24" fill="#EAF8F2" stroke="#A9DDC4" stroke-width="1.5"/>
-  <text x="1051" y="985.6" fill="#187347" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">Refine + Distill</text>
-<path d="M 1164 980 H 1194" fill="none" stroke="#8B90A4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#overview-zh-Hant-desktop-arrow)"/>
-<rect x="1204" y="956" width="210" height="48" rx="24" fill="#EAF4FF" stroke="#A8D0F3" stroke-width="1.5"/>
-  <text x="1309" y="985.6" fill="#245F9C" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, Arial, sans-serif" font-size="16" font-weight="720" text-anchor="middle" letter-spacing="0">最新知識</text>
+  </g>
+    <g data-fit-region="overview-zh-Hant-desktop-changed-support" data-fit-x="1124" data-fit-y="704" data-fit-width="390" data-fit-height="80" data-check-overlap="true">
 
-  <defs>
-    <linearGradient id="overview-zh-Hant-desktop-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
+        <path d="M1064 590 C1064 678 1110 710 1142 716" fill="none" stroke="#B5842E" stroke-width="1.5"/>
+        <text x="1154" y="724" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8C5F16" text-anchor="start">依據發生變化</text>
+        <text x="1154" y="754" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="start">只更新受影響的結論。</text>
+
+  </g>
+    <g data-fit-region="overview-zh-Hant-desktop-back-to-work" data-fit-x="1208" data-fit-y="308" data-fit-width="326" data-fit-height="390" data-check-overlap="true">
+
+      <text x="1208" y="328" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">回到你的工作</text>
+      <text x="1208" y="382" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">閱讀。</text>
+<text x="1208" y="432" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">提問。</text>
+<text x="1208" y="482" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">繼續使用。</text>
+      <line x1="1208" y1="522" x2="1534" y2="522" stroke="#E3E7EE"/>
+      <circle cx="1221" cy="566" r="12" fill="#F3F2FC" stroke="#D2CFF0"/>
+        <text x="1221" y="571" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#5E58C8" text-anchor="middle">1</text>
+        <text x="1248" y="571" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">開啟目前頁面</text>
+<circle cx="1221" cy="614" r="12" fill="#F3F2FC" stroke="#D2CFF0"/>
+        <text x="1221" y="619" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#5E58C8" text-anchor="middle">2</text>
+        <text x="1248" y="619" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">從 AI 工具中提問</text>
+<circle cx="1221" cy="662" r="12" fill="#F3F2FC" stroke="#D2CFF0"/>
+        <text x="1221" y="667" font-family="&quot;JetBrains Mono&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, ui-monospace, monospace" font-size="13" font-weight="500" fill="#5E58C8" text-anchor="middle">3</text>
+        <text x="1248" y="667" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">帶著完整脈絡繼續</text>
+
+  </g>
+    <g data-fit-region="overview-zh-Hant-desktop-authority" data-fit-x="64" data-fit-y="842" data-fit-width="1472" data-fit-height="100" data-check-overlap="true">
+
+      <line x1="64" y1="842" x2="1536" y2="842" stroke="#E3E7EE"/>
+      <circle cx="84" cy="885" r="7" fill="#6F8F76"/>
+      <text x="106" y="882" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="start">日常維護交給 Wenlan</text>
+      <text x="106" y="912" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="17" font-weight="400" fill="#586174" text-anchor="start">在背景整理、關聯、引用與更新。</text>
+      <line x1="802" y1="868" x2="802" y2="925" stroke="#E3E7EE"/>
+      <circle cx="844" cy="885" r="7" fill="#B46A3A"/>
+      <text x="866" y="882" font-family="&quot;Songti SC&quot;, &quot;Songti TC&quot;, &quot;STSong&quot;, &quot;PingFang SC&quot;, &quot;PingFang TC&quot;, serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="start">你保留決定權</text>
+      <text x="866" y="912" font-family="&quot;PingFang SC&quot;, &quot;PingFang TC&quot;, &quot;Hiragino Sans GB&quot;, sans-serif" font-size="17" font-weight="400" fill="#586174" text-anchor="start">衝突與對你文字的改動，等待你的判斷。</text>
+
+  </g>
+
+    <defs>
+      <linearGradient id="overview-zh-Hant-desktop-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6C63FF"/>
       <stop offset="0.5" stop-color="#5BA3E6"/>
       <stop offset="1" stop-color="#4AC8E8"/>
@@ -132,8 +172,12 @@
       <stop offset="0.45" stop-color="#A5C4F7"/>
       <stop offset="1" stop-color="#4AC8E8"/>
     </radialGradient>
-    <marker id="overview-zh-Hant-desktop-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8B90A4"/>
-    </marker>
-  </defs>
-</svg>
+      <marker id="overview-zh-Hant-desktop-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0L10 5L0 10Z" fill="#5E58C8"/>
+  </marker>
+      <filter id="overview-zh-Hant-desktop-page-shadow" x="-20%" y="-20%" width="140%" height="150%">
+        <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#1A1A2E" flood-opacity="0.10"/>
+        <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1A1A2E" flood-opacity="0.06"/>
+      </filter>
+    </defs>
+  </svg>
