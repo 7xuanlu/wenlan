@@ -68,6 +68,7 @@ pub mod tags;
 pub(crate) mod temporal_query;
 pub mod topic_match;
 pub mod tuning;
+pub mod vocab;
 
 // Re-exports for convenience.
 pub use error::WenlanError;
