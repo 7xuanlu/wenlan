@@ -219,21 +219,21 @@ a1b2c3d distill: 4 pages
 - **Chat import:** Bring in ChatGPT or Claude export ZIPs; Wenlan automatically skips conversations already imported.
 - **Document Sources:** Ingest one `.md`, `.txt`, or text-extractable `.pdf` file; recurse through a folder of them; or index Markdown from an Obsidian vault.
 - **Incremental sync:** Regular file and folder Sources track changes in the background; Obsidian vaults stay read-only and resync on demand.
-- **[Atomic Memory](#two-lifecycles):** MCP clients save one complete decision, lesson, correction, preference, or fact, with provenance for its origin and a supersession chain for what it replaces.
-- **[Typed enrichment](#two-lifecycles):** A configured model classifies each Memory, then adds type-specific schema fields, dates, tags, retrieval cues, and graph links.
-- **[Source-backed Pages](#two-lifecycles):** Distill related Sources and Memories into Markdown Pages with source references and `[[wikilinks]]`; the daemon can verify and record per-claim citations.
-- **[Citation-gated refresh](#two-lifecycles):** Unsupported drafts are rejected; machine Pages refresh while human edits become reviewable revisions.
+- **Atomic Memory:** MCP clients save one complete decision, lesson, correction, preference, or fact, with [provenance and supersession](https://wenlan.app/learn/ai-memory-provenance) recording where it came from and what it replaces.
+- **Typed enrichment:** A configured model classifies each Memory, then adds type-specific schema fields, dates, tags, retrieval cues, and graph links.
+- **[Source-backed Pages](https://wenlan.app/docs/source-backed-pages):** Distill related Sources and Memories into Markdown Pages with source references and `[[wikilinks]]`; the daemon can verify and record per-claim citations.
+- **Citation-gated refresh:** Unsupported drafts are rejected; machine Pages refresh while human edits become reviewable revisions.
 - **[Hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** FTS5 finds exact words, local BGE embeddings find meaning, and RRF fuses their ranks; graph links can add context.
 - **[Retrieval channels](docs/technical-foundations.md#optional-channels-and-defaults):** Optional Page, episodic, and per-fact channels widen recall; cross-encoder reranking can improve precision.
 - **[Knowledge graph](docs/technical-foundations.md#graph-data-and-entity-resolution):** Typed entities, relations, and observations connect people, projects, claims, and supporting Memories.
-- **[Human-in-the-loop review](plugin/skills/curate/SKILL.md):** Routine work stays automatic; protected conflicts, Page revisions, entity merges, and new vocabulary wait for judgment.
-- **[Spaces](plugin/skills/README.md#choosing-the-active-space):** Keep work, personal, client, and repository knowledge inside an explicit retrieval scope.
-- **[Local daemon + MCP](docs/setup-with-ai.md):** One lightweight Rust service stays local and lets the desktop app, CLI, Claude Code, Codex, Cursor, Claude Desktop, VS Code, and Gemini CLI share the same knowledge.
+- **[Human-in-the-loop review](https://wenlan.app/docs/review-and-trust):** Routine work stays automatic; protected conflicts, Page revisions, entity merges, and new vocabulary wait for judgment.
+- **[Spaces](https://wenlan.app/docs/spaces):** Keep work, personal, client, and repository knowledge inside an explicit retrieval scope.
+- **[Local daemon + MCP](https://wenlan.app/docs/architecture):** One lightweight Rust service stays local and lets the desktop app, CLI, Claude Code, Codex, Cursor, Claude Desktop, VS Code, and Gemini CLI share the same knowledge.
 - **Custom integrations:** The localhost HTTP API accepts prepared text, webpage content, and Memories from other capture workflows.
 - **Background maintenance:** Managed mode runs configured sync, enrichment, citation work, and eligible Page refresh without an open client.
 - **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local; enrichment and synthesis can use on-device Qwen, a local endpoint, or a configured cloud model.
-- **[Inspectable ownership](#local-markdown):** Memories and graph data stay in local libSQL; Markdown, citations, revisions, git history, and Obsidian exports remain inspectable.
-- **Read-only health checks:** [`doctor`](crates/wenlan-cli/README.md#wenlan-doctor) verifies the runtime; [`lint`](plugin/skills/lint/SKILL.md) finds malformed citations, orphan links, broken embeddings, and search-index or graph integrity problems without rewriting knowledge.
+- **[Inspectable ownership](https://wenlan.app/learn/markdown-local-index-ai-memory):** Memories and graph data stay in local libSQL; Markdown, citations, revisions, git history, and Obsidian exports remain inspectable.
+- **Read-only health checks:** [`doctor`](https://wenlan.app/docs/diagnostics-and-issue-reports) verifies the runtime; [`lint`](plugin/skills/lint/SKILL.md) finds malformed citations, orphan links, broken embeddings, and search-index or graph integrity problems without rewriting knowledge.
 
 ---
 

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=f31a922578753a85635f079d9b1cd0e903113f8f614f2d3d4caf81748861848d -->
+<!-- README_SYNC: source=README.md sha256=66dab17b8efb516d4b36c2fcdb1c6fed02fa21b127d482ac21730bbf218fecc1 -->
 
 <p align="center">
   <picture>
@@ -221,21 +221,21 @@ a1b2c3d distill: 4 pages
 - **对话导入：** 导入 ChatGPT 或 Claude 的 ZIP；Wenlan 会自动跳过已经导入的对话。
 - **文档来源：** 导入单个 `.md`、`.txt` 或可提取文本的 `.pdf`，递归读取包含它们的文件夹，或索引 Obsidian 仓库中的 Markdown。
 - **增量同步：** 单个文件与普通文件夹来源会在后台追踪变化；Obsidian 仓库保持只读，按需重新同步。
-- **[原子记忆（Atomic Memory）](#two-lifecycles)：** MCP 客户端把一个完整的决策、经验、更正、偏好或事实存成一条，并保留溯源（provenance）与取代链（supersession chain）。
-- **[类型化补全（Typed enrichment）](#two-lifecycles)：** 配好模型后，Wenlan 会分类每条记忆，并补上按类型定义的 schema 字段、日期、标签、检索提示与图谱链接。
-- **[来源支撑页面（Source-backed Pages）](#two-lifecycles)：** 把相关来源与记忆提炼成带来源标记与 `[[wikilinks]]` 的 Markdown 页面；daemon 还能验证并记录逐条引用。
-- **[引用门控更新（Citation-gated refresh）](#two-lifecycles)：** 依据不足的草稿会被拒绝；机器页面可更新，用户文字只进入待审修订。
+- **原子记忆（Atomic Memory）：** MCP 客户端把一个完整的决策、经验、更正、偏好或事实存成一条，并用[溯源与取代](https://wenlan.app/learn/ai-memory-provenance)记录它来自哪里、替代了什么。
+- **类型化补全（Typed enrichment）：** 配好模型后，Wenlan 会分类每条记忆，并补上按类型定义的 schema 字段、日期、标签、检索提示与图谱链接。
+- **[来源支撑页面（Source-backed Pages）](https://wenlan.app/docs/source-backed-pages)：** 把相关来源与记忆提炼成带来源标记与 `[[wikilinks]]` 的 Markdown 页面；daemon 还能验证并记录逐条引用。
+- **引用门控更新（Citation-gated refresh）：** 依据不足的草稿会被拒绝；机器页面可更新，用户文字只进入待审修订。
 - **[混合检索（Hybrid retrieval）](docs/technical-foundations.md#retrieval-pipeline)：** FTS5 找原词，本地 BGE embedding 找语义，RRF 融合排序，图谱链接补充脉络。
 - **[检索通道（Retrieval channels）](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选的页面、情节记忆（episodic）与逐事实（per-fact）通道扩大召回；cross-encoder 重排提高精度。
 - **[知识图谱（Knowledge graph）](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 类型化实体、关系与观察连接人物、项目、主张及其支撑记忆。
-- **[人在回路审查（Human-in-the-loop）](plugin/skills/curate/SKILL.md)：** 日常工作保持自动；受保护冲突、页面修订、实体合并与新词汇才等待判断。
-- **[空间（Spaces）](plugin/skills/README.md#choosing-the-active-space)：** 用明确范围隔开工作、个人、客户与代码库的记忆、页面和检索结果。
-- **[本地 daemon + MCP](docs/setup-with-ai.md)：** 一个轻量 Rust 服务留在本机，让桌面 app、CLI、Claude Code、Codex、Cursor、Claude Desktop、VS Code 与 Gemini CLI 共用同一份知识。
+- **[人在回路审查（Human-in-the-loop）](https://wenlan.app/docs/review-and-trust)：** 日常工作保持自动；受保护冲突、页面修订、实体合并与新词汇才等待判断。
+- **[空间（Spaces）](https://wenlan.app/docs/spaces)：** 用明确范围隔开工作、个人、客户与代码库的记忆、页面和检索结果。
+- **[本地 daemon + MCP](https://wenlan.app/docs/architecture)：** 一个轻量 Rust 服务留在本机，让桌面 app、CLI、Claude Code、Codex、Cursor、Claude Desktop、VS Code 与 Gemini CLI 共用同一份知识。
 - **自定义集成：** localhost HTTP API 可接收其他采集流程准备好的文本、网页内容与记忆。
 - **后台维护：** 受管理模式可在没有客户端窗口时执行已配置的同步、补全、引用与页面更新。
 - **[模型选择](docs/technical-foundations.md#model-roles)：** 基础检索留在本机；补全与合成可用设备端 Qwen、兼容 OpenAI 的本地接口或云端模型。
-- **[可检查的所有权](#local-markdown)：** 记忆与图谱留在本地 libSQL；Markdown、引用、修订、git 历史与 Obsidian 导出都可检查。
-- **只读健康检查：** [`doctor`](crates/wenlan-cli/README.md#wenlan-doctor) 检查本地服务；[`lint`](plugin/skills/lint/SKILL.md) 找出格式错误的引用、孤立链接、损坏的 embedding，以及搜索索引或图谱完整性问题，但不会改写知识。
+- **[可检查的所有权](https://wenlan.app/learn/markdown-local-index-ai-memory)：** 记忆与图谱留在本地 libSQL；Markdown、引用、修订、git 历史与 Obsidian 导出都可检查。
+- **只读健康检查：** [`doctor`](https://wenlan.app/docs/diagnostics-and-issue-reports) 检查本地服务；[`lint`](plugin/skills/lint/SKILL.md) 找出格式错误的引用、孤立链接、损坏的 embedding，以及搜索索引或图谱完整性问题，但不会改写知识。
 
 ---
 
