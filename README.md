@@ -122,24 +122,28 @@ Wenlan turns documents, notes, and past AI conversations into a source-backed kn
 
 ### A knowledge graph that gets more useful over time
 
-With a model configured for enrichment, Wenlan can identify people and concepts in captured Memories, record observations, and connect related entities. Later refinement can link older Memories that were not connected when first saved.
+With an enrichment model configured, Wenlan extracts a local entity-relation graph from Memories: people, projects, and concepts become typed entities; claims become observations; and typed relations connect them. Entity linking and resolution reuse existing nodes instead of treating every mention as new, while each Memory keeps its source and can link to multiple entities.
 
 - **Accumulate:** New captures can extend the graph while original Sources and Memory history remain intact.
 - **Connect:** People, concepts, decisions, and evidence stay related across tools and sessions.
 - **Reuse:** Established connections help later work find related Memories and evidence instead of rediscovering context from scratch.
 - **Compare and correct:** Related claims become easier to inspect together; corrections and explicit supersession stay traceable instead of silently replacing history.
 
+During retrieval, dense entity matching finds query-relevant entities. When eligible graph links exist, the default graph-memory stream boosts linked Memories as a third [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf) signal. The path is data- and scope-dependent, and Space boundaries still apply. [How the graph path works ->](docs/technical-foundations.md#graph-assisted-retrieval)
+
 <a id="retrieval"></a>
 
 ### Retrieval across words, meaning, and connections
 
-Base Memory search combines exact-word and semantic rankings with reciprocal-rank fusion (RRF). Additional channels stay explicit:
+Wenlan's core search is a local hybrid pipeline, not a single vector lookup. Each stage has a different job:
 
-- **Exact wording:** FTS5 finds literal terms.
-- **Similar meaning:** embedding-based vector search finds semantic matches.
-- **Connected context:** the knowledge graph can boost Memories linked to relevant entities within the selected Space.
-- **Maintained synthesis:** when the Page retrieval channel is enabled, Pages are searched separately and returned alongside relevant Memories.
-- **Controlled depth:** Space limits the read scope; optional local cross-encoder reranking, bounded multi-hop graph traversal, and episodic recall add deeper paths when enabled.
+- **Exact wording — [SQLite FTS5](https://www.sqlite.org/fts5.html):** a full-text index finds literal terms, identifiers, and phrases.
+- **Similar meaning — FastEmbed + [`Qdrant/bge-base-en-v1.5-onnx-Q`](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q):** a quantized English model creates 768-dimensional embeddings; [libSQL cosine DiskANN](https://turso.tech/blog/approximate-nearest-neighbor-search-with-diskann-in-libsql) indexes them for approximate nearest-neighbor retrieval.
+- **Combined ranking — weighted [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf) (`k = 60`):** lexical and semantic rank lists are fused without pretending their raw scores share a scale; cosine similarity also weights the vector contribution.
+- **Connected context — graph-memory stream:** eligible entity links add a third RRF signal while the active read scope still filters returned Memories.
+- **Optional precision — cross-encoder reranking:** unlike embeddings, [`jinaai/jina-reranker-v1-turbo-en`](https://huggingface.co/jinaai/jina-reranker-v1-turbo-en) or [`BAAI/bge-reranker-base`](https://huggingface.co/BAAI/bge-reranker-base) reads each query-candidate pair and reorders the smaller pool; reranking is off by default.
+
+Page, episodic, and fact channels are opt-in and degrade to the remaining search signals if unavailable. Space still limits the read scope. [Methods, defaults, and limitations ->](docs/technical-foundations.md)
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -249,11 +253,12 @@ The loop has four steps:
 
 ### Models and privacy
 
-- **Local core:** Capture, recall, base hybrid search, existing graph context, and the Markdown store work without an API key or cloud account.
-- **Choose deeper synthesis:** Page synthesis and model-backed enrichment can use an on-device model, an OpenAI-compatible local endpoint such as Ollama or LM Studio, or a configured cloud provider.
+- **Local base retrieval:** The [BGE embedding model](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) runs through FastEmbed on your machine for hybrid search and needs no API key.
+- **Optional on-device synthesis:** Enrichment and Page synthesis can use user-selected [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) or [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) through [llama.cpp](https://github.com/ggml-org/llama.cpp). Wenlan does not download or activate a language model until you choose one.
+- **Other providers:** An OpenAI-compatible local endpoint such as Ollama or LM Studio, or a configured cloud provider, can supply model-backed enrichment and synthesis instead.
 - **No telemetry:** Wenlan sends no telemetry.
 
-Full workflow reference: [plugin/skills](plugin/skills/README.md).
+Full workflow reference: [plugin/skills](plugin/skills/README.md). Technical model roles: [technical foundations](docs/technical-foundations.md#model-roles).
 
 ---
 

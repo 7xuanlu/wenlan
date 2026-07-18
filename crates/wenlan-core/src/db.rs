@@ -188,7 +188,7 @@ pub struct Migration55Report {
     pub entity_links_inserted: usize,
 }
 
-/// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).
+/// Embedding dimension — must match the model (BGE-Base-EN-v1.5-Q = 768).
 pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).

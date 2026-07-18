@@ -15,5 +15,6 @@ If a plan starts with a **Superseded** note, treat it as historical context rath
 ## Current sources of truth
 
 - Repository overview and quickstart: `README.md`
+- Retrieval, graph, and model details: `technical-foundations.md`
 - Contributor workflow and CI commands: `CONTRIBUTING.md`
 - Detailed developer architecture conventions: `CLAUDE.md`
