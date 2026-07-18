@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::super::tests::test_db;
-use super::{CreateNodeOutcome, MemoryDB, NodePatch};
+use super::{CreateEdgeOutcome, CreateNodeOutcome, EdgePatch, MemoryDB, NodeLayout, NodePatch};
 
 async fn seed_page(db: &MemoryDB, page_id: &str) {
     let conn = db.conn.lock().await;
@@ -28,17 +28,19 @@ async fn init_page_map_idempotent() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;
 
-    let first = db.init_page_map("page-1").await.unwrap();
+    let (first, created_first) = db.init_page_map("page-1").await.unwrap();
+    assert!(created_first, "first call must report created = true");
     assert_eq!(first.map.revision, 1);
     assert_eq!(first.nodes.len(), 1);
     let root = &first.nodes[0];
     assert!(root.parent_id.is_none());
     assert_eq!(root.ref_kind, "page");
     assert_eq!(root.ref_id, "page-1");
-    assert_eq!(root.fingerprint, "page:page-1@~");
+    assert_eq!(root.fingerprint, "page\u{1f}page-1\u{1f}~");
 
     // Second call is a no-op: same revision, same single root, no new row.
-    let second = db.init_page_map("page-1").await.unwrap();
+    let (second, created_second) = db.init_page_map("page-1").await.unwrap();
+    assert!(!created_second, "second call must report created = false");
     assert_eq!(second.map.revision, 1);
     assert_eq!(second.nodes.len(), 1);
     assert_eq!(second.nodes[0].id, root.id);
@@ -48,7 +50,7 @@ async fn init_page_map_idempotent() {
 async fn create_map_node_fingerprint_dedup() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;
-    let map = db.init_page_map("page-1").await.unwrap();
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
     let root = root_id(&map.nodes);
 
     let first = db
@@ -67,7 +69,7 @@ async fn create_map_node_fingerprint_dedup() {
         CreateNodeOutcome::Created(node) => node,
         other => panic!("expected Created, got {other:?}"),
     };
-    assert_eq!(created.fingerprint, "memory:mem-1@~");
+    assert_eq!(created.fingerprint, "memory\u{1f}mem-1\u{1f}~");
 
     // Same (ref_kind, ref_id, parent) proposed again -> Duplicate, no revision bump.
     let revision_after_first = db
@@ -113,7 +115,7 @@ async fn create_map_node_fingerprint_dedup() {
 async fn dismissed_tombstone_blocks_reproposal() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;
-    let map = db.init_page_map("page-1").await.unwrap();
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
     let root = root_id(&map.nodes);
 
     let created = match db
@@ -164,7 +166,7 @@ async fn dismissed_tombstone_blocks_reproposal() {
         after
             .nodes
             .iter()
-            .filter(|n| n.fingerprint == "memory:mem-1@~")
+            .filter(|n| n.fingerprint == "memory\u{1f}mem-1\u{1f}~")
             .count(),
         1
     );
@@ -174,7 +176,7 @@ async fn dismissed_tombstone_blocks_reproposal() {
 async fn revision_bumps_on_every_write_and_stale_base_rejected() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;
-    let map = db.init_page_map("page-1").await.unwrap();
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
     let root = root_id(&map.nodes);
     let stale_revision = map.map.revision;
 
@@ -218,7 +220,7 @@ async fn revision_bumps_on_every_write_and_stale_base_rejected() {
 async fn root_invariants_reject_dismiss_delete_and_reparent() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;
-    let map = db.init_page_map("page-1").await.unwrap();
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
     let root = root_id(&map.nodes);
 
     let child = match db
@@ -267,7 +269,7 @@ async fn root_invariants_reject_dismiss_delete_and_reparent() {
 async fn reparent_rejects_cycle() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;
-    let map = db.init_page_map("page-1").await.unwrap();
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
     let root = root_id(&map.nodes);
 
     let a = match db
@@ -329,7 +331,7 @@ async fn reparent_rejects_cycle() {
 async fn reset_page_map_clears_tombstones() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;
-    let map = db.init_page_map("page-1").await.unwrap();
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
     let root = root_id(&map.nodes);
 
     let created = match db
@@ -363,7 +365,8 @@ async fn reset_page_map_clears_tombstones() {
     assert!(db.get_page_map("page-1", true).await.unwrap().is_none());
 
     // Fresh init + the same fingerprint must succeed as Created, not Tombstoned.
-    let map = db.init_page_map("page-1").await.unwrap();
+    let (map, created_after_reset) = db.init_page_map("page-1").await.unwrap();
+    assert!(created_after_reset);
     let root = root_id(&map.nodes);
     let outcome = db
         .create_map_node(
@@ -378,4 +381,500 @@ async fn reset_page_map_clears_tombstones() {
         .await
         .unwrap();
     assert!(matches!(outcome, CreateNodeOutcome::Created(_)));
+}
+
+// Dismissed rows are terminal: no patch, of any shape, can touch them — not
+// even one that only re-parents (which would otherwise recompute the
+// fingerprint and free the old tombstone key, letting a dismissed suggestion
+// resurface under a different parent).
+#[tokio::test]
+async fn patch_on_dismissed_node_rejected_and_tombstone_holds() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    let other_parent = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-other-parent",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let created = match db
+        .create_map_node("page-1", rev, &root, "memory", "mem-1", None, 0.0)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.delete_map_node("page-1", rev, &created.id)
+        .await
+        .unwrap();
+    let fingerprint_before = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find(|n| n.id == created.id)
+        .unwrap()
+        .fingerprint;
+
+    // A patch touching only parent_id (no status change) must still be
+    // rejected — dismissed is terminal regardless of patch contents.
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let err = db
+        .patch_map_node(
+            "page-1",
+            rev,
+            &created.id,
+            NodePatch {
+                parent_id: Some(other_parent.id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Validation(_)));
+
+    // Fingerprint must be unchanged in the DB.
+    let after = db.get_page_map("page-1", true).await.unwrap().unwrap();
+    let node_after = after.nodes.iter().find(|n| n.id == created.id).unwrap();
+    assert_eq!(node_after.fingerprint, fingerprint_before);
+
+    // A subsequent create under the original parent still tombstones.
+    let rev = after.map.revision;
+    let outcome = db
+        .create_map_node("page-1", rev, &root, "memory", "mem-1", None, 0.0)
+        .await
+        .unwrap();
+    assert_eq!(outcome, CreateNodeOutcome::Tombstoned);
+}
+
+#[tokio::test]
+async fn patch_on_dismissed_edge_rejected() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    let a = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-a",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let b = match db
+        .create_map_node("page-1", rev, &root, "memory", "mem-b", None, 0.0)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let edge = match db
+        .create_map_edge("page-1", rev, &a.id, &b.id, "link", None)
+        .await
+        .unwrap()
+    {
+        CreateEdgeOutcome::Created(edge) => edge,
+        other => panic!("expected Created, got {other:?}"),
+    };
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.delete_map_edge("page-1", rev, &edge.id).await.unwrap();
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let err = db
+        .patch_map_edge(
+            "page-1",
+            rev,
+            &edge.id,
+            EdgePatch {
+                label: Some(Some("relabel".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Validation(_)));
+}
+
+// Dismissal cannot orphan: dismissing a node with a live child is rejected.
+#[tokio::test]
+async fn dismiss_with_live_child_rejected() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    let parent = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-parent",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.create_map_node("page-1", rev, &parent.id, "memory", "mem-child", None, 0.0)
+        .await
+        .unwrap();
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let err = db
+        .delete_map_node("page-1", rev, &parent.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Validation(_)));
+}
+
+// Creating a node under a dismissed parent is rejected.
+#[tokio::test]
+async fn create_under_dismissed_parent_rejected() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    let parent = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-parent",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.delete_map_node("page-1", rev, &parent.id).await.unwrap();
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let err = db
+        .create_map_node("page-1", rev, &parent.id, "memory", "mem-child", None, 0.0)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Validation(_)));
+}
+
+// Creating an edge to a dismissed endpoint is rejected.
+#[tokio::test]
+async fn edge_to_dismissed_endpoint_rejected() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    let a = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-a",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let b = match db
+        .create_map_node("page-1", rev, &root, "memory", "mem-b", None, 0.0)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.delete_map_node("page-1", rev, &b.id).await.unwrap();
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let err = db
+        .create_map_edge("page-1", rev, &a.id, &b.id, "link", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Validation(_)));
+}
+
+#[tokio::test]
+async fn fingerprint_uses_unit_separator_and_rejects_it_in_ref_components() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    // A ref_id containing the fingerprint separator itself is rejected.
+    let err = db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "a\u{1f}b",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Validation(_)));
+
+    // ref_ids that would have collided under the OLD "{kind}:{id}@{parent}"
+    // scheme (colliding on '@'/':' in the ref_id) now insert as distinct rows.
+    let first = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "a@b",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    assert_eq!(first.fingerprint, "memory\u{1f}a@b\u{1f}~");
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let second = match db
+        .create_map_node("page-1", rev, &root, "memory", "a:b", None, 0.0)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    assert_eq!(second.fingerprint, "memory\u{1f}a:b\u{1f}~");
+    assert_ne!(first.fingerprint, second.fingerprint);
+}
+
+#[tokio::test]
+async fn init_page_map_created_flag_reflects_atomic_insert() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+
+    let (first, created_first) = db.init_page_map("page-1").await.unwrap();
+    assert!(created_first, "first call must report created = true");
+    assert_eq!(first.map.revision, 1);
+
+    let (second, created_second) = db.init_page_map("page-1").await.unwrap();
+    assert!(
+        !created_second,
+        "second call must report created = false (idempotent no-op)"
+    );
+    assert_eq!(second.map.revision, 1);
+}
+
+#[tokio::test]
+async fn put_page_map_layout_round_trip_pins_and_places_positioned_nodes() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    let child = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-1",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let viewport = r#"{"x":1.0,"y":2.0,"zoom":1.5}"#;
+    let positions = vec![NodeLayout {
+        node_id: child.id.clone(),
+        x: 10.0,
+        y: 20.0,
+        width: 100.0,
+        height: 50.0,
+        collapsed: true,
+    }];
+    let data = db
+        .put_page_map_layout("page-1", rev, Some(viewport), &positions)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        data.map.revision,
+        rev + 1,
+        "layout write must bump the revision"
+    );
+    assert_eq!(data.map.viewport.as_deref(), Some(viewport));
+
+    let updated = data.nodes.iter().find(|n| n.id == child.id).unwrap();
+    assert_eq!(updated.x, Some(10.0));
+    assert_eq!(updated.y, Some(20.0));
+    assert_eq!(updated.width, Some(100.0));
+    assert_eq!(updated.height, Some(50.0));
+    assert!(updated.placed, "positioned node must be marked placed");
+    assert!(
+        updated.pinned,
+        "positioned node must be pinned (move with placement)"
+    );
+    assert!(updated.collapsed);
+
+    // Stale base_revision is rejected.
+    let err = db
+        .put_page_map_layout("page-1", rev, None, &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Conflict(_)));
 }

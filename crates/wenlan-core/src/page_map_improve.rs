@@ -31,6 +31,15 @@ use crate::WenlanError;
 /// the page's own `source_memory_ids` order.
 const MAX_MEMORY_NODES: usize = 20;
 
+/// Upper bound on section nodes proposed for one page, mirroring
+/// `MAX_MEMORY_NODES` — a page with many headings shouldn't produce an
+/// unusable hairball either. The first N in document order.
+const MAX_SECTION_NODES: usize = 20;
+
+/// Upper bound on wikilink nodes proposed for one page, mirroring
+/// `MAX_MEMORY_NODES`. The first N in first-seen order.
+const MAX_WIKILINK_NODES: usize = 20;
+
 /// How many active pages the proactive pass scans per tick (most-recently-
 /// modified first). Bounded so an idle tick is cheap on a large corpus.
 const PROACTIVE_SCAN_LIMIT: i64 = 200;
@@ -51,7 +60,11 @@ fn improve_provenance(basis: &str) -> String {
 
 /// ATX markdown headings (`#`..`######`), de-duplicated case-insensitively in
 /// first-seen order. Setext (`===`/`---`) headings are intentionally ignored.
-fn extract_headings(content: &str) -> Vec<String> {
+///
+/// `pub` (not crate-private) so `wenlan-server`'s `compute_ref_state` can reuse
+/// this exact extraction when checking whether a `section` node's heading
+/// still exists in the page, instead of duplicating the slug logic.
+pub fn extract_headings(content: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for line in content.lines() {
@@ -199,9 +212,15 @@ pub async fn improve_page_map(db: &MemoryDB, page_id: &str) -> Result<ImproveOut
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::NotFound(format!("page {page_id} not found")))?;
+    // Captured BEFORE sourcing starts: the watermark must reflect the page's
+    // state at the moment the pass began reading it, not wall-clock time when
+    // it finishes. An edit landing during the pass bumps `last_modified` past
+    // this captured value, so the proactive scheduler still sees the page as
+    // eligible next tick instead of wrongly treating it as caught up.
+    let last_modified = page.last_modified.clone();
 
     // Ensure the map + root exist (idempotent); capture root id + revision.
-    let map = db.init_page_map(page_id).await?;
+    let (map, _created) = db.init_page_map(page_id).await?;
     let root_id = map
         .nodes
         .iter()
@@ -215,14 +234,22 @@ pub async fn improve_page_map(db: &MemoryDB, page_id: &str) -> Result<ImproveOut
     // A concurrent client write between our reads flips a create to Conflict;
     // `source` returns early on it (a graceful stop, not an error). Any real
     // error propagates via `?`.
-    source_suggestions(db, page_id, &page, &root_id, &mut revision, &mut outcome).await?;
+    let completed =
+        source_suggestions(db, page_id, &page, &root_id, &mut revision, &mut outcome).await?;
 
-    // Watermark regardless of an early conflict stop, so the proactive
-    // scheduler doesn't re-pick the same page every tick.
-    db.stamp_page_map_generated_at(page_id).await?;
+    // Only watermark a pass that ran to completion. A conflict-stop leaves
+    // generated_at untouched so the next tick's idempotent re-run resumes
+    // cheaply instead of being wrongly marked done.
+    if completed {
+        db.stamp_page_map_generated_at(page_id, &last_modified)
+            .await?;
+    }
     Ok(outcome)
 }
 
+/// Returns whether the pass ran to completion (`true`) or stopped early on a
+/// revision conflict (`false`) — the caller uses this to decide whether to
+/// stamp the watermark (spec: only a completed pass is watermarked).
 async fn source_suggestions(
     db: &MemoryDB,
     page_id: &str,
@@ -230,7 +257,7 @@ async fn source_suggestions(
     root_id: &str,
     revision: &mut i64,
     outcome: &mut ImproveOutcome,
-) -> Result<(), WenlanError> {
+) -> Result<bool, WenlanError> {
     // Ranks give newly-suggested siblings a stable order under the root.
     let mut rank = 1.0f64;
 
@@ -241,13 +268,16 @@ async fn source_suggestions(
         )
         .await?
         {
-            return Ok(());
+            return Ok(false);
         }
         rank += 1.0;
     }
 
-    // 2. The page's own markdown sections.
-    for heading in extract_headings(&page.content) {
+    // 2. The page's own markdown sections (bounded).
+    for heading in extract_headings(&page.content)
+        .into_iter()
+        .take(MAX_SECTION_NODES)
+    {
         let ref_id = format!("{page_id}#{}", crate::export::obsidian::slugify(&heading));
         if let NodeStep::Conflict = add_suggested_node(
             db,
@@ -263,7 +293,7 @@ async fn source_suggestions(
         )
         .await?
         {
-            return Ok(());
+            return Ok(false);
         }
         rank += 1.0;
     }
@@ -275,13 +305,16 @@ async fn source_suggestions(
         )
         .await?
         {
-            return Ok(());
+            return Ok(false);
         }
         rank += 1.0;
     }
 
-    // 4. Wikilinks → a linked-page node + a suggested cross-link edge.
-    for title in extract_wikilinks(&page.content) {
+    // 4. Wikilinks → a linked-page node + a suggested cross-link edge (bounded).
+    for title in extract_wikilinks(&page.content)
+        .into_iter()
+        .take(MAX_WIKILINK_NODES)
+    {
         let Some(linked_id) = db.find_active_page_id_by_title(&title).await? else {
             continue; // unresolved title — stay grounded, propose nothing
         };
@@ -307,17 +340,17 @@ async fn source_suggestions(
                 rank += 1.0;
                 continue;
             }
-            NodeStep::Conflict => return Ok(()),
+            NodeStep::Conflict => return Ok(false),
         };
         rank += 1.0;
         if let EdgeStep::Conflict =
             add_suggested_edge(db, page_id, revision, root_id, &node_id, outcome).await?
         {
-            return Ok(());
+            return Ok(false);
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// Bounded proactive pass: improves up to `budget` active pages whose content
@@ -330,6 +363,9 @@ pub async fn run_proactive_page_maps(db: &MemoryDB, budget: usize) -> Result<usi
     }
     // Most-recently-modified first — those most likely to want fresh
     // suggestions. A single bounded window suffices for an idle tick.
+    // ponytail: fixed 200-newest scan window; pages beyond it rely on
+    // explicit POST improve — add a persistent cursor if large corpora make
+    // proactive coverage matter.
     let pages = db.list_pages("active", PROACTIVE_SCAN_LIMIT, 0).await?;
     let mut improved = 0usize;
     for page in pages {
@@ -505,7 +541,7 @@ mod tests {
         )
         .await;
 
-        let map = db.init_page_map(&page_id).await.unwrap();
+        let (map, _created) = db.init_page_map(&page_id).await.unwrap();
         let root = map
             .nodes
             .iter()
@@ -612,7 +648,7 @@ mod tests {
         let dismissed_rows: Vec<_> = after
             .nodes
             .iter()
-            .filter(|n| n.fingerprint == "memory:mem-dismissed@~")
+            .filter(|n| n.fingerprint == "memory\u{1f}mem-dismissed\u{1f}~")
             .collect();
         assert_eq!(dismissed_rows.len(), 1);
         assert_eq!(dismissed_rows[0].status, "dismissed");
@@ -678,6 +714,107 @@ mod tests {
         let (db, _tmp) = test_db().await;
         let err = improve_page_map(&db, "no-such-page").await.unwrap_err();
         assert!(matches!(err, WenlanError::NotFound(_)));
+    }
+
+    // A conflict-stop must not stamp generated_at, so the next tick's
+    // idempotent re-run resumes rather than being wrongly marked done. Forces
+    // the conflict deterministically by calling the private `source_suggestions`
+    // helper directly with a stale revision (the same pattern this file already
+    // uses to test private helpers, e.g. `extract_headings_parses_atx_and_dedups`),
+    // rather than via true concurrency, which would be flaky.
+    #[tokio::test]
+    async fn improve_conflict_stop_leaves_generated_at_unchanged() {
+        let (db, _tmp) = test_db().await;
+        let page_id = seed_page(&db, "Conflict Stop", "body", vec!["mem-1".to_string()]).await;
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+
+        let (map, _created) = db.init_page_map(&page_id).await.unwrap();
+        let root_id = map
+            .nodes
+            .iter()
+            .find(|n| n.parent_id.is_none())
+            .unwrap()
+            .id
+            .clone();
+
+        // A deliberately-stale revision forces the very first candidate write
+        // to hit a revision conflict.
+        let mut stale_revision = map.map.revision + 999;
+        let mut outcome = ImproveOutcome::default();
+        let completed = source_suggestions(
+            &db,
+            &page_id,
+            &page,
+            &root_id,
+            &mut stale_revision,
+            &mut outcome,
+        )
+        .await
+        .unwrap();
+        assert!(!completed, "stale revision must stop the pass early");
+
+        // improve_page_map only stamps when `completed`; since it's false here,
+        // generated_at must still be unset.
+        assert!(
+            db.page_map_generated_at(&page_id).await.unwrap().is_none(),
+            "conflict-stop must leave generated_at unstamped"
+        );
+    }
+
+    // The watermark must reflect the page's last_modified as it was AT THE
+    // START of the pass, not wall-clock time when the pass finishes — so an
+    // edit that happens after generation still leaves the page eligible for
+    // the next proactive tick.
+    #[tokio::test]
+    async fn improve_stamps_captured_last_modified_and_page_stays_eligible_after_later_edit() {
+        let (db, _tmp) = test_db().await;
+        let page_id = seed_page(&db, "Watermark Capture", "body", vec!["mem-1".to_string()]).await;
+
+        let page_before = db.get_page(&page_id).await.unwrap().unwrap();
+        let captured = page_before.last_modified.clone();
+
+        improve_page_map(&db, &page_id).await.unwrap();
+
+        let generated_at = db
+            .page_map_generated_at(&page_id)
+            .await
+            .unwrap()
+            .expect("stamped");
+        assert_eq!(
+            generated_at, captured,
+            "must stamp with page.last_modified captured at pass start, not now()"
+        );
+
+        // Bump last_modified AFTER generation captured its value (simulating an
+        // edit that happened during/after the pass) — sleep past the RFC3339
+        // one-second resolution so the compare in run_proactive_page_maps is
+        // unambiguous.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        db.update_page_summary(&page_id, Some("edited during pass"))
+            .await
+            .unwrap();
+
+        let improved = run_proactive_page_maps(&db, 5).await.unwrap();
+        assert_eq!(
+            improved, 1,
+            "page whose last_modified advanced past the captured watermark stays eligible"
+        );
+    }
+
+    #[tokio::test]
+    async fn improve_caps_section_suggestions_at_twenty() {
+        let (db, _tmp) = test_db().await;
+        let content: String = (1..=25).map(|i| format!("# Heading {i}\n")).collect();
+        let page_id = seed_page(&db, "Many Headings", &content, vec!["mem-1".to_string()]).await;
+
+        improve_page_map(&db, &page_id).await.unwrap();
+
+        let map = db.get_page_map(&page_id, true).await.unwrap().unwrap();
+        let section_nodes = map.nodes.iter().filter(|n| n.ref_kind == "section").count();
+        assert_eq!(
+            section_nodes, 20,
+            "must cap section suggestions at MAX_SECTION_NODES"
+        );
     }
 
     // --- Proactive runner ---

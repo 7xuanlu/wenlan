@@ -43,10 +43,11 @@ fn root_node_id(nodes: &[CoreNode]) -> Option<String> {
 }
 
 /// `ref_state` is computed at read time, never stored: live iff the node's
-/// backing object still resolves. `section` refs are simplified to "live
-/// iff the parent page exists" (the full heading-existence check is
-/// deferred; `ref_id` is `"{page_id}#{heading-slug}"`, so the page id is
-/// everything before the first `#`).
+/// backing object still resolves. `section` refs additionally check that the
+/// heading itself is still present in the page's content (`ref_id` is
+/// `"{page_id}#{heading-slug}"`), reusing `wenlan_core::page_map_improve`'s
+/// exact heading extraction + slug function so this never duplicates that
+/// logic.
 async fn compute_ref_state(
     db: &MemoryDB,
     ref_kind: &str,
@@ -57,7 +58,12 @@ async fn compute_ref_state(
         "entity" => db.get_entity_name_type(ref_id).await?.is_some(),
         "page" => db.get_page(ref_id).await?.is_some(),
         "section" => match ref_id.split_once('#') {
-            Some((page_id, _heading_slug)) => db.get_page(page_id).await?.is_some(),
+            Some((page_id, heading_slug)) => match db.get_page(page_id).await? {
+                Some(page) => wenlan_core::page_map_improve::extract_headings(&page.content)
+                    .iter()
+                    .any(|h| wenlan_core::export::obsidian::slugify(h) == heading_slug),
+                None => false,
+            },
             None => false,
         },
         _ => false,
@@ -210,15 +216,17 @@ pub async fn handle_put_page_map_layout(
 /// POST /api/pages/{id}/map/nodes
 ///
 /// First mutation against a never-initialized map: `init_page_map` runs
-/// (idempotent) before the create. When the map was absent, the client's
-/// `base_revision` is necessarily a guess (GET synthesizes `revision: 0`
-/// for an absent map — a sentinel, not a real CAS token, since no
-/// `page_maps` row ever existed to be stale against), so the freshly
-/// initialized revision is used instead of trusting it; once a map
-/// exists, `base_revision` reverts to a normal conditional write. A
-/// `parent_id` of `None` attaches under the map's root, resolved here so
-/// the very first node can be created without the client already knowing
-/// the root's freshly-minted id.
+/// (idempotent) before the create. When THIS call's `init_page_map` is the
+/// one that atomically performed the insert (`created == true`, decided from
+/// the INSERT's own `rows_affected`, not a separate pre-check), the client's
+/// `base_revision` is necessarily a guess (GET synthesizes `revision: 0` for
+/// an absent map — a sentinel, not a real CAS token, since no `page_maps` row
+/// ever existed to be stale against), so the freshly initialized revision is
+/// used instead of trusting it; otherwise `base_revision` is enforced as a
+/// normal conditional write (a stale `base_revision` 409s even though the map
+/// already existed before this request). A `parent_id` of `None` attaches
+/// under the map's root, resolved here so the very first node can be created
+/// without the client already knowing the root's freshly-minted id.
 pub async fn handle_create_map_node(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(page_id): Path<String>,
@@ -239,14 +247,13 @@ pub async fn handle_create_map_node(
         .as_deref()
         .ok_or_else(|| ServerError::BadRequest("ref_id is required".to_string()))?;
 
-    let was_absent = db.get_page_map(&page_id, true).await?.is_none();
-    let map = db.init_page_map(&page_id).await?;
+    let (map, created) = db.init_page_map(&page_id).await?;
     let parent_id = match req.parent_id.clone() {
         Some(id) => id,
         None => root_node_id(&map.nodes)
             .ok_or_else(|| ServerError::Internal("page map has no root node".to_string()))?,
     };
-    let base_revision = if was_absent {
+    let base_revision = if created {
         map.map.revision
     } else {
         req.base_revision
@@ -508,6 +515,43 @@ mod tests {
             wenlan_types::requests::CreateConceptRequest {
                 title: title.to_string(),
                 content: format!("{title} body content for testing"),
+                summary: None,
+                entity_id: None,
+                source_memory_ids: vec![source_id],
+                creation_kind: Some("distilled".to_string()),
+                space: Some("default".to_string()),
+                workspace: Some("default".to_string()),
+            },
+            "test",
+            None,
+            1,
+            1.1, // forces a new page rather than clustering into an existing one
+        )
+        .await
+        .unwrap();
+        result.id
+    }
+
+    async fn seed_page_with_content(db: &MemoryDB, title: &str, content: &str) -> String {
+        let source_id = format!("src-{title}");
+        let source = wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.clone(),
+            title: format!("memory-{source_id}"),
+            content: content.to_string(),
+            memory_type: Some("fact".to_string()),
+            space: Some("default".to_string()),
+            source_agent: Some("test-agent".to_string()),
+            confidence: Some(0.9),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+        db.upsert_documents(vec![source]).await.unwrap();
+        let result = wenlan_core::post_write::create_page_with_tuning(
+            db,
+            wenlan_types::requests::CreateConceptRequest {
+                title: title.to_string(),
+                content: content.to_string(),
                 summary: None,
                 entity_id: None,
                 source_memory_ids: vec![source_id],
@@ -793,7 +837,7 @@ mod tests {
     async fn delete_map_node_rejects_root_dismissal_with_422() {
         let (db, _tmp) = new_test_db().await;
         let page_id = seed_test_page(&db, "Root Protect Page").await;
-        let map = db.init_page_map(&page_id).await.unwrap();
+        let (map, _created) = db.init_page_map(&page_id).await.unwrap();
         let root_id = map.nodes[0].id.clone();
         let base_revision = map.map.revision;
         let state = state_with_db(db);
@@ -954,6 +998,54 @@ mod tests {
         assert!(
             response.nodes.iter().any(|n| n.status == "suggested"),
             "explicit improve route must suggest regardless of the config flag"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_map_node_rejects_stale_zero_base_revision_once_map_exists() {
+        let (db, _tmp) = new_test_db().await;
+        let page_id = seed_test_page(&db, "Existing Map Page").await;
+        seed_memory(&db, "mem-1").await;
+
+        // Simulate an actor that already initialized the map before this
+        // request's own init call runs.
+        let (_pre, created) = db.init_page_map(&page_id).await.unwrap();
+        assert!(created);
+
+        let state = state_with_db(db);
+        let result = handle_create_map_node(
+            State(state),
+            Path(page_id),
+            Json(create_node_request("mem-1", 0)),
+        )
+        .await;
+
+        match result {
+            Err(ServerError::Conflict(_)) => {}
+            _ => panic!("expected 409 for stale base_revision=0 once the map already exists"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compute_ref_state_section_dangles_when_heading_removed() {
+        let (db, _tmp) = new_test_db().await;
+        let page_id = seed_page_with_content(&db, "Section Removal Page", "# Overview\nbody").await;
+        let slug = wenlan_core::export::obsidian::slugify("Overview");
+        let ref_id = format!("{page_id}#{slug}");
+
+        assert_eq!(
+            compute_ref_state(&db, "section", &ref_id).await.unwrap(),
+            RefState::Live
+        );
+
+        // Heading removed from the page's own content.
+        db.update_page_content(&page_id, "no headings here anymore", &[], "test")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            compute_ref_state(&db, "section", &ref_id).await.unwrap(),
+            RefState::Dangling
         );
     }
 }

@@ -257,20 +257,67 @@ fn row_to_map_edge(row: &libsql::Row) -> Result<PageMapEdge, WenlanError> {
     })
 }
 
-/// `fingerprint = "{ref_kind}:{ref_id}@{parent_ref}"` (spec: Identity &
-/// tombstones). The root's own fingerprint is `fingerprint_for("page",
+/// ASCII Unit Separator — joins fingerprint components unambiguously, since
+/// `validate_ref_component` rejects it from ever appearing inside a
+/// `ref_kind`/`ref_id`. Replaces the old `"{kind}:{id}@{parent}"` encoding,
+/// where a ref_id containing `:` or `@` could inject a fake component
+/// boundary and collide with an unrelated node's fingerprint.
+const FINGERPRINT_SEP: char = '\u{1f}';
+
+/// `fingerprint = "{ref_kind}<SEP>{ref_id}<SEP>{parent_ref}"` (spec: Identity
+/// & tombstones). The root's own fingerprint is `fingerprint_for("page",
 /// page_id, "~")`.
 fn fingerprint_for(ref_kind: &str, ref_id: &str, parent_ref: &str) -> String {
-    format!("{ref_kind}:{ref_id}@{parent_ref}")
+    format!("{ref_kind}{FINGERPRINT_SEP}{ref_id}{FINGERPRINT_SEP}{parent_ref}")
 }
 
-/// A node's own `"{ref_kind}:{ref_id}"` token as used in a *child's*
+/// A node's own `"{ref_kind}<SEP>{ref_id}"` token as used in a *child's*
 /// fingerprint — `"~"` when the node itself is the root.
 fn parent_ref_token(node: &PageMapNode) -> String {
     if node.parent_id.is_none() {
         "~".to_string()
     } else {
-        format!("{}:{}", node.ref_kind, node.ref_id)
+        format!("{}{FINGERPRINT_SEP}{}", node.ref_kind, node.ref_id)
+    }
+}
+
+/// Rejects a `ref_kind`/`ref_id` containing the fingerprint separator — it
+/// would otherwise let a crafted ref inject a fake component boundary into
+/// `fingerprint_for`'s encoding.
+fn validate_ref_component(ref_kind: &str, ref_id: &str) -> Result<(), WenlanError> {
+    if ref_kind.contains(FINGERPRINT_SEP) || ref_id.contains(FINGERPRINT_SEP) {
+        return Err(WenlanError::Validation(
+            "ref_kind/ref_id must not contain the fingerprint separator".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Count of non-dismissed direct children of `node_id` — used to block a
+/// dismissal (or delete, which dismisses) that would orphan live descendants
+/// (spec: dismissal cannot orphan).
+async fn count_live_children(
+    conn: &libsql::Connection,
+    page_id: &str,
+    node_id: &str,
+) -> Result<i64, WenlanError> {
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM page_map_nodes \
+             WHERE page_id = ?1 AND parent_id = ?2 AND status != 'dismissed'",
+            libsql::params![page_id, node_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("count_live_children: {e}")))?;
+    match rows
+        .next()
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("count_live_children row: {e}")))?
+    {
+        Some(row) => row
+            .get(0)
+            .map_err(|e| WenlanError::VectorDb(format!("count_live_children col: {e}"))),
+        None => Ok(0),
     }
 }
 
@@ -586,24 +633,30 @@ impl MemoryDB {
             .and_then(|m| m.generated_at))
     }
 
-    /// Stamps `page_maps.generated_at` to now WITHOUT bumping the revision — it
-    /// is a server-internal watermark, not a client-visible map change, so
-    /// bumping would raise spurious 409s against in-flight client edits. No-op
-    /// when no map row exists.
+    /// Stamps `page_maps.generated_at` to `generated_at` WITHOUT bumping the
+    /// revision — it is a server-internal watermark, not a client-visible map
+    /// change, so bumping would raise spurious 409s against in-flight client
+    /// edits. No-op when no map row exists.
     ///
-    /// Stored as an RFC3339 UTC string (`chrono::Utc::now().to_rfc3339()`) —
-    /// the SAME clock and format as `pages.last_modified` (see
-    /// `post_write::create_page_with_tuning`). This matters: the proactive
-    /// scheduler compares the two, and SQLite's `datetime('now')` ("YYYY-MM-DD
-    /// HH:MM:SS") both truncates to whole seconds and uses a space separator,
-    /// so a lexical or same-second compare against RFC3339 `last_modified`
-    /// would be wrong. One format on both sides keeps the compare honest.
-    pub async fn stamp_page_map_generated_at(&self, page_id: &str) -> Result<(), WenlanError> {
-        let now = chrono::Utc::now().to_rfc3339();
+    /// The caller passes `page.last_modified` captured at the START of an
+    /// improve pass, not `now()` — otherwise an edit made DURING the pass
+    /// (bumping `last_modified` after the watermark would be stamped) could
+    /// land between capture and stamp and be silently missed by the next
+    /// proactive tick. Same clock and format as `pages.last_modified` (see
+    /// `post_write::create_page_with_tuning`): an RFC3339 UTC string. This
+    /// matters because SQLite's `datetime('now')` ("YYYY-MM-DD HH:MM:SS")
+    /// both truncates to whole seconds and uses a space separator, so a
+    /// lexical or same-second compare against RFC3339 `last_modified` would
+    /// be wrong. One format on both sides keeps the compare honest.
+    pub async fn stamp_page_map_generated_at(
+        &self,
+        page_id: &str,
+        generated_at: &str,
+    ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE page_maps SET generated_at = ?2 WHERE page_id = ?1",
-            libsql::params![page_id, now],
+            libsql::params![page_id, generated_at],
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("stamp_page_map_generated_at: {e}")))?;
@@ -612,30 +665,47 @@ impl MemoryDB {
 
     /// Idempotent: creates the `page_maps` row + root node
     /// (`ref_kind='page'`, `ref_id=page_id`, `parent_id=NULL`, fingerprint
-    /// `"page:{page_id}@~"`) in one transaction when no map exists yet, then
-    /// returns the current map state either way. Root creation counts as
-    /// the first write, so a freshly-initialized map's `revision` is 1 — 0
-    /// is reserved for "no `page_maps` row at all" (spec: whole-map
-    /// lifecycle).
-    pub async fn init_page_map(&self, page_id: &str) -> Result<PageMapData, WenlanError> {
+    /// `fingerprint_for("page", page_id, "~")`) in one transaction when no
+    /// map exists yet, then returns the current map state either way. Root
+    /// creation counts as the first write, so a freshly-initialized map's
+    /// `revision` is 1 — 0 is reserved for "no `page_maps` row at all"
+    /// (spec: whole-map lifecycle).
+    ///
+    /// The returned `bool` is `true` only when THIS call performed the
+    /// insert, decided atomically from the INSERT's own `rows_affected`
+    /// (`ON CONFLICT(page_id) DO NOTHING`) rather than from a separate,
+    /// non-atomic pre-check — a caller (e.g. `handle_create_map_node`) must
+    /// use this flag, not an earlier `get_page_map` read, to decide whether
+    /// to substitute the freshly-initialized revision for a client's
+    /// `base_revision`; substituting on a stale earlier read let a genuinely
+    /// stale `base_revision` silently succeed instead of 409ing.
+    pub async fn init_page_map(&self, page_id: &str) -> Result<(PageMapData, bool), WenlanError> {
         let conn = self.conn.lock().await;
         if let Some(existing) = load_page_map_data(&conn, page_id, true).await? {
-            return Ok(existing);
+            return Ok((existing, false));
         }
 
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("init_page_map begin: {e}")))?;
 
-        let result: Result<(), WenlanError> = async {
+        let result: Result<bool, WenlanError> = async {
             let root_id = uuid::Uuid::new_v4().to_string();
             let fingerprint = fingerprint_for("page", page_id, "~");
-            conn.execute(
-                "INSERT INTO page_maps (page_id, revision) VALUES (?1, 0)",
-                libsql::params![page_id],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("init_page_map insert page_maps: {e}")))?;
+            let inserted = conn
+                .execute(
+                    "INSERT INTO page_maps (page_id, revision) VALUES (?1, 0) \
+                     ON CONFLICT(page_id) DO NOTHING",
+                    libsql::params![page_id],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("init_page_map insert page_maps: {e}"))
+                })?;
+            if inserted == 0 {
+                // Someone else's insert won; nothing left for us to do.
+                return Ok(false);
+            }
             conn.execute(
                 "INSERT INTO page_map_nodes (id, page_id, parent_id, rank, ref_kind, ref_id, status, fingerprint) \
                  VALUES (?1, ?2, NULL, 0, 'page', ?2, 'active', ?3)",
@@ -649,23 +719,27 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("init_page_map bump: {e}")))?;
-            Ok(())
+            Ok(true)
         }
         .await;
 
-        if let Err(e) = result {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(e);
-        }
+        let created = match result {
+            Ok(created) => created,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("init_page_map commit: {e}")))?;
 
-        load_page_map_data(&conn, page_id, true)
+        let data = load_page_map_data(&conn, page_id, true)
             .await?
             .ok_or_else(|| {
                 WenlanError::VectorDb(format!("init_page_map: {page_id} missing after insert"))
-            })
+            })?;
+        Ok((data, created))
     }
 
     /// Creates a node under `parent_id`. Requires an existing `page_maps`
@@ -689,6 +763,7 @@ impl MemoryDB {
                 "unknown ref_kind '{ref_kind}'"
             )));
         }
+        validate_ref_component(ref_kind, ref_id)?;
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
             .await
@@ -706,6 +781,11 @@ impl MemoryDB {
                 Some(p) => p,
                 None => return Err(missing_node_error(&conn, parent_id).await?),
             };
+            if parent.status == "dismissed" {
+                return Err(WenlanError::Validation(format!(
+                    "parent {parent_id} is dismissed"
+                )));
+            }
             let parent_ref = parent_ref_token(&parent);
             let fingerprint = fingerprint_for(ref_kind, ref_id, &parent_ref);
 
@@ -794,6 +874,7 @@ impl MemoryDB {
                 "unknown ref_kind '{ref_kind}'"
             )));
         }
+        validate_ref_component(ref_kind, ref_id)?;
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
             .await
@@ -811,6 +892,11 @@ impl MemoryDB {
                 Some(p) => p,
                 None => return Err(missing_node_error(&conn, parent_id).await?),
             };
+            if parent.status == "dismissed" {
+                return Err(WenlanError::Validation(format!(
+                    "parent {parent_id} is dismissed"
+                )));
+            }
             let parent_ref = parent_ref_token(&parent);
             let fingerprint = fingerprint_for(ref_kind, ref_id, &parent_ref);
 
@@ -908,6 +994,11 @@ impl MemoryDB {
             let node = read_map_node(&conn, page_id, node_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("node {node_id} not found")))?;
+            if node.status == "dismissed" {
+                return Err(WenlanError::Validation(
+                    "node is dismissed and cannot be modified".to_string(),
+                ));
+            }
             let is_root = node.parent_id.is_none();
 
             if let Some(new_status) = &patch.status {
@@ -925,6 +1016,14 @@ impl MemoryDB {
                         "invalid status transition {} -> {new_status}",
                         node.status
                     )));
+                }
+                if new_status == "dismissed" {
+                    let live_children = count_live_children(&conn, page_id, node_id).await?;
+                    if live_children > 0 {
+                        return Err(WenlanError::Validation(
+                            "node has live children and cannot be dismissed".to_string(),
+                        ));
+                    }
                 }
             }
             if patch.parent_id.is_some() && is_root {
@@ -1077,11 +1176,23 @@ impl MemoryDB {
             if current_revision != base_revision {
                 return Err(revision_conflict(page_id, current_revision, base_revision));
             }
-            if read_map_node(&conn, page_id, from_node).await?.is_none() {
-                return Err(missing_node_error(&conn, from_node).await?);
+            let from = match read_map_node(&conn, page_id, from_node).await? {
+                Some(n) => n,
+                None => return Err(missing_node_error(&conn, from_node).await?),
+            };
+            if from.status == "dismissed" {
+                return Err(WenlanError::Validation(format!(
+                    "node {from_node} is dismissed"
+                )));
             }
-            if read_map_node(&conn, page_id, to_node).await?.is_none() {
-                return Err(missing_node_error(&conn, to_node).await?);
+            let to = match read_map_node(&conn, page_id, to_node).await? {
+                Some(n) => n,
+                None => return Err(missing_node_error(&conn, to_node).await?),
+            };
+            if to.status == "dismissed" {
+                return Err(WenlanError::Validation(format!(
+                    "node {to_node} is dismissed"
+                )));
             }
 
             let edge_id = uuid::Uuid::new_v4().to_string();
@@ -1170,11 +1281,23 @@ impl MemoryDB {
             if current_revision != base_revision {
                 return Err(revision_conflict(page_id, current_revision, base_revision));
             }
-            if read_map_node(&conn, page_id, from_node).await?.is_none() {
-                return Err(missing_node_error(&conn, from_node).await?);
+            let from = match read_map_node(&conn, page_id, from_node).await? {
+                Some(n) => n,
+                None => return Err(missing_node_error(&conn, from_node).await?),
+            };
+            if from.status == "dismissed" {
+                return Err(WenlanError::Validation(format!(
+                    "node {from_node} is dismissed"
+                )));
             }
-            if read_map_node(&conn, page_id, to_node).await?.is_none() {
-                return Err(missing_node_error(&conn, to_node).await?);
+            let to = match read_map_node(&conn, page_id, to_node).await? {
+                Some(n) => n,
+                None => return Err(missing_node_error(&conn, to_node).await?),
+            };
+            if to.status == "dismissed" {
+                return Err(WenlanError::Validation(format!(
+                    "node {to_node} is dismissed"
+                )));
             }
 
             let edge_id = uuid::Uuid::new_v4().to_string();
@@ -1264,6 +1387,11 @@ impl MemoryDB {
             let edge = read_map_edge(&conn, page_id, edge_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("edge {edge_id} not found")))?;
+            if edge.status == "dismissed" {
+                return Err(WenlanError::Validation(
+                    "edge is dismissed and cannot be modified".to_string(),
+                ));
+            }
 
             if let Some(new_status) = &patch.status {
                 let allowed = matches!(
@@ -1335,8 +1463,10 @@ impl MemoryDB {
     }
 
     /// Writes viewport + per-node positions/sizes/collapsed state in one
-    /// transaction, setting `placed = 1` on every positioned node. Every
-    /// `node_id` in `positions` must already belong to this map.
+    /// transaction, setting `placed = 1` AND `pinned = 1` on every positioned
+    /// node (spec: moving a node with placement is a user mutation, so it
+    /// pins the same way any other user edit does). Every `node_id` in
+    /// `positions` must already belong to this map.
     pub async fn put_page_map_layout(
         &self,
         page_id: &str,
@@ -1362,7 +1492,7 @@ impl MemoryDB {
                     .execute(
                         "UPDATE page_map_nodes \
                          SET x = ?1, y = ?2, width = ?3, height = ?4, collapsed = ?5, placed = 1, \
-                             updated_at = datetime('now') \
+                             pinned = 1, updated_at = datetime('now') \
                          WHERE page_id = ?6 AND id = ?7",
                         libsql::params![
                             pos.x,
