@@ -193,7 +193,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 70;
+pub const SCHEMA_VERSION: u32 = 71;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -1741,6 +1741,61 @@ pub struct RefinementProposal {
     pub created_at: String,
 }
 
+/// Decode and verify the full identity/ownership contract of a lint Review Item.
+///
+/// This is shared by storage, diagnostics, and HTTP surfacing so a typed payload
+/// whose id or durable owners were tampered cannot cross any boundary.
+pub fn validate_lint_review_contract(
+    id: &str,
+    source_ids: &[String],
+    payload: &str,
+) -> Result<wenlan_types::RefinementPayload, WenlanError> {
+    let canonical_source_ids = crate::repair::canonical_lint_review_source_ids(source_ids)?;
+    if canonical_source_ids != source_ids {
+        return Err(WenlanError::Validation(
+            "lint repair review source_ids must be canonically sorted".to_string(),
+        ));
+    }
+    let decoded =
+        serde_json::from_str::<wenlan_types::RefinementPayload>(payload).map_err(|error| {
+            WenlanError::Validation(format!("invalid lint repair review payload: {error}"))
+        })?;
+    let wenlan_types::RefinementPayload::LintRepairReview {
+        check_id,
+        occurrence_digest,
+        owner_binding_digest,
+        issue,
+        choices,
+        suggested_research_queries,
+    } = &decoded
+    else {
+        return Err(WenlanError::Validation(
+            "invalid lint repair review payload action".to_string(),
+        ));
+    };
+    if id != format!("lint_review_{}", occurrence_digest.as_str()) {
+        return Err(WenlanError::Validation(
+            "lint repair review id does not match occurrence digest".to_string(),
+        ));
+    }
+    let expected_owner_binding =
+        crate::repair::lint_review_owner_binding_digest(occurrence_digest, source_ids)?;
+    if &expected_owner_binding != owner_binding_digest {
+        return Err(WenlanError::Validation(
+            "lint repair review owner binding mismatch".to_string(),
+        ));
+    }
+    wenlan_types::repair_plan::RepairReviewItem::try_new(
+        id.to_string(),
+        check_id.clone(),
+        issue.clone(),
+        choices.clone(),
+        suggested_research_queries.clone(),
+    )
+    .map_err(|error| WenlanError::Validation(error.to_string()))?;
+    Ok(decoded)
+}
+
 /// A consolidation candidate: a space with N+ decayed memories.
 #[derive(Debug, Clone)]
 pub struct ConsolidationCandidate {
@@ -2008,7 +2063,7 @@ pub struct MemoryDB {
     pub(crate) lint_freshness: Arc<crate::lint::snapshot::LintFreshnessClock>,
     page_projection_tracker: Arc<crate::page_projection_tracker::PageProjectionTracker>,
     pub(crate) derived_artifact_state: Arc<crate::derived_artifact_state::DerivedArtifactState>,
-    embedder: Arc<std::sync::Mutex<TextEmbedding>>,
+    embedder: Option<Arc<std::sync::Mutex<TextEmbedding>>>,
     chunker: ChunkingEngine,
     embedding_cache: std::sync::Mutex<EmbeddingCache>,
 }
@@ -2062,6 +2117,71 @@ impl MemoryDB {
             return query.to_string();
         }
         words.join(" OR ")
+    }
+
+    /// Open an already-current database for one approval-gated repair without
+    /// running startup migrations, schema creation, profile bootstrap, or the
+    /// embedding-model loader. The repair contract refuses stale schemas
+    /// instead of mutating them outside the approved manifest.
+    pub async fn open_for_repair(db_path: &Path) -> Result<Self, WenlanError> {
+        let db_file = db_path.join("origin_memory.db");
+        if !db_file.is_file() {
+            return Err(WenlanError::Validation(
+                "repair_database_missing".to_string(),
+            ));
+        }
+
+        let db = libsql::Builder::new_local(db_file.to_str().unwrap_or("origin_memory.db"))
+            .build()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair database open: {error}")))?;
+        let conn = db
+            .connect()
+            .map_err(|error| WenlanError::VectorDb(format!("repair database connect: {error}")))?;
+        // Connection-local integrity enforcement; unlike journal_mode, this
+        // PRAGMA does not rewrite canonical database state.
+        conn.execute("PRAGMA foreign_keys = ON", ())
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair database foreign keys: {error}"))
+            })?;
+        let mut rows = conn
+            .query("PRAGMA user_version", ())
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair database schema version: {error}"))
+            })?;
+        let user_version = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair database schema row: {error}")))?
+            .ok_or_else(|| WenlanError::Validation("repair_database_schema_missing".to_string()))?
+            .get::<i64>(0)
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair database schema value: {error}"))
+            })?;
+        drop(rows);
+        if user_version != i64::from(SCHEMA_VERSION) {
+            return Err(WenlanError::Validation(
+                "repair_database_schema_mismatch".to_string(),
+            ));
+        }
+
+        let lint_freshness = Arc::new(
+            crate::lint::snapshot::LintFreshnessClock::new(&db).map_err(|error| {
+                WenlanError::VectorDb(format!("lint freshness observer: {error}"))
+            })?,
+        );
+        Ok(Self {
+            _db: db,
+            conn: tokio::sync::Mutex::new(conn),
+            lint_freshness,
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
+            embedder: None,
+            chunker: ChunkingEngine::default(),
+            embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
+        })
     }
 
     pub async fn new(db_path: &Path, emitter: Arc<dyn EventEmitter>) -> Result<Self, WenlanError> {
@@ -2260,7 +2380,7 @@ impl MemoryDB {
             lint_freshness,
             page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
-            embedder: Arc::new(std::sync::Mutex::new(embedder)),
+            embedder: Some(Arc::new(std::sync::Mutex::new(embedder))),
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
@@ -2339,7 +2459,7 @@ impl MemoryDB {
             lint_freshness,
             page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
-            embedder,
+            embedder: Some(embedder),
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
@@ -6664,9 +6784,206 @@ impl MemoryDB {
                     "[migration] Migration 70 applied: pages.source_revision monotonic compile CAS"
                 );
             }
+
+            if version < 71 {
+                self.migrate_71_lint_review_owner_bindings().await?;
+            }
         }
 
         Ok(())
+    }
+
+    async fn migrate_71_lint_review_owner_bindings(&self) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN TRANSACTION", ())
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m71 begin: {error}")))?;
+        let migration = async {
+            let mut rows = conn
+                .query(
+                    "SELECT id,source_ids,payload,status
+                       FROM refinement_queue
+                      WHERE action='lint_repair_review'
+                      ORDER BY id",
+                    (),
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("m71 read lint reviews: {error}"))
+                })?;
+            let mut legacy_rows = Vec::new();
+            while let Some(row) = rows.next().await.map_err(|error| {
+                WenlanError::VectorDb(format!("m71 read lint review row: {error}"))
+            })? {
+                legacy_rows.push((
+                    row.get::<String>(0)
+                        .map_err(|error| WenlanError::VectorDb(format!("m71 read id: {error}")))?,
+                    row.get::<String>(1).map_err(|error| {
+                        WenlanError::VectorDb(format!("m71 read source_ids: {error}"))
+                    })?,
+                    row.get::<Option<String>>(2).map_err(|error| {
+                        WenlanError::VectorDb(format!("m71 read payload: {error}"))
+                    })?,
+                    row.get::<String>(3).map_err(|error| {
+                        WenlanError::VectorDb(format!("m71 read status: {error}"))
+                    })?,
+                ));
+            }
+            drop(rows);
+
+            let mut updates = Vec::with_capacity(legacy_rows.len());
+            for (id, source_ids_json, payload, status) in legacy_rows {
+                if !matches!(
+                    status.as_str(),
+                    "awaiting_review" | "resolved" | "dismissed"
+                ) {
+                    return Err(WenlanError::Validation(format!(
+                        "m71 malformed lint review {id}: invalid status {status}"
+                    )));
+                }
+                let source_ids =
+                    serde_json::from_str::<Vec<String>>(&source_ids_json).map_err(|error| {
+                        WenlanError::Validation(format!(
+                            "m71 malformed lint review {id} source_ids: {error}"
+                        ))
+                    })?;
+                let canonical_source_ids = crate::repair::canonical_lint_review_source_ids(
+                    &source_ids,
+                )
+                .map_err(|error| {
+                    WenlanError::Validation(format!(
+                        "m71 malformed lint review {id} source_ids: {error}"
+                    ))
+                })?;
+                let payload = payload.ok_or_else(|| {
+                    WenlanError::Validation(format!(
+                        "m71 malformed lint review {id}: missing payload"
+                    ))
+                })?;
+                let mut value =
+                    serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
+                        WenlanError::Validation(format!(
+                            "m71 malformed lint review {id} payload: {error}"
+                        ))
+                    })?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    WenlanError::Validation(format!(
+                        "m71 malformed lint review {id}: payload is not an object"
+                    ))
+                })?;
+                let occurrence_digest = object
+                    .get("occurrence_digest")
+                    .cloned()
+                    .ok_or_else(|| {
+                        WenlanError::Validation(format!(
+                            "m71 malformed lint review {id}: missing occurrence_digest"
+                        ))
+                    })
+                    .and_then(|value| {
+                        serde_json::from_value::<wenlan_types::repair::RepairDigest>(value).map_err(
+                            |error| {
+                                WenlanError::Validation(format!(
+                                    "m71 malformed lint review {id} occurrence_digest: {error}"
+                                ))
+                            },
+                        )
+                    })?;
+                let owner_binding_digest = crate::repair::lint_review_owner_binding_digest(
+                    &occurrence_digest,
+                    &canonical_source_ids,
+                )?;
+                if let Some(existing) = object.get("owner_binding_digest") {
+                    let existing = serde_json::from_value::<wenlan_types::repair::RepairDigest>(
+                        existing.clone(),
+                    )
+                    .map_err(|error| {
+                        WenlanError::Validation(format!(
+                            "m71 malformed lint review {id} owner_binding_digest: {error}"
+                        ))
+                    })?;
+                    if existing != owner_binding_digest {
+                        return Err(WenlanError::Validation(format!(
+                            "m71 malformed lint review {id}: owner binding mismatch"
+                        )));
+                    }
+                } else {
+                    object.insert(
+                        "owner_binding_digest".to_string(),
+                        serde_json::to_value(&owner_binding_digest)?,
+                    );
+                }
+                let decoded =
+                    serde_json::from_value::<wenlan_types::RefinementPayload>(value.clone())
+                        .map_err(|error| {
+                            WenlanError::Validation(format!(
+                                "m71 malformed lint review {id} payload contract: {error}"
+                            ))
+                        })?;
+                let wenlan_types::RefinementPayload::LintRepairReview {
+                    check_id,
+                    occurrence_digest: decoded_occurrence,
+                    owner_binding_digest: decoded_owner_binding,
+                    issue,
+                    choices,
+                    suggested_research_queries,
+                } = decoded
+                else {
+                    return Err(WenlanError::Validation(format!(
+                        "m71 malformed lint review {id}: wrong payload action"
+                    )));
+                };
+                if id != format!("lint_review_{}", decoded_occurrence.as_str())
+                    || decoded_owner_binding != owner_binding_digest
+                    || wenlan_types::repair_plan::RepairReviewItem::try_new(
+                        id.clone(),
+                        check_id,
+                        issue,
+                        choices,
+                        suggested_research_queries,
+                    )
+                    .is_err()
+                {
+                    return Err(WenlanError::Validation(format!(
+                        "m71 malformed lint review {id}: payload contract mismatch"
+                    )));
+                }
+                updates.push((
+                    id,
+                    serde_json::to_string(&canonical_source_ids)?,
+                    serde_json::to_string(&value)?,
+                ));
+            }
+            for (id, source_ids, payload) in updates {
+                conn.execute(
+                    "UPDATE refinement_queue SET source_ids=?1,payload=?2 WHERE id=?3",
+                    libsql::params![source_ids, payload, id],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("m71 update lint review: {error}"))
+                })?;
+            }
+            conn.execute("PRAGMA user_version = 71", ())
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("m71 bump: {error}")))?;
+            Ok(())
+        }
+        .await;
+
+        match migration {
+            Ok(()) => {
+                if let Err(error) = conn.execute("COMMIT", ()).await {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(WenlanError::VectorDb(format!("m71 commit: {error}")));
+                }
+                log::info!("[migration] Migration 71 applied: lint review owner binding digests");
+                Ok(())
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
     }
 
     /// Migration 41 helper: seed one self-alias per entity, then collapse
@@ -7453,7 +7770,10 @@ impl MemoryDB {
                 return Ok(cached);
             }
         }
-        let mut embedder = self.embedder.lock().unwrap();
+        let embedder = self.embedder.as_ref().ok_or_else(|| {
+            WenlanError::Embedding("embedding_unavailable_in_repair_mode".to_string())
+        })?;
+        let mut embedder = embedder.lock().unwrap();
         let embeddings = embedder
             .embed(vec![text], None)
             .map_err(|e| WenlanError::Embedding(e.to_string()))?;
@@ -7475,7 +7795,10 @@ impl MemoryDB {
             return Ok(vec![]);
         }
         let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        let mut embedder = self.embedder.lock().unwrap();
+        let embedder = self.embedder.as_ref().ok_or_else(|| {
+            WenlanError::Embedding("embedding_unavailable_in_repair_mode".to_string())
+        })?;
+        let mut embedder = embedder.lock().unwrap();
         embedder
             .embed(text_refs, None)
             .map_err(|e| WenlanError::Embedding(e.to_string()))
@@ -21259,6 +21582,12 @@ impl MemoryDB {
         payload: Option<&str>,
         confidence: f64,
     ) -> Result<(), WenlanError> {
+        if action == "lint_repair_review" {
+            return Err(WenlanError::Validation(
+                "lint repair reviews require the canonical insert_lint_review_if_absent writer"
+                    .to_string(),
+            ));
+        }
         let conn = self.conn.lock().await;
         let source_ids_json = serde_json::to_string(source_ids).unwrap_or_default();
         conn.execute(
@@ -21277,6 +21606,7 @@ impl MemoryDB {
         source_ids: &[String],
         payload: &str,
     ) -> Result<bool, WenlanError> {
+        let expected_payload = validate_lint_review_contract(id, source_ids, payload)?;
         let source_ids_json = serde_json::to_string(source_ids)?;
         let conn = self.conn.lock().await;
         let changed = conn
@@ -21284,13 +21614,66 @@ impl MemoryDB {
                 "INSERT OR IGNORE INTO refinement_queue
                      (id, action, source_ids, payload, confidence, status)
                  VALUES (?1, 'lint_repair_review', ?2, ?3, 1.0, 'awaiting_review')",
-                libsql::params![id.to_string(), source_ids_json, payload.to_string()],
+                libsql::params![id.to_string(), source_ids_json.clone(), payload.to_string()],
             )
             .await
             .map_err(|error| {
                 WenlanError::VectorDb(format!("insert lint repair review: {error}"))
             })?;
-        Ok(changed == 1)
+        if changed == 1 {
+            return Ok(true);
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT action,source_ids,payload
+                   FROM refinement_queue
+                  WHERE id=?1
+                  LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("read lint repair review collision: {error}"))
+            })?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("read lint repair review collision row: {error}"))
+            })?
+            .ok_or_else(|| {
+                WenlanError::Validation("lint repair review collision row disappeared".to_string())
+            })?;
+        let existing_action = row
+            .get::<String>(0)
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+        let existing_source_ids = row
+            .get::<String>(1)
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+        let existing_payload = row
+            .get::<Option<String>>(2)
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+        let existing_source_ids = serde_json::from_str::<Vec<String>>(&existing_source_ids)
+            .map_err(|error| {
+                WenlanError::Validation(format!(
+                    "lint repair review collision has invalid source_ids: {error}"
+                ))
+            })?;
+        let existing_payload = existing_payload.ok_or_else(|| {
+            WenlanError::Validation("lint repair review collision has no payload".to_string())
+        })?;
+        let existing_payload =
+            validate_lint_review_contract(id, &existing_source_ids, &existing_payload)?;
+        if existing_action != "lint_repair_review"
+            || existing_source_ids.as_slice() != source_ids
+            || existing_payload != expected_payload
+        {
+            return Err(WenlanError::Validation(
+                "lint repair review id collision is not equivalent".to_string(),
+            ));
+        }
+        Ok(false)
     }
 
     /// Get all pending/awaiting_review refinement proposals.
@@ -26581,7 +26964,7 @@ impl MemoryDB {
     /// citations (JSON array of `wenlan_types::pages::PageCitation`, may be NULL —
     /// NULL and unparseable both default to an empty Vec).
     /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 20.
-    fn row_to_page(row: &libsql::Row) -> Result<Page, WenlanError> {
+    pub(crate) fn row_to_page(row: &libsql::Row) -> Result<Page, WenlanError> {
         let source_ids_json: String = row.get::<String>(6).unwrap_or_else(|_| "[]".to_string());
         let source_memory_ids: Vec<String> =
             serde_json::from_str(&source_ids_json).unwrap_or_default();
@@ -30420,7 +30803,7 @@ pub(crate) mod tests {
             lint_freshness,
             page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
-            embedder: shared_embedder(),
+            embedder: Some(shared_embedder()),
             // Token-aware chunker matching production; falls back to char-based
             // when the BGE tokenizer isn't in the resolved cache.
             chunker: build_chunker(std::path::Path::new(".nonexistent")),
@@ -53205,7 +53588,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 70);
     }
 
     #[tokio::test]
@@ -53257,7 +53639,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 70);
     }
 
     #[tokio::test]
@@ -55377,5 +55758,322 @@ pub(crate) mod tests {
             );
         }
         assert_eq!(seen, n, "every upserted chunk row should be returned");
+    }
+
+    #[tokio::test]
+    async fn lint_review_enqueue_rejects_invalid_contracts_and_non_equivalent_collisions() {
+        let (db, _dir) = test_db().await;
+        let occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let review_id = format!("lint_review_{occurrence}");
+        let source_ids = vec!["mem_a".to_string()];
+        let payload_for = |issue: &str, owners: &[String]| {
+            serde_json::json!({
+                "action": "lint_repair_review",
+                "check_id": "identity.memory_state_integrity",
+                "occurrence_digest": occurrence,
+                "owner_binding_digest": crate::repair::lint_review_owner_binding_digest(
+                    &wenlan_types::repair::RepairDigest::parse(occurrence).unwrap(),
+                    owners,
+                )
+                .unwrap(),
+                "issue": issue,
+                "choices": ["confirm", "unpin"],
+                "suggested_research_queries": []
+            })
+            .to_string()
+        };
+        let payload = payload_for("ambiguous state", &source_ids);
+
+        assert!(db
+            .insert_refinement_proposal(
+                &review_id,
+                "lint_repair_review",
+                &source_ids,
+                Some(&payload),
+                1.0,
+            )
+            .await
+            .is_err());
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, "not-json")
+            .await
+            .is_err());
+        assert!(db
+            .insert_lint_review_if_absent(
+                "lint_review_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                &source_ids,
+                &payload,
+            )
+            .await
+            .is_err());
+        assert!(db
+            .insert_lint_review_if_absent(
+                &review_id,
+                &source_ids,
+                &payload_for("ambiguous state", &["mem_b".to_string()]),
+            )
+            .await
+            .is_err());
+
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, &payload)
+            .await
+            .unwrap());
+        assert!(db
+            .insert_lint_review_if_absent(
+                &review_id,
+                &source_ids,
+                &payload_for("different issue", &source_ids),
+            )
+            .await
+            .is_err());
+
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE refinement_queue
+                    SET action = 'relation_conflict'
+                  WHERE id = ?1",
+                libsql::params![review_id.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, &payload)
+            .await
+            .is_err());
+
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE refinement_queue
+                    SET action = 'lint_repair_review',
+                        source_ids = '[\"mem_b\"]'
+                  WHERE id = ?1",
+                libsql::params![review_id.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, &payload)
+            .await
+            .is_err());
+    }
+
+    async fn create_repair_open_probe(dir: &std::path::Path, schema_version: u32) {
+        std::fs::create_dir_all(dir).unwrap();
+        let db_file = dir.join("origin_memory.db");
+        let database = libsql::Builder::new_local(db_file.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(&format!(
+                "PRAGMA user_version = {schema_version}; \
+                 CREATE TABLE repair_open_probe (value TEXT NOT NULL);"
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_71_backfills_lint_review_owner_binding_without_changing_row_identity() {
+        let (db, _dir) = test_db().await;
+        let occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let id = format!("lint_review_{occurrence}");
+        let legacy_source_ids_json = r#"["page-b","page-a"]"#;
+        let canonical_source_ids_json = r#"["page-a","page-b"]"#;
+        let legacy_payload = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": occurrence,
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": [],
+        })
+        .to_string();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES (?1,'lint_repair_review',?2,?3,'dismissed','2023-11-14 22:13:20')",
+                libsql::params![id.clone(), legacy_source_ids_json, legacy_payload],
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 70", ()).await.unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 71 must be idempotent");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id,status,source_ids,payload
+                   FROM refinement_queue WHERE id=?1",
+                libsql::params![id.clone()],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<String>(0).unwrap(), id);
+        assert_eq!(row.get::<String>(1).unwrap(), "dismissed");
+        assert_eq!(
+            row.get::<String>(2).unwrap(),
+            canonical_source_ids_json,
+            "migration must safely canonicalize the existing owner set"
+        );
+        let payload: wenlan_types::RefinementPayload =
+            serde_json::from_str(&row.get::<String>(3).unwrap()).unwrap();
+        let wenlan_types::RefinementPayload::LintRepairReview {
+            occurrence_digest,
+            owner_binding_digest,
+            ..
+        } = payload
+        else {
+            panic!("expected lint repair review payload");
+        };
+        assert_eq!(
+            owner_binding_digest,
+            crate::repair::lint_review_owner_binding_digest(
+                &occurrence_digest,
+                &["page-a".to_string(), "page-b".to_string()],
+            )
+            .unwrap()
+        );
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            71
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_71_rejects_malformed_lint_review_without_partial_backfill_or_version_bump() {
+        let (db, _dir) = test_db().await;
+        let valid_occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let valid_id = format!("lint_review_{valid_occurrence}");
+        let valid_payload = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": valid_occurrence,
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": [],
+        })
+        .to_string();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES (?1,'lint_repair_review','[\"page-a\"]',?2,'awaiting_review',
+                         '2023-11-14 22:13:20')",
+                libsql::params![valid_id.clone(), valid_payload.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES ('lint_review_malformed','lint_repair_review','[\"page-b\"]',
+                         'not-json','awaiting_review','2023-11-14 22:13:20')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 70", ()).await.unwrap();
+        }
+
+        let error = db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("m71"));
+
+        let conn = db.conn.lock().await;
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            70
+        );
+        let mut payload_rows = conn
+            .query(
+                "SELECT payload FROM refinement_queue WHERE id=?1",
+                libsql::params![valid_id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            payload_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            valid_payload
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_open_requires_an_existing_current_schema_without_bootstrap_or_embedder() {
+        let root = tempfile::tempdir().unwrap();
+        let db_path = root.path().join("memorydb");
+        create_repair_open_probe(&db_path, SCHEMA_VERSION).await;
+
+        let db = MemoryDB::open_for_repair(&db_path).await.unwrap();
+        let connection = db.conn.lock().await;
+        let mut rows = connection
+            .query(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut tables = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            tables.push(row.get::<String>(0).unwrap());
+        }
+        drop(rows);
+        drop(connection);
+
+        assert_eq!(tables, vec!["repair_open_probe"]);
+        assert!(db
+            .generate_embeddings(&["must stay unloaded".to_string()])
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn repair_open_rejects_missing_or_stale_database_without_creating_one() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing");
+        assert!(MemoryDB::open_for_repair(&missing).await.is_err());
+        assert!(!missing.exists());
+
+        let stale = root.path().join("stale");
+        create_repair_open_probe(&stale, SCHEMA_VERSION - 1).await;
+        assert!(MemoryDB::open_for_repair(&stale).await.is_err());
     }
 }

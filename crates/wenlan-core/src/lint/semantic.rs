@@ -23,7 +23,7 @@ pub(crate) fn semantic_record_digest(kind: &str, durable_id: &str) -> LintDigest
     semantic_record_key_digest(&format!("{kind}:{durable_id}"))
 }
 
-pub(super) fn semantic_record_key_digest(key: &str) -> LintDigest {
+pub(crate) fn semantic_record_key_digest(key: &str) -> LintDigest {
     let digest: [u8; 32] = Sha256::digest(key.as_bytes()).into();
     LintDigest::from_u64(u64::from_le_bytes(
         digest[..8].try_into().expect("digest prefix"),
@@ -478,33 +478,8 @@ fn semantic_result(
         judged,
         unresolved,
     };
-    let result = if population.eligible() == 0 {
-        terminal_result(
-            context,
-            check_id,
-            population,
-            LintOutcome::NotRunPrerequisite,
-            LintReasonCode::InsufficientSemanticEvidence,
-            telemetry,
-        )
-    } else if population.truncated() {
-        terminal_result(
-            context,
-            check_id,
-            population,
-            LintOutcome::FailedToRun,
-            LintReasonCode::SemanticPopulationIncomplete,
-            telemetry,
-        )
-    } else if check_candidates.is_empty() {
-        terminal_result(
-            context,
-            check_id,
-            population,
-            LintOutcome::NotRunPrerequisite,
-            LintReasonCode::InsufficientSemanticEvidence,
-            telemetry,
-        )
+    let result = if check_candidates.is_empty() {
+        completed_result(context, candidates, check_id, population, &[], adjudication)
     } else {
         match adjudication {
             None => terminal_result(
@@ -656,15 +631,15 @@ fn completed_result(
             coverage: LintCoverage::new(
                 LintValidationMethod::IntrinsicSample,
                 semantic_denominator(population),
-                population.candidates(),
+                population.packet_candidates(),
                 LINT_MAX_EVIDENCE_PER_CHECK,
-                false,
+                population.truncated(),
                 affected,
             )
             .expect("complete semantic coverage"),
             metrics: semantic_metrics(
                 population,
-                population.candidates(),
+                verdicts.len() as u64,
                 affected,
                 adjudication,
                 unresolved,

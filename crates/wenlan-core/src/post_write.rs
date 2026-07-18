@@ -7,9 +7,12 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use std::{collections::HashSet, path::Path, str::FromStr};
+use std::{collections::HashSet, fmt::Write as _, path::Path, str::FromStr};
 use wenlan_types::{
-    repair::RepairDigest,
+    repair::{
+        RepairDigest, RepairManifest, RepairMutation, RepairRollbackPayloadV2, RepairTarget,
+        RepairWriter,
+    },
     requests::{
         AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
         UpdatePageRequest,
@@ -71,17 +74,112 @@ impl RepairWriteProof {
     }
 }
 
+fn recovery_required_after_rollback_failure(
+    error: &WenlanError,
+    rollback_error: impl std::fmt::Display,
+) -> WenlanError {
+    log::error!("repair outcome is uncertain after {error}; rollback failed: {rollback_error}");
+    WenlanError::Conflict("repair_apply_recovery_required".to_string())
+}
+
+async fn rollback_repair_transaction(
+    connection: &libsql::Connection,
+    error: &WenlanError,
+    force_failure: bool,
+) -> Result<(), WenlanError> {
+    if force_failure {
+        return Err(recovery_required_after_rollback_failure(
+            error,
+            "forced rollback failure",
+        ));
+    }
+    connection
+        .execute("ROLLBACK", ())
+        .await
+        .map(|_| ())
+        .map_err(|rollback_error| recovery_required_after_rollback_failure(error, rollback_error))
+}
+
+struct ReclassifyMemoryCasInput<'a> {
+    source_id: &'a str,
+    expected_receipt: &'a RepairDigest,
+    expected_space: Option<&'a str>,
+    review_binding: Option<&'a wenlan_types::repair::RepairReviewBinding>,
+    after_memory_type: MemoryType,
+    force_rollback_failure: bool,
+}
+
 pub async fn reclassify_memory_cas<F>(
     db: &MemoryDB,
     source_id: &str,
     expected_receipt: &RepairDigest,
     expected_space: Option<&str>,
+    review_binding: Option<&wenlan_types::repair::RepairReviewBinding>,
     after_memory_type: MemoryType,
     before_commit: F,
 ) -> Result<RepairWriteProof, WenlanError>
 where
     F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
 {
+    reclassify_memory_cas_inner(
+        db,
+        ReclassifyMemoryCasInput {
+            source_id,
+            expected_receipt,
+            expected_space,
+            review_binding,
+            after_memory_type,
+            force_rollback_failure: false,
+        },
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn reclassify_memory_cas_with_forced_rollback_failure<F>(
+    db: &MemoryDB,
+    source_id: &str,
+    expected_receipt: &RepairDigest,
+    expected_space: Option<&str>,
+    review_binding: Option<&wenlan_types::repair::RepairReviewBinding>,
+    after_memory_type: MemoryType,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    reclassify_memory_cas_inner(
+        db,
+        ReclassifyMemoryCasInput {
+            source_id,
+            expected_receipt,
+            expected_space,
+            review_binding,
+            after_memory_type,
+            force_rollback_failure: true,
+        },
+        before_commit,
+    )
+    .await
+}
+
+async fn reclassify_memory_cas_inner<F>(
+    db: &MemoryDB,
+    input: ReclassifyMemoryCasInput<'_>,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let ReclassifyMemoryCasInput {
+        source_id,
+        expected_receipt,
+        expected_space,
+        review_binding,
+        after_memory_type,
+        force_rollback_failure,
+    } = input;
     let conn = db.conn.lock().await;
     conn.execute("BEGIN IMMEDIATE", ())
         .await
@@ -89,6 +187,14 @@ where
     let result = async {
         crate::repair::validate_target_space_on_connection(&conn, source_id, expected_space)
             .await?;
+        if let Some(review_binding) = review_binding {
+            crate::repair::validate_reclassification_review_on_connection(
+                &conn,
+                review_binding,
+                source_id,
+            )
+            .await?;
+        }
         let (before_target_receipt, target_rows) =
             crate::repair::target_receipt_on_connection(&conn, source_id).await?;
         if &before_target_receipt != expected_receipt {
@@ -137,6 +243,934 @@ where
     let proof = match result {
         Ok(proof) => proof,
         Err(error) => {
+            rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = before_commit(&proof) {
+        rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+        return Err(error);
+    }
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let commit_error = WenlanError::VectorDb(format!("repair commit failed: {error}"));
+        rollback_repair_transaction(&conn, &commit_error, force_rollback_failure).await?;
+        return Err(commit_error);
+    }
+    Ok(proof)
+}
+
+pub(crate) async fn complete_entity_extraction_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    complete_entity_extraction_cas_inner(db, manifest, rollback, false, before_commit).await
+}
+
+#[cfg(test)]
+pub(crate) async fn complete_entity_extraction_cas_with_forced_rollback_failure<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    complete_entity_extraction_cas_inner(db, manifest, rollback, true, before_commit).await
+}
+
+async fn complete_entity_extraction_cas_inner<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    force_rollback_failure: bool,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let (
+        memory_id,
+        entity_ids,
+        scope,
+        enrichment_status,
+        enrichment_error,
+        enrichment_attempts,
+        enrichment_updated_at,
+    ) = match (manifest.target(), manifest.mutation(), rollback) {
+        (
+            RepairTarget::MemoryEntityExtraction {
+                memory_id,
+                entity_ids,
+                scope,
+                ..
+            },
+            RepairMutation::CompleteEntityExtraction {
+                entity_ids: mutation_entity_ids,
+            },
+            RepairRollbackPayloadV2::CompleteEntityExtraction {
+                memory_id: rollback_memory_id,
+                enrichment_status,
+                enrichment_error,
+                enrichment_attempts,
+                enrichment_updated_at,
+                ..
+            },
+        ) if manifest.writer() == RepairWriter::CompleteEntityExtraction
+            && memory_id == rollback_memory_id
+            && entity_ids == mutation_entity_ids =>
+        {
+            (
+                memory_id,
+                entity_ids,
+                scope,
+                enrichment_status,
+                enrichment_error,
+                *enrichment_attempts,
+                *enrichment_updated_at,
+            )
+        }
+        _ => {
+            return Err(WenlanError::Validation(
+                "entity extraction repair target/writer/mutation mismatch".to_string(),
+            ))
+        }
+    };
+    if enrichment_status != "failed" {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    let review_binding = manifest.source().review_binding().ok_or_else(|| {
+        WenlanError::Validation("entity extraction repair review binding missing".to_string())
+    })?;
+    let expected_owner_ids = [memory_id.clone()];
+    if review_binding.owner_ids() != expected_owner_ids {
+        return Err(WenlanError::Validation(
+            "entity extraction repair review binding mismatch".to_string(),
+        ));
+    }
+
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let result = async {
+        crate::repair::validate_target_space_on_connection(&conn, memory_id, scope.space()).await?;
+        crate::repair::validate_selected_entities_on_connection(&conn, entity_ids, scope.space())
+            .await?;
+        let occurrence = crate::repair::validate_complete_entity_extraction_review_on_connection(
+            &conn,
+            review_binding.review_id(),
+            review_binding.owner_ids(),
+        )
+        .await?;
+        if &occurrence != review_binding.occurrence_digest() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before =
+            crate::repair::capture_complete_entity_extraction_on_connection(&conn, memory_id)
+                .await?;
+        if &before != rollback {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before_target_receipt = crate::repair::complete_entity_extraction_receipt(&before)?;
+        if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let non_target_before = crate::repair::effect_guard_receipt(conn.total_changes());
+        let mut inserted = 0_u64;
+        for entity_id in entity_ids {
+            inserted = inserted.saturating_add(
+                conn.execute(
+                    "INSERT INTO memory_entities(memory_id,entity_id)
+                     SELECT ?1,?2
+                      WHERE EXISTS(
+                            SELECT 1 FROM entities
+                             WHERE id=?2
+                               AND ((?3 IS NULL AND space IS NULL) OR space=?3))
+                        AND NOT EXISTS(
+                            SELECT 1 FROM memory_entities
+                             WHERE memory_id=?1 AND entity_id=?2)",
+                    libsql::params![
+                        memory_id.clone(),
+                        entity_id.clone(),
+                        scope.space().map(str::to_string)
+                    ],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!(
+                        "repair complete entity extraction link: {error}"
+                    ))
+                })?,
+            );
+        }
+        let updated = conn
+            .execute(
+                "UPDATE enrichment_steps SET status='ok',error=NULL
+                 WHERE source_id=?1 AND step_name='entity_extract'
+                   AND status=?2 AND error IS ?3 AND attempts=?4 AND updated_at=?5",
+                libsql::params![
+                    memory_id.clone(),
+                    enrichment_status.clone(),
+                    enrichment_error.clone(),
+                    enrichment_attempts,
+                    enrichment_updated_at
+                ],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair complete entity extraction step: {error}"))
+            })?;
+        if updated != 1 {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let after =
+            crate::repair::capture_complete_entity_extraction_on_connection(&conn, memory_id)
+                .await?;
+        let RepairRollbackPayloadV2::CompleteEntityExtraction {
+            before_entity_ids: after_entity_ids,
+            ..
+        } = &after
+        else {
+            unreachable!("complete entity extraction capture returns aggregate payload")
+        };
+        if entity_ids
+            .iter()
+            .any(|entity_id| after_entity_ids.binary_search(entity_id).is_err())
+        {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let after_target_receipt = crate::repair::complete_entity_extraction_receipt(&after)?;
+        if after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let allowed_changes = inserted.saturating_add(updated);
+        let normalized_total_changes = conn
+            .total_changes()
+            .checked_sub(allowed_changes)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        let non_target_after = crate::repair::effect_guard_receipt(normalized_total_changes);
+        if non_target_after != non_target_before {
+            return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
+        }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            post_apply_db_digest,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
+            rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = before_commit(&proof) {
+        rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+        return Err(error);
+    }
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let commit_error = WenlanError::VectorDb(format!("repair commit failed: {error}"));
+        rollback_repair_transaction(&conn, &commit_error, force_rollback_failure).await?;
+        return Err(commit_error);
+    }
+    Ok(proof)
+}
+
+pub(crate) async fn rename_page_title_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    page_root: &Path,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    rename_page_title_cas_inner(db, manifest, rollback, page_root, || Ok(()), before_commit).await
+}
+
+#[cfg(test)]
+pub(crate) async fn rename_page_title_cas_with_projection_write_hook<F, G>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    page_root: &Path,
+    after_target_write: G,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+    G: FnOnce() -> Result<(), WenlanError>,
+{
+    rename_page_title_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        after_target_write,
+        before_commit,
+    )
+    .await
+}
+
+async fn rename_page_title_cas_inner<F, G>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    page_root: &Path,
+    after_target_write: G,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+    G: FnOnce() -> Result<(), WenlanError>,
+{
+    let (page_id, scope, before_title, after_title, after_embedding_hex) =
+        match (manifest.target(), manifest.mutation(), rollback) {
+            (
+                RepairTarget::PageProjection { page_id, scope },
+                RepairMutation::RenamePageTitle {
+                    before_title,
+                    after_title,
+                    after_embedding_hex,
+                },
+                RepairRollbackPayloadV2::RenamePageTitle {
+                    page_id: rollback_page_id,
+                    ..
+                },
+            ) if manifest.writer() == RepairWriter::RenamePageTitle
+                && page_id == rollback_page_id =>
+            {
+                (
+                    page_id,
+                    scope,
+                    before_title,
+                    after_title,
+                    after_embedding_hex,
+                )
+            }
+            _ => {
+                return Err(WenlanError::Validation(
+                    "page title repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+    let review_binding = manifest.source().review_binding().ok_or_else(|| {
+        WenlanError::Validation("page title repair review binding missing".to_string())
+    })?;
+    if review_binding.owner_ids().len() != 1
+        || review_binding.owner_ids()[0].as_str() != page_id.as_str()
+    {
+        return Err(WenlanError::Validation(
+            "page title repair review binding mismatch".to_string(),
+        ));
+    }
+    let embedding_sql = decode_page_title_embedding(after_embedding_hex)?;
+    let session = crate::export::knowledge::KnowledgeProjectionWrite::begin_owned_repair_session(
+        page_root.to_path_buf(),
+        db,
+    )?;
+    let projection = session.locked();
+    let excluded_paths = crate::repair::rename_page_title_excluded_paths(rollback)?;
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let mut projection_written = false;
+    let result = async {
+        let mut target_rows = conn
+            .query(
+                "SELECT title,version,status,COALESCE(workspace,space)
+                   FROM pages WHERE id=?1 LIMIT 2",
+                libsql::params![page_id.as_str()],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair page title target: {error}"))
+            })?;
+        let target = target_rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair page title target row: {error}"))
+            })?
+            .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?;
+        let current_title = target.get::<String>(0).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current title: {error}"))
+        })?;
+        let current_version = target.get::<i64>(1).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current version: {error}"))
+        })?;
+        let current_status = target.get::<String>(2).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current status: {error}"))
+        })?;
+        let current_scope = target.get::<Option<String>>(3).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current scope: {error}"))
+        })?;
+        if target_rows.next().await.map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title duplicate target: {error}"))
+        })?
+        .is_some()
+            || current_title != *before_title
+            || current_version != manifest.expected_state().version().unwrap_or_default()
+            || current_status != "active"
+            || current_scope.as_deref() != scope.space()
+        {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        drop(target_rows);
+        crate::repair::validate_rename_page_title_collision_on_connection(
+            &conn,
+            page_id,
+            before_title,
+            after_title,
+            scope.space(),
+        )
+        .await?;
+        let occurrence = crate::repair::validate_rename_page_title_review_on_connection(
+            &conn,
+            review_binding.review_id(),
+            page_id,
+        )
+        .await?;
+        if &occurrence != review_binding.occurrence_digest() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before =
+            crate::repair::capture_rename_page_title_on_connection(&conn, &projection, page_id)
+                .await?;
+        if &before != rollback {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before_target_receipt = crate::repair::rename_page_title_receipt(&before)?;
+        if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let database_changes_before_target = conn.total_changes();
+        let stored_database_guard = crate::repair::effect_guard_receipt(0);
+        let before_scan = projection.scan_page_root_controlled(
+            true,
+            &crate::lint::pages::fs::PageScanControl::with_timeout(
+                std::time::Duration::from_secs(30),
+            ),
+        )?;
+        let non_target_before = crate::repair::rename_page_title_non_target_receipt(
+            &stored_database_guard,
+            before_scan.non_target_digest(&excluded_paths),
+            &before,
+        )?;
+
+        let affected = conn
+            .execute(
+                "UPDATE pages
+                    SET title=?1,version=version+1,embedding=vector32(?2)
+                  WHERE id=?3 AND status='active' AND version=?4 AND title=?5
+                    AND ((?6 IS NULL AND COALESCE(workspace,space) IS NULL)
+                         OR COALESCE(workspace,space)=?6)
+                    AND NOT EXISTS(
+                        SELECT 1 FROM pages collision
+                         WHERE collision.status='active' AND collision.id<>?3
+                           AND ((?6 IS NULL AND COALESCE(collision.workspace,collision.space) IS NULL)
+                                OR COALESCE(collision.workspace,collision.space)=?6)
+                           AND lower(collision.title)=lower(?1))",
+                libsql::params![
+                    after_title.as_str(),
+                    embedding_sql,
+                    page_id.as_str(),
+                    current_version,
+                    before_title.as_str(),
+                    scope.space().map(str::to_string)
+                ],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair page title update: {error}"))
+            })?;
+        if affected != 1 {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        // The canonical Page UPDATE fires the Page FTS maintenance triggers.
+        // Treat that statement's complete observed delta as the target write,
+        // then require every later proof/projection step to remain DB-read-only.
+        let database_changes_after_target = conn.total_changes();
+        let target_change_delta = database_changes_after_target
+            .checked_sub(database_changes_before_target)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        if target_change_delta < affected {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let page = page_on_connection(&conn, page_id).await?;
+        if page.title != *after_title || page.version != current_version + 1 {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        projection_written = true;
+        projection.write_page_with_after_target_write(&page, after_target_write)?;
+
+        let after =
+            crate::repair::capture_rename_page_title_on_connection(&conn, &projection, page_id)
+                .await?;
+        let after_target_receipt = crate::repair::rename_page_title_receipt(&after)?;
+        if after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        if conn.total_changes() != database_changes_after_target {
+            return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+        }
+        let after_scan = projection.scan_page_root_controlled(
+            true,
+            &crate::lint::pages::fs::PageScanControl::with_timeout(
+                std::time::Duration::from_secs(30),
+            ),
+        )?;
+        let non_target_after = crate::repair::rename_page_title_non_target_receipt(
+            &stored_database_guard,
+            after_scan.non_target_digest(&excluded_paths),
+            &after,
+        )?;
+        if non_target_after != non_target_before {
+            return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+        }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            post_apply_db_digest,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
+            let projection_error = if projection_written {
+                restore_rename_projection(&projection, rollback).err()
+            } else {
+                None
+            };
+            let rollback_error = conn.execute("ROLLBACK", ()).await.err();
+            return match (projection_error, rollback_error) {
+                (None, None) => Err(error),
+                _ => Err(WenlanError::Conflict(
+                    "repair_apply_recovery_required".to_string(),
+                )),
+            };
+        }
+    };
+    if let Err(error) = before_commit(&proof) {
+        let projection_error = restore_rename_projection(&projection, rollback).err();
+        let rollback_error = conn.execute("ROLLBACK", ()).await.err();
+        return match (projection_error, rollback_error) {
+            (None, None) => Err(error),
+            _ => Err(WenlanError::Conflict(
+                "repair_apply_recovery_required".to_string(),
+            )),
+        };
+    }
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let projection_error = restore_rename_projection(&projection, rollback).err();
+        let rollback_error = conn.execute("ROLLBACK", ()).await.err();
+        return if projection_error.is_none() && rollback_error.is_none() {
+            Err(WenlanError::VectorDb(format!(
+                "repair commit failed: {error}"
+            )))
+        } else {
+            Err(WenlanError::Conflict(
+                "repair_apply_recovery_required".to_string(),
+            ))
+        };
+    }
+    Ok(proof)
+}
+
+fn restore_rename_projection(
+    projection: &crate::export::knowledge::LockedRepairProjection<'_>,
+    rollback: &RepairRollbackPayloadV2,
+) -> Result<(), WenlanError> {
+    let RepairRollbackPayloadV2::RenamePageTitle {
+        projection_target_path,
+        projection_entries,
+        ..
+    } = rollback
+    else {
+        return Err(WenlanError::Validation(
+            "repair_rollback_writer_mismatch".to_string(),
+        ));
+    };
+    projection.restore_rename_page_projection(projection_target_path, projection_entries)
+}
+
+fn decode_page_title_embedding(value: &str) -> Result<String, WenlanError> {
+    const EMBEDDING_HEX_LEN: usize = 768 * std::mem::size_of::<f32>() * 2;
+    if value.len() != EMBEDDING_HEX_LEN
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return Err(WenlanError::Validation(
+            "repair_page_embedding_invalid".to_string(),
+        ));
+    }
+    let bytes = hex::decode(value)
+        .map_err(|_| WenlanError::Validation("repair_page_embedding_invalid".to_string()))?;
+    let mut encoded = String::with_capacity(768 * 12);
+    encoded.push('[');
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let float = f32::from_le_bytes(chunk.try_into().expect("four-byte chunks"));
+        if !float.is_finite() {
+            return Err(WenlanError::Validation(
+                "repair_page_embedding_invalid".to_string(),
+            ));
+        }
+        if index > 0 {
+            encoded.push(',');
+        }
+        write!(&mut encoded, "{float}")
+            .map_err(|error| WenlanError::Validation(error.to_string()))?;
+    }
+    encoded.push(']');
+    Ok(encoded)
+}
+
+pub(crate) async fn page_on_connection(
+    connection: &libsql::Connection,
+    page_id: &str,
+) -> Result<crate::pages::Page, WenlanError> {
+    let mut rows = connection
+        .query(
+            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version,
+                    status, created_at, last_compiled, last_modified,
+                    COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0),
+                    COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'),
+                    COALESCE(review_status, 'confirmed'), workspace, citations
+               FROM pages WHERE id=?1 LIMIT 2",
+            libsql::params![page_id],
+        )
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair page title read: {error}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair page title row: {error}")))?
+        .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?;
+    let page = MemoryDB::row_to_page(&row)?;
+    if rows
+        .next()
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair page title rows: {error}")))?
+        .is_some()
+    {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    Ok(page)
+}
+
+pub async fn apply_deterministic_repair_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    prior_verified_tag_targets: &[RepairTarget],
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    if matches!(
+        manifest.writer(),
+        RepairWriter::ReclassifyMemory | RepairWriter::RegeneratePageProjection
+    ) {
+        return Err(WenlanError::Validation(
+            "deterministic database writer mismatch".to_string(),
+        ));
+    }
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let result = async {
+        crate::repair::validate_tag_record_set_on_connection(
+            &conn,
+            manifest,
+            prior_verified_tag_targets,
+            false,
+        )
+        .await?;
+        let (before_target_receipt, _) =
+            crate::repair::repair_target_receipt_on_connection(&conn, manifest.target()).await?;
+        if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let non_target_before = crate::repair::effect_guard_receipt(conn.total_changes());
+        let affected = match (manifest.target(), manifest.writer(), manifest.mutation()) {
+            (
+                RepairTarget::Memory { source_id, .. },
+                RepairWriter::NormalizeMemorySourceAgent,
+                RepairMutation::NormalizeMemorySourceAgent {
+                    before_source_agent,
+                },
+            ) => conn
+                .execute(
+                    "UPDATE memories SET source_agent=NULL
+                     WHERE source='memory' AND source_id=?1
+                       AND source_agent=?2 AND TRIM(source_agent)=''",
+                    libsql::params![source_id.clone(), before_source_agent.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair normalize source agent: {error}"))
+                })?,
+            (
+                RepairTarget::Memory { source_id, .. },
+                RepairWriter::ClearMemorySupersedes,
+                RepairMutation::ClearMemorySupersedes { before_supersedes },
+            ) if source_id == before_supersedes => conn
+                .execute(
+                    "UPDATE memories SET supersedes=NULL
+                     WHERE source='memory' AND source_id=?1 AND supersedes=?1",
+                    libsql::params![source_id.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair clear supersedes: {error}"))
+                })?,
+            (
+                RepairTarget::Memory { source_id, .. },
+                RepairWriter::UnstageOrphanRevision,
+                RepairMutation::UnstageOrphanRevision,
+            ) => conn
+                .execute(
+                    "UPDATE memories SET pending_revision=0
+                     WHERE source='memory' AND source_id=?1
+                       AND pending_revision=1 AND supersedes IS NULL",
+                    libsql::params![source_id.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair unstage orphan revision: {error}"))
+                })?,
+            (
+                RepairTarget::Tag {
+                    source,
+                    source_id,
+                    tag,
+                    ..
+                },
+                RepairWriter::DeleteTagRow,
+                RepairMutation::DeleteTagRow {
+                    source: mutation_source,
+                    source_id: mutation_source_id,
+                    tag: mutation_tag,
+                },
+            ) if source == mutation_source
+                && source_id == mutation_source_id
+                && tag == mutation_tag =>
+            {
+                conn.execute(
+                    "DELETE FROM document_tags
+                     WHERE source=?1 AND source_id=?2 AND tag=?3
+                       AND (TRIM(tag)='' OR source NOT IN ('memory','page')
+                         OR (source='memory' AND NOT EXISTS(
+                            SELECT 1 FROM memories m WHERE m.source_id=document_tags.source_id))
+                         OR (source='page' AND NOT EXISTS(
+                            SELECT 1 FROM pages p WHERE p.id=document_tags.source_id)))",
+                    libsql::params![source.clone(), source_id.clone(), tag.clone()],
+                )
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("repair delete tag row: {error}")))?
+            }
+            (
+                RepairTarget::MemoryEntityLink {
+                    memory_id,
+                    entity_id,
+                    ..
+                },
+                RepairWriter::DeleteMemoryEntityLink,
+                RepairMutation::DeleteMemoryEntityLink {
+                    memory_id: mutation_memory_id,
+                    entity_id: mutation_entity_id,
+                },
+            ) if memory_id == mutation_memory_id && entity_id == mutation_entity_id => conn
+                .execute(
+                    "DELETE FROM memory_entities
+                     WHERE memory_id=?1 AND entity_id=?2
+                       AND (NOT EXISTS(
+                            SELECT 1 FROM memories m WHERE m.source_id=memory_entities.memory_id)
+                         OR NOT EXISTS(
+                            SELECT 1 FROM entities e WHERE e.id=memory_entities.entity_id))",
+                    libsql::params![memory_id.clone(), entity_id.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair delete memory entity link: {error}"))
+                })?,
+            (
+                RepairTarget::PageLink {
+                    source_page_id,
+                    label_key,
+                    scope,
+                },
+                RepairWriter::BindPageLink,
+                RepairMutation::BindPageLink {
+                    before_target_page_id: None,
+                    after_target_page_id,
+                },
+            ) => {
+                let mut target_rows = conn
+                    .query(
+                        "SELECT id FROM pages
+                         WHERE LOWER(title)=LOWER(?1) AND status='active'
+                           AND ((?2 IS NULL AND COALESCE(workspace,space) IS NULL)
+                                OR COALESCE(workspace,space)=?2)
+                         ORDER BY id LIMIT 2",
+                        libsql::params![label_key.clone(), scope.space()],
+                    )
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!("repair page link target: {error}"))
+                    })?;
+                let first = target_rows
+                    .next()
+                    .await
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+                    .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?
+                    .get::<String>(0)
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+                if first != *after_target_page_id
+                    || target_rows
+                        .next()
+                        .await
+                        .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+                        .is_some()
+                {
+                    return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+                }
+                drop(target_rows);
+                conn.execute(
+                    "UPDATE page_links SET target_page_id=?1
+                     WHERE source_page_id=?2 AND label_key=?3 AND target_page_id IS NULL",
+                    libsql::params![
+                        after_target_page_id.clone(),
+                        source_page_id.clone(),
+                        label_key.clone()
+                    ],
+                )
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("repair bind page link: {error}")))?
+            }
+            (
+                RepairTarget::Page { page_id, scope },
+                RepairWriter::ArchiveEmptySourcePage,
+                RepairMutation::ArchiveEmptySourcePage {
+                    before_status,
+                    after_status,
+                },
+            ) if before_status == "active" && after_status == "archived" => {
+                let expected_version = manifest.expected_state().version().ok_or_else(|| {
+                    WenlanError::Validation("repair page version missing".to_string())
+                })?;
+                let mut content_rows = conn
+                    .query(
+                        "SELECT content FROM pages WHERE id=?1 AND version=?2",
+                        libsql::params![page_id.clone(), expected_version],
+                    )
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!(
+                            "repair read empty source page content: {error}"
+                        ))
+                    })?;
+                let content = content_rows
+                    .next()
+                    .await
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+                    .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?
+                    .get::<String>(0)
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+                drop(content_rows);
+                if !content.trim().is_empty() {
+                    return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+                }
+                conn.execute(
+                    "UPDATE pages SET status='archived'
+                     WHERE id=?1 AND version=?2 AND status='active'
+                       AND creation_kind='source' AND review_status='unconfirmed'
+                       AND COALESCE(user_edited,0)=0
+                       AND json_valid(source_memory_ids)
+                       AND json_type(source_memory_ids)='array'
+                       AND json_array_length(source_memory_ids)=0
+                       AND ((?3 IS NULL AND COALESCE(workspace,space) IS NULL)
+                            OR COALESCE(workspace,space)=?3)
+                       AND NOT EXISTS(
+                            SELECT 1 FROM page_sources ps WHERE ps.page_id=pages.id)
+                       AND NOT EXISTS(
+                            SELECT 1 FROM page_evidence pe WHERE pe.page_id=pages.id)",
+                    libsql::params![page_id.clone(), expected_version, scope.space()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair archive empty source page: {error}"))
+                })?
+            }
+            _ => {
+                return Err(WenlanError::Validation(
+                    "deterministic repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+        if affected == 0 {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let (after_target_receipt, _) =
+            crate::repair::repair_target_receipt_on_connection(&conn, manifest.target()).await?;
+        if after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let normalized_total_changes = conn
+            .total_changes()
+            .checked_sub(affected)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        let non_target_after = crate::repair::effect_guard_receipt(normalized_total_changes);
+        if non_target_after != non_target_before {
+            return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
+        }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            post_apply_db_digest,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
             if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
                 return Err(WenlanError::VectorDb(format!(
                     "{error}; repair rollback failed: {rollback_error}"
@@ -160,6 +1194,419 @@ where
         )));
     }
     Ok(proof)
+}
+
+pub(crate) async fn regenerate_page_projection_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let (page_id, expected_scope, database_version) =
+        match (manifest.target(), manifest.writer(), manifest.mutation()) {
+            (
+                RepairTarget::PageProjection { page_id, scope },
+                RepairWriter::RegeneratePageProjection,
+                RepairMutation::RegeneratePageProjection { database_version },
+            ) => (page_id.as_str(), scope.space(), *database_version),
+            _ => {
+                return Err(WenlanError::Validation(
+                    "page projection repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+    let page = db
+        .get_page(page_id)
+        .await?
+        .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?;
+    if page.version != database_version
+        || page.workspace.as_deref().or(page.space.as_deref()) != expected_scope
+    {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    let paths = crate::repair::projection_rollback_paths(rollback)?;
+    let target_path = crate::repair::page_projection_target_path(rollback)?;
+    let conn = db.conn.lock().await;
+    let page_row = crate::repair::projection_page_row_on_connection(&conn, page_id).await?;
+    let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+    crate::export::knowledge::KnowledgeProjectionWrite::with_repair_lock(
+        page_root.to_path_buf(),
+        db,
+        |write| {
+            let before = crate::repair::capture_page_projection_from_row(
+                page_root,
+                page_id,
+                page_row.clone(),
+                &paths,
+                &rollback.table,
+            )?;
+            let before_target_receipt = crate::repair::target_receipt(&before)?;
+            if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let scan_control = crate::lint::pages::fs::PageScanControl::with_timeout(
+                std::time::Duration::from_secs(30),
+            );
+            let before_scan =
+                crate::lint::pages::fs::scan_page_root_controlled(page_root, true, &scan_control)
+                    .map_err(|error| {
+                    WenlanError::Validation(format!("repair projection scan: {error}"))
+                })?;
+            if !crate::lint::pages::state_checks::projection_target_is_exclusive_page_markdown(
+                &before_scan,
+                page_id,
+                &target_path,
+            ) {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let non_target_before = crate::repair::page_projection_non_target_receipt(
+                before_scan.non_target_digest(&paths),
+                &before,
+            )?;
+
+            let result = (|| {
+                write.write_page(&page)?;
+                let after_scan = crate::lint::pages::fs::scan_page_root_controlled(
+                    page_root,
+                    true,
+                    &crate::lint::pages::fs::PageScanControl::with_timeout(
+                        std::time::Duration::from_secs(30),
+                    ),
+                )
+                .map_err(|error| {
+                    WenlanError::Validation(format!("repair projection scan: {error}"))
+                })?;
+                let after = crate::repair::capture_page_projection_from_row(
+                    page_root,
+                    page_id,
+                    page_row.clone(),
+                    &paths,
+                    &rollback.table,
+                )?;
+                let non_target_after = crate::repair::page_projection_non_target_receipt(
+                    after_scan.non_target_digest(&paths),
+                    &after,
+                )?;
+                if non_target_after != non_target_before {
+                    return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+                }
+                Ok((non_target_after, after))
+            })();
+            let (non_target_after, after) = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    return match crate::repair::restore_page_projection_snapshot(page_root, &before)
+                    {
+                        Ok(()) => Err(error),
+                        Err(rollback_error) => Err(WenlanError::VectorDb(format!(
+                            "{error}; repair projection rollback failed: {rollback_error}"
+                        ))),
+                    };
+                }
+            };
+            let completion = (|| {
+                let after_target_receipt = crate::repair::target_receipt(&after)?;
+                if after_target_receipt == before_target_receipt {
+                    return Err(WenlanError::VectorDb(
+                        "repair_target_write_unproven".to_string(),
+                    ));
+                }
+                let proof = RepairWriteProof {
+                    before_target_receipt,
+                    after_target_receipt,
+                    non_target_before,
+                    non_target_after,
+                    post_apply_db_digest: post_apply_db_digest.clone(),
+                };
+                before_commit(&proof)?;
+                Ok(proof)
+            })();
+            match completion {
+                Ok(proof) => Ok(proof),
+                Err(error) => {
+                    match crate::repair::restore_page_projection_snapshot(page_root, &before) {
+                        Ok(()) => Err(error),
+                        Err(rollback_error) => Err(WenlanError::VectorDb(format!(
+                            "{error}; repair projection rollback failed: {rollback_error}"
+                        ))),
+                    }
+                }
+            }
+        },
+    )
+}
+
+pub(crate) async fn quarantine_stale_page_projection_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        || Ok(()),
+        || Ok(()),
+        || Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn quarantine_stale_page_projection_cas_with_before_pin<B, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_pin: B,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    B: FnOnce() -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        before_pin,
+        || Ok(()),
+        || Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn quarantine_stale_page_projection_cas_with_after_pin<A, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    after_pin: A,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    A: FnOnce() -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        || Ok(()),
+        after_pin,
+        || Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn quarantine_stale_page_projection_cas_with_before_source_stage<S, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_source_stage: S,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    S: FnOnce() -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        || Ok(()),
+        || Ok(()),
+        before_source_stage,
+        before_commit,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn quarantine_stale_page_projection_cas_inner<B, A, S, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_pin: B,
+    after_pin: A,
+    before_source_stage: S,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    B: FnOnce() -> Result<(), WenlanError>,
+    A: FnOnce() -> Result<(), WenlanError>,
+    S: FnOnce() -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let (page_id, source_path, quarantine_path) =
+        match (manifest.target(), manifest.writer(), manifest.mutation()) {
+            (
+                RepairTarget::PageProjection {
+                    page_id,
+                    scope: wenlan_types::repair::RepairScope::Global,
+                },
+                RepairWriter::QuarantineStalePageProjection,
+                RepairMutation::QuarantineStalePageProjection {
+                    source_path,
+                    quarantine_path,
+                },
+            ) => (
+                page_id.as_str(),
+                source_path.as_str(),
+                quarantine_path.as_str(),
+            ),
+            _ => {
+                return Err(WenlanError::Validation(
+                    "stale page projection repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+    let (captured_source, captured_quarantine) =
+        crate::repair::stale_page_projection_paths(rollback)?;
+    if captured_source != source_path || captured_quarantine != quarantine_path {
+        return Err(WenlanError::Validation(
+            "repair_projection_rollback_invalid".to_string(),
+        ));
+    }
+    let connection = db.conn.lock().await;
+    let mut owner = connection
+        .query(
+            "SELECT 1 FROM pages WHERE id=?1 LIMIT 1",
+            libsql::params![page_id],
+        )
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair projection owner CAS: {error}")))?;
+    if owner
+        .next()
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair projection owner CAS: {error}")))?
+        .is_some()
+    {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    drop(owner);
+    let post_apply_db_digest = crate::repair::database_content_digest(&connection).await?;
+    crate::export::knowledge::KnowledgeProjectionWrite::with_repair_lock(
+        page_root.to_path_buf(),
+        db,
+        |write| {
+            let before = write.capture_stale_page_projection_current(
+                page_id,
+                source_path,
+                quarantine_path,
+            )?;
+            let before_target_receipt = crate::repair::target_receipt(&before)?;
+            if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let excluded = std::collections::BTreeSet::from([
+                ".wenlan".to_string(),
+                ".wenlan/state.json".to_string(),
+                ".wenlan/orphaned".to_string(),
+                source_path.to_string(),
+                quarantine_path.to_string(),
+            ]);
+            let scan = write.scan_page_root_controlled(
+                true,
+                &crate::lint::pages::fs::PageScanControl::with_timeout(
+                    std::time::Duration::from_secs(30),
+                ),
+            )?;
+            if !matches!(
+                crate::lint::pages::state_checks::stale_projection_ownership(&scan, page_id),
+                crate::lint::pages::state_checks::StaleProjectionOwnership::Exact {
+                    source_path: ref source,
+                    quarantine_path: ref quarantine,
+                } if source == source_path && quarantine == quarantine_path
+            ) {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let non_target_before = crate::repair::page_projection_non_target_receipt(
+                scan.non_target_digest(&excluded),
+                &before,
+            )?;
+            before_pin()?;
+            let mut pinned = write.pin_stale_page_projection(
+                page_id,
+                source_path,
+                quarantine_path,
+                rollback,
+                manifest.manifest_id(),
+            )?;
+            let result = (|| {
+                #[cfg(test)]
+                pinned.quarantine_with_hooks(after_pin, before_source_stage)?;
+                #[cfg(not(test))]
+                {
+                    let _ = (after_pin, before_source_stage);
+                    pinned.quarantine()?;
+                }
+                let after_scan = write.scan_page_root_controlled(
+                    true,
+                    &crate::lint::pages::fs::PageScanControl::with_timeout(
+                        std::time::Duration::from_secs(30),
+                    ),
+                )?;
+                let after = write.capture_stale_page_projection_current(
+                    page_id,
+                    source_path,
+                    quarantine_path,
+                )?;
+                let non_target_after = crate::repair::page_projection_non_target_receipt(
+                    after_scan.non_target_digest(&excluded),
+                    &after,
+                )?;
+                if non_target_after != non_target_before {
+                    return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+                }
+                let after_target_receipt = crate::repair::target_receipt(&after)?;
+                if after_target_receipt == before_target_receipt {
+                    return Err(WenlanError::VectorDb(
+                        "repair_target_write_unproven".to_string(),
+                    ));
+                }
+                let proof = RepairWriteProof {
+                    before_target_receipt,
+                    after_target_receipt,
+                    non_target_before,
+                    non_target_after,
+                    post_apply_db_digest,
+                };
+                before_commit(&proof)?;
+                Ok(proof)
+            })();
+            match result {
+                Ok(proof) => Ok(proof),
+                Err(error) if !pinned.mutation_started() => Err(error),
+                Err(error) => match pinned.restore_snapshot(&before) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(WenlanError::VectorDb(format!(
+                        "{error}; stale projection rollback failed: {rollback_error}"
+                    ))),
+                },
+            }
+        },
+    )
 }
 
 pub async fn update_memory(
@@ -1840,6 +3287,19 @@ mod tests {
     use super::*;
     use crate::events::NoopEmitter;
     use std::sync::Arc;
+
+    #[test]
+    fn rollback_failure_is_a_typed_recovery_required_error() {
+        let error = recovery_required_after_rollback_failure(
+            &WenlanError::VectorDb("forced write failure".to_string()),
+            "forced rollback failure",
+        );
+
+        assert!(matches!(
+            error,
+            WenlanError::Conflict(message) if message == "repair_apply_recovery_required"
+        ));
+    }
 
     // Serialize env-var-sensitive tests to avoid races.
     // Uses tokio::sync::Mutex so the guard can safely span .await points.

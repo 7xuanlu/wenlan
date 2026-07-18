@@ -147,6 +147,19 @@ where
         assert_eq!(self.reads, expected, "sensitive route registration drift");
         FinalizedRouter { inner: self.inner }
     }
+
+    pub(crate) fn finish_restricted(self) -> FinalizedRouter<S> {
+        let expected = routes::sensitive_read_routes()
+            .map(|row| ((row.method, row.path), 1usize))
+            .collect::<BTreeMap<_, _>>();
+        assert!(
+            self.reads
+                .iter()
+                .all(|(route, count)| expected.get(route) == Some(count)),
+            "restricted router registered an unknown or duplicate sensitive read route"
+        );
+        FinalizedRouter { inner: self.inner }
+    }
 }
 
 impl<S> FinalizedRouter<S>
@@ -173,7 +186,7 @@ where
 
 #[rustfmt::skip]
 const NON_SENSITIVE_PATHS: &[&str] = &[
-    "/api/health", "/api/status", "/api/ping", "/api/lint", "/api/repairs/prepare", "/api/repairs/apply", "/api/repairs/verify", "/api/llm/test", "/api/shutdown", "/api/debug/pipeline",
+    "/api/health", "/api/status", "/api/ping", "/api/lint", "/api/repairs/plan", "/api/repairs/plan/entries", "/api/repairs/prepare", "/api/repairs/apply", "/api/repairs/verify", "/api/llm/test", "/api/shutdown", "/api/debug/pipeline",
     "/api/steep", "/api/distill", "/api/distill/{page_id}",
     "/api/ingest/text", "/api/ingest/webpage", "/api/ingest/memory", "/api/documents/{source}/{source_id}",
     "/api/import/memories", "/api/import/chat-export", "/api/memory/store", "/api/memory/confirm/{source_id}",

@@ -11,7 +11,7 @@ mod run_config;
 pub mod runner;
 pub mod runtime;
 mod semantic;
-pub(crate) use semantic::semantic_record_digest;
+pub(crate) use semantic::{semantic_record_digest, semantic_record_key_digest};
 pub mod serving;
 pub mod snapshot;
 

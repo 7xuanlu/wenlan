@@ -752,6 +752,7 @@ pub enum RefinementPayload {
     LintRepairReview {
         check_id: String,
         occurrence_digest: RepairDigest,
+        owner_binding_digest: RepairDigest,
         issue: String,
         choices: Vec<String>,
         suggested_research_queries: Vec<String>,

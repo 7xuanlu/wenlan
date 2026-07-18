@@ -22,6 +22,7 @@ pub(crate) struct RuntimeObservationInput {
     reranker_light_status: RerankerStatus,
     ingest_worker_closed: Option<bool>,
     db: Option<Arc<wenlan_core::db::MemoryDB>>,
+    optional_runtime_workers_suspended: bool,
 }
 
 impl RuntimeObservationInput {
@@ -41,11 +42,15 @@ impl RuntimeObservationInput {
                 .as_ref()
                 .map(|batcher| batcher.is_closed()),
             db: state.db.clone(),
+            optional_runtime_workers_suspended: state.optional_runtime_workers_suspended,
         }
     }
 
     pub(crate) async fn observe(self) -> RuntimeObservation {
         let mut observation = RuntimeObservation::unavailable();
+        if self.optional_runtime_workers_suspended {
+            observation = observation.with_optional_workers_suspended();
+        }
         observation = observe_provider(
             observation,
             ProviderClass::AnthropicRoutine,

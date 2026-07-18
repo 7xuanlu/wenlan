@@ -282,6 +282,117 @@ fn scanner_receipt_detects_mutation_and_stays_deterministic() {
 }
 
 #[test]
+fn scanner_ignores_projection_lock_and_state_temp_controls() {
+    let dir = root();
+    write(
+        dir.path(),
+        ".wenlan/state.json",
+        state("{\"page_a\":{\"file\":\"page.md\",\"version\":1}}").as_bytes(),
+    );
+    write(
+        dir.path(),
+        "page.md",
+        b"---\norigin_id: page_a\norigin_version: 1\n---\nbody\n",
+    );
+    let before = scan_page_root_deep(dir.path()).expect("baseline deep scan");
+    let excluded = std::collections::BTreeSet::new();
+    let before_non_target = before.non_target_digest(&excluded);
+
+    write(dir.path(), ".wenlan/.projection.lock", b"lock bytes");
+    write(
+        dir.path(),
+        ".wenlan/.projection-state-123-456.tmp",
+        b"temporary state bytes",
+    );
+    let after = scan_page_root_deep(dir.path()).expect("deep scan with internal controls");
+
+    assert!(after.entry(".wenlan/.projection.lock").is_none());
+    assert!(after
+        .entry(".wenlan/.projection-state-123-456.tmp")
+        .is_none());
+    assert!(after.entry(".wenlan/state.json").is_some());
+    assert_eq!(after.normalized_bytes(), before.normalized_bytes());
+    assert_eq!(after.non_target_digest(&excluded), before_non_target);
+}
+
+#[test]
+fn scanner_ignores_only_exact_owned_projection_stage_marker() {
+    let dir = root();
+    write(
+        dir.path(),
+        ".wenlan/state.json",
+        state("{\"page_a\":{\"file\":\"page.md\",\"version\":1}}").as_bytes(),
+    );
+    write(
+        dir.path(),
+        "page.md",
+        b"---\norigin_id: page_a\norigin_version: 1\n---\nbody\n",
+    );
+    let before = scan_page_root_deep(dir.path()).expect("baseline deep scan");
+    let excluded = std::collections::BTreeSet::new();
+    let before_non_target = before.non_target_digest(&excluded);
+    let manifest_id = "manifest-owner";
+    let stage_hash = hex::encode(Sha256::digest(manifest_id.as_bytes()));
+    let exact_stage = format!(".wenlan/.projection-unlink-{stage_hash}");
+    let exact_owner = format!("{exact_stage}/owner.json");
+    let malformed_owner = format!(".wenlan/.projection-unlink-{}/owner.json", "A".repeat(64));
+    let staged_source = format!(".wenlan/.projection-unlink-{}/source", "b".repeat(64));
+    let valid_owner = serde_json::to_vec(&serde_json::json!({
+        "format_version": 1,
+        "manifest_id": manifest_id,
+        "page_id": "page_a",
+        "source_path": "page.md",
+        "source_digest": "c".repeat(64),
+    }))
+    .unwrap();
+
+    write(dir.path(), &exact_owner, &valid_owner);
+    let exact = scan_page_root_deep(dir.path()).expect("scan exact owned marker");
+    assert!(exact.entry(&exact_owner).is_none());
+    assert_eq!(exact.non_target_digest(&excluded), before_non_target);
+
+    write(dir.path(), &exact_owner, b"{malformed");
+    let malformed = scan_page_root_deep(dir.path()).expect("scan malformed exact owner");
+    assert!(malformed.entry(&exact_owner).is_some());
+    std::fs::remove_file(dir.path().join(&exact_owner)).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let external = tempfile::TempDir::new().unwrap();
+        let foreign = external.path().join("foreign-owner.json");
+        std::fs::write(&foreign, &valid_owner).unwrap();
+        symlink(&foreign, dir.path().join(&exact_owner)).unwrap();
+        let symlink_scan = scan_page_root_deep(dir.path()).expect("scan exact owner symlink");
+        assert!(symlink_scan.entry(&exact_owner).is_some());
+        std::fs::remove_file(dir.path().join(&exact_owner)).unwrap();
+
+        let status = std::process::Command::new("mkfifo")
+            .arg(dir.path().join(&exact_owner))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let special_scan = scan_page_root_deep(dir.path()).expect("scan exact owner special file");
+        assert!(special_scan.entry(&exact_owner).is_some());
+        std::fs::remove_file(dir.path().join(&exact_owner)).unwrap();
+    }
+
+    std::fs::create_dir(dir.path().join(&exact_owner)).unwrap();
+    let directory_scan = scan_page_root_deep(dir.path()).expect("scan exact owner directory");
+    assert!(directory_scan.entry(&exact_owner).is_some());
+    std::fs::remove_dir(dir.path().join(&exact_owner)).unwrap();
+
+    std::fs::remove_dir(dir.path().join(&exact_stage)).unwrap();
+    write(dir.path(), &malformed_owner, b"foreign marker");
+    write(dir.path(), &staged_source, b"approved bytes");
+    let visible = scan_page_root_deep(dir.path()).expect("scan foreign controls");
+    assert!(visible.entry(&malformed_owner).is_some());
+    assert!(visible.entry(&staged_source).is_some());
+    assert_ne!(visible.non_target_digest(&excluded), before_non_target);
+}
+
+#[test]
 fn scanner_honors_cancellation_and_deadline_before_traversal() {
     let dir = root();
     write(dir.path(), "page.md", b"# page\n");

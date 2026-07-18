@@ -38,6 +38,7 @@ pub async fn run(dry_run: bool) -> anyhow::Result<()> {
                 .join("wenlan")
         });
     let data_dir = origin_root.join("memorydb");
+    let _data_root_lock = super::DaemonDataLock::acquire(&origin_root, true)?;
 
     let db = MemoryDB::new(&data_dir, Arc::new(NoopEmitter))
         .await

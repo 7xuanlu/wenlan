@@ -113,8 +113,11 @@ pub fn related_frontmatter(related_titles: &[String]) -> String {
     format!("related: [{}]\n", quoted.join(", "))
 }
 
+use cap_fs_ext::{DirExt as _, FollowSymlinks, OpenOptionsFollowExt as _};
+use cap_std::fs::{Dir, OpenOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 /// Subdir under `knowledge_path` for read-only source stubs. The page_watcher
@@ -163,6 +166,38 @@ impl StubManifest {
         let data = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into());
         std::fs::write(dir.join(".manifest.json"), data)
     }
+
+    pub(crate) fn load_from(root: &Dir) -> Self {
+        let Ok(dir) = open_or_create_sources_dir(root, false) else {
+            return Self::default();
+        };
+        let Some(dir) = dir else {
+            return Self::default();
+        };
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let mut file = match dir.open_with(".manifest.json", &options) {
+            Ok(file) => file,
+            Err(_) => return Self::default(),
+        };
+        let mut data = String::new();
+        if (&mut file)
+            .take(4 * 1024 * 1024 + 1)
+            .read_to_string(&mut data)
+            .is_err()
+            || data.len() > 4 * 1024 * 1024
+        {
+            return Self::default();
+        }
+        serde_json::from_str(&data).unwrap_or_default()
+    }
+
+    pub(crate) fn save_to(&self, root: &Dir) -> std::io::Result<()> {
+        let dir = open_or_create_sources_dir(root, true)?
+            .expect("create=true always returns the sources directory");
+        let data = serde_json::to_vec_pretty(self).unwrap_or_else(|_| b"{}".to_vec());
+        write_regular_nofollow(&dir, ".manifest.json", &data)
+    }
 }
 
 /// Deletes orphan daemon-written stub files (those no longer cited by any page
@@ -209,6 +244,44 @@ pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::i
     Ok(())
 }
 
+pub(crate) fn gc_orphan_stubs_in(root: &Dir, manifest: &StubManifest) -> std::io::Result<()> {
+    let Some(dir) = open_or_create_sources_dir(root, false)? else {
+        return Ok(());
+    };
+    let cited: HashSet<String> = manifest
+        .cited_ids()
+        .iter()
+        .map(|id| stub_filename(id))
+        .collect();
+    for entry in dir.entries()? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name_text) = name.to_str() else {
+            continue;
+        };
+        if !name_text.ends_with(".md") || cited.contains(name_text) {
+            continue;
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let mut file = match dir.open_with(Path::new(&name), &options) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
+        let mut content = String::new();
+        let daemon_stub = (&mut file)
+            .take(1024 * 1024 + 1)
+            .read_to_string(&mut content)
+            .is_ok()
+            && content.len() <= 1024 * 1024
+            && content.contains("origin_stub:");
+        if daemon_stub {
+            let _ = dir.remove_file(Path::new(&name));
+        }
+    }
+    Ok(())
+}
+
 /// Map a memory id to a filesystem/wikilink-safe token. Ids already matching
 /// `[A-Za-z0-9_-]+` (all stored Wenlan `mem_<uuid>` ids) pass through
 /// unchanged. Other chars are hex-escaped as `_XX`.
@@ -243,7 +316,7 @@ pub fn stub_filename(id: &str) -> String {
 /// `<knowledge_path>/_sources/`. Idempotent: rewrites the stub each call.
 pub fn project_stubs_for_page(
     knowledge_path: &Path,
-    page_id: &str,
+    _page_id: &str,
     source_memory_ids: &[String],
 ) -> std::io::Result<()> {
     if source_memory_ids.is_empty() {
@@ -256,12 +329,63 @@ pub fn project_stubs_for_page(
         let quoted = yaml_quoted(id);
         let body = format!(
             "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
-             This is a read-only source projection for memory `{id}`, cited by \
-             page `{page_id}`. Edit the memory in Wenlan, not this file.\n"
+             This is a read-only source projection for memory `{id}`. \
+             Edit the memory in Wenlan, not this file.\n"
         );
         std::fs::write(&path, body)?;
     }
     Ok(())
+}
+
+pub(crate) fn project_stubs_for_page_in(
+    root: &Dir,
+    _page_id: &str,
+    source_memory_ids: &[String],
+) -> std::io::Result<()> {
+    if source_memory_ids.is_empty() {
+        return Ok(());
+    }
+    let dir = open_or_create_sources_dir(root, true)?
+        .expect("create=true always returns the sources directory");
+    for id in source_memory_ids {
+        let quoted = yaml_quoted(id);
+        let body = format!(
+            "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
+             This is a read-only source projection for memory `{id}`. \
+             Edit the memory in Wenlan, not this file.\n"
+        );
+        write_regular_nofollow(&dir, &stub_filename(id), body.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn open_or_create_sources_dir(root: &Dir, create: bool) -> std::io::Result<Option<Dir>> {
+    match root.symlink_metadata(SOURCES_STUB_DIR) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            root.open_dir_nofollow(SOURCES_STUB_DIR).map(Some)
+        }
+        Ok(_) => Err(std::io::Error::other(
+            "source projection directory is not a plain directory",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+            root.create_dir(SOURCES_STUB_DIR)?;
+            root.open_dir_nofollow(SOURCES_STUB_DIR).map(Some)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_regular_nofollow(directory: &Dir, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .follow(FollowSymlinks::No);
+    let mut file = directory.open_with(name, &options)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -427,6 +551,19 @@ mod tests {
         // Stub identifies the memory and is marked a read-only projection.
         assert!(body.contains("mem_1"));
         assert!(body.contains("read-only"));
+    }
+
+    #[test]
+    fn shared_stub_bytes_do_not_depend_on_citing_page() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let source = ["mem_shared".to_string()];
+        project_stubs_for_page(dir.path(), "page_a", &source).unwrap();
+        let path = dir.path().join("_sources").join("mem_shared.md");
+        let from_page_a = std::fs::read(&path).unwrap();
+
+        project_stubs_for_page(dir.path(), "page_b", &source).unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), from_page_a);
     }
 
     #[test]

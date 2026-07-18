@@ -276,6 +276,27 @@ fn versions_pass_warn_inventory_and_error() {
 }
 
 #[test]
+fn missing_file_version_does_not_hide_state_database_drift() {
+    let state = serde_json::json!({
+        "schema_version": 2,
+        "pages": {"page_a": {"file": "a.md", "version": 1}}
+    })
+    .to_string();
+    let (_root, scan) = scan(
+        Some(&state),
+        &[("a.md", "---\norigin_id: page_a\n---\nbody\n")],
+    );
+
+    let (_, severity, _, _) = outcome(evaluate_versions(
+        &scan,
+        &[page("page_a", "active", 2)],
+        false,
+    ));
+
+    assert_eq!(severity, LintSeverity::Warning);
+}
+
+#[test]
 fn selected_scope_excludes_unanchored_state_and_frontmatter_canaries() {
     let state = "{\"schema_version\":2,\"pages\":{\"page_selected\":{\"file\":\"selected.md\",\"version\":1},\"page_CANARY_OTHER\":{\"file\":\"private.md\",\"version\":9}}}";
     let (_root, scan) = scan(

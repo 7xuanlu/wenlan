@@ -209,7 +209,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 state.maintenance_coordinator.clone()
             };
             let Some(maintenance_guard) = coordinator.try_begin_background() else {
-                tracing::debug!("[scheduler] approved repair fence active; skipping poll");
+                tracing::debug!("[scheduler] maintenance fence active; skipping poll");
                 continue;
             };
 

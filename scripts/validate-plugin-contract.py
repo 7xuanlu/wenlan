@@ -25,7 +25,6 @@ CODEX_SKILLS_USING_RESOLVER = {
     "distill",
     "handoff",
     "lint",
-    "lint-repair",
     "recall",
 }
 CODEX_REQUIRED_GUARDRAILS = {
@@ -46,20 +45,58 @@ CODEX_REQUIRED_GUARDRAILS = {
     ],
 }
 LINT_SHARED_GUARDRAILS = [
+    "/lint repair",
+    "[deep|repair] [global|uncategorized|space:<name>]",
     "General uses exactly one lint MCP call",
     "Agent-assisted Deep uses exactly two lint MCP calls",
     "never evaluate records outside agent_work",
+    "get_lint_agent_work_page",
     "submit verdicts exactly once",
+    "authorized record refs (`evidence_refs` plus `counterevidence_refs`)",
+    "Do not mechanically copy every evidence ref",
+    "Population truncation is honest coverage metadata, not an automatic incomplete result.",
+    "every packet candidate has exactly one accepted verdict",
+    "trust the typed report's `complete` flag and preserve its denominator, evaluated, and truncation metadata",
+    "If Deep is incomplete, its producer receipt differs from General, or its DB analysis digest differs from General, rerun fresh General exactly once after Deep before prepare; do not rerun Deep.",
+    "Do not compare General and Deep Page digests across profiles because their Page scan coverage intentionally differs.",
+    "Lead repair output with exactly one compact typed-count funnel",
+    "Never substitute check, family, or candidate counts for occurrence counts",
     "no CLI or HTTP fallback",
     "global",
     "uncategorized",
-]
-LINT_REPAIR_SHARED_GUARDRAILS = [
-    "`/lint` and `/api/lint` remain fully read-only",
-    "only one target",
+    "Plain `/lint`, `/lint deep`, the lint MCP tool, and `/api/lint` are fully read-only",
+    "Lint creates durable Review Items for choices that are not yet exact.",
+    "turns exactly one Review Item into a separately approved manifest",
+    "`lint_repair_review` generic accept remains rejected and non-mutating",
+    "Never call `apply_lint_repair` in the same turn as `prepare_lint_repair`.",
+    "prepare_lint_repair",
+    "prepare_lint_repair_plan",
+    "get_lint_repair_plan_entries",
+    "every observed family",
+    "`ready`",
+    "`review`",
+    "`system_action`",
+    "`blocked`",
+    "artifact_path",
+    "canonical data is unchanged",
     "apply repair <manifest-id> <manifest-digest>",
-    "Never call apply_lint_repair in the same turn as prepare_lint_repair",
-    "`applied_unverified`",
+    "one or more exact approval lines",
+    "contain only ready tuples from the same displayed plan",
+    "no duplicates, blank lines, prose, or code fences",
+    "A single line remains valid",
+    "Validate the complete reply before the first apply",
+    "one contiguous copy-pasteable block",
+    "in the order they appear among ready tuples in the displayed plan",
+    "Immediately rerun fresh General once",
+    "Only after one manifest is `verified` may the next approved manifest begin",
+    "`next_apply`",
+    "bounded daemon handoff reservation",
+    "Do not apply any later approved manifest",
+    "`verified`, `applied_unverified`, `failed`, or `not_attempted`",
+    "Use `applied_unverified` whenever an apply receipt exists but durable verification does not",
+    "Never call `apply_lint_repair` in the same turn as `prepare_lint_repair_plan`",
+    "applied_unverified",
+    "Match every line byte-for-byte",
     "no CLI or HTTP fallback",
 ]
 
@@ -215,6 +252,12 @@ def validate_mcp_config(root: Path, surface: str, config: dict[str, Any]) -> Non
         server.get("command"),
         config["mcp_command"],
     )
+    if "mcp_cwd" in config:
+        require_equal(
+            f"{surface} MCP cwd",
+            server.get("cwd"),
+            config["mcp_cwd"],
+        )
 
 
 def validate_runner(root: Path, surface: str, config: dict[str, Any]) -> None:
@@ -335,6 +378,8 @@ def validate_skill_surface(
 ) -> None:
     plugin_root = root / config["plugin_root"]
     actual_names = skill_names(root, plugin_root)
+    if "lint-repair" in actual_names or "lint-repair" in expected_names:
+        fail(f"{surface} must expose repair only through the lint skill")
     if actual_names != expected_names:
         fail(
             f"{surface} skill inventory drift: expected {sorted(expected_names)}, "
@@ -363,9 +408,44 @@ def validate_skill_surface(
         if mcp_tools and not any(token.startswith(expected_prefix) for token in mcp_tools):
             fail(f"{rel(root, skill_path)} must use MCP prefix {expected_prefix!r}")
         if name == "lint":
-            expected_tool = f"{expected_prefix}lint"
-            if expected_tool not in text:
-                fail(f"{rel(root, skill_path)} must call exactly {expected_tool!r}")
+            require_equal(
+                f"{rel(root, skill_path)} argument-hint",
+                frontmatter.get("argument-hint"),
+                "[deep|repair] [global|uncategorized|space:<name>]",
+            )
+            for tool in (
+                "lint",
+                "get_lint_agent_work_page",
+                "prepare_lint_repair",
+                "prepare_lint_repair_plan",
+                "get_lint_repair_plan_entries",
+                "apply_lint_repair",
+                "verify_lint_repair",
+            ):
+                expected_tool = f"{expected_prefix}{tool}"
+                if expected_tool not in text:
+                    fail(f"{rel(root, skill_path)} must call {expected_tool!r}")
+            try:
+                allowed_tools = json.loads(frontmatter.get("allowed-tools", ""))
+            except json.JSONDecodeError:
+                fail(f"{rel(root, skill_path)} allowed-tools must be a JSON array")
+            expected_allowed_tools = {
+                "Bash",
+                *(f"{expected_prefix}{tool}" for tool in (
+                    "lint",
+                    "get_lint_agent_work_page",
+                    "prepare_lint_repair",
+                    "prepare_lint_repair_plan",
+                    "get_lint_repair_plan_entries",
+                    "apply_lint_repair",
+                    "verify_lint_repair",
+                )),
+            }
+            if not isinstance(allowed_tools, list) or set(allowed_tools) != expected_allowed_tools:
+                fail(
+                    f"{rel(root, skill_path)} allowed-tools must be exactly "
+                    f"{sorted(expected_allowed_tools)!r}"
+                )
             normalized_text = " ".join(text.split())
             for needle in LINT_SHARED_GUARDRAILS:
                 if needle not in normalized_text:
@@ -377,27 +457,8 @@ def validate_skill_surface(
             )
             if resolver not in text:
                 fail(f"{rel(root, skill_path)} must use {resolver}")
-        if name == "lint-repair":
-            for tool in (
-                "lint",
-                "prepare_lint_repair",
-                "apply_lint_repair",
-                "verify_lint_repair",
-            ):
-                expected_tool = f"{expected_prefix}{tool}"
-                if expected_tool not in text:
-                    fail(f"{rel(root, skill_path)} must call {expected_tool!r}")
-            normalized_text = " ".join(text.split())
-            for needle in LINT_REPAIR_SHARED_GUARDRAILS:
-                if needle not in normalized_text:
-                    fail(f"{rel(root, skill_path)} must contain guardrail {needle!r}")
-            resolver = (
-                "$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh"
-                if surface == "claude"
-                else "plugin-codex/bin/resolve-space.sh"
-            )
-            if resolver not in text:
-                fail(f"{rel(root, skill_path)} must use {resolver}")
+        if name == "help" and "/lint [deep|repair] [scope]" not in text:
+            fail(f"{rel(root, skill_path)} must advertise the unified lint grammar")
 
         if surface == "codex" and name in shared_now:
             require_equal(

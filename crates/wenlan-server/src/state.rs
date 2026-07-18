@@ -132,6 +132,9 @@ pub struct ServerState {
     /// Core rejects repair operations on platforms without the required
     /// owner-only permissions and directory-sync durability.
     pub repair_root: Option<PathBuf>,
+    /// True only while startup recovery intentionally suppresses optional
+    /// providers, rerankers, and background runtime workers.
+    pub optional_runtime_workers_suspended: bool,
     pub lint_config: LintServerConfig,
     pub lint_observer: Arc<dyn LintRunObserver>,
 }
@@ -160,6 +163,7 @@ impl Default for ServerState {
             reflection_debouncer: ReflectionDebouncer::new(),
             ingest_batcher: None,
             repair_root: None,
+            optional_runtime_workers_suspended: false,
             lint_config: LintServerConfig::default(),
             lint_observer: Arc::new(NoopLintRunObserver),
         }

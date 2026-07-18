@@ -16,6 +16,7 @@ pub(super) struct Assessment {
 
 pub(super) enum PendingAssessment {
     Ready(Assessment),
+    ExpectedEmpty(Assessment),
     Failed(&'static str),
 }
 
@@ -55,6 +56,7 @@ pub(super) fn finish_pending(
 ) -> Result<LintCheckResult, BuildError> {
     match pending {
         PendingAssessment::Ready(assessment) => finish(context, assessment),
+        PendingAssessment::ExpectedEmpty(assessment) => expected_empty(context, assessment),
         PendingAssessment::Failed(id) => failed(context, id),
     }
 }
@@ -102,6 +104,43 @@ pub(super) fn finish(
             LintSummaryCode::CheckPassed
         },
         recommendation_code: finding.then_some(LintRecommendationCode::InspectRuntime),
+        evidence: Vec::new(),
+        duration_ms: context.clock().duration_ms(),
+    })?;
+    context.record_population(
+        assessment.id,
+        PopulationBasis::Global,
+        assessment.population,
+    )?;
+    Ok(result)
+}
+
+fn expected_empty(
+    context: &LintContext<'_, '_>,
+    assessment: Assessment,
+) -> Result<LintCheckResult, BuildError> {
+    let mut metrics = assessment.metrics;
+    metrics.push(metric(LintMetricCode::AffectedRecords, 0));
+    if let Some(observed) = assessment.observed {
+        metrics.push(metric(LintMetricCode::ObservedRecords, observed));
+    }
+    let result = LintCheckResult::try_new(LintCheckResultInput {
+        check_id: assessment.id.to_string(),
+        outcome: LintOutcome::Pass,
+        severity: LintSeverity::Info,
+        applicability: LintApplicability::ExpectedEmpty,
+        precondition: LintPrecondition::ConfiguredOff,
+        coverage: LintCoverage::new(
+            LintValidationMethod::FullEnumeration,
+            assessment.population,
+            assessment.population,
+            LINT_MAX_EVIDENCE_PER_CHECK,
+            false,
+            0,
+        )?,
+        metrics,
+        summary_code: LintSummaryCode::ExpectedEmpty,
+        recommendation_code: None,
         evidence: Vec::new(),
         duration_ms: context.clock().duration_ms(),
     })?;

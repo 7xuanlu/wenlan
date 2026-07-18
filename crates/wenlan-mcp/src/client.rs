@@ -5,6 +5,7 @@ use serde::{de::DeserializeOwned, Serialize};
 
 const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES: usize = 64 * 1024;
 
 /// Single source of truth for the space-lock header name.
 /// Mirrors the daemon's `X-Wenlan-Space` constant (daemon dual-reads the legacy x-origin-space).
@@ -84,24 +85,33 @@ impl WenlanClient {
         serde_json::from_slice::<R>(bytes).map_err(|_| WenlanError::Deserialize)
     }
 
-    /// Read response body, checking status first.
+    /// Read a bounded response body. Non-success bodies are parsed only for a
+    /// stable machine-code reason; arbitrary daemon text is never propagated.
     async fn read_body(mut resp: reqwest::Response) -> Result<Vec<u8>, WenlanError> {
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            return Err(WenlanError::Api { status });
-        }
+        let status = resp.status();
+        let limit = if status.is_success() {
+            MAX_RESPONSE_BYTES
+        } else {
+            MAX_ERROR_RESPONSE_BYTES
+        };
         if resp
             .content_length()
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+            .is_some_and(|length| length > limit as u64)
         {
             return Err(WenlanError::ResponseTooLarge);
         }
         let mut body = Vec::new();
         while let Some(chunk) = resp.chunk().await.map_err(|_| WenlanError::Deserialize)? {
-            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            if body.len().saturating_add(chunk.len()) > limit {
                 return Err(WenlanError::ResponseTooLarge);
             }
             body.extend_from_slice(&chunk);
+        }
+        if !status.is_success() {
+            return Err(WenlanError::Api {
+                status: status.as_u16(),
+                reason: parse_api_error_reason(&body),
+            });
         }
         Ok(body)
     }
@@ -283,7 +293,7 @@ pub enum WenlanError {
     Unreachable(String),
 
     #[error("Wenlan API error (HTTP {status})")]
-    Api { status: u16 },
+    Api { status: u16, reason: Option<String> },
 
     #[error("Failed to parse Wenlan response")]
     Deserialize,
@@ -292,9 +302,65 @@ pub enum WenlanError {
     ResponseTooLarge,
 }
 
+fn parse_api_error_reason(bytes: &[u8]) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct ApiErrorBody {
+        error: Option<String>,
+        reason: Option<String>,
+    }
+
+    let body: ApiErrorBody = serde_json::from_slice(bytes).ok()?;
+    let reason = body.error.or(body.reason)?;
+    let safe = matches!(
+        reason.as_str(),
+        "repair_background_writer_busy"
+            | "repair_write_fence_conflict"
+            | "repair_write_fence_expired"
+            | "repair_handoff_manifest_mismatch"
+            | "noise_pattern"
+            | "too_short"
+            | "not_novel"
+            | "credential_leak"
+            | "embedding_unavailable"
+            | "duplicate"
+            | "unknown"
+    );
+    safe.then_some(reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_error_reason_keeps_machine_code_without_private_detail() {
+        for code in [
+            "repair_background_writer_busy",
+            "repair_write_fence_conflict",
+            "repair_write_fence_expired",
+            "repair_handoff_manifest_mismatch",
+        ] {
+            let body = format!(r#"{{"error":"{code}","detail":"PRIVATE_SENTINEL"}}"#);
+            let reason = parse_api_error_reason(body.as_bytes()).expect("typed reason survives");
+            assert_eq!(reason, code);
+            assert!(!reason.contains("PRIVATE_SENTINEL"));
+        }
+
+        let quality_gate = br#"{
+            "status": "rejected",
+            "reason": "duplicate",
+            "detail": "PRIVATE_SENTINEL"
+        }"#;
+        assert_eq!(
+            parse_api_error_reason(quality_gate).as_deref(),
+            Some("duplicate")
+        );
+        assert_eq!(
+            parse_api_error_reason(br#"{"error":"private_project_codename"}"#),
+            None,
+            "unknown machine-looking strings must not cross the MCP boundary"
+        );
+    }
 
     #[test]
     fn test_discover_url_prefers_cli_flag() {

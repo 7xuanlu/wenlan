@@ -12,6 +12,10 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{collections::BTreeSet, fmt};
 
 pub const REPAIR_PLAN_SCHEMA_VERSION: u16 = 1;
+pub const REPAIR_PLAN_PAGE_MAX_ENTRIES: usize = 100;
+/// Keeps each tool result below transcript truncation limits as well as MCP's
+/// larger transport ceiling.
+pub const REPAIR_PLAN_PAGE_MAX_BYTES: usize = 48 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepairPlanContractError {
@@ -20,10 +24,12 @@ pub enum RepairPlanContractError {
     InvalidReportReceipt,
     InvalidEntry,
     DuplicateOccurrence,
+    DuplicateReadyManifest,
     InvalidReviewItem,
     InvalidSystemAction,
     InvalidBlockedResolution,
     InvalidTotals,
+    InvalidDigest,
 }
 
 impl fmt::Display for RepairPlanContractError {
@@ -34,10 +40,12 @@ impl fmt::Display for RepairPlanContractError {
             Self::InvalidReportReceipt => "invalid repair plan report receipt",
             Self::InvalidEntry => "invalid repair plan entry",
             Self::DuplicateOccurrence => "duplicate repair plan occurrence",
+            Self::DuplicateReadyManifest => "duplicate ready repair manifest",
             Self::InvalidReviewItem => "invalid repair review item",
             Self::InvalidSystemAction => "invalid repair system action",
             Self::InvalidBlockedResolution => "invalid blocked repair resolution",
             Self::InvalidTotals => "invalid repair plan totals",
+            Self::InvalidDigest => "invalid repair plan digest",
         })
     }
 }
@@ -92,7 +100,7 @@ pub struct RepairAffectedRecord {
     durable_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RepairAffectedRecordWire {
     kind: RepairAffectedRecordKind,
@@ -633,7 +641,22 @@ impl RepairPlanDraft {
                 && entries
                     .iter()
                     .all(|entry| entry.finding_kind() != RepairFindingKind::Semantic));
-        if !valid_plan_id(&plan_id) || !reports_valid || !semantic_valid {
+        let source_incomplete = |kind| {
+            entries.iter().any(|entry| {
+                entry.finding_kind() == kind
+                    && matches!(
+                        entry.resolution(),
+                        RepairResolution::Blocked { blocked }
+                            if blocked.reason_code() == RepairBlockedReasonCode::SourceIncomplete
+                    )
+            })
+        };
+        let completeness_valid = deterministic_complete
+            != source_incomplete(RepairFindingKind::Deterministic)
+            && semantic_complete
+                == (deep_report_receipt.is_some()
+                    && !source_incomplete(RepairFindingKind::Semantic));
+        if !valid_plan_id(&plan_id) || !reports_valid || !semantic_valid || !completeness_valid {
             return Err(RepairPlanContractError::InvalidPlanId);
         }
         let mut occurrences = BTreeSet::new();
@@ -642,6 +665,16 @@ impl RepairPlanDraft {
             .any(|entry| !occurrences.insert(entry.occurrence_digest().as_str().to_string()))
         {
             return Err(RepairPlanContractError::DuplicateOccurrence);
+        }
+        let mut ready_manifest_ids = BTreeSet::new();
+        if entries.iter().any(|entry| {
+            matches!(
+                entry.resolution(),
+                RepairResolution::Ready { manifest }
+                    if !ready_manifest_ids.insert(manifest.manifest_id().to_string())
+            )
+        }) {
+            return Err(RepairPlanContractError::DuplicateReadyManifest);
         }
         entries.sort_by(|left, right| {
             (
@@ -681,9 +714,9 @@ pub struct RepairPlan {
     plan_digest: RepairDigest,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RepairPlanWire {
+pub struct StoredRepairPlan {
     plan_schema_version: u16,
     plan_id: String,
     scope: RepairLintScope,
@@ -701,7 +734,14 @@ impl RepairPlan {
     pub fn try_new(
         draft: RepairPlanDraft,
         plan_digest: RepairDigest,
+        verify: impl FnOnce(&[u8], &RepairDigest) -> bool,
     ) -> Result<Self, RepairPlanContractError> {
+        let canonical = draft
+            .canonical_bytes()
+            .map_err(|_| RepairPlanContractError::InvalidDigest)?;
+        if !verify(&canonical, &plan_digest) {
+            return Err(RepairPlanContractError::InvalidDigest);
+        }
         Ok(Self { draft, plan_digest })
     }
 
@@ -750,29 +790,344 @@ impl RepairPlan {
     }
 }
 
-impl<'de> Deserialize<'de> for RepairPlan {
+impl StoredRepairPlan {
+    pub fn verify_and_try_into_current(
+        self,
+        verify: impl FnOnce(&[u8], &RepairDigest) -> bool,
+    ) -> Result<RepairPlan, RepairPlanContractError> {
+        if self.plan_schema_version != REPAIR_PLAN_SCHEMA_VERSION {
+            return Err(RepairPlanContractError::UnsupportedSchema);
+        }
+        let draft = RepairPlanDraft::try_new(
+            self.plan_id,
+            self.scope,
+            self.general_report_receipt,
+            self.deep_report_receipt,
+            self.deterministic_complete,
+            self.semantic_complete,
+            self.entries,
+        )?;
+        if draft.totals != self.totals {
+            return Err(RepairPlanContractError::InvalidTotals);
+        }
+        RepairPlan::try_new(draft, self.plan_digest, verify)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrepareRepairPlanResponse {
+    plan: RepairPlan,
+    artifact_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredPrepareRepairPlanResponse {
+    plan: StoredRepairPlan,
+    artifact_path: String,
+}
+
+impl StoredPrepareRepairPlanResponse {
+    pub fn verify_and_try_into_current(
+        self,
+        verify: impl FnOnce(&[u8], &RepairDigest) -> bool,
+    ) -> Result<PrepareRepairPlanResponse, RepairPlanContractError> {
+        PrepareRepairPlanResponse::try_new(
+            self.plan.verify_and_try_into_current(verify)?,
+            self.artifact_path,
+        )
+    }
+}
+
+impl PrepareRepairPlanResponse {
+    pub fn try_new(
+        plan: RepairPlan,
+        artifact_path: String,
+    ) -> Result<Self, RepairPlanContractError> {
+        if !valid_nonempty(&artifact_path) {
+            return Err(RepairPlanContractError::InvalidPlanId);
+        }
+        Ok(Self {
+            plan,
+            artifact_path,
+        })
+    }
+
+    pub fn plan(&self) -> &RepairPlan {
+        &self.plan
+    }
+
+    pub fn artifact_path(&self) -> &str {
+        &self.artifact_path
+    }
+
+    pub fn compact_summary(&self) -> Result<RepairPlanSummary, RepairPlanContractError> {
+        RepairPlanSummary::try_new(
+            self.plan.schema_version(),
+            self.plan.plan_id().to_string(),
+            self.plan.scope().clone(),
+            self.plan.plan_digest().clone(),
+            self.artifact_path.clone(),
+            self.plan.deterministic_complete(),
+            self.plan.semantic_complete(),
+            self.plan.totals().clone(),
+            self.plan.entries().len(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepairPlanSummary {
+    plan_schema_version: u16,
+    plan_id: String,
+    scope: RepairLintScope,
+    plan_digest: RepairDigest,
+    artifact_path: String,
+    deterministic_complete: bool,
+    semantic_complete: bool,
+    totals: RepairPlanTotals,
+    entry_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepairPlanSummaryWire {
+    plan_schema_version: u16,
+    plan_id: String,
+    scope: RepairLintScope,
+    plan_digest: RepairDigest,
+    artifact_path: String,
+    deterministic_complete: bool,
+    semantic_complete: bool,
+    totals: RepairPlanTotals,
+    entry_count: usize,
+}
+
+impl RepairPlanSummary {
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        plan_schema_version: u16,
+        plan_id: String,
+        scope: RepairLintScope,
+        plan_digest: RepairDigest,
+        artifact_path: String,
+        deterministic_complete: bool,
+        semantic_complete: bool,
+        totals: RepairPlanTotals,
+        entry_count: usize,
+    ) -> Result<Self, RepairPlanContractError> {
+        let counted_entries = totals
+            .deterministic()
+            .checked_add(totals.semantic())
+            .and_then(|count| usize::try_from(count).ok());
+        let counted_resolutions = totals
+            .ready()
+            .checked_add(totals.review())
+            .and_then(|count| count.checked_add(totals.system_action()))
+            .and_then(|count| count.checked_add(totals.blocked()))
+            .and_then(|count| usize::try_from(count).ok());
+        if plan_schema_version != REPAIR_PLAN_SCHEMA_VERSION
+            || !valid_plan_id(&plan_id)
+            || !valid_nonempty(&artifact_path)
+            || counted_entries != Some(entry_count)
+            || counted_resolutions != Some(entry_count)
+        {
+            return Err(RepairPlanContractError::InvalidTotals);
+        }
+        Ok(Self {
+            plan_schema_version,
+            plan_id,
+            scope,
+            plan_digest,
+            artifact_path,
+            deterministic_complete,
+            semantic_complete,
+            totals,
+            entry_count,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairPlanSummary {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let wire = RepairPlanWire::deserialize(deserializer)?;
-        if wire.plan_schema_version != REPAIR_PLAN_SCHEMA_VERSION {
-            return Err(D::Error::custom(RepairPlanContractError::UnsupportedSchema));
-        }
-        let draft = RepairPlanDraft::try_new(
+        let wire = RepairPlanSummaryWire::deserialize(deserializer)?;
+        Self::try_new(
+            wire.plan_schema_version,
             wire.plan_id,
             wire.scope,
-            wire.general_report_receipt,
-            wire.deep_report_receipt,
+            wire.plan_digest,
+            wire.artifact_path,
             wire.deterministic_complete,
             wire.semantic_complete,
+            wire.totals,
+            wire.entry_count,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepairPlanEntriesRequest {
+    plan_id: String,
+    plan_digest: RepairDigest,
+    offset: usize,
+    limit: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepairPlanEntriesRequestWire {
+    plan_id: String,
+    plan_digest: RepairDigest,
+    offset: usize,
+    limit: usize,
+}
+
+impl RepairPlanEntriesRequest {
+    pub fn try_new(
+        plan_id: String,
+        plan_digest: RepairDigest,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Self, RepairPlanContractError> {
+        if !valid_plan_id(&plan_id) || !(1..=REPAIR_PLAN_PAGE_MAX_ENTRIES).contains(&limit) {
+            return Err(RepairPlanContractError::InvalidEntry);
+        }
+        Ok(Self {
+            plan_id,
+            plan_digest,
+            offset,
+            limit,
+        })
+    }
+
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    pub fn plan_digest(&self) -> &RepairDigest {
+        &self.plan_digest
+    }
+
+    pub const fn offset(&self) -> usize {
+        self.offset
+    }
+
+    pub const fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairPlanEntriesRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RepairPlanEntriesRequestWire::deserialize(deserializer)?;
+        Self::try_new(wire.plan_id, wire.plan_digest, wire.offset, wire.limit)
+            .map_err(D::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepairPlanEntriesPage {
+    plan_id: String,
+    plan_digest: RepairDigest,
+    scope: RepairLintScope,
+    offset: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+    total_entries: usize,
+    entries: Vec<RepairPlanEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepairPlanEntriesPageWire {
+    plan_id: String,
+    plan_digest: RepairDigest,
+    scope: RepairLintScope,
+    offset: usize,
+    #[serde(default)]
+    next_offset: Option<usize>,
+    total_entries: usize,
+    entries: Vec<RepairPlanEntry>,
+}
+
+impl RepairPlanEntriesPage {
+    pub fn try_new(
+        plan_id: String,
+        plan_digest: RepairDigest,
+        scope: RepairLintScope,
+        offset: usize,
+        total_entries: usize,
+        entries: Vec<RepairPlanEntry>,
+    ) -> Result<Self, RepairPlanContractError> {
+        if !valid_plan_id(&plan_id)
+            || offset > total_entries
+            || entries.len() > REPAIR_PLAN_PAGE_MAX_ENTRIES
+            || entries.len() > total_entries.saturating_sub(offset)
+        {
+            return Err(RepairPlanContractError::InvalidEntry);
+        }
+        let consumed = offset
+            .checked_add(entries.len())
+            .ok_or(RepairPlanContractError::InvalidEntry)?;
+        let next_offset = (consumed < total_entries).then_some(consumed);
+        if next_offset.is_some() && entries.is_empty() {
+            return Err(RepairPlanContractError::InvalidEntry);
+        }
+        let page = Self {
+            plan_id,
+            plan_digest,
+            scope,
+            offset,
+            next_offset,
+            total_entries,
+            entries,
+        };
+        if serde_json::to_vec(&page)
+            .map_err(|_| RepairPlanContractError::InvalidEntry)?
+            .len()
+            > REPAIR_PLAN_PAGE_MAX_BYTES
+        {
+            return Err(RepairPlanContractError::InvalidEntry);
+        }
+        Ok(page)
+    }
+
+    pub fn entries(&self) -> &[RepairPlanEntry] {
+        &self.entries
+    }
+
+    pub fn scope(&self) -> &RepairLintScope {
+        &self.scope
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairPlanEntriesPage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RepairPlanEntriesPageWire::deserialize(deserializer)?;
+        let page = Self::try_new(
+            wire.plan_id,
+            wire.plan_digest,
+            wire.scope,
+            wire.offset,
+            wire.total_entries,
             wire.entries,
         )
         .map_err(D::Error::custom)?;
-        if draft.totals != wire.totals {
-            return Err(D::Error::custom(RepairPlanContractError::InvalidTotals));
+        if page.next_offset != wire.next_offset {
+            return Err(D::Error::custom(RepairPlanContractError::InvalidEntry));
         }
-        Self::try_new(draft, wire.plan_digest).map_err(D::Error::custom)
+        Ok(page)
     }
 }
 

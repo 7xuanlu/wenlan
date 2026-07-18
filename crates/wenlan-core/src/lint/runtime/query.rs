@@ -67,14 +67,46 @@ impl RuntimeSnapshot {
                 .iter()
                 .filter(|reranker| reranker.readiness == RuntimeReadiness::Ready)
                 .count();
-        let providers = PendingAssessment::Ready(
-            Assessment::new(
-                PROVIDERS,
-                u64::try_from(requested).unwrap_or(u64::MAX),
-                u64::try_from(provider_affected + reranker_affected).unwrap_or(u64::MAX),
-            )
-            .with_observed(u64::try_from(observed).unwrap_or(u64::MAX)),
-        );
+        let observed_while_suspended = config
+            .observation
+            .providers
+            .iter()
+            .filter(|provider| provider.readiness != RuntimeReadiness::Unavailable)
+            .count()
+            + config
+                .observation
+                .rerankers
+                .iter()
+                .filter(|reranker| reranker.readiness != RuntimeReadiness::Unavailable)
+                .count();
+        let provider_population = u64::try_from(requested).unwrap_or(u64::MAX);
+        let provider_observed = u64::try_from(observed).unwrap_or(u64::MAX);
+        let suspended_worker_observed = u64::try_from(observed_while_suspended).unwrap_or(u64::MAX);
+        let providers =
+            if config.observation.optional_workers_suspended() && suspended_worker_observed == 0 {
+                PendingAssessment::ExpectedEmpty(
+                    Assessment::new(PROVIDERS, provider_population, 0)
+                        .with_observed(suspended_worker_observed),
+                )
+            } else if config.observation.optional_workers_suspended() {
+                PendingAssessment::Ready(
+                    Assessment::new(
+                        PROVIDERS,
+                        provider_population.max(suspended_worker_observed),
+                        suspended_worker_observed,
+                    )
+                    .with_observed(suspended_worker_observed),
+                )
+            } else {
+                PendingAssessment::Ready(
+                    Assessment::new(
+                        PROVIDERS,
+                        provider_population,
+                        u64::try_from(provider_affected + reranker_affected).unwrap_or(u64::MAX),
+                    )
+                    .with_observed(provider_observed),
+                )
+            };
         let status = match (self.files_indexed, config.observation.status_files) {
             (Ok(files_indexed), StatusFilesObservation::Direct(status_files)) => {
                 PendingAssessment::Ready(

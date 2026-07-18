@@ -1,4 +1,4 @@
-use super::refinement::valid_refinement_row;
+use super::refinement::{valid_refinement_payload, valid_refinement_row};
 use super::{metric, AgeBuckets};
 use crate::lint::operations::read_context::OperationsReadContext;
 use crate::lint::operations::result::Assessment;
@@ -13,7 +13,9 @@ pub(super) async fn load_refinements(
     let mut rows = context
         .snapshot()
         .query(
-            "SELECT action,source_ids,status,created_at FROM refinement_queue ORDER BY id",
+            "SELECT id,action,source_ids,payload,status,created_at
+               FROM refinement_queue
+              ORDER BY id",
             libsql::params::Params::None,
         )
         .await
@@ -22,10 +24,12 @@ pub(super) async fn load_refinements(
     let mut positions = Vec::new();
     let mut ages = AgeBuckets::default();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
-        let action = row.get::<String>(0).map_err(|_| ())?;
-        let source_ids = row.get::<String>(1).map_err(|_| ())?;
-        let status = row.get::<String>(2).map_err(|_| ())?;
-        let created = row.get::<String>(3).map_err(|_| ())?;
+        let id = row.get::<String>(0).map_err(|_| ())?;
+        let action = row.get::<String>(1).map_err(|_| ())?;
+        let source_ids = row.get::<String>(2).map_err(|_| ())?;
+        let payload = row.get::<Option<String>>(3).map_err(|_| ())?;
+        let status = row.get::<String>(4).map_err(|_| ())?;
+        let created = row.get::<String>(5).map_err(|_| ())?;
         let timestamp = parse_timestamp(&created);
         match status.as_str() {
             "pending" => {
@@ -41,7 +45,10 @@ pub(super) async fn load_refinements(
         }
         let shape_valid = serde_json::from_str::<Vec<String>>(&source_ids)
             .ok()
-            .is_some_and(|ids| valid_refinement_row(&action, &status, &ids));
+            .is_some_and(|ids| {
+                valid_refinement_row(&action, &status, &ids)
+                    && valid_refinement_payload(&id, &action, &ids, payload.as_deref())
+            });
         let valid = shape_valid
             && timestamp.is_some_and(|value| ages.observe(value, context.clock().epoch_seconds()));
         if !valid {

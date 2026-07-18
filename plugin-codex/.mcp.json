@@ -1,7 +1,8 @@
 {
   "mcpServers": {
     "wenlan": {
-      "command": "./bin/wenlan-mcp-runner.sh"
+      "command": "./bin/wenlan-mcp-runner.sh",
+      "cwd": "."
     }
   }
 }

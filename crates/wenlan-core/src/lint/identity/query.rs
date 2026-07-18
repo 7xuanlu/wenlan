@@ -1,11 +1,15 @@
 use super::{CACHES, MEMORY, REGISTRY, SESSIONS, TAGS};
 use crate::lint::context::{LintContext, PopulationBasis, ScopeFilter};
-use wenlan_types::lint::{LintMetric, LintMetricCode, LintMetricValue, LintSeverity};
+use sha2::{Digest as _, Sha256};
+use wenlan_types::lint::{
+    LintEvidenceRef, LintMetric, LintMetricCode, LintMetricValue, LintOpaqueDigest, LintOpaqueId,
+    LintSeverity, LINT_MAX_EVIDENCE_PER_CHECK,
+};
 
 pub(super) struct RowCheck {
     population: u64,
     affected: u64,
-    evidence_positions: Vec<usize>,
+    evidence: Vec<LintEvidenceRef>,
 }
 
 pub(super) struct IdentitySnapshot {
@@ -88,7 +92,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<IdentitySnapsh
     let registry = row_check(context, REGISTRY_SQL, libsql::params::Params::None).await?;
     let (scope, params) = memory_scope(context.scope().filter());
     let memory = row_check(context, &MEMORY_SQL.replace("{scope}", &scope), params).await?;
-    let tags = row_check(context, TAG_SQL, libsql::params::Params::None).await?;
+    let tags = tag_check(context).await?;
     let sessions = row_check(context, super::session::SQL, libsql::params::Params::None).await?;
     let caches = row_check(context, CACHE_SQL, libsql::params::Params::None).await?;
     let inventory = inventory(context, context.scope().filter()).await?;
@@ -121,7 +125,7 @@ SELECT CASE WHEN (m.confirmed IS NOT NULL AND m.confirmed NOT IN (0,1)) OR COALE
 FROM memories m WHERE m.source='memory' AND m.chunk_index=0{scope} ORDER BY m.source_id";
 
 const TAG_SQL: &str = "
-SELECT CASE WHEN TRIM(t.tag)='' OR t.source NOT IN ('memory','page')
+SELECT t.source,t.source_id,t.tag,CASE WHEN TRIM(t.tag)='' OR t.source NOT IN ('memory','page')
  OR (t.source='memory' AND NOT EXISTS(SELECT 1 FROM memories m WHERE m.source_id=t.source_id))
  OR (t.source='page' AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.id=t.source_id))
  THEN 1 ELSE 0 END FROM document_tags t ORDER BY t.source,t.source_id,t.tag";
@@ -144,14 +148,16 @@ async fn row_check(
         .map_err(|_| ())?;
     let mut population = 0_u64;
     let mut affected = 0_u64;
-    let mut evidence_positions = Vec::new();
+    let mut evidence = Vec::new();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
         if row.get::<i64>(0).map_err(|_| ())? != 0 {
             affected = affected.saturating_add(1);
-            if evidence_positions.len()
-                < usize::from(wenlan_types::lint::LINT_MAX_EVIDENCE_PER_CHECK)
-            {
-                evidence_positions.push(usize::try_from(population).map_err(|_| ())?);
+            if evidence.len() < usize::from(LINT_MAX_EVIDENCE_PER_CHECK) {
+                let opaque_id = LintOpaqueId::from_sorted_position(
+                    usize::try_from(population).map_err(|_| ())?,
+                )
+                .ok_or(())?;
+                evidence.push(LintEvidenceRef::OpaqueId { opaque_id });
             }
         }
         population = population.saturating_add(1);
@@ -159,8 +165,50 @@ async fn row_check(
     Ok(RowCheck {
         population,
         affected,
-        evidence_positions,
+        evidence,
     })
+}
+
+async fn tag_check(context: &LintContext<'_, '_>) -> Result<RowCheck, ()> {
+    let mut rows = context
+        .snapshot()
+        .query(TAG_SQL, libsql::params::Params::None)
+        .await
+        .map_err(|_| ())?;
+    let mut population = 0_u64;
+    let mut affected = 0_u64;
+    let mut evidence = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|_| ())? {
+        if row.get::<i64>(3).map_err(|_| ())? != 0 {
+            affected = affected.saturating_add(1);
+            if evidence.len() < usize::from(LINT_MAX_EVIDENCE_PER_CHECK) {
+                evidence.push(LintEvidenceRef::OpaqueDigest {
+                    opaque_digest: tag_evidence_digest(
+                        &row.get::<String>(0).map_err(|_| ())?,
+                        &row.get::<String>(1).map_err(|_| ())?,
+                        &row.get::<String>(2).map_err(|_| ())?,
+                    ),
+                });
+            }
+        }
+        population = population.saturating_add(1);
+    }
+    Ok(RowCheck {
+        population,
+        affected,
+        evidence,
+    })
+}
+
+fn tag_evidence_digest(source: &str, source_id: &str, tag: &str) -> LintOpaqueDigest {
+    let mut digest = Sha256::new();
+    digest.update(b"wenlan-lint-tag-evidence-v1");
+    for value in [source, source_id, tag] {
+        digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+        digest.update(value.as_bytes());
+    }
+    LintOpaqueDigest::from_hex(&format!("{:x}", digest.finalize()))
+        .expect("SHA-256 is canonical lowercase hex")
 }
 
 fn memory_scope(scope: &ScopeFilter) -> (String, libsql::params::Params) {
@@ -239,7 +287,7 @@ fn assessment(
         id,
         population: rows.population,
         affected: rows.affected,
-        evidence_positions: rows.evidence_positions,
+        evidence: rows.evidence,
         severity: LintSeverity::Error,
         basis,
         metrics,

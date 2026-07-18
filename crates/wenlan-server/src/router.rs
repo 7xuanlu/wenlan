@@ -500,3 +500,86 @@ pub fn build_router(state: SharedState) -> AppRouter {
         .layer(axum::middleware::from_fn(security::guard_local_only))
         .with_state(state)
 }
+
+/// Build the fail-closed router used while one exact repair owns the writer
+/// fence. Preparation and every ordinary product mutation stay unreachable;
+/// the process can only inspect health, rerun lint, apply the approved
+/// manifest, and verify its receipts.
+pub fn build_repair_router(state: SharedState) -> AppRouter {
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin, _parts| {
+            origin
+                .to_str()
+                .map(crate::security::origin_is_local)
+                .unwrap_or(false)
+        }))
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    repair_routes::register_execution(lint_routes::register(TrackedRouter::new()))
+        .route("/api/health", get(routes::handle_health))
+        .route("/api/status", get(routes::handle_status))
+        .finish_restricted()
+        .layer(cors)
+        .layer(axum::middleware::from_fn(security::guard_local_only))
+        .with_state(state)
+}
+
+#[cfg(test)]
+mod repair_only_tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    async fn status(method: Method, path: &str) -> StatusCode {
+        let state = Arc::new(RwLock::new(crate::state::ServerState::new()));
+        build_repair_router(state)
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn repair_only_router_exposes_only_read_only_diagnostics_and_exact_execution() {
+        assert_eq!(status(Method::GET, "/api/health").await, StatusCode::OK);
+        assert_ne!(
+            status(Method::GET, "/api/lint").await,
+            StatusCode::NOT_FOUND
+        );
+        assert_ne!(
+            status(Method::POST, "/api/repairs/apply").await,
+            StatusCode::NOT_FOUND
+        );
+        assert_ne!(
+            status(Method::POST, "/api/repairs/verify").await,
+            StatusCode::NOT_FOUND
+        );
+
+        for path in [
+            "/api/repairs/plan",
+            "/api/repairs/prepare",
+            "/api/memory/store",
+            "/api/pages",
+            "/api/config",
+        ] {
+            assert_eq!(
+                status(Method::POST, path).await,
+                StatusCode::NOT_FOUND,
+                "repair-only router unexpectedly exposed {path}"
+            );
+        }
+    }
+}
