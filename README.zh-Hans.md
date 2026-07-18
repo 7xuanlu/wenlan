@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=3e77184c0ff6dae42cdd2cbe95a7abb4bee126a58242030f6ab392af30d4798c -->
+<!-- README_SYNC: source=README.md sha256=f31a922578753a85635f079d9b1cd0e903113f8f614f2d3d4caf81748861848d -->
 
 <p align="center">
   <picture>
@@ -214,28 +214,28 @@ a1b2c3d distill: 4 pages
 
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
+<a id="what-can-i-bring-in"></a>
 
 ## 能力
 
-- **有来源支撑的页面：** Wenlan 把相关来源与记忆汇总成页面，保留依据与引用状态，追踪哪些支撑已经变化，并依当前依据刷新符合条件、由机器维护的页面。
-- **审核后再覆盖：** 引用检查可以拒绝依据不足的自动刷新；对用户拥有页面的更新会成为待审核修订。可选的冲突审核能让受保护记忆的冲突浮现，而不会拦住每一次捕获。
-- **关联检索：** 原词、embedding、知识图谱脉络与可选的页面检索，会找回需要的知识层，而不是加载整个知识库。
-- **一个本地 Rust 服务：** 桌面 app、CLI 与 MCP 客户端共用同一个 daemon，因此在一个工具捕获的知识可以在另一个工具回来。受管理的后台模式必须明确启用；启用后，不打开客户端窗口也能继续已配置的摄取、补充、图谱连接、引用与符合条件的页面维护。退出 Wenlan 会关闭服务。
-- **显式空间：** 把记忆、页面与 recall 限定在工作、个人或客户脉络中；默认可依 repo 判断，也能明确覆盖。
-- **本地所有权，不被绑定：** daemon 默认只绑定 localhost；记忆与图谱数据留在本地 libSQL，页面与 session notes 则以用户拥有的 Markdown 保存，并留下本地 git 历史。现有 Obsidian vault 可以继续作为只读来源，Wenlan 页面也能 symlink 或导出到你熟悉的编辑器。
-
-<a id="what-can-i-bring-in"></a>
-
-### 可以带进 Wenlan 的内容
-
-Wenlan 从你已经拥有的材料开始，并让每一项内容都能追溯到来源。
-
-- **过去的 AI 对话：** 把 ChatGPT 或 Claude 导出的 ZIP 放进桌面 app。Wenlan 会批量导入对话，并自动跳过已经导入的内容。
-- **笔记与文档：** 连接 Obsidian vault，或任何包含 `.md`、`.txt`、`.pdf` 的文件夹。Wenlan 只读取来源文件夹，不会回写；普通文件夹会在后台检查变化，Obsidian vault 则可从 app 重新同步。CLI 也能用 `wenlan sources add <path>` 登记单个支持的文件。
-- **正在进行的 AI 工作：** Claude Code、Codex、Cursor、Claude Desktop、VS Code、Gemini CLI 与其他 MCP 客户端，都能在工作过程中把决策、经验和上下文存进同一个本地知识库。
-- **自定义集成：** 需要接上其他采集流程时，本地 HTTP API 可以接收整理好的文本、网页内容与记忆。
-
-一份文档、一段旧对话和一项新的 agent 决策，可以共同支撑同一个页面，而不再分散在不同孤岛中。
+- **对话导入：** 导入 ChatGPT 或 Claude 的 ZIP；Wenlan 会自动跳过已经导入的对话。
+- **文档来源：** 导入单个 `.md`、`.txt` 或可提取文本的 `.pdf`，递归读取包含它们的文件夹，或索引 Obsidian 仓库中的 Markdown。
+- **增量同步：** 单个文件与普通文件夹来源会在后台追踪变化；Obsidian 仓库保持只读，按需重新同步。
+- **[原子记忆（Atomic Memory）](#two-lifecycles)：** MCP 客户端把一个完整的决策、经验、更正、偏好或事实存成一条，并保留溯源（provenance）与取代链（supersession chain）。
+- **[类型化补全（Typed enrichment）](#two-lifecycles)：** 配好模型后，Wenlan 会分类每条记忆，并补上按类型定义的 schema 字段、日期、标签、检索提示与图谱链接。
+- **[来源支撑页面（Source-backed Pages）](#two-lifecycles)：** 把相关来源与记忆提炼成带来源标记与 `[[wikilinks]]` 的 Markdown 页面；daemon 还能验证并记录逐条引用。
+- **[引用门控更新（Citation-gated refresh）](#two-lifecycles)：** 依据不足的草稿会被拒绝；机器页面可更新，用户文字只进入待审修订。
+- **[混合检索（Hybrid retrieval）](docs/technical-foundations.md#retrieval-pipeline)：** FTS5 找原词，本地 BGE embedding 找语义，RRF 融合排序，图谱链接补充脉络。
+- **[检索通道（Retrieval channels）](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选的页面、情节记忆（episodic）与逐事实（per-fact）通道扩大召回；cross-encoder 重排提高精度。
+- **[知识图谱（Knowledge graph）](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 类型化实体、关系与观察连接人物、项目、主张及其支撑记忆。
+- **[人在回路审查（Human-in-the-loop）](plugin/skills/curate/SKILL.md)：** 日常工作保持自动；受保护冲突、页面修订、实体合并与新词汇才等待判断。
+- **[空间（Spaces）](plugin/skills/README.md#choosing-the-active-space)：** 用明确范围隔开工作、个人、客户与代码库的记忆、页面和检索结果。
+- **[本地 daemon + MCP](docs/setup-with-ai.md)：** 一个轻量 Rust 服务留在本机，让桌面 app、CLI、Claude Code、Codex、Cursor、Claude Desktop、VS Code 与 Gemini CLI 共用同一份知识。
+- **自定义集成：** localhost HTTP API 可接收其他采集流程准备好的文本、网页内容与记忆。
+- **后台维护：** 受管理模式可在没有客户端窗口时执行已配置的同步、补全、引用与页面更新。
+- **[模型选择](docs/technical-foundations.md#model-roles)：** 基础检索留在本机；补全与合成可用设备端 Qwen、兼容 OpenAI 的本地接口或云端模型。
+- **[可检查的所有权](#local-markdown)：** 记忆与图谱留在本地 libSQL；Markdown、引用、修订、git 历史与 Obsidian 导出都可检查。
+- **只读健康检查：** [`doctor`](crates/wenlan-cli/README.md#wenlan-doctor) 检查本地服务；[`lint`](plugin/skills/lint/SKILL.md) 找出格式错误的引用、孤立链接、损坏的 embedding，以及搜索索引或图谱完整性问题，但不会改写知识。
 
 ---
 

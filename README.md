@@ -212,28 +212,28 @@ a1b2c3d distill: 4 pages
 
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
+<a id="what-can-i-bring-in"></a>
 
 ## Capabilities
 
-- **Source-backed Pages:** Wenlan compiles related Sources and Memories into Pages, preserves their evidence and citation state, tracks stale support, and refreshes eligible machine-owned Pages from current evidence.
-- **Review before overwrite:** citation checks can reject an unsupported refresh; changes to human-owned Pages become pending revisions. Optional conflict review can surface protected-memory conflicts without gating every capture.
-- **Connected retrieval:** exact words, embeddings, graph context, and optional Page retrieval bring back the right layer of knowledge without loading the whole store.
-- **One local Rust runtime:** the desktop app, CLI, and MCP clients share the same daemon, so knowledge captured in one tool can return in another. Managed background mode is an explicit choice; when enabled, configured ingest, enrichment, graph-linking, citation, and eligible Page maintenance can continue without an open client window. Quitting Wenlan shuts it down.
-- **Explicit Spaces:** scope Memories, Pages, and recall to work, personal, or client contexts, with repo-aware defaults and explicit overrides.
-- **Local ownership without lock-in:** the daemon binds to localhost by default; Memories and graph data stay in local libSQL, while Pages and session notes remain user-owned Markdown with local git history. Existing Obsidian vaults can stay read-only Sources, and Wenlan Pages can be symlinked or exported into the editor you already use.
-
-<a id="what-can-i-bring-in"></a>
-
-### What you can bring in
-
-Wenlan starts with the material you already have and keeps each item connected to its source.
-
-- **Past AI conversations:** Drop a ChatGPT or Claude export ZIP into the desktop app. Wenlan imports the conversations in bulk and automatically skips conversations it has already imported.
-- **Notes and documents:** Connect an Obsidian vault or any folder containing `.md`, `.txt`, and `.pdf` files. Wenlan reads source folders without writing back to them. Plain folder sources are checked for changes in the background; Obsidian vaults can be resynced from the app. The CLI can also register a single supported file with `wenlan sources add <path>`.
-- **Live AI work:** Claude Code, Codex, Cursor, Claude Desktop, VS Code, Gemini CLI, and other MCP clients can capture decisions, lessons, and working context into the same local store while you work.
-- **Custom integrations:** The local HTTP API accepts prepared text, webpage content, and memories when you need to connect another capture workflow.
-
-A document, an older conversation, and a new agent decision can all support the same page instead of remaining separate silos.
+- **Chat import:** Bring in ChatGPT or Claude export ZIPs; Wenlan automatically skips conversations already imported.
+- **Document Sources:** Ingest one `.md`, `.txt`, or text-extractable `.pdf` file; recurse through a folder of them; or index Markdown from an Obsidian vault.
+- **Incremental sync:** Regular file and folder Sources track changes in the background; Obsidian vaults stay read-only and resync on demand.
+- **[Atomic Memory](#two-lifecycles):** MCP clients save one complete decision, lesson, correction, preference, or fact, with provenance for its origin and a supersession chain for what it replaces.
+- **[Typed enrichment](#two-lifecycles):** A configured model classifies each Memory, then adds type-specific schema fields, dates, tags, retrieval cues, and graph links.
+- **[Source-backed Pages](#two-lifecycles):** Distill related Sources and Memories into Markdown Pages with source references and `[[wikilinks]]`; the daemon can verify and record per-claim citations.
+- **[Citation-gated refresh](#two-lifecycles):** Unsupported drafts are rejected; machine Pages refresh while human edits become reviewable revisions.
+- **[Hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** FTS5 finds exact words, local BGE embeddings find meaning, and RRF fuses their ranks; graph links can add context.
+- **[Retrieval channels](docs/technical-foundations.md#optional-channels-and-defaults):** Optional Page, episodic, and per-fact channels widen recall; cross-encoder reranking can improve precision.
+- **[Knowledge graph](docs/technical-foundations.md#graph-data-and-entity-resolution):** Typed entities, relations, and observations connect people, projects, claims, and supporting Memories.
+- **[Human-in-the-loop review](plugin/skills/curate/SKILL.md):** Routine work stays automatic; protected conflicts, Page revisions, entity merges, and new vocabulary wait for judgment.
+- **[Spaces](plugin/skills/README.md#choosing-the-active-space):** Keep work, personal, client, and repository knowledge inside an explicit retrieval scope.
+- **[Local daemon + MCP](docs/setup-with-ai.md):** One lightweight Rust service stays local and lets the desktop app, CLI, Claude Code, Codex, Cursor, Claude Desktop, VS Code, and Gemini CLI share the same knowledge.
+- **Custom integrations:** The localhost HTTP API accepts prepared text, webpage content, and Memories from other capture workflows.
+- **Background maintenance:** Managed mode runs configured sync, enrichment, citation work, and eligible Page refresh without an open client.
+- **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local; enrichment and synthesis can use on-device Qwen, a local endpoint, or a configured cloud model.
+- **[Inspectable ownership](#local-markdown):** Memories and graph data stay in local libSQL; Markdown, citations, revisions, git history, and Obsidian exports remain inspectable.
+- **Read-only health checks:** [`doctor`](crates/wenlan-cli/README.md#wenlan-doctor) verifies the runtime; [`lint`](plugin/skills/lint/SKILL.md) finds malformed citations, orphan links, broken embeddings, and search-index or graph integrity problems without rewriting knowledge.
 
 ---
 
