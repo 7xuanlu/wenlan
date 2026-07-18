@@ -2281,7 +2281,7 @@ impl WenlanMcpServer {
     // --- Review proposal tools ---
 
     #[tool(
-        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge/vocab_promote), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
+        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review. Phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge/vocab_promote), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
         annotations(
             title = "List review proposals",
             read_only_hint = true,
