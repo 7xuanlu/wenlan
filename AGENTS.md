@@ -161,13 +161,7 @@ The eval-specific machinery — the baseline/scenario-DB cache (`EVAL_BASELINES_
 
 ## Releasing (release-please)
 
-Releases are automated via [release-please](https://github.com/googleapis/release-please). The workflow runs on every push to `main`.
-
-**How it works:**
-1. Every push to `main`, release-please scans new commits and maintains an open "release PR" that accumulates changes and updates `CHANGELOG.md`.
-2. When you're ready to ship, merge the release PR. release-please creates a **published** GitHub release + git tag.
-3. The `v*` tag push triggers `.github/workflows/release.yml`. Its first job immediately demotes that release to a **prerelease**, so `releases/latest` keeps resolving to the last good version while the build runs. It then builds `wenlan`, `wenlan-server`, and `wenlan-mcp`, uploads standalone binaries, publishes to crates.io / npm / Homebrew, and only if every one of those jobs succeeds does `finalize-release` clear the prerelease flag. Nothing is notified at promotion: the Claude Code plugin ships from this repo's own `.claude-plugin/marketplace.json`, which sources `plugin/` by `git-subdir` with no `ref` pin, so it tracks the default branch and has no release-time pin to sync.
-4. The release-please workflow also syncs daemon `Cargo.toml` versions on the release branch (release-please can't handle Cargo workspaces reliably with `simple` release type).
+Releases are automated via [release-please](https://github.com/googleapis/release-please): every push to `main` maintains an open "release PR" that bumps the version and updates `CHANGELOG.md`; merging that PR publishes a GitHub release + `v*` tag, which triggers `.github/workflows/release.yml` to build and publish `wenlan`, `wenlan-server`, and `wenlan-mcp`. **The operator runbook — manual `bump-version.sh`, tag steps, the release-workflow breakdown, config files, and required secrets — lives in [`RELEASING.md`](RELEASING.md).** What an agent must keep in mind while coding:
 
 **Commit messages control version bumps.** Pre-1.0:
 
@@ -184,27 +178,9 @@ After 1.0, standard semver: `feat:` bumps minor, `BREAKING CHANGE` bumps major.
 
 **Squash merge commit messages matter.** When GitHub squash-merges a PR, the commit message defaults to the PR title. A PR titled `feat: ...` creates a `feat:` commit on main, triggering a minor version bump. Review PR titles before merging — rename to `fix:` if a minor bump is not intended.
 
-**Config files:**
-- `release-please-config.json` — release type, version bump behavior
-- `.release-please-manifest.json` — current version
-- `.github/workflows/release-please.yml` — creates/updates release PRs, syncs daemon Cargo.toml versions
-- `.github/workflows/release.yml` — builds daemon + uploads artifacts on `v*` tag push
+**Version files must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` (`# x-release-please-version` marker on the `[workspace.package]` version line; the 4 crates inherit it via `version.workspace = true`). Teeth #3 enforces this; the release-please workflow syncs them on the release branch, so any manual version edit must touch all three. The desktop app version lives in [7xuanlu/wenlan-app](https://github.com/7xuanlu/wenlan-app) and bumps independently.
 
-```bash
-# To release: just merge the open release-please PR on GitHub.
-# To check what version is pending:
-cat .release-please-manifest.json
-```
-
-### Release pipeline gotchas (learned the hard way)
-
-**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` (`# x-release-please-version` marker on the `[workspace.package]` version line; the 4 crates inherit it via `version.workspace = true`). The release-please workflow syncs these automatically on the release branch; manual version changes must update all of them. The desktop app version lives in [7xuanlu/wenlan-app](https://github.com/7xuanlu/wenlan-app) and bumps independently.
-
-**release-please determines "last version" from merged PR commit messages**, not tags or manifest. It scans for commits matching `chore(main): release X.Y.Z`. Deleting a tag or GitHub Release is NOT enough to reset the version. You must also ensure no commit message in the history matches that pattern, or use `release-as` to force-override.
-
-**Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
-
-**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, wenlan-server, wenlan-mcp, standalone binary uploads, crates.io publishing for `wenlan-types` + `wenlan-mcp`, and npm publishing for `wenlan-mcp` + `wenlan`. It does NOT build a desktop bundle — wenlan-app builds its own DMG in its own repo.
+**Undoing a release is not just deleting a tag.** release-please derives the "last version" from merged `chore(main): release X.Y.Z` commit messages — not tags or the manifest. A rollback must rewrite that commit message (`git filter-branch --msg-filter`), delete the tag + GitHub Release, and rename the merged PR title, or the next run keeps bumping from the old version. Full procedure in [`RELEASING.md`](RELEASING.md).
 
 ### Branch protection
 
