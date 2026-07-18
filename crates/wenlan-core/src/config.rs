@@ -78,12 +78,13 @@ pub struct Config {
     pub reranker_mode: Option<String>,
     /// Optional per-job routing pin for everyday work (recap, extraction, bulk
     /// enrich): `"anthropic"` | `"external"` | `"on_device"`. Selects the SOURCE
-    /// only; the model comes from that source's own knobs. Absent → auto chain.
+    /// only; the model comes from that source's own knobs. Absent disables
+    /// model-backed background work for this job class.
     #[serde(default)]
     pub everyday_source: Option<String>,
     /// Optional per-job routing pin for synthesis (page distillation):
-    /// `"anthropic"` | `"external"` (and `"on_device"` only when the compile gate
-    /// is set). Selects the SOURCE only. Absent → auto chain.
+    /// `"anthropic"` | `"external"` | `"on_device"`. Selects the SOURCE only.
+    /// Absent disables model-backed background work for this job class.
     #[serde(default)]
     pub synthesis_source: Option<String>,
 }

@@ -2,6 +2,7 @@
 //! Server state — shared application state for the standalone HTTP daemon.
 
 use crate::ingest_batcher::IngestBatcher;
+use crate::lifecycle::ShutdownHandle;
 use crate::reflection_debounce::ReflectionDebouncer;
 use crate::scheduler::WriteSignal;
 use std::path::PathBuf;
@@ -71,6 +72,8 @@ impl LintServerConfig {
 /// handlers actually need. It does NOT include Tauri-specific fields (app_handle,
 /// sensors, triggers, ambient overlay, etc.).
 pub struct ServerState {
+    /// Sticky daemon-lifecycle signal shared by HTTP and background workers.
+    pub shutdown: ShutdownHandle,
     pub db: Option<Arc<MemoryDB>>,
     /// On-device LLM provider (Qwen via llama-cpp).
     pub llm: Option<Arc<dyn LlmProvider>>,
@@ -132,6 +135,7 @@ pub struct ServerState {
 impl Default for ServerState {
     fn default() -> Self {
         Self {
+            shutdown: ShutdownHandle::default(),
             db: None,
             llm: None,
             loaded_on_device_model: None,

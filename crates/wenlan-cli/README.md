@@ -59,7 +59,7 @@ wenlan setup --anthropic-api-key-env ANTHROPIC_API_KEY
 
 ### `wenlan background <on|off>`
 
-Start, restart, or remove the per-user background runtime. Most users run `wenlan background on` once after setup and `wenlan restart` after upgrades installed outside `wenlan setup`.
+Start or stop the per-user background runtime. `wenlan background off` stops the current daemon while preserving its login registration; run `wenlan background on` to start it again. Most users run `wenlan background on` once after setup and `wenlan restart` after upgrades installed outside `wenlan setup`.
 
 ```bash
 wenlan background on

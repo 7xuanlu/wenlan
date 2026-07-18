@@ -210,8 +210,9 @@ fn validate_everyday_source(v: &str) -> Result<Option<String>, ServerError> {
 
 /// Validate a `synthesis_source` PATCH value. `""` clears; a known source
 /// stores; anything else is a 4xx. Pins carry no capability restriction —
-/// on-device is a first-class synthesis pin, and the
-/// `WENLAN_PREFER_ON_DEVICE_COMPILE` gate governs only the unpinned auto chain.
+/// on-device is a first-class synthesis pin. The legacy
+/// `WENLAN_PREFER_ON_DEVICE_COMPILE` gate applies only to explicit foreground
+/// callers of `synthesis_route`, not to background routing.
 fn validate_synthesis_source(v: &str) -> Result<Option<String>, ServerError> {
     match v {
         "" => Ok(None),
@@ -295,12 +296,12 @@ pub struct JobRoute {
     /// synthesis: "anthropic" | "external" | "on_device" | "none".
     pub source: String,
     pub model: Option<String>,
-    /// "pinned" (explicit source pin honored), "pinned_degraded" (pin set but
-    /// its source was unavailable, so the auto chain ran), or "auto" (no pin).
+    /// "pinned" (explicit source pin honored), "pinned_unavailable" (the exact
+    /// pinned source is not loaded), or "unconfigured" (no source was approved).
     pub mode: String,
     /// The raw configured source pin for this job, or `null` when unpinned.
-    /// Distinct from `source` (the RESOLVED source): on a `pinned_degraded`
-    /// result the two differ, letting the app say "Pinned to X — using Y".
+    /// On `pinned_unavailable`, `source` remains the exact pinned source while
+    /// `model` is null; the daemon never silently crosses to another source.
     /// everyday: "anthropic" | "external" | "on_device"; synthesis: "anthropic"
     /// | "external".
     pub pin: Option<String>,
@@ -340,18 +341,18 @@ pub struct ResolvedRoutingResponse {
 }
 
 /// GET /api/config/routing — resolved per-job routing derived at request time
-/// from the live provider slots, using the SAME chain code the refinery runs
-/// (`everyday_llm` / `synthesis_route`) so what the app displays cannot drift
-/// from what the daemon does. Never includes key material.
+/// from the live provider slots, using the SAME hard-pin resolvers the refinery
+/// runs so what the app displays cannot drift from what the daemon does. Never
+/// includes key material.
 pub async fn handle_get_resolved_routing(
     State(state): State<SharedState>,
 ) -> Result<Json<ResolvedRoutingResponse>, ServerError> {
     let cfg = config::load_config();
     let s = state.read().await;
 
-    // Live resolution — the exact pin-aware chains the refinery/import paths run,
-    // so display can't drift from behavior. Pins come from config; on a miss the
-    // resolvers fall back to the auto chain and report mode "pinned_degraded".
+    // Live resolution — the exact hard-pin resolvers background work runs, so
+    // display cannot drift from behavior. Missing pins authorize no inference;
+    // an unavailable pin remains pinned and never falls back across sources.
     let everyday_pin = wenlan_core::refinery::EverydaySource::parse(cfg.everyday_source.as_deref());
     let everyday_route = wenlan_core::refinery::resolve_everyday(
         everyday_pin,
@@ -748,11 +749,11 @@ mod setup_status_tests {
         let body = response_json(resp).await;
         assert_eq!(body["everyday"]["source"], "basic");
         assert_eq!(body["everyday"]["model"], Value::Null);
-        assert_eq!(body["everyday"]["mode"], "auto");
+        assert_eq!(body["everyday"]["mode"], "unconfigured");
         // No pins configured → pin is null on both jobs (present key, null value).
         assert_eq!(body["everyday"]["pin"], Value::Null);
         assert_eq!(body["synthesis"]["source"], "none");
-        assert_eq!(body["synthesis"]["mode"], "auto");
+        assert_eq!(body["synthesis"]["mode"], "unconfigured");
         assert_eq!(body["synthesis"]["pin"], Value::Null);
         assert_eq!(body["pool"]["anthropic"]["configured"], false);
         assert_eq!(body["pool"]["anthropic"]["everyday_model"], Value::Null);
@@ -761,7 +762,7 @@ mod setup_status_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn routing_reflects_external_provider_and_omits_keys() {
+    async fn routing_reports_external_pool_without_using_it_unpinned_and_omits_keys() {
         let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
@@ -799,11 +800,14 @@ mod setup_status_tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = response_json(resp).await;
-        // No Anthropic key: external now serves everyday (the un-trap) AND synthesis.
-        assert_eq!(body["everyday"]["source"], "external");
-        assert_eq!(body["everyday"]["model"], "llama3");
-        assert_eq!(body["everyday"]["mode"], "auto"); // no pin → auto chain
-        assert_eq!(body["synthesis"]["source"], "external");
+        // Being configured is capability, not consent: neither background job
+        // may use the external provider until its source is explicitly pinned.
+        assert_eq!(body["everyday"]["source"], "basic");
+        assert_eq!(body["everyday"]["model"], Value::Null);
+        assert_eq!(body["everyday"]["mode"], "unconfigured");
+        assert_eq!(body["synthesis"]["source"], "none");
+        assert_eq!(body["synthesis"]["model"], Value::Null);
+        assert_eq!(body["synthesis"]["mode"], "unconfigured");
         assert_eq!(body["pool"]["anthropic"]["configured"], false);
         assert_eq!(
             body["pool"]["external"]["endpoint"],
@@ -884,10 +888,11 @@ mod setup_status_tests {
         assert_eq!(body["everyday"]["model"], "qwen3-4b");
         // The raw pin is echoed alongside the resolved source.
         assert_eq!(body["everyday"]["pin"], "on_device");
-        // Anthropic is still configured and still serves synthesis (no pin there).
+        // Anthropic is configured but cannot serve unpinned synthesis work.
         assert_eq!(body["pool"]["anthropic"]["configured"], true);
-        assert_eq!(body["synthesis"]["source"], "anthropic");
-        assert_eq!(body["synthesis"]["mode"], "auto");
+        assert_eq!(body["synthesis"]["source"], "none");
+        assert_eq!(body["synthesis"]["model"], Value::Null);
+        assert_eq!(body["synthesis"]["mode"], "unconfigured");
         assert_eq!(body["synthesis"]["pin"], Value::Null);
     }
 
@@ -958,9 +963,62 @@ mod setup_status_tests {
         assert_eq!(body["synthesis"]["mode"], "pinned");
         assert_eq!(body["synthesis"]["model"], "qwen3-4b");
         assert_eq!(body["synthesis"]["pin"], "on_device");
-        // Anthropic is still configured; everyday is unpinned (auto chain).
+        // Anthropic is still configured; unpinned everyday inference is disabled.
         assert_eq!(body["pool"]["anthropic"]["configured"], true);
+        assert_eq!(body["everyday"]["source"], "basic");
+        assert_eq!(body["everyday"]["model"], Value::Null);
+        assert_eq!(body["everyday"]["mode"], "unconfigured");
         assert_eq!(body["everyday"]["pin"], Value::Null);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_keeps_unavailable_pins_without_cross_source_fallback() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+
+        let mut cfg = config::load_config();
+        cfg.everyday_source = Some("external".to_string());
+        cfg.synthesis_source = Some("external".to_string());
+        cfg.anthropic_api_key = Some("sk-ant-test-key".to_string());
+        config::save_config(&cfg).unwrap();
+
+        // Anthropic is live, but the explicitly pinned external slot is absent.
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        {
+            let mut s = state.write().await;
+            s.api_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-haiku",
+            }));
+            s.synthesis_llm = Some(Arc::new(PinTestProvider {
+                backend: wenlan_core::llm_provider::LlmBackend::Api,
+                model: "claude-sonnet",
+            }));
+        }
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+
+        for job in ["everyday", "synthesis"] {
+            assert_eq!(body[job]["source"], "external");
+            assert_eq!(body[job]["model"], Value::Null);
+            assert_eq!(body[job]["mode"], "pinned_unavailable");
+            assert_eq!(body[job]["pin"], "external");
+        }
     }
 
     /// Divergence case: config on disk has endpoint+model set (so `configured`
@@ -1379,7 +1437,7 @@ mod external_llm_lifecycle_tests {
             .await;
         let _env = DataDirGuard::new();
         // On-device synthesis is a first-class pin — accepted and persisted even
-        // with the compile gate unset (the gate governs only the auto chain).
+        // with the legacy foreground fallback gate unset.
         std::env::remove_var("WENLAN_PREFER_ON_DEVICE_COMPILE");
         let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);

@@ -10,6 +10,7 @@ pub mod import_routes;
 pub mod ingest_batcher;
 pub mod ingest_routes;
 pub mod knowledge_routes;
+pub mod lifecycle;
 pub mod lint_routes;
 pub mod memory_routes;
 pub mod onboarding_routes;

@@ -11,13 +11,16 @@
 use anyhow::{Context, Result};
 use service_manager::{
     ServiceInstallCtx, ServiceLabel, ServiceLevel, ServiceManager, ServiceStartCtx, ServiceStopCtx,
-    ServiceUninstallCtx,
 };
 use std::path::{Path, PathBuf};
 
 use crate::client::origin_host_from_env;
 
 pub const SERVICE_LABEL: &str = "com.wenlan.server";
+const DEFAULT_LOCAL_BIND_ADDR: &str = "127.0.0.1:7878";
+const SHUTDOWN_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const SHUTDOWN_STABILITY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+const SHUTDOWN_VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Windows Task Scheduler does not love dots in task names. The macOS launchd
 /// and systemd-user paths still use the canonical reverse-DNS `SERVICE_LABEL`.
@@ -28,14 +31,14 @@ pub const WINDOWS_TASK_NAME: &str = "WenlanServer";
 pub enum BackgroundCommand {
     /// Start Wenlan now and keep it running in the background after login.
     On,
-    /// Stop Wenlan and stop keeping it running in the background.
+    /// Stop Wenlan now while keeping its background registration.
     Off,
 }
 
-pub fn run_background(command: BackgroundCommand) -> Result<()> {
+pub async fn run_background(command: BackgroundCommand) -> Result<()> {
     match command {
         BackgroundCommand::On => install(),
-        BackgroundCommand::Off => uninstall(),
+        BackgroundCommand::Off => stop().await,
     }
 }
 
@@ -68,8 +71,8 @@ fn run_schtasks(args: &[&str], action: &str) -> Result<std::process::Output> {
 }
 
 fn manager() -> Result<Box<dyn ServiceManager>> {
-    // macOS + Linux only. Windows install/uninstall short-circuit before
-    // calling this and drive schtasks.exe directly (see install/uninstall).
+    // macOS + Linux only. Windows install/stop short-circuit before
+    // calling this and drive schtasks.exe directly (see install/stop).
     let mut m = <dyn ServiceManager>::native().context("detect native service manager")?;
     let _ = m.set_level(ServiceLevel::User);
     Ok(m)
@@ -302,34 +305,207 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
-pub fn uninstall() -> Result<()> {
+#[cfg(target_os = "macos")]
+fn current_user_id() -> Result<String> {
+    let output = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .context("run id -u for launchd user domain")?;
+    if !output.status.success() {
+        anyhow::bail!("id -u failed (exit {})", output.status.code().unwrap_or(-1));
+    }
+    let uid = std::str::from_utf8(&output.stdout)
+        .context("id -u returned non-UTF-8 output")?
+        .trim();
+    if uid.is_empty() || !uid.bytes().all(|byte| byte.is_ascii_digit()) {
+        anyhow::bail!("id -u returned invalid user id: {uid:?}");
+    }
+    Ok(uid.to_owned())
+}
+
+fn stop_registered_service() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        // /end returns nonzero if the task is not currently running; that
-        // is not an error worth surfacing, so swallow the exit code.
+        // /end returns nonzero when the registered task is not currently
+        // running. Preserve idempotence and, critically, never /delete it.
         let _ = std::process::Command::new("schtasks.exe")
             .args(["/end", "/tn", WINDOWS_TASK_NAME])
-            .output();
-        run_schtasks(
-            &["/delete", "/tn", WINDOWS_TASK_NAME, "/f"],
-            "delete scheduled task",
-        )?;
-        println!(
-            "Uninstalled Windows scheduled task '{}'.",
-            WINDOWS_TASK_NAME
-        );
-        return Ok(());
+            .output()
+            .context("spawn schtasks.exe (end scheduled task)")?;
+        Ok(())
     }
 
-    #[cfg_attr(target_os = "windows", allow(unreachable_code))]
-    let label_value = label()?;
-    let m = manager()?;
-    let _ = m.stop(ServiceStopCtx {
-        label: label_value.clone(),
-    });
-    m.uninstall(ServiceUninstallCtx { label: label_value })
-        .context("uninstall service")?;
-    println!("Uninstalled {}.", SERVICE_LABEL);
+    #[cfg(target_os = "macos")]
+    {
+        let uid = current_user_id()?;
+        let domain = format!("gui/{uid}");
+        let plist = service_unit_path()?;
+        let bootout = std::process::Command::new("launchctl")
+            .arg("bootout")
+            .arg(&domain)
+            .arg(&plist)
+            .output()
+            .context("spawn launchctl bootout")?;
+
+        if !bootout.status.success() {
+            let target = format!("{domain}/{SERVICE_LABEL}");
+            let status = std::process::Command::new("launchctl")
+                .args(["print", &target])
+                .output()
+                .context("spawn launchctl print after failed bootout")?;
+            if status.status.code() != Some(113) {
+                let stderr = String::from_utf8_lossy(&bootout.stderr);
+                let stdout = String::from_utf8_lossy(&bootout.stdout);
+                let details = if stderr.trim().is_empty() {
+                    stdout.trim()
+                } else {
+                    stderr.trim()
+                };
+                anyhow::bail!(
+                    "launchctl bootout failed (exit {}): {}",
+                    bootout.status.code().unwrap_or(-1),
+                    details
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let label_value = label()?;
+        let m = manager()?;
+        m.stop(ServiceStopCtx { label: label_value })
+            .context("stop service")?;
+        Ok(())
+    }
+}
+
+async fn request_daemon_shutdown() -> Result<bool> {
+    let base_url = local_daemon_base_url()?;
+    let shutdown_url = format!("{base_url}/api/shutdown");
+    let health_url = format!("{base_url}/api/health");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .context("build daemon shutdown client")?;
+
+    let response = match client.post(&shutdown_url).send().await {
+        Ok(response) => response,
+        Err(error) if error.is_connect() => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("POST {shutdown_url} failed"));
+        }
+    };
+    response
+        .error_for_status()
+        .with_context(|| format!("daemon returned an error for {shutdown_url}"))?;
+
+    // This stability check is load-bearing for manager-backed installs: it
+    // catches a delayed respawn after the cooperative exit. When the daemon
+    // cannot be reached at all, stop() first stops the manager and then runs
+    // the same check; do not reorder that fallback verification.
+    verify_daemon_unreachable(&client, &health_url).await?;
+    Ok(true)
+}
+
+fn local_daemon_base_url() -> Result<String> {
+    let raw =
+        std::env::var("WENLAN_BIND_ADDR").unwrap_or_else(|_| DEFAULT_LOCAL_BIND_ADDR.to_string());
+    let mut address: std::net::SocketAddr = raw
+        .parse()
+        .with_context(|| format!("invalid local WENLAN_BIND_ADDR {raw:?}"))?;
+    if address.ip().is_unspecified() {
+        address.set_ip(if address.is_ipv4() {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        } else {
+            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        });
+    } else if !address.ip().is_loopback() {
+        anyhow::bail!(
+            "refusing background lifecycle control through non-loopback WENLAN_BIND_ADDR {raw:?}"
+        );
+    }
+    Ok(format!("http://{address}"))
+}
+
+async fn verify_daemon_unreachable(client: &reqwest::Client, health_url: &str) -> Result<()> {
+    let deadline = std::time::Instant::now() + SHUTDOWN_VERIFY_TIMEOUT;
+    let mut unreachable_since = None;
+    loop {
+        tokio::time::sleep(SHUTDOWN_PROBE_INTERVAL).await;
+        match client.get(health_url).send().await {
+            Err(error) if error.is_connect() => {
+                let since = unreachable_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() >= SHUTDOWN_STABILITY_WINDOW {
+                    return Ok(());
+                }
+            }
+            Ok(_) => {
+                if unreachable_since.is_some() {
+                    anyhow::bail!("daemon remained reachable at {health_url} after disconnecting");
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("verify shutdown via {health_url}"));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("daemon remained reachable at {health_url}");
+        }
+    }
+}
+
+async fn stop() -> Result<()> {
+    let registration_present = is_installed();
+    let shutdown_requested = match request_daemon_shutdown().await {
+        Ok(true) => true,
+        Ok(false) if registration_present => {
+            // Connection refusal is ambiguous while a registered manager job
+            // may still be starting or respawning. Stop the supervisor too;
+            // otherwise `background off` can report success before the hot
+            // daemon appears on its port.
+            stop_registered_service().context("daemon was unreachable; service fallback failed")?;
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(2))
+                .build()
+                .context("build daemon shutdown verification client")?;
+            let health_url = format!("{}/api/health", local_daemon_base_url()?);
+            verify_daemon_unreachable(&client, &health_url)
+                .await
+                .context("service fallback did not keep the daemon stopped")?;
+            true
+        }
+        Ok(false) => false,
+        Err(graceful_error) if registration_present => {
+            stop_registered_service().with_context(|| {
+                format!(
+                    "graceful daemon shutdown failed ({graceful_error:#}); service fallback failed"
+                )
+            })?;
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(2))
+                .build()
+                .context("build daemon shutdown verification client")?;
+            let health_url = format!("{}/api/health", local_daemon_base_url()?);
+            verify_daemon_unreachable(&client, &health_url)
+                .await
+                .with_context(|| format!("graceful daemon shutdown failed: {graceful_error:#}"))?;
+            true
+        }
+        Err(error) => return Err(error),
+    };
+    if registration_present {
+        println!("Stopped {}. Background registration kept.", SERVICE_LABEL);
+    } else if shutdown_requested {
+        println!(
+            "Stopped {}. No background registration found.",
+            SERVICE_LABEL
+        );
+    } else {
+        println!("Wenlan background process is already stopped; no registration found.");
+    }
     Ok(())
 }
 
@@ -345,7 +521,7 @@ pub fn restart() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         // No service-manager on Windows: drive Task Scheduler directly,
-        // mirroring uninstall()'s /end and install()'s /run.
+        // mirroring stop()'s /end and install()'s /run.
         let _ = std::process::Command::new("schtasks.exe")
             .args(["/end", "/tn", WINDOWS_TASK_NAME])
             .output();

@@ -1235,6 +1235,9 @@ mod tests {
         )
         .await
         .unwrap();
+        db.set_page_citations_for_test("page_survivor", "[]")
+            .await
+            .unwrap();
         db.insert_refinement_proposal(
             "ref_page_merge_1",
             "page_merge",
@@ -1267,6 +1270,7 @@ mod tests {
             .unwrap()
             .expect("survivor page remains active");
         assert_eq!(survivor.status, "active");
+        assert_eq!(survivor.version, 2, "merge must advance the survivor");
         assert_eq!(survivor.stale_reason.as_deref(), Some("source_updated"));
         assert!(
             ["mem_keep", "mem_absorbed", "mem_extra"]
@@ -1282,6 +1286,27 @@ mod tests {
             .unwrap()
             .expect("absorbed page is archived, not deleted");
         assert_eq!(absorbed.status, "archived");
+        assert_eq!(
+            absorbed.version, 2,
+            "archive must advance the absorbed Page"
+        );
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query("SELECT citations FROM pages WHERE id = 'page_survivor'", ())
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .get::<Option<String>>(0)
+                    .unwrap(),
+                None,
+                "merged evidence must reopen citation annotation"
+            );
+        }
 
         let survivor_sources = db.get_page_sources("page_survivor").await.unwrap();
         assert!(

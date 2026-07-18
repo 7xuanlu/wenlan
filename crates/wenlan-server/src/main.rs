@@ -42,13 +42,98 @@ mod bind_addr_tests {
 // All other modules live in the library target (src/lib.rs) so that
 // integration tests in tests/ can reference them as wenlan_server::<mod>.
 use wenlan_server::{
-    ingest_batcher, router, scheduler,
+    ingest_batcher, lifecycle, router, scheduler,
     state::{ServerState, SharedState},
 };
 
 use clap::{Parser, Subcommand};
-use std::sync::Arc;
+use std::{future::IntoFuture, io::Write, sync::Arc};
 use tokio::sync::RwLock;
+
+const SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+fn exit_daemon(code: i32) -> ! {
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(code);
+}
+
+#[cfg(unix)]
+struct TerminationSignals {
+    interrupt: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+fn install_termination_signals() -> std::io::Result<TerminationSignals> {
+    Ok(TerminationSignals {
+        interrupt: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
+        terminate: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+    })
+}
+
+#[cfg(unix)]
+impl TerminationSignals {
+    async fn wait(mut self) {
+        tokio::select! {
+            _ = self.interrupt.recv() => {}
+            _ = self.terminate.recv() => {}
+        }
+    }
+}
+
+#[cfg(windows)]
+struct TerminationSignals {
+    ctrl_c: tokio::signal::windows::CtrlC,
+}
+
+#[cfg(windows)]
+fn install_termination_signals() -> std::io::Result<TerminationSignals> {
+    Ok(TerminationSignals {
+        ctrl_c: tokio::signal::windows::ctrl_c()?,
+    })
+}
+
+#[cfg(windows)]
+impl TerminationSignals {
+    async fn wait(mut self) {
+        let _ = self.ctrl_c.recv().await;
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+struct TerminationSignals;
+
+#[cfg(not(any(unix, windows)))]
+fn install_termination_signals() -> std::io::Result<TerminationSignals> {
+    Ok(TerminationSignals)
+}
+
+#[cfg(not(any(unix, windows)))]
+impl TerminationSignals {
+    async fn wait(self) {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(debug_assertions)]
+async fn wait_at_startup_signal_test_barrier() -> anyhow::Result<()> {
+    let Some(root) = std::env::var_os("WENLAN_TEST_STARTUP_SIGNAL_BARRIER") else {
+        return Ok(());
+    };
+    let root = std::path::PathBuf::from(root);
+    let ready = root.join("ready");
+    let release = root.join("release");
+    std::fs::write(&ready, b"ready")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !release.exists() {
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("startup signal test barrier timed out");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    Ok(())
+}
 
 /// Wenlan memory daemon — headless HTTP server.
 #[derive(Parser)]
@@ -88,6 +173,13 @@ enum Command {
 }
 
 async fn run_daemon() -> anyhow::Result<()> {
+    // Register with the OS before binding or touching durable state. Creating
+    // Tokio's platform signal streams installs the handlers synchronously, so
+    // SIGTERM/CTRL_C received during startup is retained for the waiter below
+    // instead of taking the process down through the platform default path.
+    let termination_signals = install_termination_signals()
+        .map_err(|error| anyhow::anyhow!("install termination signal handlers: {error}"))?;
+
     // Logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -152,6 +244,9 @@ async fn run_daemon() -> anyhow::Result<()> {
             }
         }
     };
+
+    #[cfg(debug_assertions)]
+    wait_at_startup_signal_test_barrier().await?;
 
     // One-time origin -> wenlan data migration (default locations only). Runs here,
     // before the DB opens, so the daemon is the sole writer. No-op once migrated.
@@ -777,28 +872,36 @@ async fn run_daemon() -> anyhow::Result<()> {
         let _ = wenlan_core::llm_provider::LLM_READINESS_HOOK.set(hook);
     }
 
+    let shutdown = { shared.read().await.shutdown.clone() };
+    let signal_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        termination_signals.wait().await;
+        tracing::info!("termination signal received");
+        signal_shutdown.request();
+    });
+
     // Spawn the event-driven steep scheduler.
     // See docs/superpowers/specs/2026-04-12-event-driven-steep-triggers-design.md
-    {
+    let scheduler_task = {
         let write_signal = {
             let s = shared.read().await;
             s.write_signal.clone()
         };
-        scheduler::spawn_scheduler(shared.clone(), write_signal);
-    }
+        scheduler::spawn_scheduler(shared.clone(), write_signal, shutdown.subscribe())
+    };
 
     if wenlan_core::db::entity_sweep_enabled() {
         tracing::info!(
-            "Background entity-enrichment sweep is ON: it backfills knowledge-graph \
-             links over existing memories via your configured LLM. Set \
+            "Ambient entity enrichment is ON: the shared quiet/cooldown-gated scheduler \
+             backfills knowledge-graph links over existing memories. Set \
              WENLAN_ENABLE_ENTITY_SWEEP=0 to disable."
         );
     } else {
-        tracing::info!("Background entity-enrichment sweep is OFF (WENLAN_ENABLE_ENTITY_SWEEP).");
+        tracing::info!("Ambient entity enrichment is OFF (WENLAN_ENABLE_ENTITY_SWEEP).");
     }
 
     // Build router
-    let app = router::build_router(shared);
+    let app = router::build_router_with_shutdown(shared, shutdown.clone());
 
     // Advertise the bound port before accepting requests.
     // `addr` may be `127.0.0.1:0`; `local_addr()` gives the real ephemeral port.
@@ -809,7 +912,6 @@ async fn run_daemon() -> anyhow::Result<()> {
     // WENLAN_BIND_ADDR=127.0.0.1:0. Format MUST stay stable — see
     // crates/wenlan-core/src/eval/http_harness.rs in the P2 plan.
     println!("WENLAN_LISTENING_ON={}", local_addr);
-    use std::io::Write;
     let _ = std::io::stdout().flush();
 
     // Alternate signal: write the port to a file if WENLAN_PORT_FILE is set.
@@ -821,10 +923,71 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
-    // Serve
-    axum::serve(listener, app.into_make_service()).await?;
+    // Serve until HTTP shutdown or an OS termination signal. Axum stops
+    // accepting new connections and drains in-flight requests; the scheduler
+    // finishes its currently awaited item without starting another. A hard
+    // deadline remains necessary because Tokio cannot cancel arbitrary
+    // spawn_blocking work during runtime drop.
+    let server = axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(lifecycle::wait_for_shutdown(shutdown.subscribe()))
+        .into_future();
+    tokio::pin!(server);
+    let server_completed = tokio::select! {
+        result = &mut server => Some(result),
+        _ = lifecycle::wait_for_shutdown(shutdown.subscribe()) => None,
+    };
 
-    Ok(())
+    if let Some(result) = server_completed {
+        shutdown.request();
+        match tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, scheduler_task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!("scheduler join failed: {error}"),
+            Err(_) => tracing::warn!("scheduler did not stop within the drain deadline"),
+        }
+        match result {
+            Ok(()) => {
+                tracing::info!("HTTP server stopped; daemon lifecycle complete");
+                exit_daemon(0);
+            }
+            Err(error) => {
+                tracing::error!("HTTP server failed: {error}");
+                exit_daemon(1);
+            }
+        }
+    }
+
+    tracing::info!(
+        "shutdown requested — draining for at most {}ms",
+        SHUTDOWN_DRAIN_TIMEOUT.as_millis()
+    );
+    let drained = tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, async {
+        let server_result = (&mut server).await;
+        let scheduler_result = scheduler_task.await;
+        (server_result, scheduler_result)
+    })
+    .await;
+    match drained {
+        Ok((server_result, scheduler_result)) => {
+            if let Err(error) = scheduler_result {
+                tracing::warn!("scheduler join failed during shutdown: {error}");
+            }
+            server_result?;
+            // `#[tokio::main]` waits indefinitely for already-started
+            // `spawn_blocking` work while dropping the runtime. The HTTP
+            // server and scheduler above are the daemon-owned drain boundary;
+            // exit explicitly once both have stopped so shutdown remains
+            // bounded even if an inference worker is still blocked.
+            tracing::info!("graceful shutdown complete");
+            exit_daemon(0);
+        }
+        Err(_) => {
+            tracing::warn!(
+                "graceful shutdown exceeded {}ms — forcing clean exit",
+                SHUTDOWN_DRAIN_TIMEOUT.as_millis()
+            );
+            exit_daemon(0);
+        }
+    }
 }
 
 /// Batch processor invoked by the ingest coalescer per flush. Runs the

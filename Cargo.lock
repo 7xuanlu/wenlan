@@ -5712,6 +5712,7 @@ dependencies = [
  "uuid",
  "wenlan-core",
  "wenlan-types",
+ "zip",
 ]
 
 [[package]]

@@ -55,6 +55,7 @@ pub async fn update_memory(
         update.space,
         update.confirm,
         normalized_memory_type.as_deref(),
+        None,
     )
     .await
 }
@@ -99,6 +100,25 @@ pub enum PageWrite<'a> {
         source_memory_ids: &'a [String],
         agent: &'a str,
     },
+    DocumentSource {
+        page_id: &'a str,
+        title: &'a str,
+        summary: Option<&'a str>,
+        content: &'a str,
+        source_memory_ids: &'a [String],
+        queue_source_id: &'a str,
+        file_path: &'a str,
+        expected_content_hash: Option<&'a str>,
+        expected_page_version: Option<i64>,
+        agent: &'a str,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct PageGrowthCommit<'a> {
+    source_id: &'a str,
+    expected_memory_version: i64,
+    expected_page_version: i64,
 }
 
 pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResult, WenlanError> {
@@ -148,6 +168,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 require_stale,
                 knowledge_path,
                 citations,
+                None,
             )
             .await
         }
@@ -170,7 +191,114 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             )
             .await
         }
+        PageWrite::DocumentSource {
+            page_id,
+            title,
+            summary,
+            content,
+            source_memory_ids,
+            queue_source_id,
+            file_path,
+            expected_content_hash,
+            expected_page_version,
+            agent,
+        } => {
+            write_document_source_page_impl(
+                db,
+                page_id,
+                title,
+                summary,
+                content,
+                source_memory_ids,
+                queue_source_id,
+                file_path,
+                expected_content_hash,
+                expected_page_version,
+                agent,
+            )
+            .await
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn write_document_source_page_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    title: &str,
+    summary: Option<&str>,
+    content: &str,
+    source_memory_ids: &[String],
+    queue_source_id: &str,
+    file_path: &str,
+    expected_content_hash: Option<&str>,
+    expected_page_version: Option<i64>,
+    agent: &str,
+) -> Result<WriteResult, WenlanError> {
+    if title.trim().is_empty() || content.trim().is_empty() || source_memory_ids.is_empty() {
+        return Err(WenlanError::Validation(
+            "document source Page requires title, content, and source ids".into(),
+        ));
+    }
+    let source_refs: Vec<&str> = source_memory_ids.iter().map(String::as_str).collect();
+    let now = chrono::Utc::now().to_rfc3339();
+    let wrote = match expected_page_version {
+        Some(version) => {
+            db.replace_source_page_at_document_hash(
+                page_id,
+                title,
+                summary,
+                content,
+                &source_refs,
+                agent,
+                queue_source_id,
+                file_path,
+                expected_content_hash,
+                version,
+            )
+            .await?
+        }
+        None => {
+            db.insert_document_source_page_at_hash(
+                page_id,
+                title,
+                summary,
+                content,
+                &source_refs,
+                &now,
+                queue_source_id,
+                file_path,
+                expected_content_hash,
+            )
+            .await?
+        }
+    };
+    if !wrote {
+        return Err(WenlanError::Conflict(format!(
+            "document source Page input changed: {page_id}"
+        )));
+    }
+
+    let action = if expected_page_version.is_some() {
+        "page_update"
+    } else {
+        "page_create"
+    };
+    let detail = format!("title={title}, sources={}", source_memory_ids.len());
+    if let Err(error) = db
+        .log_agent_activity(agent, action, source_memory_ids, None, &detail)
+        .await
+    {
+        log::warn!("[document_source_page] activity log failed: {error}");
+    }
+    Ok(WriteResult {
+        id: page_id.to_string(),
+        attached_to: None,
+        warnings: Vec::new(),
+        wrote: true,
+        revision_card_id: None,
+        gated: false,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1135,8 +1263,9 @@ pub(crate) fn merge_shrink_threshold() -> Option<f64> {
 /// freshly verified [N] markers against a numbered source list for this
 /// exact `req.content` — persisted atomically with the content, and
 /// `stats_summary` is recorded on the changelog entry. `None` always resets
-/// `citations` to `'[]'` (a stale marker-to-source map must not survive a
-/// content change without fresh verification).
+/// `citations` to SQL `NULL` (a stale marker-to-source map must not survive a
+/// content change without fresh verification, and the new body must remain
+/// eligible for bounded annotation).
 #[allow(clippy::too_many_arguments)]
 pub async fn update_page(
     db: &MemoryDB,
@@ -1161,6 +1290,38 @@ pub async fn update_page(
     .await
 }
 
+/// Page-growth-only update path. Unlike the generic update helper, the CAS
+/// token comes from the pre-inference match and is not refreshed after the
+/// model returns. The memory receipt shares the DB transaction with the Page
+/// write, so neither can claim a stale inference landed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn update_page_growth_at_versions(
+    db: &MemoryDB,
+    page_id: &str,
+    req: UpdatePageRequest,
+    expected_page_version: i64,
+    source_id: &str,
+    expected_memory_version: i64,
+    knowledge_path: Option<&Path>,
+    citations: Option<(String, String)>,
+) -> Result<WriteResult, WenlanError> {
+    update_page_impl(
+        db,
+        page_id,
+        req,
+        "page_growth",
+        false,
+        knowledge_path,
+        citations,
+        Some(PageGrowthCommit {
+            source_id,
+            expected_memory_version,
+            expected_page_version,
+        }),
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn update_page_impl(
     db: &MemoryDB,
@@ -1170,6 +1331,7 @@ async fn update_page_impl(
     require_stale: bool,
     knowledge_path: Option<&Path>,
     citations: Option<(String, String)>,
+    page_growth: Option<PageGrowthCommit<'_>>,
 ) -> Result<WriteResult, WenlanError> {
     // ── Pre-write validation ────────────────────────────────────────────────
     if req.content.trim().is_empty() {
@@ -1205,6 +1367,18 @@ async fn update_page_impl(
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
+    if let Some(guard) = page_growth {
+        if current.version != guard.expected_page_version || page_is_human_owned(&current) {
+            return Ok(WriteResult {
+                id: page_id.to_string(),
+                attached_to: None,
+                warnings: vec![],
+                wrote: false,
+                revision_card_id: None,
+                gated: false,
+            });
+        }
+    }
     if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
         return stage_page_revision_card(
             db,
@@ -1305,19 +1479,44 @@ async fn update_page_impl(
     let projection = knowledge_path.map(|path| {
         crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
     });
-    // citations: None -> resets `citations` to '[]' (no fresh citation source
-    // for this write; a stale claim-map must not survive a content change).
-    let wrote = db
-        .try_update_page_content_with_changelog(
+    // citations: None -> resets `citations` to SQL NULL (no fresh citation
+    // source for this write; a stale claim-map must not survive a content
+    // change, and the new body should re-enter bounded annotation).
+    let wrote = if let Some(guard) = page_growth {
+        db.try_update_page_growth_at_versions(
+            page_id,
+            &req.content,
+            &source_refs,
+            &new_changelog,
+            citations.as_ref().map(|(json, _)| json.as_str()),
+            guard.expected_page_version,
+            guard.source_id,
+            guard.expected_memory_version,
+        )
+        .await?
+    } else if require_stale {
+        db.try_update_page_content_with_changelog(
             page_id,
             &req.content,
             &source_refs,
             edited_by,
-            require_stale,
+            true,
             &new_changelog,
             citations.as_ref().map(|(json, _)| json.as_str()),
         )
-        .await?;
+        .await?
+    } else {
+        db.try_update_page_content_with_changelog_at_version(
+            page_id,
+            &req.content,
+            &source_refs,
+            edited_by,
+            &new_changelog,
+            citations.as_ref().map(|(json, _)| json.as_str()),
+            current_version,
+        )
+        .await?
+    };
 
     if !wrote {
         // CAS skipped — page was not stale; return empty warnings (no-op)
@@ -2862,6 +3061,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn non_stale_page_write_uses_loaded_version_cas() {
+        let source = include_str!("post_write.rs");
+        let update_impl = source
+            .split("async fn update_page_impl")
+            .nth(1)
+            .expect("update_page_impl source");
+        assert!(
+            update_impl.contains("try_update_page_content_with_changelog_at_version"),
+            "PageWrite must commit against the current.version snapshot it already loaded"
+        );
+    }
+
     #[tokio::test]
     async fn update_page_cas_skips_when_not_stale() {
         let (db, _dir) = test_db().await;
@@ -3413,6 +3625,10 @@ mod tests {
             db.list_pending_revisions(10).await.unwrap().is_empty(),
             "accepted page-write card must leave the pending revision queue"
         );
+        assert!(
+            db.get_memory_detail(card_id).await.unwrap().is_none(),
+            "accepted Page proposal is a transient card, not a new ambient memory"
+        );
 
         let writer =
             crate::export::knowledge::KnowledgeWriter::new(knowledge_dir.path().to_path_buf(), &db);
@@ -3457,7 +3673,7 @@ mod tests {
             let conn = db.conn.lock().await;
             conn.execute_batch(&format!(
                 "CREATE TRIGGER abort_page_revision_consume
-                 BEFORE UPDATE OF pending_revision ON memories
+                 BEFORE DELETE ON memories
                  WHEN OLD.source_id = '{}' AND OLD.pending_revision = 1
                  BEGIN SELECT RAISE(ABORT, 'blocked revision consume'); END;",
                 card_id.replace('\'', "''")

@@ -3,10 +3,8 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use crate::llm_provider::LlmProvider;
 use crate::read_scope::ReadScope;
 use crate::tuning::RefineryConfig;
-use std::sync::Arc;
 
 /// Result of a post-store verification check.
 #[derive(Debug)]
@@ -110,7 +108,6 @@ pub struct RethinkReport {
 /// 5. Contradiction scan -- log entities with many observations for review
 pub async fn run_rethink(
     db: &MemoryDB,
-    _llm: Option<&Arc<dyn LlmProvider>>,
     _config: &RefineryConfig,
 ) -> Result<RethinkReport, WenlanError> {
     let report = RethinkReport {
@@ -589,7 +586,7 @@ mod tests {
         }
 
         let config = RefineryConfig::default();
-        let report = run_rethink(&db, None, &config).await.unwrap();
+        let report = run_rethink(&db, &config).await.unwrap();
 
         // Rethink should have normalized "working_at" -> "works_on"
         assert!(
@@ -616,7 +613,7 @@ mod tests {
     async fn test_run_rethink_completes_on_empty_db() {
         let (db, _dir) = test_db().await;
         let config = RefineryConfig::default();
-        let report = run_rethink(&db, None, &config).await.unwrap();
+        let report = run_rethink(&db, &config).await.unwrap();
         // All zero is fine; the point is it runs without error.
         assert_eq!(report.merge_candidates, 0);
         assert_eq!(report.types_normalized, 0);
@@ -730,7 +727,7 @@ mod tests {
 
         // 6. Rethink completes successfully
         let config = RefineryConfig::default();
-        let report = run_rethink(&db, None, &config).await.unwrap();
+        let report = run_rethink(&db, &config).await.unwrap();
         // Nothing to normalize (already canonical); no duplicates;
         // embedding_refreshed and stale counts should be 0.
         assert_eq!(report.merge_candidates, 0);
