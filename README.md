@@ -99,41 +99,47 @@ Wenlan turns documents, notes, and past AI conversations into a source-backed kn
 
 <a id="what-wenlan-is-not"></a>
 
-**Built for work that continues.** Wenlan is for researchers, writers, consultants, product teams, and software teams whose knowledge is scattered across documents, notes, and AI conversations. It turns that material into inspectable Pages that can improve across projects and weeks, not another chat history or isolated memory store. It is not designed as a life-management system or a memory SDK inside another product.
+**Built for work that continues.** Wenlan is for researchers, writers, consultants, product teams, and software teams whose knowledge is scattered across documents, notes, and AI conversations. It turns that material into inspectable Pages that can improve across projects and weeks, not another chat history or isolated memory store. It is not a life-management system or a memory SDK embedded inside another product.
 
-**Memories preserve evidence. Pages compile knowledge.** Sources preserve the original material; captured decisions retain where they came from, including corrections and supersession. Wenlan turns both into source-cited Markdown Pages you can reuse, update, and review.
+**One knowledge system, three roles:**
 
-[Karpathy's original LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) defined three foundations: immutable **Sources**, an AI-maintained Markdown **Wiki**, and a co-evolving **Schema** of rules for structuring and maintaining it. Wenlan implements that source-to-maintained-page foundation with typed Memory fields and built-in rules for Page structure, provenance, citations, refresh, ownership, and review.
+- **Sources preserve the original material.** Documents, notes, and imported conversations remain traceable.
+- **Memories preserve what work teaches you.** Agents capture atomic decisions, lessons, corrections, and supersession with provenance.
+- **Pages compile current knowledge.** Wenlan turns relevant Sources and Memories into source-cited Markdown you can reuse, refresh, and review.
 
-[Rohitg00's llm-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) adds a memory lifecycle. Wenlan makes that direction concrete with traceable Sources, agent-captured Zettelkasten-style atomic Memories (one complete idea each), and maintained Pages built from both.
+**The LLM-wiki foundation, extended:**
 
-**Wenlan's distinctive move:** Sources and atomic Memories are both evidence for maintained Pages. Memory history preserves what changed; Page history shows what the current synthesis is built from. Machine-maintained Pages can rebuild from current support, while changes to human writing wait as reviewable revisions.
+- **[LLM-wiki v1](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):** Karpathy defined immutable Sources, an AI-maintained Markdown Wiki, and a co-evolving Schema of rules for structuring and maintaining it. Wenlan implements that foundation with typed Memory fields and built-in rules for Page structure, provenance, citations, refresh, ownership, and review.
+- **[LLM-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2):** Rohitg00 added a memory lifecycle. Wenlan makes that direction concrete with traceable Sources, agent-captured Zettelkasten-style atomic Memories (one complete idea each), and maintained Pages built from both.
+
+**Wenlan's distinctive move:** Sources and atomic Memories independently support maintained Pages. Memory history preserves how knowledge changed; Page history shows which current evidence supports the synthesis. Machine-maintained Pages can rebuild from current support, while changes to human writing wait as reviewable revisions.
 
 <p align="center">
   <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel showing source-backed pages, source inspection, graph context, agent capture, and curation." width="100%">
 </p>
 
-### How knowledge compounds
+<a id="knowledge-graph"></a>
 
-Source documents and imported conversations remain source records. Decisions, lessons, and corrections captured during active work become atomic Memories with provenance, confidence, stability, corrections, and supersession.
+### A knowledge graph that gets more useful over time
 
-As the collection grows, links among people, concepts, decisions, and sources narrow what later work needs to read and make related evidence easier to compare and correct.
+With a model configured for enrichment, Wenlan can identify people and concepts in captured Memories, record observations, and connect related entities. Later refinement can link older Memories that were not connected when first saved.
 
-Memory search combines FTS5 lexical search and embedding-based vector search with reciprocal-rank fusion, then can expand through graph-linked entities and relations. When the Page retrieval channel is enabled, maintained Pages are searched separately and returned alongside relevant Memories within the selected Space. Opt-in advanced channels add bounded multi-hop graph traversal and episodic recall.
+- **Accumulate:** New captures can extend the graph while original Sources and Memory history remain intact.
+- **Connect:** People, concepts, decisions, and evidence stay related across tools and sessions.
+- **Reuse:** Established connections help later work find related Memories and evidence instead of rediscovering context from scratch.
+- **Compare and correct:** Related claims become easier to inspect together; corrections and explicit supersession stay traceable instead of silently replacing history.
 
-Wenlan compiles related sources and memories into source-cited Markdown Pages. Pages, search, and `/recall` bring current knowledge back into later work, even when you switch AI tools; `/brief` is an optional way to assemble a broader session-start snapshot. New material can improve the same Page instead of creating another disconnected answer.
+<a id="retrieval"></a>
 
-Pages and session notes stay as plain Markdown under `~/.wenlan/`. Distill and handoff workflows can commit logical file batches to a local git repository, leaving an inspectable, portable history.
+### Retrieval across words, meaning, and connections
 
-The local history is directly inspectable:
+Base Memory search combines exact-word and semantic rankings with reciprocal-rank fusion (RRF). Additional channels stay explicit:
 
-```text
-$ git -C ~/.wenlan log --oneline
-a1b2c3d distill: 4 pages
-9f8e7d6 session: embedding-work
-```
-
-**Already use Obsidian? Keep it.** Wenlan can read your existing vault as a source. To use Wenlan's own pages in Obsidian, symlink `~/.wenlan/pages/` into your vault or export a page from the desktop app. Wenlan treats edits to those pages as human-owned; later machine refreshes become reviewable revisions instead of overwriting your prose.
+- **Exact wording:** FTS5 finds literal terms.
+- **Similar meaning:** embedding-based vector search finds semantic matches.
+- **Connected context:** the knowledge graph can boost Memories linked to relevant entities within the selected Space.
+- **Maintained synthesis:** when the Page retrieval channel is enabled, Pages are searched separately and returned alongside relevant Memories.
+- **Controlled depth:** Space limits the read scope; optional local cross-encoder reranking, bounded multi-hop graph traversal, and episodic recall add deeper paths when enabled.
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -180,6 +186,24 @@ Advanced configuration: set `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` to enable that r
 
 For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. When that Page is refreshed, it rebuilds from its current support; if you have edited it, the proposed change waits for review.
 
+<a id="local-markdown"></a>
+
+### Local Markdown that works with Obsidian
+
+Your durable synthesis remains ordinary files rather than a proprietary editor format:
+
+- **Plain files:** Pages and session notes stay as Markdown under `~/.wenlan/`.
+- **Inspectable history:** Distill and handoff workflows can commit logical file batches to a local git repository.
+- **Obsidian coexistence:** Wenlan reads an existing vault as a source. Symlink `~/.wenlan/pages/` into the vault or export a Page from the desktop app; your edits remain human-owned, and later machine refreshes become reviewable revisions.
+
+The local history is directly inspectable:
+
+```text
+$ git -C ~/.wenlan log --oneline
+a1b2c3d distill: 4 pages
+9f8e7d6 session: embedding-work
+```
+
 ---
 
 <a id="what-you-get"></a>
@@ -187,19 +211,16 @@ For example, import a design document and capture a debugging decision in Codex.
 
 ## Capabilities
 
-- **Maintained knowledge:** Wenlan compiles related Sources and Memories into source-cited Pages, tracks when their support changes, and refreshes eligible machine-owned Pages from current evidence.
-- **Evidence-backed knowledge:** Captured Memories retain source agent, confidence, stability, and supersession; distilled and refreshed Pages retain links to source records and Memories, citation records and verification status, stale reasons, ownership, and revision state.
-- **Maintained, reviewable pages:** automatic re-distill refreshes fail closed when their citation verification gate fails. Updates to human-owned pages become pending revisions instead of silent rewrites.
-- **Optional conflict review:** when you explicitly enable the on-device reconcile pass, protected-memory conflicts can surface for review without turning every capture into an approval queue.
-- **Hybrid, connected retrieval:** Memory search combines FTS5 and embedding-based vector search with reciprocal-rank fusion, can add graph-linked evidence, and can use an optional local cross-encoder reranker. When enabled, the Page channel searches relevant Pages separately and returns them alongside Memories.
-- **One local Rust runtime:** the desktop app, CLI, and MCP clients use the same daemon, so knowledge captured in one tool can return in another. Installing it as a managed background service is an explicit choice; when enabled, it can stay available without an open client window and run configured ingest, enrichment, graph-linking, citation, and eligible Page-maintenance work. Quitting Wenlan still shuts it down.
-- **Explicit spaces:** scope memories, pages, and recall to work, personal, or client contexts, with repo-aware defaults and explicit overrides.
-- **Obsidian without lock-in:** index an existing vault as a read-only source, then read, edit, symlink, or export Wenlan's Markdown pages into the editor you already use.
-- **Local-first ownership:** the daemon binds to localhost by default; memories and graph data stay in local libSQL, while durable pages and session notes remain user-owned Markdown under `~/.wenlan/` with local git history.
+- **Source-backed Pages:** Wenlan compiles related Sources and Memories into Pages, preserves their evidence and citation state, tracks stale support, and refreshes eligible machine-owned Pages from current evidence.
+- **Review before overwrite:** citation checks can reject an unsupported refresh; changes to human-owned Pages become pending revisions. Optional conflict review can surface protected-memory conflicts without gating every capture.
+- **Connected retrieval:** exact words, embeddings, graph context, and optional Page retrieval bring back the right layer of knowledge without loading the whole store.
+- **One local Rust runtime:** the desktop app, CLI, and MCP clients share the same daemon, so knowledge captured in one tool can return in another. Managed background mode is an explicit choice; when enabled, configured ingest, enrichment, graph-linking, citation, and eligible Page maintenance can continue without an open client window. Quitting Wenlan shuts it down.
+- **Explicit Spaces:** scope Memories, Pages, and recall to work, personal, or client contexts, with repo-aware defaults and explicit overrides.
+- **Local ownership without lock-in:** the daemon binds to localhost by default; Memories and graph data stay in local libSQL, while Pages and session notes remain user-owned Markdown with local git history. Existing Obsidian vaults can stay read-only Sources, and Wenlan Pages can be symlinked or exported into the editor you already use.
 
 <a id="what-can-i-bring-in"></a>
 
-### Supported sources
+### What you can bring in
 
 Wenlan starts with the material you already have and keeps each item connected to its source.
 
@@ -226,9 +247,11 @@ The loop has four steps:
 3. **Close the loop.** `/handoff` records what changed, what remains open, and where the next session should continue.
 4. **Keep the wiki current.** `/distill` deliberately creates or refreshes pages. Between sessions, optional model-backed passes can enrich captures, connect related entities, and refresh eligible pages. `/lint` checks knowledge health; `/curate` brings proposed revisions and any conflict-review items created by the optional reconcile pass to you.
 
-### Choose how Wenlan thinks
+### Models and privacy
 
-Capture, recall, hybrid search, graph context, and the Markdown store work locally without an API key or cloud account. For page synthesis and deeper enrichment, use an on-device model, an OpenAI-compatible local endpoint such as Ollama or LM Studio, or a configured cloud provider. Wenlan sends no telemetry.
+- **Local core:** Capture, recall, base hybrid search, existing graph context, and the Markdown store work without an API key or cloud account.
+- **Choose deeper synthesis:** Page synthesis and model-backed enrichment can use an on-device model, an OpenAI-compatible local endpoint such as Ollama or LM Studio, or a configured cloud provider.
+- **No telemetry:** Wenlan sends no telemetry.
 
 Full workflow reference: [plugin/skills](plugin/skills/README.md).
 
