@@ -2344,6 +2344,7 @@ mod tests {
             "re-distill",
             "overview",
             "decision_logs",
+            "page_maps",
         ];
         for &exp in expected {
             assert!(
@@ -2502,6 +2503,7 @@ mod tests {
             "overview",
             "refinement_queue",
             "decision_logs",
+            "page_maps",
             "prune_rejections",
             "kg_rethink",
         ];

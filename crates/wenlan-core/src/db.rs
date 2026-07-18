@@ -51683,7 +51683,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51700,7 +51699,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51734,7 +51734,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51751,7 +51750,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51799,10 +51799,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(
-            uv, 72,
-            "terminal version is 72 after dedup_merge retirement"
-        );
     }
 
     #[tokio::test]
@@ -51819,7 +51815,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
