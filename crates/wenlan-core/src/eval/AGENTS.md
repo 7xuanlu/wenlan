@@ -154,7 +154,7 @@ Seeding a cached scenario DB is ONE orchestrator, not a scatter of STEP tests: r
 - **Producer:** `seed_scenario_dbs_complete` asserts `complete()` — hard-fails on `memory_entities=0` (graph), `event_date=0` (temporal), or `pages=0` active (page channel; matches `MemoryDB::count_active_pages`). Presence checks, not percentages (percentages rot).
 - **Consumer:** every per-query collector calls `assert_feature_substrate_live(conn, feature)` at entry — a graph/temporal/page A/B over an empty substrate **errors ("EVAL REFUSED")** rather than emitting a null that reads as "doesn't help". A starved-substrate lie is structurally impossible.
 
-Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See root `AGENTS.md` "Eval seed + eval read: ONE route, ONE contract".
+Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See `crates/wenlan-core/AGENTS.md` "Eval seed + eval read: ONE route, ONE contract (no drift)".
 
 ---
 
@@ -212,7 +212,7 @@ Cross-model adversarial review (claude/main-loop + gpt-5.5 + gemini-3.1-pro, una
 
 3. **Faithful per-question isolation only.** The consolidated/merged cross-conversation substrate (one shared 11397-memory haystack) is BANNED for CE pool / on-off decisions — a question retrieves another's evidence, inflating deep-pool gains. Code teeth: `run_fullpipeline_lme` refuses `DbSource::Consolidated` for confounder-isolation arms unless `ALLOW_CONSOLIDATED_CE=1`. See root `AGENTS.md` + memory `feedback_no_consolidated_ce_substrate`.
    - **`DbSource::SeedPerQuestion` depth depends on the FIXTURE:** + `longmemeval_oracle.json` (the runner default) = gold turns only (mem~12, pool-BLIND — "rarely changes membership"); + `longmemeval_s.json` (`LME_S_FIXTURE`) = the deep ~285-mem isolated haystack (the correct substrate). Same enum value, opposite validity.
-   - **PROVENANCE WARNING:** the historical CE figures (`+0.178 NDCG@10`, `+0.233@pool=50` in root `AGENTS.md`) were measured on **oracle (pool-blind)** or **consolidated (banned)** substrates — NOT faithful deep-S. Do NOT cite them for a deep-S pool/CE decision; regenerate retrieval NDCG on `SeedPerQuestion + _s`.
+   - **PROVENANCE WARNING:** the historical CE figures (`+0.178 NDCG@10` — still cited under the `WENLAN_RERANK_SKIP_PREFERENCE` flag in `crates/wenlan-core/AGENTS.md`; `+0.233@pool=50`, no longer cited in any tracked AGENTS.md) were measured on **oracle (pool-blind)** or **consolidated (banned)** substrates — NOT faithful deep-S. Do NOT cite them for a deep-S pool/CE decision; regenerate retrieval NDCG on `SeedPerQuestion + _s`.
 
 ### emitter correctness (boule adversarial review 2026-06-19 — 2 critical fixes shipped)
 The retrieval-NDCG emitter (`run_longmemeval_rerank_pool_probe`, `score_retrieval`) and its runner must obey:

@@ -6,7 +6,15 @@ This document covers releases of the local runtime: `wenlan` CLI, `wenlan-server
 
 Merge conventional commits to `main` (e.g. `feat:`, `fix:`, `chore:`). The `release-please` workflow opens a "Release PR" automatically, bumping the version and updating `CHANGELOG.md`. Merge that PR to cut the release. Release-please then creates the git tag, which triggers the `release.yml` build workflow.
 
-The `.release-please-manifest.json` is the canonical version source. The release-please workflow syncs Cargo manifests, npm package manifests, plugin metadata, and pinned install URLs from `version.txt`.
+> The coding-time rules — which commit prefix bumps what (`feat:` = minor, `fix:` = patch), the "review the squash-merge PR title before merging" warning, the version-file-sync rule, and how to undo a release — live in the root [`AGENTS.md`](AGENTS.md) 'Releasing (release-please)' section so every agent has them in-context. This document is the human operator procedure.
+
+The `.release-please-manifest.json` is the canonical version source; check the pending version with `cat .release-please-manifest.json`. The release-please workflow syncs Cargo manifests, npm package manifests, plugin metadata, and pinned install URLs from `version.txt`. It also syncs the daemon workspace `Cargo.toml` version on the release branch, because release-please can't handle Cargo workspaces reliably with the `simple` release type.
+
+**Config files:**
+- `release-please-config.json` — release type, version-bump behavior
+- `.release-please-manifest.json` — current version
+- `.github/workflows/release-please.yml` — creates/updates the release PR, syncs daemon Cargo.toml versions
+- `.github/workflows/release.yml` — builds the daemon + uploads artifacts on `v*` tag push
 
 ## Manual override: bump-version.sh
 
@@ -31,6 +39,8 @@ The `release.yml` workflow validates that the pushed tag version matches `versio
 
 ## What the release workflow does
 
+The `v*` tag push triggers `.github/workflows/release.yml`. Its **first** job immediately demotes the freshly-created release to a **prerelease**, so `releases/latest` keeps resolving to the last good version while the build runs; only after every build + publish step below succeeds does the `finalize-release` job clear the prerelease flag.
+
 1. Validates version consistency.
 2. Builds `wenlan`, `wenlan-server`, and `wenlan-mcp` for `aarch64-apple-darwin`.
 3. Smoke-tests `wenlan --help` and `wenlan-server --help`.
@@ -40,6 +50,8 @@ The `release.yml` workflow validates that the pushed tag version matches `versio
 7. Updates the Homebrew tap for `wenlan-mcp`.
 
 `wenlan-mcp` now lives in this monorepo under `crates/wenlan-mcp` and shares the workspace Apache-2.0 license. The desktop DMG is still built from [wenlan-app](https://github.com/7xuanlu/wenlan-app); see its `RELEASING.md` for that pipeline.
+
+Nothing is notified when the prerelease flag clears: the Claude Code plugin ships from this repo's own `.claude-plugin/marketplace.json`, which sources `plugin/` by `git-subdir` with no `ref` pin, so it tracks the default branch and has no release-time pin to sync.
 
 ## Required secrets
 
