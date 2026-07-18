@@ -217,6 +217,19 @@ pub async fn apply_refinement_with_decision(
                 ));
             }
         },
+        "vocab_promote" => {
+            let payload = prop
+                .payload
+                .as_deref()
+                .ok_or_else(|| WenlanError::Validation("vocab_promote missing payload".into()))?;
+            let v: serde_json::Value = serde_json::from_str(payload)
+                .map_err(|e| WenlanError::Validation(format!("vocab_promote payload: {e}")))?;
+            let kind = v["kind"].as_str().unwrap_or_default();
+            let old_value = v["old_value"].as_str().unwrap_or_default();
+            let category = v["category"].as_str();
+            db.promote_vocabulary_canonical(kind, old_value, category)
+                .await?;
+        }
         other => {
             return Err(WenlanError::Validation(format!("unknown action: {other}")));
         }
@@ -818,6 +831,24 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_vocab_promote_adds_canonical() {
+        let (db, _tmp) = test_db().await;
+        // A dirty relation type exists in the queue as a promote candidate.
+        db.insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap();
+        let id = crate::db::MemoryDB::vocab_proposal_fingerprint("relation", "design_inspiration");
+        apply_refinement(&db, &id, "test").await.unwrap();
+        // It is now canonical: resolve returns itself.
+        assert_eq!(
+            db.resolve_relation_type("design_inspiration")
+                .await
+                .unwrap(),
+            Some("design_inspiration".into())
+        );
     }
 
     #[tokio::test]
