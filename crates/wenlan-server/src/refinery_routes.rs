@@ -142,6 +142,7 @@ fn parse_action(s: &str) -> Option<ProposalAction> {
         "cross_space_discovery" => Some(ProposalAction::CrossSpaceDiscovery),
         "page_keep_or_archive" => Some(ProposalAction::PageKeepOrArchive),
         "lint_repair_review" => Some(ProposalAction::LintRepairReview),
+        "vocab_promote" => Some(ProposalAction::VocabPromote),
         _ => None,
     }
 }
@@ -181,6 +182,10 @@ fn parse_payload(payload: Option<&str>, action: &str) -> Option<RefinementPayloa
             return Some(RefinementPayload::SuggestEntity {
                 name_hint: payload.map(|s| s.to_string()),
             });
+        }
+        "vocab_promote" => {
+            let raw = payload?;
+            return serde_json::from_str::<RefinementPayload>(raw).ok();
         }
         _ => {}
     }

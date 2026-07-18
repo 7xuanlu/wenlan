@@ -13,6 +13,7 @@ enum Action {
     PageMerge,
     RelationConflict,
     SuggestEntity,
+    VocabPromote,
 }
 
 impl Action {
@@ -28,12 +29,15 @@ impl Action {
             "page_merge" => Some(Self::PageMerge),
             "relation_conflict" => Some(Self::RelationConflict),
             "suggest_entity" => Some(Self::SuggestEntity),
+            "vocab_promote" => Some(Self::VocabPromote),
             _ => None,
         }
     }
 
     fn valid_cardinality(self, count: usize) -> bool {
         match self {
+            // source_ids is empty — the payload carries the value.
+            Self::VocabPromote => true,
             Self::CrossSpaceDiscovery => count >= 2,
             Self::LintRepairReview => count >= 1,
             Self::PageKeepOrArchive | Self::SuggestEntity => count == 1,
@@ -81,7 +85,8 @@ impl Action {
             | Self::EntityMerge
             | Self::PageKeepOrArchive
             | Self::PageMerge
-            | Self::RelationConflict => match status {
+            | Self::RelationConflict
+            | Self::VocabPromote => match status {
                 Status::Pending | Status::AwaitingReview | Status::Resolved | Status::Dismissed => {
                     true
                 }

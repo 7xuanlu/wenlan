@@ -803,7 +803,7 @@ pub struct ConfirmMemoryParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListRefinementsParams {
     #[schemars(
-        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge, page_merge, cross_space_discovery, page_keep_or_archive, lint_repair_review."
+        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge, page_merge, cross_space_discovery, page_keep_or_archive, lint_repair_review, vocab_promote."
     )]
     #[serde(default)]
     pub action: Option<String>,
@@ -3159,7 +3159,7 @@ impl WenlanMcpServer {
     // --- Review proposal tools ---
 
     #[tool(
-        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with typed actions and payloads, including lint_repair_review items created by `/lint repair`. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise. lint_repair_review choices are advisory until a choice-specific repair is prepared and separately approved; generic accept does not apply them.",
+        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with typed actions and payloads, including vocab_promote and lint_repair_review items created by `/lint repair`. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise. lint_repair_review choices are advisory until a choice-specific repair is prepared and separately approved; generic accept does not apply them.",
         annotations(
             title = "List review proposals",
             read_only_hint = true,
@@ -3196,6 +3196,7 @@ impl WenlanMcpServer {
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
             cross_space_discovery: pass `space` to choose the destination space. \
+            vocab_promote: promote a non-canonical entity or relation type to a first-class vocabulary type. \
             Returns 422 for suggest_entity (no producer), dedup_merge (deprecated), \
             and lint_repair_review (requires a choice-specific repair flow). \
             Not available over remote HTTP MCP transport (local stdio only).",
@@ -5989,6 +5990,21 @@ mod tests {
         assert!(
             ctx.contains("how the user thinks"),
             "context description must frame the result as modeling how the user thinks, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn list_refinements_description_mentions_vocab_promote() {
+        // Closed-set contract (spec §2.4): the list_refinements action enumeration
+        // must include vocab_promote, or the action ships half-wired (Task 6 wired
+        // the enum/parse/apply but missed this doc string).
+        let descriptions = tool_descriptions();
+        let list = descriptions
+            .get("list_refinements")
+            .expect("list_refinements tool exists");
+        assert!(
+            list.contains("vocab_promote"),
+            "list_refinements description must enumerate vocab_promote, got: {list}"
         );
     }
 

@@ -188,12 +188,348 @@ pub struct Migration55Report {
     pub entity_links_inserted: usize,
 }
 
+/// A `vocab_heal_ledger` row: the full pre-image of rows an auto-heal mutated,
+/// so the fix is reversible.
+#[derive(Debug, Clone)]
+pub struct VocabLedgerEntry {
+    pub id: String,
+    pub kind: String,
+    pub old_value: String,
+    pub new_value: String,
+    pub pre_image: String,
+    pub created_at: i64,
+}
+
+impl MemoryDB {
+    /// Record a vocab auto-heal's full pre-image so the mutation can be undone.
+    /// Every affected row id already lives inside `pre_image_json`; the ledger
+    /// has no separate `affected` column.
+    pub async fn insert_vocab_ledger_entry(
+        &self,
+        kind: &str,
+        old_value: &str,
+        new_value: &str,
+        pre_image_json: &str,
+    ) -> Result<String, WenlanError> {
+        let id = format!("vheal-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO vocab_heal_ledger (id, kind, old_value, new_value, pre_image, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![id.clone(), kind, old_value, new_value, pre_image_json, now],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_ledger: {e}")))?;
+        Ok(id)
+    }
+
+    /// Look up a vocab ledger entry by id, for reading back the pre-image on undo.
+    pub async fn get_vocab_ledger_entry(
+        &self,
+        id: &str,
+    ) -> Result<Option<VocabLedgerEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, kind, old_value, new_value, pre_image, created_at FROM vocab_heal_ledger WHERE id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_vocab_ledger: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row) => Ok(Some(VocabLedgerEntry {
+                id: row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                kind: row
+                    .get(1)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                old_value: row
+                    .get(2)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                new_value: row
+                    .get(3)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                pre_image: row
+                    .get(4)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+                created_at: row
+                    .get(5)
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    /// Fold every relation of `old_type` into `canonical`, collision-aware.
+    ///
+    /// Rewrites each `relations` row of `old_type` to `canonical`. On a
+    /// `(from, to, canonical)` collision, merges the loser's provenance into the
+    /// survivor (higher confidence wins; COALESCE explanation/source_memory_id)
+    /// then deletes the loser — never a blind delete. Every folded row's
+    /// pre-image is recorded to the ledger so the whole fold is reversible.
+    /// Returns the number of rows folded.
+    pub async fn fold_relation_type(
+        &self,
+        old_type: &str,
+        canonical: &str,
+    ) -> Result<usize, WenlanError> {
+        // Self-fold would collide every row with itself and DELETE it: guard first.
+        if old_type == canonical {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold begin: {e}")))?;
+
+        // Run the snapshot + mutation loop in an inner block so any early Err
+        // routes through ROLLBACK below instead of leaking an open transaction
+        // on the shared connection (mirrors the migration-50 pattern).
+        let result: Result<(usize, Vec<serde_json::Value>), WenlanError> = async {
+            // Snapshot every row of old_type (the pre-image, for the ledger + undo).
+            let mut rows = conn
+                .query(
+                    "SELECT id, from_entity, to_entity, confidence, explanation, source_memory_id, source_agent, created_at FROM relations WHERE relation_type = ?1",
+                    libsql::params![old_type],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("fold snapshot: {e}")))?;
+            let mut pre_image: Vec<serde_json::Value> = Vec::new();
+            #[allow(clippy::type_complexity)]
+            let mut ids: Vec<(
+                String,
+                String,
+                String,
+                Option<f64>,
+                Option<String>,
+                Option<String>,
+            )> = Vec::new();
+            while let Some(r) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                let id: String = r.get(0).unwrap_or_default();
+                let from: String = r.get(1).unwrap_or_default();
+                let to: String = r.get(2).unwrap_or_default();
+                let conf: Option<f64> = r.get(3).ok();
+                let expl: Option<String> = r.get(4).ok();
+                let smid: Option<String> = r.get(5).ok();
+                let sagent: Option<String> = r.get(6).ok();
+                let created: Option<i64> = r.get(7).ok();
+                pre_image.push(serde_json::json!({
+                    "id": id, "from_entity": from, "to_entity": to, "relation_type": old_type,
+                    "confidence": conf, "explanation": expl, "source_memory_id": smid,
+                    "source_agent": sagent, "created_at": created,
+                }));
+                ids.push((id, from, to, conf, expl, smid));
+            }
+            drop(rows);
+
+            let mut folded = 0usize;
+            for (id, from, to, conf, expl, smid) in &ids {
+                // Does a canonical edge already exist for this pair?
+                let mut ex = conn
+                    .query(
+                        "SELECT id, confidence, explanation, source_memory_id, source_agent, created_at FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
+                        libsql::params![from.clone(), to.clone(), canonical.to_string()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                if let Some(sr) = ex
+                    .next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+                {
+                    let s_id: String = sr.get(0).unwrap_or_default();
+                    let s_conf: Option<f64> = sr.get(1).ok();
+                    let s_expl: Option<String> = sr.get(2).ok();
+                    let s_smid: Option<String> = sr.get(3).ok();
+                    let s_sagent: Option<String> = sr.get(4).ok();
+                    let s_created: Option<i64> = sr.get(5).ok();
+                    drop(ex);
+                    // The survivor is mutated too (its provenance is COALESCE-merged
+                    // below), so per spec §2.5 ledger its full pre-image BEFORE the
+                    // UPDATE, same shape as the loser's, so undo can restore it.
+                    pre_image.push(serde_json::json!({
+                        "id": s_id, "from_entity": from, "to_entity": to, "relation_type": canonical,
+                        "confidence": s_conf, "explanation": s_expl, "source_memory_id": s_smid,
+                        "source_agent": s_sagent, "created_at": s_created,
+                    }));
+                    // Merge provenance into the survivor: higher confidence wins; fill nulls.
+                    let merged_conf = match (s_conf, conf) {
+                        (Some(a), Some(b)) => Some(a.max(*b)),
+                        (a, b) => a.or(*b),
+                    };
+                    let merged_expl = s_expl.or_else(|| expl.clone());
+                    let merged_smid = s_smid.or_else(|| smid.clone());
+                    conn.execute(
+                        "UPDATE relations SET confidence = ?1, explanation = ?2, source_memory_id = ?3 WHERE from_entity = ?4 AND to_entity = ?5 AND relation_type = ?6",
+                        libsql::params![
+                            merged_conf.map(libsql::Value::Real).unwrap_or(libsql::Value::Null),
+                            merged_expl.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
+                            merged_smid.map(libsql::Value::Text).unwrap_or(libsql::Value::Null),
+                            from.clone(), to.clone(), canonical.to_string()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                    // Delete the loser (its pre-image is already captured above).
+                    conn.execute(
+                        "DELETE FROM relations WHERE id = ?1",
+                        libsql::params![id.clone()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                } else {
+                    drop(ex);
+                    conn.execute(
+                        "UPDATE relations SET relation_type = ?1 WHERE id = ?2",
+                        libsql::params![canonical.to_string(), id.clone()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+                }
+                folded += 1;
+            }
+
+            Ok((folded, pre_image))
+        }
+        .await;
+
+        let (folded, pre_image) = match result {
+            Ok(v) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("fold commit: {e}")))?;
+                v
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+        drop(conn);
+
+        if !pre_image.is_empty() {
+            let pre_json = serde_json::to_string(&pre_image).unwrap_or_else(|_| "[]".into());
+            self.insert_vocab_ledger_entry("relation", old_type, canonical, &pre_json)
+                .await?;
+        }
+        Ok(folded)
+    }
+
+    /// All canonical entity types (lowercase), for safe-transform matching.
+    pub async fn entity_canonicals(&self) -> Result<Vec<String>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical FROM entity_type_vocabulary ORDER BY canonical",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("entity_canonicals: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(r) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            out.push(r.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
+    /// Fold every entity of `old_type` into `canonical`. Plain rewrite: unlike
+    /// relations, there's no unique constraint on `entities.entity_type`, so no
+    /// collision handling is needed. Every folded row's pre-image is recorded
+    /// to the ledger so the fold is reversible. Returns the number of rows folded.
+    pub async fn fold_entity_type(
+        &self,
+        old_type: &str,
+        canonical: &str,
+    ) -> Result<usize, WenlanError> {
+        // Snapshot the affected ids, rewrite them, and ledger the pre-image inside
+        // ONE transaction so the UPDATE and the ledger write are atomic (mirrors
+        // fold_relation_type's begin/commit/rollback). The ledger INSERT is inlined
+        // on the held `conn` rather than routed through `insert_vocab_ledger_entry`,
+        // which would re-lock the non-reentrant conn Mutex and self-deadlock.
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold_entity begin: {e}")))?;
+
+        let result: Result<usize, WenlanError> = async {
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM entities WHERE entity_type = ?1",
+                    libsql::params![old_type],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
+            let mut ids = Vec::new();
+            while let Some(r) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                ids.push(r.get::<String>(0).unwrap_or_default());
+            }
+            drop(rows);
+            if ids.is_empty() {
+                return Ok(0);
+            }
+            let pre: Vec<serde_json::Value> = ids
+                .iter()
+                .map(|id| serde_json::json!({"id": id, "entity_type": old_type}))
+                .collect();
+            let pre_json = serde_json::to_string(&pre).unwrap_or_else(|_| "[]".into());
+
+            conn.execute(
+                "UPDATE entities SET entity_type = ?1 WHERE entity_type = ?2",
+                libsql::params![canonical.to_string(), old_type.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold_entity_type: {e}")))?;
+
+            let ledger_id = format!("vheal-{}", uuid::Uuid::new_v4());
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "INSERT INTO vocab_heal_ledger (id, kind, old_value, new_value, pre_image, created_at) VALUES (?1, 'entity', ?2, ?3, ?4, ?5)",
+                libsql::params![ledger_id, old_type, canonical, pre_json, now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_ledger: {e}")))?;
+
+            Ok(ids.len())
+        }
+        .await;
+
+        match result {
+            Ok(n) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("fold_entity commit: {e}")))?;
+                Ok(n)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
+    }
+}
+
 /// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).
 pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 71;
+pub const SCHEMA_VERSION: u32 = 74;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -6749,55 +7085,188 @@ impl MemoryDB {
                 log::info!("[migration] Migration 69 applied: derived artifact sweep receipts");
             }
 
-            // Migration 70: monotonic page compile-input revision. Unlike
-            // sources_updated_count (a pending-work counter that resets after
-            // compilation), this token never decreases. Refresh CAS uses it
-            // to reject ABA interleavings and source-content changes that land
-            // while synthesis is in flight.
+            // Migration 70: entity_type_vocabulary table (mirrors
+            // relation_type_vocabulary from migration 41), seeded with the
+            // 6 live canonical entity types.
             if version < 70 {
                 let conn = self.conn.lock().await;
-                let has_col: bool = {
-                    let mut rows = conn
-                        .query(
-                            "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'source_revision'",
-                            (),
-                        )
-                        .await
-                        .map_err(|e| WenlanError::VectorDb(format!("m70 col check: {e}")))?;
-                    match rows.next().await {
-                        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
-                        _ => false,
-                    }
-                };
-                if !has_col {
-                    conn.execute(
-                        "ALTER TABLE pages ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0",
-                        (),
-                    )
-                    .await
-                    .map_err(|e| WenlanError::VectorDb(format!("m70 add source_revision: {e}")))?;
-                }
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS entity_type_vocabulary (
+                        canonical TEXT PRIMARY KEY,
+                        aliases TEXT,
+                        category TEXT,
+                        count INTEGER DEFAULT 0
+                    );
+                    INSERT OR IGNORE INTO entity_type_vocabulary (canonical, aliases, category, count) VALUES
+                        ('concept',      '[]', 'general', 0),
+                        ('technology',   '[]', 'general', 0),
+                        ('project',      '[]', 'general', 0),
+                        ('organization', '[]', 'general', 0),
+                        ('person',       '[]', 'general', 0),
+                        ('place',        '[]', 'general', 0);",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 70 DDL: {e}")))?;
                 conn.execute("PRAGMA user_version = 70", ())
                     .await
-                    .map_err(|e| WenlanError::VectorDb(format!("m70 bump: {e}")))?;
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 70 bump: {e}")))?;
+                log::info!("[migration] Migration 70 applied: entity_type_vocabulary table seeded with 6 live canonicals");
+            }
+
+            // Migration 71: vocab_heal_ledger table. Stores the full pre-image
+            // JSON of rows a vocab auto-heal mutates, so any fix is reversible.
+            if version < 71 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS vocab_heal_ledger (
+                        id TEXT PRIMARY KEY,
+                        kind TEXT NOT NULL,
+                        old_value TEXT NOT NULL,
+                        new_value TEXT NOT NULL,
+                        pre_image TEXT NOT NULL,
+                        created_at INTEGER NOT NULL
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 71 DDL: {e}")))?;
+                conn.execute("PRAGMA user_version = 71", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 71 bump: {e}")))?;
+                log::info!("[migration] Migration 71 applied: vocab_heal_ledger table for reversible auto-heal");
+            }
+
+            // Migration 72: retire dedup_merge. One-time dismiss of any legacy
+            // dedup_merge rows still pending/awaiting_review; nothing produces
+            // them anymore (the ProposalAction::DedupMerge parse arms stay for
+            // historical deserialize).
+            if version < 72 {
+                let conn = self.conn.lock().await;
+                conn.execute(
+                    "UPDATE refinement_queue SET status = 'dismissed' \
+                     WHERE action = 'dedup_merge' AND status IN ('pending', 'awaiting_review')",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 72 dismiss: {e}")))?;
+                conn.execute("PRAGMA user_version = 72", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 72 bump: {e}")))?;
                 log::info!(
-                    "[migration] Migration 70 applied: pages.source_revision monotonic compile CAS"
+                    "[migration] Migration 72 applied: dismissed deprecated dedup_merge rows"
                 );
             }
 
-            if version < 71 {
-                self.migrate_71_lint_review_owner_bindings().await?;
+            // Migrations 70 and 71 were assigned independently on two branches:
+            // one added vocabulary substrate, while the other added page compile
+            // CAS and lint-review owner bindings. A database that ran either
+            // branch can therefore claim version 71/72 while missing the other
+            // branch's schema. Migration 73 reconciles both histories
+            // idempotently before version 74 validates lint-review ownership.
+            if version < 73 {
+                self.migrate_73_schema_collision_reconciliation().await?;
+            }
+
+            if version < 74 {
+                self.migrate_74_lint_review_owner_bindings().await?;
             }
         }
 
         Ok(())
     }
 
-    async fn migrate_71_lint_review_owner_bindings(&self) -> Result<(), WenlanError> {
+    async fn migrate_73_schema_collision_reconciliation(&self) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         conn.execute("BEGIN TRANSACTION", ())
             .await
-            .map_err(|error| WenlanError::VectorDb(format!("m71 begin: {error}")))?;
+            .map_err(|error| WenlanError::VectorDb(format!("m73 begin: {error}")))?;
+        let migration = async {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS entity_type_vocabulary (
+                    canonical TEXT PRIMARY KEY,
+                    aliases TEXT,
+                    category TEXT,
+                    count INTEGER DEFAULT 0
+                );
+                INSERT OR IGNORE INTO entity_type_vocabulary
+                    (canonical, aliases, category, count) VALUES
+                    ('concept',      '[]', 'general', 0),
+                    ('technology',   '[]', 'general', 0),
+                    ('project',      '[]', 'general', 0),
+                    ('organization', '[]', 'general', 0),
+                    ('person',       '[]', 'general', 0),
+                    ('place',        '[]', 'general', 0);
+                CREATE TABLE IF NOT EXISTS vocab_heal_ledger (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    old_value TEXT NOT NULL,
+                    new_value TEXT NOT NULL,
+                    pre_image TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );",
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m73 reconcile tables: {error}")))?;
+
+            let has_source_revision = {
+                let mut rows = conn
+                    .query(
+                        "SELECT COUNT(*) FROM pragma_table_info('pages')
+                          WHERE name = 'source_revision'",
+                        (),
+                    )
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!("m73 source_revision check: {error}"))
+                    })?;
+                rows.next()
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!("m73 source_revision row: {error}"))
+                    })?
+                    .is_some_and(|row| row.get::<i64>(0).unwrap_or(0) > 0)
+            };
+            if !has_source_revision {
+                conn.execute(
+                    "ALTER TABLE pages
+                         ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("m73 add source_revision: {error}"))
+                })?;
+            }
+
+            conn.execute("PRAGMA user_version = 73", ())
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("m73 bump: {error}")))?;
+            Ok(())
+        }
+        .await;
+
+        match migration {
+            Ok(()) => {
+                if let Err(error) = conn.execute("COMMIT", ()).await {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(WenlanError::VectorDb(format!("m73 commit: {error}")));
+                }
+                log::info!(
+                    "[migration] Migration 73 applied: reconciled vocabulary and page compile schema"
+                );
+                Ok(())
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn migrate_74_lint_review_owner_bindings(&self) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN TRANSACTION", ())
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m74 begin: {error}")))?;
         let migration = async {
             let mut rows = conn
                 .query(
@@ -6809,23 +7278,23 @@ impl MemoryDB {
                 )
                 .await
                 .map_err(|error| {
-                    WenlanError::VectorDb(format!("m71 read lint reviews: {error}"))
+                    WenlanError::VectorDb(format!("m74 read lint reviews: {error}"))
                 })?;
             let mut legacy_rows = Vec::new();
             while let Some(row) = rows.next().await.map_err(|error| {
-                WenlanError::VectorDb(format!("m71 read lint review row: {error}"))
+                WenlanError::VectorDb(format!("m74 read lint review row: {error}"))
             })? {
                 legacy_rows.push((
                     row.get::<String>(0)
-                        .map_err(|error| WenlanError::VectorDb(format!("m71 read id: {error}")))?,
+                        .map_err(|error| WenlanError::VectorDb(format!("m74 read id: {error}")))?,
                     row.get::<String>(1).map_err(|error| {
-                        WenlanError::VectorDb(format!("m71 read source_ids: {error}"))
+                        WenlanError::VectorDb(format!("m74 read source_ids: {error}"))
                     })?,
                     row.get::<Option<String>>(2).map_err(|error| {
-                        WenlanError::VectorDb(format!("m71 read payload: {error}"))
+                        WenlanError::VectorDb(format!("m74 read payload: {error}"))
                     })?,
                     row.get::<String>(3).map_err(|error| {
-                        WenlanError::VectorDb(format!("m71 read status: {error}"))
+                        WenlanError::VectorDb(format!("m74 read status: {error}"))
                     })?,
                 ));
             }
@@ -6838,13 +7307,13 @@ impl MemoryDB {
                     "awaiting_review" | "resolved" | "dismissed"
                 ) {
                     return Err(WenlanError::Validation(format!(
-                        "m71 malformed lint review {id}: invalid status {status}"
+                        "m74 malformed lint review {id}: invalid status {status}"
                     )));
                 }
                 let source_ids =
                     serde_json::from_str::<Vec<String>>(&source_ids_json).map_err(|error| {
                         WenlanError::Validation(format!(
-                            "m71 malformed lint review {id} source_ids: {error}"
+                            "m74 malformed lint review {id} source_ids: {error}"
                         ))
                     })?;
                 let canonical_source_ids = crate::repair::canonical_lint_review_source_ids(
@@ -6852,23 +7321,23 @@ impl MemoryDB {
                 )
                 .map_err(|error| {
                     WenlanError::Validation(format!(
-                        "m71 malformed lint review {id} source_ids: {error}"
+                        "m74 malformed lint review {id} source_ids: {error}"
                     ))
                 })?;
                 let payload = payload.ok_or_else(|| {
                     WenlanError::Validation(format!(
-                        "m71 malformed lint review {id}: missing payload"
+                        "m74 malformed lint review {id}: missing payload"
                     ))
                 })?;
                 let mut value =
                     serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
                         WenlanError::Validation(format!(
-                            "m71 malformed lint review {id} payload: {error}"
+                            "m74 malformed lint review {id} payload: {error}"
                         ))
                     })?;
                 let object = value.as_object_mut().ok_or_else(|| {
                     WenlanError::Validation(format!(
-                        "m71 malformed lint review {id}: payload is not an object"
+                        "m74 malformed lint review {id}: payload is not an object"
                     ))
                 })?;
                 let occurrence_digest = object
@@ -6876,14 +7345,14 @@ impl MemoryDB {
                     .cloned()
                     .ok_or_else(|| {
                         WenlanError::Validation(format!(
-                            "m71 malformed lint review {id}: missing occurrence_digest"
+                            "m74 malformed lint review {id}: missing occurrence_digest"
                         ))
                     })
                     .and_then(|value| {
                         serde_json::from_value::<wenlan_types::repair::RepairDigest>(value).map_err(
                             |error| {
                                 WenlanError::Validation(format!(
-                                    "m71 malformed lint review {id} occurrence_digest: {error}"
+                                    "m74 malformed lint review {id} occurrence_digest: {error}"
                                 ))
                             },
                         )
@@ -6898,12 +7367,12 @@ impl MemoryDB {
                     )
                     .map_err(|error| {
                         WenlanError::Validation(format!(
-                            "m71 malformed lint review {id} owner_binding_digest: {error}"
+                            "m74 malformed lint review {id} owner_binding_digest: {error}"
                         ))
                     })?;
                     if existing != owner_binding_digest {
                         return Err(WenlanError::Validation(format!(
-                            "m71 malformed lint review {id}: owner binding mismatch"
+                            "m74 malformed lint review {id}: owner binding mismatch"
                         )));
                     }
                 } else {
@@ -6916,7 +7385,7 @@ impl MemoryDB {
                     serde_json::from_value::<wenlan_types::RefinementPayload>(value.clone())
                         .map_err(|error| {
                             WenlanError::Validation(format!(
-                                "m71 malformed lint review {id} payload contract: {error}"
+                                "m74 malformed lint review {id} payload contract: {error}"
                             ))
                         })?;
                 let wenlan_types::RefinementPayload::LintRepairReview {
@@ -6929,7 +7398,7 @@ impl MemoryDB {
                 } = decoded
                 else {
                     return Err(WenlanError::Validation(format!(
-                        "m71 malformed lint review {id}: wrong payload action"
+                        "m74 malformed lint review {id}: wrong payload action"
                     )));
                 };
                 if id != format!("lint_review_{}", decoded_occurrence.as_str())
@@ -6944,7 +7413,7 @@ impl MemoryDB {
                     .is_err()
                 {
                     return Err(WenlanError::Validation(format!(
-                        "m71 malformed lint review {id}: payload contract mismatch"
+                        "m74 malformed lint review {id}: payload contract mismatch"
                     )));
                 }
                 updates.push((
@@ -6960,12 +7429,12 @@ impl MemoryDB {
                 )
                 .await
                 .map_err(|error| {
-                    WenlanError::VectorDb(format!("m71 update lint review: {error}"))
+                    WenlanError::VectorDb(format!("m74 update lint review: {error}"))
                 })?;
             }
-            conn.execute("PRAGMA user_version = 71", ())
+            conn.execute("PRAGMA user_version = 74", ())
                 .await
-                .map_err(|error| WenlanError::VectorDb(format!("m71 bump: {error}")))?;
+                .map_err(|error| WenlanError::VectorDb(format!("m74 bump: {error}")))?;
             Ok(())
         }
         .await;
@@ -6974,9 +7443,9 @@ impl MemoryDB {
             Ok(()) => {
                 if let Err(error) = conn.execute("COMMIT", ()).await {
                     let _ = conn.execute("ROLLBACK", ()).await;
-                    return Err(WenlanError::VectorDb(format!("m71 commit: {error}")));
+                    return Err(WenlanError::VectorDb(format!("m74 commit: {error}")));
                 }
-                log::info!("[migration] Migration 71 applied: lint review owner binding digests");
+                log::info!("[migration] Migration 74 applied: lint review owner binding digests");
                 Ok(())
             }
             Err(error) => {
@@ -15828,7 +16297,7 @@ impl MemoryDB {
         // Scan aliases JSON arrays for a case-insensitive match.
         let mut rows = conn
             .query(
-                "SELECT canonical, aliases FROM relation_type_vocabulary WHERE aliases IS NOT NULL",
+                "SELECT canonical, aliases FROM relation_type_vocabulary WHERE aliases IS NOT NULL ORDER BY canonical",
                 libsql::params![],
             )
             .await
@@ -15855,6 +16324,27 @@ impl MemoryDB {
         Ok(None)
     }
 
+    /// All canonical relation types (lowercase), for safe-transform matching.
+    pub async fn relation_canonicals(&self) -> Result<Vec<String>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical FROM relation_type_vocabulary ORDER BY canonical",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("relation_canonicals: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(r) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            out.push(r.get::<String>(0).unwrap_or_default());
+        }
+        Ok(out)
+    }
+
     /// Increment the usage count for a canonical relation type.
     pub async fn increment_relation_type_count(&self, canonical: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
@@ -15864,6 +16354,68 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("increment_relation_type_count: {}", e)))?;
+        Ok(())
+    }
+
+    /// Resolve an entity type against the vocabulary. Canonical-first, then a
+    /// deterministic ordered alias scan. Mirrors `resolve_relation_type`.
+    pub async fn resolve_entity_type(
+        &self,
+        entity_type: &str,
+    ) -> Result<Option<String>, WenlanError> {
+        let lower = entity_type.to_lowercase();
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT canonical FROM entity_type_vocabulary WHERE canonical = ?1",
+                libsql::params![lower.clone()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type canonical: {e}")))?;
+        if rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type row: {e}")))?
+            .is_some()
+        {
+            return Ok(Some(lower));
+        }
+        drop(rows);
+        // Deterministic order so resolution can't flip between runs.
+        let mut rows = conn
+            .query(
+                "SELECT canonical, aliases FROM entity_type_vocabulary WHERE aliases IS NOT NULL ORDER BY canonical",
+                libsql::params![],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type aliases: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_entity_type alias row: {e}")))?
+        {
+            let canonical = row.get::<String>(0).unwrap_or_default();
+            let aliases_json = row.get::<String>(1).unwrap_or_default();
+            if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&aliases_json) {
+                for v in &arr {
+                    if v.as_str().map(|a| a.to_lowercase()) == Some(lower.clone()) {
+                        return Ok(Some(canonical));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Increment usage count for a canonical entity type.
+    pub async fn increment_entity_type_count(&self, canonical: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE entity_type_vocabulary SET count = count + 1 WHERE canonical = ?1",
+            libsql::params![canonical.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("increment_entity_type_count: {e}")))?;
         Ok(())
     }
 
@@ -16312,9 +16864,21 @@ impl MemoryDB {
             Some(c) => c,
             None => {
                 log::warn!(
-                    "[create_relation] non-vocabulary type '{}' coerced to 'related_to' (caller should use a canonical type)",
+                    "[create_relation] non-vocabulary type '{}' coerced to 'related_to' (queued as promote candidate)",
                     relation_type
                 );
+                // Capture-at-coercion: keep the review queue fed. Best-effort —
+                // a failed insert must never fail ingest. resolve_relation_type
+                // has released its lock; insert_vocab_promote_proposal takes its
+                // own, and we have not locked self.conn yet.
+                if let Err(e) = self
+                    .insert_vocab_promote_proposal("relation", relation_type, None)
+                    .await
+                {
+                    log::warn!(
+                        "[create_relation] capture-at-coercion insert failed (ignored): {e}"
+                    );
+                }
                 "related_to".to_string()
             }
         };
@@ -21674,6 +22238,89 @@ impl MemoryDB {
             ));
         }
         Ok(false)
+    }
+
+    /// Stable fingerprint for a vocab proposal — keyed on (kind, old_value) ONLY,
+    /// never the suggested target. One human dismissal of a value is permanent.
+    /// `pub(crate)` so the refinement_queue tests can reconstruct the id.
+    pub(crate) fn vocab_proposal_fingerprint(kind: &str, old_value: &str) -> String {
+        format!("vocab_promote::{kind}::{}", old_value.to_lowercase())
+    }
+
+    /// Insert a `vocab_promote` proposal, deduped by fingerprint. Returns true iff
+    /// a new row was created (existing awaiting_review/dismissed/resolved rows are kept).
+    ///
+    /// Self-promotes to `status='awaiting_review'` at insert (mirroring the
+    /// `maintenance.rs` card producers), because nothing transitions a pending
+    /// `vocab_promote` and every human-facing lister filters to `awaiting_review`.
+    /// Without this the proposal would accumulate invisibly (spec §2.7 anti-dark-flag).
+    /// The `ON CONFLICT(id) DO NOTHING` guard still makes a dismissal permanent.
+    pub async fn insert_vocab_promote_proposal(
+        &self,
+        kind: &str,
+        old_value: &str,
+        category: Option<&str>,
+    ) -> Result<bool, WenlanError> {
+        let id = Self::vocab_proposal_fingerprint(kind, old_value);
+        let payload = serde_json::json!({
+            "action": "vocab_promote",
+            "kind": kind,
+            "old_value": old_value,
+            "category": category,
+        })
+        .to_string();
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) \
+                 VALUES (?1, 'vocab_promote', '[]', ?2, 1.0, 'awaiting_review') ON CONFLICT(id) DO NOTHING",
+                libsql::params![id, payload],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))?;
+        Ok(affected > 0)
+    }
+
+    /// Promote a value to a new canonical in the entity/relation vocabulary.
+    /// Rejects a value that collides (casefold) with an existing canonical or alias.
+    pub async fn promote_vocabulary_canonical(
+        &self,
+        kind: &str,
+        old_value: &str,
+        category: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        // Cross-canonical uniqueness guard (Task 11 extends the alias half).
+        // Resolve BEFORE taking the conn lock — `resolve_*` lock `self.conn`
+        // internally and the Mutex is not reentrant.
+        let already = match kind {
+            "entity" => self.resolve_entity_type(old_value).await?,
+            _ => self.resolve_relation_type(old_value).await?,
+        };
+        if already.is_some() {
+            return Err(WenlanError::Validation(format!(
+                "'{old_value}' already resolves to a canonical; cannot promote"
+            )));
+        }
+        let table = if kind == "entity" {
+            "entity_type_vocabulary"
+        } else {
+            "relation_type_vocabulary"
+        };
+        let conn = self.conn.lock().await;
+        conn.execute(
+            &format!(
+                "INSERT OR IGNORE INTO {table} (canonical, aliases, category, count) VALUES (?1, '[]', ?2, 0)"
+            ),
+            libsql::params![
+                old_value.to_lowercase(),
+                category
+                    .map(|c| libsql::Value::Text(c.to_string()))
+                    .unwrap_or(libsql::Value::Null)
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("promote_vocabulary_canonical: {e}")))?;
+        Ok(())
     }
 
     /// Get all pending/awaiting_review refinement proposals.
@@ -45402,6 +46049,17 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn promote_rejects_value_colliding_with_existing_alias() {
+        let (db, _tmp) = test_db().await;
+        // 'wrote' is a seeded alias of 'authored'. Promoting it as a NEW canonical
+        // would be shadowed by resolve's canonical-first lookup -> must be rejected.
+        let err = db
+            .promote_vocabulary_canonical("relation", "wrote", None)
+            .await;
+        assert!(err.is_err(), "promoting an existing alias must be rejected");
+    }
+
+    #[tokio::test]
     async fn extract_knowledge_graph_prompt_vocabulary_matches_db_seed() {
         let (db, _tmp) = test_db().await;
         let prompt = crate::prompts::defaults::EXTRACT_KNOWLEDGE_GRAPH;
@@ -45439,6 +46097,36 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn prompt_entity_types_match_vocabulary_seed() {
+        let (db, _tmp) = test_db().await;
+        // Entity types named in the extraction prompt.
+        let prompt_types: std::collections::BTreeSet<String> = [
+            "person",
+            "project",
+            "technology",
+            "organization",
+            "place",
+            "concept",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT canonical FROM entity_type_vocabulary", ())
+            .await
+            .unwrap();
+        let mut db_types = std::collections::BTreeSet::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            db_types.insert(r.get::<String>(0).unwrap());
+        }
+        assert_eq!(
+            prompt_types, db_types,
+            "prompt entity types must match entity_type_vocabulary seed exactly"
+        );
+    }
+
+    #[tokio::test]
     async fn create_relation_coerces_unknown_type_to_related_to() {
         let (db, _tmp) = test_db().await;
         let e1 = db.create_entity("Alice", "person", None).await.unwrap();
@@ -45462,6 +46150,73 @@ pub(crate) mod tests {
         assert_eq!(
             stored, "related_to",
             "unknown relation type should be coerced to related_to"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_relation_captures_coerced_type_as_promote_candidate() {
+        let (db, _tmp) = test_db().await;
+        let e1 = db.create_entity("Alice", "person", None).await.unwrap();
+        let e2 = db.create_entity("Bob", "person", None).await.unwrap();
+        // Coerced twice -> still exactly one promote proposal (fingerprint dedup).
+        db.create_relation(&e1, &e2, "is_friend_of", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+        let e3 = db.create_entity("Carol", "person", None).await.unwrap();
+        db.create_relation(&e1, &e3, "is_friend_of", None, Some(0.9), None, None)
+            .await
+            .unwrap();
+        let pending = db.get_pending_refinements().await.unwrap();
+        let promos: Vec<_> = pending
+            .iter()
+            .filter(|p| {
+                p.action == "vocab_promote"
+                    && p.payload.as_deref().unwrap_or("").contains("is_friend_of")
+            })
+            .collect();
+        assert_eq!(
+            promos.len(),
+            1,
+            "coerced type should queue exactly one promote candidate"
+        );
+        // The row itself is still related_to (write unchanged).
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT relation_type FROM relations WHERE from_entity = ?1 AND to_entity = ?2",
+                libsql::params![e1.clone(), e2.clone()],
+            )
+            .await
+            .unwrap();
+        let stored: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(stored, "related_to");
+    }
+
+    #[tokio::test]
+    async fn entity_type_vocabulary_seeded_and_resolves() {
+        let (db, _tmp) = test_db().await;
+        // Canonical resolves to itself.
+        assert_eq!(
+            db.resolve_entity_type("concept").await.unwrap(),
+            Some("concept".into())
+        );
+        // Case-insensitive canonical.
+        assert_eq!(
+            db.resolve_entity_type("Concept").await.unwrap(),
+            Some("concept".into())
+        );
+        // Unknown type is not in the vocabulary.
+        assert_eq!(db.resolve_entity_type("interest").await.unwrap(), None);
+        // Seed count is exactly the 6 live types.
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM entity_type_vocabulary", ())
+            .await
+            .unwrap();
+        let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            n, 6,
+            "entity_type_vocabulary should seed exactly the 6 live canonicals"
         );
     }
 
@@ -48945,6 +49700,75 @@ pub(crate) mod tests {
             r1 + r2,
             1,
             "exactly one caller should see rows=1, got {r1} + {r2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vocab_promote_proposal_is_idempotent_and_respects_dismissal() {
+        let (db, _tmp) = test_db().await;
+        // First insert creates a row.
+        assert!(db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        // Second insert with the same (kind, old_value) is a no-op.
+        assert!(!db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        let pending = db.get_pending_refinements().await.unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .filter(|p| p.action == "vocab_promote")
+                .count(),
+            1
+        );
+
+        // Dismiss it, then re-insert: must stay dismissed (no resurrection).
+        let fp = pending
+            .iter()
+            .find(|p| p.action == "vocab_promote")
+            .unwrap()
+            .id
+            .clone();
+        db.resolve_refinement_if_open(&fp, "dismissed")
+            .await
+            .unwrap();
+        assert!(!db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        let pending2 = db.get_pending_refinements().await.unwrap();
+        assert_eq!(
+            pending2
+                .iter()
+                .filter(|p| p.action == "vocab_promote")
+                .count(),
+            0
+        );
+    }
+
+    /// Regression (Critical, spec §2.7/§2.9): a freshly inserted `vocab_promote`
+    /// must self-promote to `awaiting_review` so it surfaces on the human path.
+    /// Every lister (`handle_list_refinements`, the MCP `list_refinements` tool)
+    /// filters `get_pending_refinements()` to `status == "awaiting_review"`; a
+    /// row left at the default `pending` would accumulate invisibly (dark feature).
+    #[tokio::test]
+    async fn vocab_promote_proposal_self_promotes_to_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        assert!(db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        let pending = db.get_pending_refinements().await.unwrap();
+        let prop = pending
+            .iter()
+            .find(|p| p.action == "vocab_promote")
+            .expect("vocab_promote proposal must be retrievable via get_pending_refinements");
+        assert_eq!(
+            prop.status, "awaiting_review",
+            "vocab_promote must surface as awaiting_review, not the default pending"
         );
     }
 
@@ -53706,7 +54530,7 @@ pub(crate) mod tests {
         assert_eq!(
             uv as u32,
             crate::db::SCHEMA_VERSION,
-            "terminal version matches the current schema after derived sweep receipts"
+            "terminal version matches the current schema after all migrations"
         );
     }
 
@@ -53739,6 +54563,24 @@ pub(crate) mod tests {
             .unwrap();
         let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(present, 1, "child_vectors survives idempotent re-run");
+    }
+
+    #[tokio::test]
+    async fn vocab_ledger_round_trips_pre_image() {
+        let (db, _tmp) = test_db().await;
+        let pre = r#"[{"id":"rel-1","relation_type":"working_at","confidence":0.5}]"#;
+        let id = db
+            .insert_vocab_ledger_entry("relation", "working_at", "works_on", pre)
+            .await
+            .unwrap();
+        let got = db.get_vocab_ledger_entry(&id).await.unwrap().unwrap();
+        assert_eq!(got.kind, "relation");
+        assert_eq!(got.old_value, "working_at");
+        assert_eq!(got.new_value, "works_on");
+        assert_eq!(
+            got.pre_image, pre,
+            "full pre-image JSON must round-trip for undo"
+        );
     }
 
     // ── T15a: fact-channel producer + retrieval integration ───────────────────
@@ -55480,6 +56322,27 @@ pub(crate) mod tests {
             .contains(&"p1".to_string()));
     }
 
+    #[tokio::test]
+    async fn dedup_merge_rows_are_dismissed_by_migration() {
+        let (db, _tmp) = test_db().await;
+        // A migration cannot see rows inserted after it runs, so assert the SQL
+        // directly: insert a legacy row, run the same dismiss statement, verify.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) VALUES ('legacy-1', 'dedup_merge', '[\"a\",\"b\"]', NULL, 0.5, 'pending')", ()).await.unwrap();
+            conn.execute("UPDATE refinement_queue SET status = 'dismissed' WHERE action = 'dedup_merge' AND status IN ('pending','awaiting_review')", ()).await.unwrap();
+            let mut rows = conn
+                .query(
+                    "SELECT status FROM refinement_queue WHERE id = 'legacy-1'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(status, "dismissed");
+        }
+    }
+
     #[test]
     fn build_cluster_populates_centroid_embedding() {
         let mems = vec![
@@ -55880,7 +56743,91 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn migration_71_backfills_lint_review_owner_binding_without_changing_row_identity() {
+    async fn migration_73_reconciles_both_colliding_schema_histories() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "DROP TABLE entity_type_vocabulary;
+                 DROP TABLE vocab_heal_ledger;
+                 ALTER TABLE pages DROP COLUMN source_revision;
+                 PRAGMA user_version = 72;",
+            )
+            .await
+            .unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut table_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='table'
+                    AND name IN ('entity_type_vocabulary','vocab_heal_ledger')",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            table_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            2
+        );
+        let mut vocabulary_rows = conn
+            .query("SELECT COUNT(*) FROM entity_type_vocabulary", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            vocabulary_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            6
+        );
+        let mut column_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('pages')
+                  WHERE name='source_revision'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            column_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            1
+        );
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            i64::from(SCHEMA_VERSION)
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_74_backfills_lint_review_owner_binding_without_changing_row_identity() {
         let (db, _dir) = test_db().await;
         let occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let id = format!("lint_review_{occurrence}");
@@ -55905,7 +56852,7 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-            conn.execute("PRAGMA user_version = 70", ()).await.unwrap();
+            conn.execute("PRAGMA user_version = 73", ()).await.unwrap();
         }
 
         db.run_migrations(&crate::events::NoopEmitter)
@@ -55913,7 +56860,7 @@ pub(crate) mod tests {
             .unwrap();
         db.run_migrations(&crate::events::NoopEmitter)
             .await
-            .expect("migration 71 must be idempotent");
+            .expect("migration 74 must be idempotent");
 
         let conn = db.conn.lock().await;
         let mut rows = conn
@@ -55959,12 +56906,12 @@ pub(crate) mod tests {
                 .unwrap()
                 .get::<i64>(0)
                 .unwrap(),
-            71
+            74
         );
     }
 
     #[tokio::test]
-    async fn migration_71_rejects_malformed_lint_review_without_partial_backfill_or_version_bump() {
+    async fn migration_74_rejects_malformed_lint_review_without_partial_backfill_or_version_bump() {
         let (db, _dir) = test_db().await;
         let valid_occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let valid_id = format!("lint_review_{valid_occurrence}");
@@ -55997,14 +56944,14 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-            conn.execute("PRAGMA user_version = 70", ()).await.unwrap();
+            conn.execute("PRAGMA user_version = 73", ()).await.unwrap();
         }
 
         let error = db
             .run_migrations(&crate::events::NoopEmitter)
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("m71"));
+        assert!(error.to_string().contains("m74"));
 
         let conn = db.conn.lock().await;
         let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
@@ -56016,7 +56963,7 @@ pub(crate) mod tests {
                 .unwrap()
                 .get::<i64>(0)
                 .unwrap(),
-            70
+            73
         );
         let mut payload_rows = conn
             .query(
