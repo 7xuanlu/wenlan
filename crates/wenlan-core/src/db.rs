@@ -336,7 +336,7 @@ impl MemoryDB {
                 // Does a canonical edge already exist for this pair?
                 let mut ex = conn
                     .query(
-                        "SELECT id, confidence, explanation, source_memory_id FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
+                        "SELECT id, confidence, explanation, source_memory_id, source_agent, created_at FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
                         libsql::params![from.clone(), to.clone(), canonical.to_string()],
                     )
                     .await
@@ -346,10 +346,21 @@ impl MemoryDB {
                     .await
                     .map_err(|e| WenlanError::VectorDb(e.to_string()))?
                 {
+                    let s_id: String = sr.get(0).unwrap_or_default();
                     let s_conf: Option<f64> = sr.get(1).ok();
                     let s_expl: Option<String> = sr.get(2).ok();
                     let s_smid: Option<String> = sr.get(3).ok();
+                    let s_sagent: Option<String> = sr.get(4).ok();
+                    let s_created: Option<i64> = sr.get(5).ok();
                     drop(ex);
+                    // The survivor is mutated too (its provenance is COALESCE-merged
+                    // below), so per spec §2.5 ledger its full pre-image BEFORE the
+                    // UPDATE, same shape as the loser's, so undo can restore it.
+                    pre_image.push(serde_json::json!({
+                        "id": s_id, "from_entity": from, "to_entity": to, "relation_type": canonical,
+                        "confidence": s_conf, "explanation": s_expl, "source_memory_id": s_smid,
+                        "source_agent": s_sagent, "created_at": s_created,
+                    }));
                     // Merge provenance into the survivor: higher confidence wins; fill nulls.
                     let merged_conf = match (s_conf, conf) {
                         (Some(a), Some(b)) => Some(a.max(*b)),
@@ -442,10 +453,17 @@ impl MemoryDB {
         old_type: &str,
         canonical: &str,
     ) -> Result<usize, WenlanError> {
-        // Snapshot the affected ids for the ledger, then rewrite. No unique
-        // constraint on entities.entity_type, so no collision handling needed.
-        let (pre_json, ids) = {
-            let conn = self.conn.lock().await;
+        // Snapshot the affected ids, rewrite them, and ledger the pre-image inside
+        // ONE transaction so the UPDATE and the ledger write are atomic (mirrors
+        // fold_relation_type's begin/commit/rollback). The ledger INSERT is inlined
+        // on the held `conn` rather than routed through `insert_vocab_ledger_entry`,
+        // which would re-lock the non-reentrant conn Mutex and self-deadlock.
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold_entity begin: {e}")))?;
+
+        let result: Result<usize, WenlanError> = async {
             let mut rows = conn
                 .query(
                     "SELECT id FROM entities WHERE entity_type = ?1",
@@ -461,30 +479,48 @@ impl MemoryDB {
             {
                 ids.push(r.get::<String>(0).unwrap_or_default());
             }
+            drop(rows);
+            if ids.is_empty() {
+                return Ok(0);
+            }
             let pre: Vec<serde_json::Value> = ids
                 .iter()
                 .map(|id| serde_json::json!({"id": id, "entity_type": old_type}))
                 .collect();
-            (
-                serde_json::to_string(&pre).unwrap_or_else(|_| "[]".into()),
-                ids,
-            )
-        };
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        {
-            let conn = self.conn.lock().await;
+            let pre_json = serde_json::to_string(&pre).unwrap_or_else(|_| "[]".into());
+
             conn.execute(
                 "UPDATE entities SET entity_type = ?1 WHERE entity_type = ?2",
                 libsql::params![canonical.to_string(), old_type.to_string()],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("fold_entity_type: {e}")))?;
+
+            let ledger_id = format!("vheal-{}", uuid::Uuid::new_v4());
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "INSERT INTO vocab_heal_ledger (id, kind, old_value, new_value, pre_image, created_at) VALUES (?1, 'entity', ?2, ?3, ?4, ?5)",
+                libsql::params![ledger_id, old_type, canonical, pre_json, now],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_ledger: {e}")))?;
+
+            Ok(ids.len())
         }
-        self.insert_vocab_ledger_entry("entity", old_type, canonical, &pre_json)
-            .await?;
-        Ok(ids.len())
+        .await;
+
+        match result {
+            Ok(n) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("fold_entity commit: {e}")))?;
+                Ok(n)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
     }
 }
 
@@ -21357,7 +21393,13 @@ impl MemoryDB {
     }
 
     /// Insert a `vocab_promote` proposal, deduped by fingerprint. Returns true iff
-    /// a new row was created (existing pending/dismissed/resolved rows are kept).
+    /// a new row was created (existing awaiting_review/dismissed/resolved rows are kept).
+    ///
+    /// Self-promotes to `status='awaiting_review'` at insert (mirroring the
+    /// `maintenance.rs` card producers), because nothing transitions a pending
+    /// `vocab_promote` and every human-facing lister filters to `awaiting_review`.
+    /// Without this the proposal would accumulate invisibly (spec §2.7 anti-dark-flag).
+    /// The `ON CONFLICT(id) DO NOTHING` guard still makes a dismissal permanent.
     pub async fn insert_vocab_promote_proposal(
         &self,
         kind: &str,
@@ -21375,8 +21417,8 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let affected = conn
             .execute(
-                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence) \
-                 VALUES (?1, 'vocab_promote', '[]', ?2, 1.0) ON CONFLICT(id) DO NOTHING",
+                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) \
+                 VALUES (?1, 'vocab_promote', '[]', ?2, 1.0, 'awaiting_review') ON CONFLICT(id) DO NOTHING",
                 libsql::params![id, payload],
             )
             .await
@@ -46906,6 +46948,29 @@ pub(crate) mod tests {
                 .filter(|p| p.action == "vocab_promote")
                 .count(),
             0
+        );
+    }
+
+    /// Regression (Critical, spec §2.7/§2.9): a freshly inserted `vocab_promote`
+    /// must self-promote to `awaiting_review` so it surfaces on the human path.
+    /// Every lister (`handle_list_refinements`, the MCP `list_refinements` tool)
+    /// filters `get_pending_refinements()` to `status == "awaiting_review"`; a
+    /// row left at the default `pending` would accumulate invisibly (dark feature).
+    #[tokio::test]
+    async fn vocab_promote_proposal_self_promotes_to_awaiting_review() {
+        let (db, _tmp) = test_db().await;
+        assert!(db
+            .insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap());
+        let pending = db.get_pending_refinements().await.unwrap();
+        let prop = pending
+            .iter()
+            .find(|p| p.action == "vocab_promote")
+            .expect("vocab_promote proposal must be retrievable via get_pending_refinements");
+        assert_eq!(
+            prop.status, "awaiting_review",
+            "vocab_promote must surface as awaiting_review, not the default pending"
         );
     }
 

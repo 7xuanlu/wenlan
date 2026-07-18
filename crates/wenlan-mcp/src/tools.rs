@@ -367,7 +367,7 @@ pub struct ConfirmMemoryParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListRefinementsParams {
     #[schemars(
-        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge."
+        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge, vocab_promote."
     )]
     #[serde(default)]
     pub action: Option<String>,
@@ -2281,7 +2281,7 @@ impl WenlanMcpServer {
     // --- Review proposal tools ---
 
     #[tool(
-        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
+        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge/vocab_promote), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
         annotations(
             title = "List review proposals",
             read_only_hint = true,
@@ -4205,6 +4205,21 @@ mod tests {
         assert!(
             ctx.contains("how the user thinks"),
             "context description must frame the result as modeling how the user thinks, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn list_refinements_description_mentions_vocab_promote() {
+        // Closed-set contract (spec §2.4): the list_refinements action enumeration
+        // must include vocab_promote, or the action ships half-wired (Task 6 wired
+        // the enum/parse/apply but missed this doc string).
+        let descriptions = tool_descriptions();
+        let list = descriptions
+            .get("list_refinements")
+            .expect("list_refinements tool exists");
+        assert!(
+            list.contains("vocab_promote"),
+            "list_refinements description must enumerate vocab_promote, got: {list}"
         );
     }
 

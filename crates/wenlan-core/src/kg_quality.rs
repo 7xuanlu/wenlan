@@ -1003,6 +1003,15 @@ mod tests {
             pre_image.contains("created_at"),
             "pre-image must include created_at so undo can restore the NOT-NULL column, got {pre_image}"
         );
+        // Spec §2.5: the SURVIVOR is mutated too (provenance COALESCE-merge), so its
+        // pre-image must also be ledgered before the UPDATE, else undo cannot restore
+        // its pre-merge confidence/explanation. `rel-canon` is the survivor's id and
+        // appears in NO loser pre-image (loser id is `rel-alias`), so its presence
+        // proves the survivor pre-image was captured.
+        assert!(
+            pre_image.contains("rel-canon"),
+            "survivor pre-image must be ledgered so undo can restore the mutated survivor, got {pre_image}"
+        );
     }
 
     // ── hallucination_guard ──────────────────────────────────────────────
