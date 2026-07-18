@@ -1044,6 +1044,11 @@ impl MemoryDB {
                     Some(p) => p,
                     None => return Err(missing_node_error(&conn, target_parent_id).await?),
                 };
+                if target_parent.status == "dismissed" {
+                    return Err(WenlanError::Validation(format!(
+                        "parent {target_parent_id} is dismissed"
+                    )));
+                }
                 if node_would_cycle(&conn, page_id, node_id, target_parent_id).await? {
                     return Err(WenlanError::Validation(
                         "re-parent would create a cycle".to_string(),

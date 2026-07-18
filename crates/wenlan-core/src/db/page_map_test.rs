@@ -878,3 +878,74 @@ async fn put_page_map_layout_round_trip_pins_and_places_positioned_nodes() {
         .unwrap_err();
     assert!(matches!(err, crate::WenlanError::Conflict(_)));
 }
+
+// Re-parenting onto a dismissed target parent is rejected — the same
+// cannot-orphan rule as create-under-dismissed-parent, on the patch path.
+#[tokio::test]
+async fn reparent_onto_dismissed_parent_rejected() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-1").await;
+    let (map, _created) = db.init_page_map("page-1").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    let a = match db
+        .create_map_node(
+            "page-1",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-a",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let b = match db
+        .create_map_node("page-1", rev, &root, "memory", "mem-b", None, 1.0)
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.delete_map_node("page-1", rev, &b.id).await.unwrap();
+
+    let rev = db
+        .get_page_map("page-1", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let err = db
+        .patch_map_node(
+            "page-1",
+            rev,
+            &a.id,
+            NodePatch {
+                parent_id: Some(b.id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::WenlanError::Validation(_)));
+}
