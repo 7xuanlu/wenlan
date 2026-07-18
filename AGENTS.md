@@ -4,6 +4,20 @@ This file guides any coding agent working in this repository — Claude Code, Cu
 
 This repo holds the **daemon** (`wenlan-server`), the **CLI** (`wenlan`), shared **wire types** (`wenlan-types`), the **business-logic core** (`wenlan-core`), and the **MCP server** (`wenlan-mcp`). All five ship from this monorepo. The Tauri desktop app (`wenlan-app`) ships from a separate repo: [7xuanlu/wenlan-app](https://github.com/7xuanlu/wenlan-app). Public product surface lives at [wenlan.app](https://wenlan.app) (marketing, docs at `/docs`, longer-form writing at `/learn`).
 
+## Repo map
+
+Where things live. Subtree `AGENTS.md` files load automatically when you work under them (the [agents.md](https://agents.md/) hierarchy), so this file stays the always-loaded, cross-cutting layer and the detail lives next to its code.
+
+| Working on… | Start here |
+|---|---|
+| Cross-cutting rules — build/dev, CI layers, releasing, crate boundaries, async & SQL safety, dev gotchas | **this file** (loaded every session) |
+| Business logic — DB, engine, classify/extract, rerank, pages, retrieval + the deep flag reference | `crates/wenlan-core/AGENTS.md` |
+| HTTP daemon — router, routes, state, ingest batcher, scheduler, websocket | `crates/wenlan-server/AGENTS.md` |
+| Eval discipline — fixtures, baselines, seed scripts, cache TTL, faithfulness benches | `app/eval/AGENTS.md` |
+| Eval internals — runner conventions, paired-A/B apparatus, the G3 gate | `crates/wenlan-core/src/eval/AGENTS.md` |
+| CLI (`wenlan`) | "Key Modules — wenlan (CLI)" below (no subtree doc) |
+| Wire types (`wenlan-types`), MCP server (`wenlan-mcp`) | Architecture → Workspace Layout below (no subtree doc) |
+
 ## Design Philosophy
 
 - **Simple and elegant over clever** — prefer the straightforward solution; reads-like-easy-to-write usually is right.
@@ -141,53 +155,13 @@ Tried 90% `cargo llvm-cov` gate in pre-push, removed because:
 
 Pre-push now runs clippy + non-instrumented tests only. Coverage = L5 (PR, informational) or L7 (manual).
 
-### Eval baselines cache
+### Eval cache, baselines & faithfulness benches → `app/eval/AGENTS.md`
 
-The per-scenario DB cache (Phase 1 enrichment + Phase 3 answer cache + judge JSONLs) lives at `<baselines_dir>/`, where `baselines_dir` defaults to `~/.cache/origin-eval` (override with `EVAL_BASELINES_DIR=<path>`):
-
-```bash
-export EVAL_BASELINES_DIR=$HOME/.cache/origin-eval
-```
-
-Path must be writable and local (network mounts not recommended). When set, also chains `EVAL_ENRICHMENT_CACHE_DIR` default to the same dir unless explicitly overridden. Migration: `bash scripts/migrate-eval-cache.sh <source-baselines>`.
-
-### Cached scenario DBs (page-channel + retrieval-only evals)
-
-The PR-B page-channel runners reuse the fullpipeline_*.db seeded DBs without re-ingesting. They live at `~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/origin_memory.db`. Repopulate via `bash scripts/seed-scenario-dbs.sh` from the repo root. The `cached_scenario_db_check.rs` integration test (L7 manual) verifies migration replay against current schema; it auto-resolves the root from `SCENARIO_DB_ROOT > EVAL_BASELINES_DIR/scenario_seeded > ~/.cache/origin-eval/scenario_seeded/`.
-
-For full eval discipline (fixture management, baseline layout, env vars, seed scripts, pre-flight checklist, runner conventions), see `app/eval/AGENTS.md` and `crates/wenlan-core/src/eval/AGENTS.md`. The subdir AGENTS.md files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
-
-### Eval pre-flight subset
-
-Set `EVAL_LOCOMO_LIMIT=N` (or `EVAL_LME_LIMIT=N`) to truncate the fixture and run a small-subset eval (~30min) before committing to full 3h runs. Useful for verifying direction on new retrieval variants. Applies to every `run_locomo_eval*` / `run_longmemeval_eval*` variant. Unset (the default) runs the full fixture unchanged.
-
-### TTL policy
-
-Cache directories accumulate fast (1GB+ per full LoCoMo+LME run) and snapshots stay valid only as long as the fixture revision + embedder + provider stack remain unchanged. Rule of thumb:
-
-- **Active cache** (`~/.cache/origin-eval/`): purge whenever (a) `fixture_revision_hash` changes for the bench you're rerunning, (b) embedder weights swap, (c) LLM provider class swaps. Drop the affected `<task>/<fixture>.db` files; keep the JSONL judge cache if the judge model is unchanged.
-- **Archive caches** (`~/.cache/origin-eval.archive-YYYY-MM-DD/`): retain for 30 days after the matching baseline JSON ships to a PR. After that, delete unless the baseline is still actively cited in an open issue or recent release notes. Archives are recreated on demand by re-running the harness.
-- **Don't depend on archive contents for reproducibility** — baselines are reproduced by re-running with the same `ReportEnv` fields, not by replaying cached intermediates.
-
-### KG-faithfulness bench
-
-`app/eval/kg_fixtures/*.toml` hold hand-curated entity + relation ground-truth per source_text case. The `eval::kg_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) extracts KG from each case and scores entity + relation precision/recall/F1 against the expected ground truth. No LLM judge in this bench — string-match faithfulness only. LLM-judge variant is a follow-up plan.
-
-### Page-distillation faithfulness bench
-
-`app/eval/page_fixtures/*.toml` hold hand-curated source memories + a distilled page body per case + an `expected_min_faithfulness` floor. The `eval::page_faithfulness` module's smoke test (`#[ignore]`d, runs in L6 main canary) splits each page body into sentences and scores what fraction of sentences have ≥ 50% content-token overlap with the union of source memories. Negative-control fixtures in `seed_hallucinations.toml` carry a high `expected_min` floor specifically to verify the scorer flags hallucinated pages. LLM-judge variant deferred.
-
-**Scope limits.** Token-overlap is lexical, not semantic. Paraphrased faithful claims may fail the 50% floor and hallucinated claims with high keyword overlap may pass. Sentence-level granularity only (no multi-sentence claim composition). Acceptable for the smoke-test floor; a real faithfulness gate needs the LLM-judge variant tracked under C-D-LLM.
+The eval-specific machinery — the baseline/scenario-DB cache (`EVAL_BASELINES_DIR`, TTL/purge policy, `EVAL_ENRICHMENT_CACHE_DIR` chaining, `migrate-eval-cache.sh`), cached scenario DBs (`~/.cache/origin-eval/scenario_seeded/{locomo_v1,lme_v1}/`, `seed-scenario-dbs.sh`, `cached_scenario_db_check.rs`), the `EVAL_LOCOMO_LIMIT`/`EVAL_LME_LIMIT` pre-flight subset, the full eval env-var table, the KG- and page-distillation faithfulness benches, fixture management, baseline layout, pre-flight checklist, and citation discipline — lives in **`app/eval/AGENTS.md`** and **`crates/wenlan-core/src/eval/AGENTS.md`**. Those subdir `AGENTS.md` files apply per the agents.md hierarchical-instruction convention when an agent is working under those subtrees.
 
 ## Releasing (release-please)
 
-Releases are automated via [release-please](https://github.com/googleapis/release-please). The workflow runs on every push to `main`.
-
-**How it works:**
-1. Every push to `main`, release-please scans new commits and maintains an open "release PR" that accumulates changes and updates `CHANGELOG.md`.
-2. When you're ready to ship, merge the release PR. release-please creates a **published** GitHub release + git tag.
-3. The `v*` tag push triggers `.github/workflows/release.yml`. Its first job immediately demotes that release to a **prerelease**, so `releases/latest` keeps resolving to the last good version while the build runs. It then builds `wenlan`, `wenlan-server`, and `wenlan-mcp`, uploads standalone binaries, publishes to crates.io / npm / Homebrew, and only if every one of those jobs succeeds does `finalize-release` clear the prerelease flag. Nothing is notified at promotion: the Claude Code plugin ships from this repo's own `.claude-plugin/marketplace.json`, which sources `plugin/` by `git-subdir` with no `ref` pin, so it tracks the default branch and has no release-time pin to sync.
-4. The release-please workflow also syncs daemon `Cargo.toml` versions on the release branch (release-please can't handle Cargo workspaces reliably with `simple` release type).
+Releases are automated via [release-please](https://github.com/googleapis/release-please): every push to `main` maintains an open "release PR" that bumps the version and updates `CHANGELOG.md`; merging that PR publishes a GitHub release + `v*` tag, which triggers `.github/workflows/release.yml` to build and publish `wenlan`, `wenlan-server`, and `wenlan-mcp`. **The operator runbook — manual `bump-version.sh`, tag steps, the release-workflow breakdown, config files, and required secrets — lives in [`RELEASING.md`](RELEASING.md).** What an agent must keep in mind while coding:
 
 **Commit messages control version bumps.** Pre-1.0:
 
@@ -204,27 +178,9 @@ After 1.0, standard semver: `feat:` bumps minor, `BREAKING CHANGE` bumps major.
 
 **Squash merge commit messages matter.** When GitHub squash-merges a PR, the commit message defaults to the PR title. A PR titled `feat: ...` creates a `feat:` commit on main, triggering a minor version bump. Review PR titles before merging — rename to `fix:` if a minor bump is not intended.
 
-**Config files:**
-- `release-please-config.json` — release type, version bump behavior
-- `.release-please-manifest.json` — current version
-- `.github/workflows/release-please.yml` — creates/updates release PRs, syncs daemon Cargo.toml versions
-- `.github/workflows/release.yml` — builds daemon + uploads artifacts on `v*` tag push
+**Version files must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` (`# x-release-please-version` marker on the `[workspace.package]` version line; the 4 crates inherit it via `version.workspace = true`). Teeth #3 enforces this; the release-please workflow syncs them on the release branch, so any manual version edit must touch all three. The desktop app version lives in [7xuanlu/wenlan-app](https://github.com/7xuanlu/wenlan-app) and bumps independently.
 
-```bash
-# To release: just merge the open release-please PR on GitHub.
-# To check what version is pending:
-cat .release-please-manifest.json
-```
-
-### Release pipeline gotchas (learned the hard way)
-
-**Version files that must stay in sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` (`# x-release-please-version` marker on the `[workspace.package]` version line; the 4 crates inherit it via `version.workspace = true`). The release-please workflow syncs these automatically on the release branch; manual version changes must update all of them. The desktop app version lives in [7xuanlu/wenlan-app](https://github.com/7xuanlu/wenlan-app) and bumps independently.
-
-**release-please determines "last version" from merged PR commit messages**, not tags or manifest. It scans for commits matching `chore(main): release X.Y.Z`. Deleting a tag or GitHub Release is NOT enough to reset the version. You must also ensure no commit message in the history matches that pattern, or use `release-as` to force-override.
-
-**Never delete a release tag without also cleaning up the commit history.** If you need to undo a release version, you must rewrite the commit message that release-please created (`git filter-branch --msg-filter`), delete the tag, delete the GitHub Release, and rename the merged PR title via API. Otherwise release-please will keep bumping from the old version.
-
-**The `release.yml` workflow ships the local runtime.** It handles: origin CLI, wenlan-server, wenlan-mcp, standalone binary uploads, crates.io publishing for `wenlan-types` + `wenlan-mcp`, and npm publishing for `wenlan-mcp` + `wenlan`. It does NOT build a desktop bundle — wenlan-app builds its own DMG in its own repo.
+**Undoing a release is not just deleting a tag.** release-please derives the "last version" from merged `chore(main): release X.Y.Z` commit messages — not tags or the manifest. A rollback must rewrite that commit message (`git filter-branch --msg-filter`), delete the tag + GitHub Release, and rename the merged PR title, or the next run keeps bumping from the old version. Full procedure in [`RELEASING.md`](RELEASING.md).
 
 ### Branch protection
 
@@ -239,11 +195,12 @@ Manual setup: `bash scripts/setup-hooks.sh`. Hooks live under `.githooks/`.
 
 ### Drift-defense (doc/flag/config drift)
 
-Three fail-loud CI teeth live as `#[cfg(test)]` lib tests in `crates/wenlan-core/src/drift_guard.rs` (picked up by the same `cargo test --workspace --lib` that CI + pre-push already run — no extra wiring):
+Four fail-loud doc/flag/config-drift teeth live as `#[cfg(test)]` lib tests in `crates/wenlan-core/src/drift_guard.rs` (picked up by the same `cargo test --workspace --lib` that CI + pre-push already run — no extra wiring). The file also carries teeth #4 (root `AGENTS.md` byte budget) and #5 (FastEmbed CI cache), which guard non-drift concerns:
 
 - **Teeth #1 — path resolver:** tracked markdown may not reference an in-repo path that doesn't exist on the branch. Skips `docs/plans/**`, `docs/superpowers/**`, and `*AUDIT.md` (historical/aspirational), and only checks file-like refs. Suppress an intentional ref with `<!-- drift-ok -->`.
 - **Teeth #2 — flag doc contract (fail-closed):** every behavioral `WENLAN_*` flag read in `crates/*/src` must be documented in an `AGENTS.md`, else allowlisted (`FLAG_ALLOWLIST`, infra/test) or grandfathered (`BASELINE_UNDOCUMENTED`, the burn-down list of flags undocumented at introduction). A NEW undocumented flag fails the build.
 - **Teeth #3 — version sync:** `version.txt`, `.release-please-manifest.json`, and the root workspace `Cargo.toml` must carry an identical version string.
+- **Teeth #6 — section-heading resolver:** a cross-reference like ``See `crates/wenlan-core/AGENTS.md` "Some Heading".`` must resolve to a real heading in the target file (case-insensitively). Teeth #1 guards the *path*; this guards the *quoted heading*, so a doc-tiering move that relocates a section can't silently leave a dangling pointer. Same skips as teeth #1; suppress with `<!-- drift-ok -->`. <!-- drift-ok -->  (this bullet's own `"Some Heading"` example is illustrative, hence suppressed)
 
 The fuzzy surfaces (eval numbers stale vs the current env-hash, design-doc/decision rot, memory→repo dangling pointers, stale worktrees) are covered by the read-only `doc-drift-auditor` subagent. Run weekly, locally:
 
@@ -273,35 +230,9 @@ The daemon (`wenlan-server`) is the single source of truth. External tools (the 
 - **Daemon**: Rust, Axum 0.8 (HTTP), libSQL (Turso's SQLite fork — vectors, knowledge graph, documents), Tokio, FastEmbed (BGE-Base-EN-v1.5-Q, 768-dim, 512-token max), llama-cpp-2 (Qwen3-4B-Instruct-2507 via Metal GPU; Qwen3.5-9B optional), launchd for process management
 - **CLI** (`wenlan`): Rust, reqwest, clap
 
-### Database: libSQL (owned by wenlan-core)
+### Database & events (owned by wenlan-core)
 
-One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/wenlan/memorydb/origin_memory.db`), owned by `MemoryDB` in `crates/wenlan-core/src/db.rs`:
-- **Document chunks**: `chunks` table with `F32_BLOB(768)` vector column, DiskANN indexing (768-dim, BGE-Base-EN-v1.5-Q)
-- **Knowledge graph**: `entities`, `relations`, `observations` tables with FK cascades
-- **Full-text search**: FTS5 virtual table (`chunks_fts`) auto-synced via triggers
-- **Hybrid search**: Vector similarity + FTS combined with Reciprocal Rank Fusion (RRF)
-
-**Connection pattern**: `tokio::sync::Mutex<libsql::Connection>` — `libsql::Connection` is `Send` but not `Sync`, so it's wrapped in an async `Mutex` inside `MemoryDB`.
-
-**Sharing pattern**: `MemoryDB` is wrapped in `Arc<MemoryDB>` at the state layer (`ServerState.db: Option<Arc<MemoryDB>>`). This lets handlers clone the `Arc` out of the `RwLock<ServerState>` guard and drop the guard before performing long-running operations.
-
-### Events: EventEmitter trait (no tauri::Emitter in core)
-
-Instead of passing `tauri::AppHandle` into business logic, `wenlan-core` defines an `EventEmitter` trait:
-
-```rust
-// crates/wenlan-core/src/events.rs
-pub trait EventEmitter: Send + Sync {
-    fn emit(&self, event: &str, payload: &str) -> Result<()>;
-}
-pub struct NoopEmitter;
-```
-
-- The daemon uses `NoopEmitter` (no UI to notify directly)
-- The desktop app (separate `wenlan-app` repo) provides a `TauriEmitter` adapter that wraps `AppHandle::emit`
-- `MemoryDB::new(db_path, emitter: Arc<dyn EventEmitter>)` takes the trait object
-
-This keeps `wenlan-core` framework-agnostic and testable with `NoopEmitter` in unit tests.
+One libSQL database (`MemoryDB` in `crates/wenlan-core/src/db.rs`) holds document chunks + vectors, the knowledge graph, and FTS, combined via Reciprocal Rank Fusion. `wenlan-core` stays framework-agnostic by emitting UI events through an `EventEmitter` trait (`NoopEmitter` in the daemon, `TauriEmitter` in the desktop app) rather than depending on tauri. **Schema, connection/sharing patterns, and the trait definition live in `crates/wenlan-core/AGENTS.md`** (loaded when working under that crate, per the agents.md hierarchical convention).
 
 ### IPC Surface
 
@@ -339,19 +270,9 @@ See `app/eval/AGENTS.md` "eval citation discipline" section for the full rules (
 - **Don't add new HTTP endpoints to the CLI.** Use existing daemon endpoints. If a CLI subcommand needs new data, add a daemon endpoint first.
 - **MCP wrappers in `wenlan-mcp` always typed-deserialize.** Every `_impl` method in `crates/wenlan-mcp/src/tools.rs` deserializes the daemon response into a typed wire struct from `wenlan-types` (e.g. `SearchPagesResponse { pages: Vec<Page> }`), never into `serde_json::Value`. Untyped responses silently emit whatever shape the daemon returns; typed deserialization fails loud on envelope-key drift. Mirror commit `4f545869` and PR #77.
 
-### Ingest-path parity (training-serving skew)
-- **All post-store enrichment goes through `wenlan_core::ingest::run_canonical_enrichment`.** It is the ONE shared path for classify + extract + `apply_enrichment` + tags (Phase 1), entity/title/page enrichment (Phase 2), and dual-pool dedup/contradiction resolution (Phase 3). The server `handle_store_memory`, the eval seed pipeline, and the importer all call it. Do NOT re-implement a subset of enrichment in any consumer.
-- **Why.** The eval seed used to re-implement a divergent subset (`enrich_db_for_eval` = entity + title + page only), so every new write-time feature (importance/T8, event_date/T11+T20, episode/T2, fact-channel/T15, dual-pool/T14, summary-nodes/T18) silently lagged in the eval path and shipped merged-but-inert, re-discovered as "starved" each eval cycle. Sharing the code makes seed-vs-production fidelity hold by construction. This is the standard fix for **training-serving skew** — Google "Rules of ML", Rule #32: *"Re-use code between your training pipeline and your serving pipeline whenever possible"* → *"eliminates a source of training-serving skew."* See also 12-Factor X (dev/prod parity) and the technical-debt framing (Cunningham, OOPSLA '92): the eval shortcut was debt never repaid.
-- **New write-time feature checklist.** Add it inside `run_canonical_enrichment` (not in a consumer), then add a seed-completeness assert — a contract test (Fowler, `ContractTest`) — so the seed cache fails loud when the feature's artifact is missing rather than silently absent. A flag merged without its artifact present in the seed is unmeasurable.
+### Enrichment parity & eval-seed contract → `crates/wenlan-core/AGENTS.md`
 
-### Eval seed + eval read: ONE route, ONE contract (no drift)
-
-The recurring failure mode was not any single missing artifact — it was that seeding a cached scenario DB was a *scatter of manual STEP tests* (`seed_inject_event_dates`, `seed_backfill_classify`, entity sweep, `seed_backfill_episodes`, `distill_pages`) run by memory. Miss one and a channel ships starved, then a graph/temporal A/B over it returns a null that gets misread as "the channel doesn't help" — a lie about a dead substrate, re-discovered every cycle.
-
-- **Seed side — the ONE route.** Re-seed cached scenario DBs with the orchestrator `seed_scenario_dbs_complete` (`crates/wenlan-core/tests/eval_harness.rs`). It runs every enrichment step in the correct order (event_date inject → classify → entity/`memory_entities` sweep → episodes → distill) then asserts `SeedExpectations::complete()`. **Never hand-run the individual `seed_*` STEP tests** — they are the orchestrator's internals. Run the one route and the seed is complete *and* contract-verified by construction.
-- **Contract side — teeth, not prose.** `crates/wenlan-core/src/eval/seed_contract.rs` is the single liveness contract. `SeedExpectations::complete()` hard-fails the seed when a channel's substrate is empty: `memory_entities = 0` (graph), `event_date = 0` (temporal), `pages = 0` active (page channel), plus dupes + classification from `strict()`. These are *presence* checks (`> 0`), not coverage percentages — a percentage floor rots (see the L3/coverage note), but zero links means the channel is dead, which is the bug. `strict()` stays lenient (report-only) for minimal seeds; only `complete()` has teeth.
-- **Eval side — refuse, don't lie.** The SAME contract gates the consumer: every per-query eval collector calls `seed_contract::assert_feature_substrate_live(conn, feature)` at entry. A graph A/B over a DB with zero `memory_entities` (or a temporal A/B with zero `event_date`, or a page-channel A/B with zero active `pages`) **errors loud** ("EVAL REFUSED") instead of emitting a null. Producer and consumer share one contract, so neither can drift onto a dead substrate.
-- **Adding a write-time channel.** Add its step to `seed_scenario_dbs_complete`, its presence floor to `SeedExpectations` (+ wire it into `assert_feature_substrate_live` if it has an A/B), and a unit test in `seed_contract.rs`. The contract — not a runbook — is what keeps the seed honest.
+All post-store enrichment goes through the ONE canonical path (`wenlan_core::ingest::run_canonical_enrichment`) so no consumer re-implements a divergent subset (the training-serving-skew fix), and the eval seed + eval read share ONE liveness contract (`seed_contract.rs`) so neither drifts onto a dead substrate. The full rationale, the `seed_scenario_dbs_complete` orchestrator, and the `SeedExpectations` teeth live in **`crates/wenlan-core/AGENTS.md`** (loaded when working under that crate).
 
 ### Async and locking
 - **Never hold a `tokio::sync::RwLock` read or write guard across `.await`.** Holding a read guard during an LLM call (which can take seconds) blocks all writers. Pattern: snapshot what you need from the guard into a scoped block that ends before the await, then call the async function with the cloned values. See `crates/wenlan-server/src/memory_routes.rs` `handle_store_memory` for an example of the post-ingest enrichment pattern.

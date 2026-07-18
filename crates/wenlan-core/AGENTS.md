@@ -41,6 +41,54 @@ All business logic lives here. No tauri, no axum. Framework-agnostic.
 | `eval/` | Benchmark harness: LoCoMo, LongMemEval. Each benchmark has base (embedding-only), reranked (LLM rescores after search), and expanded (LLM query expansion before search) variants. Baselines under `EVAL_BASELINES_DIR` (gitignored). See `crates/wenlan-core/src/eval/AGENTS.md`. |
 | `state.rs` | `CoreState` — shared state struct used by wenlan-server |
 
+## Database (`MemoryDB`, `db.rs`)
+
+> Moved from root `AGENTS.md` (index-and-pointer refactor): these are `wenlan-core` internals, loaded when working in this crate. Root keeps only the one-line architectural summary.
+
+One libSQL database at the platform data directory (`dirs::data_local_dir()/origin/memorydb/origin_memory.db`; on macOS, `~/Library/Application Support/wenlan/memorydb/origin_memory.db`), owned by `MemoryDB` in `db.rs`:
+- **Document chunks**: `chunks` table with `F32_BLOB(768)` vector column, DiskANN indexing (768-dim, BGE-Base-EN-v1.5-Q)
+- **Knowledge graph**: `entities`, `relations`, `observations` tables with FK cascades
+- **Full-text search**: FTS5 virtual table (`chunks_fts`) auto-synced via triggers
+- **Hybrid search**: Vector similarity + FTS combined with Reciprocal Rank Fusion (RRF)
+
+**Connection pattern**: `tokio::sync::Mutex<libsql::Connection>` — `libsql::Connection` is `Send` but not `Sync`, so it's wrapped in an async `Mutex` inside `MemoryDB`.
+
+**Sharing pattern**: `MemoryDB` is wrapped in `Arc<MemoryDB>` at the state layer (`ServerState.db: Option<Arc<MemoryDB>>`). This lets handlers clone the `Arc` out of the `RwLock<ServerState>` guard and drop the guard before performing long-running operations.
+
+## Events (`EventEmitter`, `events.rs`)
+
+Instead of passing `tauri::AppHandle` into business logic, `wenlan-core` defines an `EventEmitter` trait — this keeps the crate framework-agnostic and testable with `NoopEmitter` in unit tests:
+
+```rust
+// crates/wenlan-core/src/events.rs
+pub trait EventEmitter: Send + Sync {
+    fn emit(&self, event: &str, payload: &str) -> Result<()>;
+}
+pub struct NoopEmitter;
+```
+
+- The daemon uses `NoopEmitter` (no UI to notify directly)
+- The desktop app (separate `wenlan-app` repo) provides a `TauriEmitter` adapter that wraps `AppHandle::emit`
+- `MemoryDB::new(db_path, emitter: Arc<dyn EventEmitter>)` takes the trait object
+
+## Enrichment parity & eval-seed contract
+
+> Moved from root `AGENTS.md` (index-and-pointer refactor): these name `wenlan-core` internals (`run_canonical_enrichment`, `eval/seed_contract.rs`), loaded when working in this crate.
+
+### Ingest-path parity (training-serving skew)
+- **All post-store enrichment goes through `wenlan_core::ingest::run_canonical_enrichment`.** It is the ONE shared path for classify + extract + `apply_enrichment` + tags (Phase 1), entity/title/page enrichment (Phase 2), and dual-pool dedup/contradiction resolution (Phase 3). The server `handle_store_memory`, the eval seed pipeline, and the importer all call it. Do NOT re-implement a subset of enrichment in any consumer.
+- **Why.** The eval seed used to re-implement a divergent subset (`enrich_db_for_eval` = entity + title + page only), so every new write-time feature (importance/T8, event_date/T11+T20, episode/T2, fact-channel/T15, dual-pool/T14, summary-nodes/T18) silently lagged in the eval path and shipped merged-but-inert, re-discovered as "starved" each eval cycle. Sharing the code makes seed-vs-production fidelity hold by construction. This is the standard fix for **training-serving skew** — Google "Rules of ML", Rule #32: *"Re-use code between your training pipeline and your serving pipeline whenever possible"* → *"eliminates a source of training-serving skew."* See also 12-Factor X (dev/prod parity) and the technical-debt framing (Cunningham, OOPSLA '92): the eval shortcut was debt never repaid.
+- **New write-time feature checklist.** Add it inside `run_canonical_enrichment` (not in a consumer), then add a seed-completeness assert — a contract test (Fowler, `ContractTest`) — so the seed cache fails loud when the feature's artifact is missing rather than silently absent. A flag merged without its artifact present in the seed is unmeasurable.
+
+### Eval seed + eval read: ONE route, ONE contract (no drift)
+
+The recurring failure mode was not any single missing artifact — it was that seeding a cached scenario DB was a *scatter of manual STEP tests* (`seed_inject_event_dates`, `seed_backfill_classify`, entity sweep, `seed_backfill_episodes`, `distill_pages`) run by memory. Miss one and a channel ships starved, then a graph/temporal A/B over it returns a null that gets misread as "the channel doesn't help" — a lie about a dead substrate, re-discovered every cycle.
+
+- **Seed side — the ONE route.** Re-seed cached scenario DBs with the orchestrator `seed_scenario_dbs_complete` (`crates/wenlan-core/tests/eval_harness.rs`). It runs every enrichment step in the correct order (event_date inject → classify → entity/`memory_entities` sweep → episodes → distill) then asserts `SeedExpectations::complete()`. **Never hand-run the individual `seed_*` STEP tests** — they are the orchestrator's internals. Run the one route and the seed is complete *and* contract-verified by construction.
+- **Contract side — teeth, not prose.** `crates/wenlan-core/src/eval/seed_contract.rs` is the single liveness contract. `SeedExpectations::complete()` hard-fails the seed when a channel's substrate is empty: `memory_entities = 0` (graph), `event_date = 0` (temporal), `pages = 0` active (page channel), plus dupes + classification from `strict()`. These are *presence* checks (`> 0`), not coverage percentages — a percentage floor rots (see the L3/coverage note), but zero links means the channel is dead, which is the bug. `strict()` stays lenient (report-only) for minimal seeds; only `complete()` has teeth.
+- **Eval side — refuse, don't lie.** The SAME contract gates the consumer: every per-query eval collector calls `seed_contract::assert_feature_substrate_live(conn, feature)` at entry. A graph A/B over a DB with zero `memory_entities` (or a temporal A/B with zero `event_date`, or a page-channel A/B with zero active `pages`) **errors loud** ("EVAL REFUSED") instead of emitting a null. Producer and consumer share one contract, so neither can drift onto a dead substrate.
+- **Adding a write-time channel.** Add its step to `seed_scenario_dbs_complete`, its presence floor to `SeedExpectations` (+ wire it into `assert_feature_substrate_live` if it has an A/B), and a unit test in `seed_contract.rs`. The contract — not a runbook — is what keeps the seed honest.
+
 ## Retrieval, LLM throughput & consolidation env flags
 
 > Moved from root `AGENTS.md` (2026-06-23) per the agents.md hierarchical convention: these are wenlan-core internals, loaded only when working in this crate. `drift_guard` teeth #2 scans every tracked `*AGENTS.md`, so the `WENLAN_*` flag-doc contract still holds.

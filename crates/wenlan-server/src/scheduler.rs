@@ -35,8 +35,153 @@ const CITATION_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// between ambient LLM requests until supported-Mac profiling freezes a
 /// measured duty-cycle policy.
 const AMBIENT_COOLDOWN: Duration = IDLE_THRESHOLD;
+const GIB: u64 = 1024 * 1024 * 1024;
 const AUTOMATIC_STEEP_PHASE_CURSOR_PREFIX: &str = "automatic_steep_phase_cursor_v1";
 const AUTOMATIC_MAINTENANCE_STAGE_CURSOR_KEY: &str = "automatic_maintenance_stage_cursor_v1";
+
+#[derive(Debug, Clone, Copy)]
+struct ResourceSnapshot {
+    cpu_usage_percent: f32,
+    available_memory_bytes: u64,
+    total_memory_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceBlockReason {
+    Warming,
+    Unavailable,
+    CpuBusy,
+    MemoryPressure,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResourcePolicy {
+    max_cpu_usage_percent: f32,
+    min_available_memory_bytes: u64,
+    min_available_memory_percent: u64,
+    idle_samples_required: u8,
+}
+
+impl ResourcePolicy {
+    const fn conservative() -> Self {
+        Self {
+            max_cpu_usage_percent: 20.0,
+            min_available_memory_bytes: 2 * GIB,
+            min_available_memory_percent: 15,
+            idle_samples_required: 2,
+        }
+    }
+
+    fn block_reason(self, snapshot: ResourceSnapshot) -> Option<ResourceBlockReason> {
+        if !snapshot.cpu_usage_percent.is_finite() || snapshot.total_memory_bytes == 0 {
+            return Some(ResourceBlockReason::Unavailable);
+        }
+        if snapshot.cpu_usage_percent > self.max_cpu_usage_percent {
+            return Some(ResourceBlockReason::CpuBusy);
+        }
+        let ratio_floor = snapshot
+            .total_memory_bytes
+            .saturating_mul(self.min_available_memory_percent)
+            / 100;
+        let memory_floor = self.min_available_memory_bytes.max(ratio_floor);
+        if snapshot.available_memory_bytes < memory_floor {
+            return Some(ResourceBlockReason::MemoryPressure);
+        }
+        None
+    }
+}
+
+#[derive(Debug, Default)]
+struct ResourceAdmission {
+    consecutive_idle_samples: u8,
+}
+
+impl ResourceAdmission {
+    fn observe(&mut self, snapshot: ResourceSnapshot, policy: ResourcePolicy) -> bool {
+        if policy.block_reason(snapshot).is_some() {
+            self.consecutive_idle_samples = 0;
+            return false;
+        }
+        self.consecutive_idle_samples = self.consecutive_idle_samples.saturating_add(1);
+        self.consecutive_idle_samples >= policy.idle_samples_required
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ThermalPolicy {
+    minimum_cooldown: Duration,
+    recovery_multiplier: u32,
+}
+
+impl ThermalPolicy {
+    const fn conservative() -> Self {
+        Self {
+            minimum_cooldown: AMBIENT_COOLDOWN,
+            // Work / (work + recovery) <= 5% when this multiplier dominates.
+            recovery_multiplier: 19,
+        }
+    }
+
+    fn cooldown_after(self, elapsed: Duration) -> Duration {
+        self.minimum_cooldown
+            .max(elapsed.saturating_mul(self.recovery_multiplier))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResourceStatus {
+    admitted: bool,
+    snapshot: Option<ResourceSnapshot>,
+    block_reason: Option<ResourceBlockReason>,
+}
+
+struct SystemResourceProbe {
+    system: sysinfo::System,
+    last_refresh: Instant,
+    admission: ResourceAdmission,
+}
+
+impl SystemResourceProbe {
+    fn new(now: Instant) -> Self {
+        let refreshes = sysinfo::RefreshKind::nothing()
+            .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram());
+        Self {
+            system: sysinfo::System::new_with_specifics(refreshes),
+            last_refresh: now,
+            admission: ResourceAdmission::default(),
+        }
+    }
+
+    fn sample(&mut self, now: Instant, policy: ResourcePolicy) -> ResourceStatus {
+        if now.saturating_duration_since(self.last_refresh) < sysinfo::MINIMUM_CPU_UPDATE_INTERVAL {
+            return ResourceStatus {
+                admitted: false,
+                snapshot: None,
+                block_reason: Some(ResourceBlockReason::Warming),
+            };
+        }
+
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
+        self.last_refresh = now;
+
+        let snapshot = ResourceSnapshot {
+            cpu_usage_percent: self.system.global_cpu_usage(),
+            available_memory_bytes: self.system.available_memory(),
+            total_memory_bytes: self.system.total_memory(),
+        };
+        let policy_block = policy.block_reason(snapshot);
+        let admitted = self.admission.observe(snapshot, policy);
+        ResourceStatus {
+            admitted,
+            snapshot: Some(snapshot),
+            block_reason: policy_block
+                .or_else(|| (!admitted).then_some(ResourceBlockReason::Warming)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AmbientJob {
     Document,
@@ -195,22 +340,36 @@ impl AmbientSchedule {
         }
     }
 
-    fn note_thermal_work_completion(&mut self, now: Instant) {
-        self.next_allowed_at = now + AMBIENT_COOLDOWN;
+    fn note_thermal_work_completion(
+        &mut self,
+        now: Instant,
+        elapsed: Duration,
+        policy: ThermalPolicy,
+    ) {
+        self.next_allowed_at = now + policy.cooldown_after(elapsed);
     }
 }
 
-fn ambient_turn_allowed(now: Instant, last_activity: Instant, next_allowed_at: Instant) -> bool {
-    now.saturating_duration_since(last_activity) >= IDLE_THRESHOLD && now >= next_allowed_at
+fn ambient_turn_allowed(
+    system_resources_idle: bool,
+    now: Instant,
+    last_activity: Instant,
+    next_allowed_at: Instant,
+) -> bool {
+    system_resources_idle
+        && now.saturating_duration_since(last_activity) >= IDLE_THRESHOLD
+        && now >= next_allowed_at
 }
 
 fn automatic_heavy_turn_allowed(
+    system_resources_idle: bool,
     ambient_turn_owed: bool,
     now: Instant,
     last_activity: Instant,
     next_allowed_at: Instant,
 ) -> bool {
-    !ambient_turn_owed && ambient_turn_allowed(now, last_activity, next_allowed_at)
+    !ambient_turn_owed
+        && ambient_turn_allowed(system_resources_idle, now, last_activity, next_allowed_at)
 }
 
 fn refresh_last_user_activity(write_signal: &WriteSignal, last_user_activity: &mut Instant) {
@@ -867,6 +1026,12 @@ pub fn spawn_scheduler(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let resource_policy = ResourcePolicy::conservative();
+        let thermal_policy = ThermalPolicy::conservative();
+        // Initialize before the built-in startup delay so the first explicit
+        // CPU refresh has a valid comparison window without sleeping inside a
+        // scheduler poll.
+        let mut resource_probe = SystemResourceProbe::new(Instant::now());
         if crate::lifecycle::sleep_or_shutdown(&mut shutdown, INITIAL_DELAY).await {
             tracing::info!("[scheduler] shutdown before initial delay completed");
             return;
@@ -1019,15 +1184,32 @@ pub fn spawn_scheduler(
             // Filesystem sync can take long enough for fresh writes to arrive;
             // all time comparisons below must use a post-sync clock sample.
             let now = Instant::now();
+            let resource_status = resource_probe.sample(now, resource_policy);
 
             // All automatic heavy work shares the same admission gate as the
             // ambient lanes. A due trigger stays due while the user is active
-            // or while the ten-minute thermal cooldown is in force.
+            // or while the machine is busy, memory-constrained, or the
+            // conservative cooldown is in force.
             refresh_last_user_activity(&write_signal, &mut last_user_activity);
+            if !resource_status.admitted
+                && now.saturating_duration_since(last_user_activity) >= IDLE_THRESHOLD
+            {
+                tracing::debug!(
+                    "[scheduler] heavy work deferred reason={:?} cpu_percent={:?} available_memory_mb={:?}",
+                    resource_status.block_reason,
+                    resource_status
+                        .snapshot
+                        .map(|snapshot| snapshot.cpu_usage_percent),
+                    resource_status
+                        .snapshot
+                        .map(|snapshot| snapshot.available_memory_bytes / (1024 * 1024)),
+                );
+            }
             drain_expired_unactionable_bursts(&write_signal, now);
             let snap = write_signal.snapshot();
 
             let selected_automatic = automatic_heavy_turn_allowed(
+                resource_status.admitted,
                 ambient_turn_owed,
                 now,
                 last_user_activity,
@@ -1226,7 +1408,11 @@ pub fn spawn_scheduler(
                 // admitted slot to the ambient round-robin before continuing.
                 ambient_turn_owed = true;
                 let completion = Instant::now();
-                ambient_schedule.note_thermal_work_completion(completion);
+                ambient_schedule.note_thermal_work_completion(
+                    completion,
+                    completion.saturating_duration_since(now),
+                    thermal_policy,
+                );
                 tracing::info!(
                     "[scheduler] automatic trigger={} llm_calls={} elapsed_ms={} next_eligible_ms={}",
                     label,
@@ -1260,6 +1446,7 @@ pub fn spawn_scheduler(
             let ambient_now = Instant::now();
             if !automatic_work_ran
                 && ambient_turn_allowed(
+                    resource_status.admitted,
                     ambient_now,
                     last_user_activity,
                     ambient_schedule.next_allowed_at,
@@ -1309,7 +1496,11 @@ pub fn spawn_scheduler(
                             report.llm_calls,
                         )
                     {
-                        ambient_schedule.note_thermal_work_completion(completion);
+                        ambient_schedule.note_thermal_work_completion(
+                            completion,
+                            report.elapsed,
+                            thermal_policy,
+                        );
                     }
                     tracing::info!(
                         "[scheduler] ambient job={:?} selected={} llm_calls={} panicked={} elapsed_ms={} next_eligible_ms={}",
@@ -2352,26 +2543,102 @@ mod tests {
     fn ambient_turn_requires_quiet_window_and_cooldown() {
         let now = Instant::now();
         assert!(!ambient_turn_allowed(
+            true,
             now,
             now - IDLE_THRESHOLD + Duration::from_secs(1),
             now - Duration::from_secs(1),
         ));
         assert!(!ambient_turn_allowed(
+            true,
             now,
             now - IDLE_THRESHOLD,
             now + Duration::from_secs(1),
         ));
-        assert!(ambient_turn_allowed(now, now - IDLE_THRESHOLD, now,));
+        assert!(ambient_turn_allowed(true, now, now - IDLE_THRESHOLD, now,));
+        assert!(
+            !ambient_turn_allowed(false, now, now - IDLE_THRESHOLD, now),
+            "Wenlan quiet time cannot admit work while the whole machine is busy"
+        );
     }
 
     #[test]
     fn pending_automatic_round_yields_one_admission_to_ambient_lane() {
         let now = Instant::now();
         let quiet_since = now - IDLE_THRESHOLD;
-        assert!(automatic_heavy_turn_allowed(false, now, quiet_since, now));
+        assert!(automatic_heavy_turn_allowed(
+            true,
+            false,
+            now,
+            quiet_since,
+            now
+        ));
         assert!(
-            !automatic_heavy_turn_allowed(true, now, quiet_since, now),
+            !automatic_heavy_turn_allowed(true, true, now, quiet_since, now),
             "an unfinished steep/maintenance round must not monopolize every admitted turn"
+        );
+        assert!(
+            !automatic_heavy_turn_allowed(false, false, now, quiet_since, now),
+            "automatic heavy work must defer to foreground system pressure"
+        );
+    }
+
+    #[test]
+    fn resource_policy_rejects_cpu_or_memory_pressure() {
+        let policy = ResourcePolicy::conservative();
+        let idle = ResourceSnapshot {
+            cpu_usage_percent: 8.0,
+            available_memory_bytes: 8 * 1024 * 1024 * 1024,
+            total_memory_bytes: 16 * 1024 * 1024 * 1024,
+        };
+        assert_eq!(policy.block_reason(idle), None);
+
+        assert_eq!(
+            policy.block_reason(ResourceSnapshot {
+                cpu_usage_percent: 60.0,
+                ..idle
+            }),
+            Some(ResourceBlockReason::CpuBusy)
+        );
+        assert_eq!(
+            policy.block_reason(ResourceSnapshot {
+                available_memory_bytes: 512 * 1024 * 1024,
+                ..idle
+            }),
+            Some(ResourceBlockReason::MemoryPressure)
+        );
+    }
+
+    #[test]
+    fn resource_admission_requires_two_idle_samples_and_resets_on_pressure() {
+        let policy = ResourcePolicy::conservative();
+        let idle = ResourceSnapshot {
+            cpu_usage_percent: 8.0,
+            available_memory_bytes: 8 * 1024 * 1024 * 1024,
+            total_memory_bytes: 16 * 1024 * 1024 * 1024,
+        };
+        let busy = ResourceSnapshot {
+            cpu_usage_percent: 60.0,
+            ..idle
+        };
+        let mut admission = ResourceAdmission::default();
+
+        assert!(!admission.observe(idle, policy));
+        assert!(admission.observe(idle, policy));
+        assert!(!admission.observe(busy, policy));
+        assert!(!admission.observe(idle, policy));
+        assert!(admission.observe(idle, policy));
+    }
+
+    #[test]
+    fn duration_cooldown_never_shortens_floor_and_extends_long_turns() {
+        let policy = ThermalPolicy::conservative();
+        assert_eq!(
+            policy.cooldown_after(Duration::from_secs(1)),
+            AMBIENT_COOLDOWN
+        );
+        assert!(
+            policy.cooldown_after(Duration::from_secs(60)) > AMBIENT_COOLDOWN,
+            "a long request must earn a longer recovery window than the hotfix floor"
         );
     }
 
@@ -2546,7 +2813,11 @@ mod tests {
     fn ambient_thermal_work_completion_starts_conservative_cooldown() {
         let now = Instant::now();
         let mut schedule = AmbientSchedule::new(now);
-        schedule.note_thermal_work_completion(now);
+        schedule.note_thermal_work_completion(
+            now,
+            Duration::from_secs(1),
+            ThermalPolicy::conservative(),
+        );
         assert_eq!(schedule.next_allowed_at, now + AMBIENT_COOLDOWN);
     }
 
@@ -3672,7 +3943,11 @@ mod tests {
             report.selected,
             report.llm_calls,
         ));
-        schedule.note_thermal_work_completion(now);
+        schedule.note_thermal_work_completion(
+            now,
+            Duration::from_secs(1),
+            ThermalPolicy::conservative(),
+        );
         assert_eq!(schedule.next_allowed_at, now + AMBIENT_COOLDOWN);
     }
 
