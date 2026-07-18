@@ -62,7 +62,7 @@ flagged in the output. Recommendation column:
   KEEP-OFF     otherwise
 
 Usage:
-  python3 analyze_paired.py [--dir EVAL_OUT] [--q 0.10] [--boot 10000]
+  python3 scripts/analyze_paired.py [--dir EVAL_OUT] [--q 0.10] [--boot 10000]
                             [--json out.json] [--md out.md]
 Defaults: --dir $EVAL_OUT or /tmp/eval_paired, prints markdown to stdout.
 """
