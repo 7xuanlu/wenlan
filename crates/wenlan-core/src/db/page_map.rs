@@ -571,6 +571,45 @@ impl MemoryDB {
         load_page_map_data(&conn, page_id, include_dismissed).await
     }
 
+    /// Reads `page_maps.generated_at` — the server-internal watermark stamped
+    /// by the improve pass (the last time suggestions were generated for this
+    /// page). `None` when no map row exists or it has never been generated.
+    /// Not part of the client wire shape; the proactive scheduler uses it to
+    /// skip pages whose `last_modified` hasn't advanced past it.
+    pub async fn page_map_generated_at(
+        &self,
+        page_id: &str,
+    ) -> Result<Option<String>, WenlanError> {
+        let conn = self.conn.lock().await;
+        Ok(read_page_map(&conn, page_id)
+            .await?
+            .and_then(|m| m.generated_at))
+    }
+
+    /// Stamps `page_maps.generated_at` to now WITHOUT bumping the revision — it
+    /// is a server-internal watermark, not a client-visible map change, so
+    /// bumping would raise spurious 409s against in-flight client edits. No-op
+    /// when no map row exists.
+    ///
+    /// Stored as an RFC3339 UTC string (`chrono::Utc::now().to_rfc3339()`) —
+    /// the SAME clock and format as `pages.last_modified` (see
+    /// `post_write::create_page_with_tuning`). This matters: the proactive
+    /// scheduler compares the two, and SQLite's `datetime('now')` ("YYYY-MM-DD
+    /// HH:MM:SS") both truncates to whole seconds and uses a space separator,
+    /// so a lexical or same-second compare against RFC3339 `last_modified`
+    /// would be wrong. One format on both sides keeps the compare honest.
+    pub async fn stamp_page_map_generated_at(&self, page_id: &str) -> Result<(), WenlanError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE page_maps SET generated_at = ?2 WHERE page_id = ?1",
+            libsql::params![page_id, now],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("stamp_page_map_generated_at: {e}")))?;
+        Ok(())
+    }
+
     /// Idempotent: creates the `page_maps` row + root node
     /// (`ref_kind='page'`, `ref_id=page_id`, `parent_id=NULL`, fingerprint
     /// `"page:{page_id}@~"`) in one transaction when no map exists yet, then
@@ -721,6 +760,116 @@ impl MemoryDB {
                 conn.execute("COMMIT", ())
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("create_map_node commit: {e}")))?;
+                Ok(outcome)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Suggestion-path sibling of [`MemoryDB::create_map_node`]: inserts a node
+    /// with `status = 'suggested'` and a `provenance` stamp, used by the
+    /// improve pass. INSERT-ONLY by construction — the same `ON CONFLICT(page_id,
+    /// fingerprint) DO NOTHING` makes re-proposing an existing OR dismissed
+    /// fingerprint a no-op (`Duplicate` / `Tombstoned`), so a suggestion pass
+    /// can never modify, resurrect, or overwrite a pinned/active/dismissed row.
+    /// Kept a separate accessor (rather than parameterizing `create_map_node`)
+    /// so the tested active-node write path stays byte-for-byte untouched.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_suggested_map_node(
+        &self,
+        page_id: &str,
+        base_revision: i64,
+        parent_id: &str,
+        ref_kind: &str,
+        ref_id: &str,
+        label: Option<&str>,
+        rank: f64,
+        provenance: &str,
+    ) -> Result<CreateNodeOutcome, WenlanError> {
+        if !matches!(ref_kind, "memory" | "entity" | "page" | "section") {
+            return Err(WenlanError::Validation(format!(
+                "unknown ref_kind '{ref_kind}'"
+            )));
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("create_suggested_map_node begin: {e}")))?;
+
+        let result = async {
+            let current_revision = read_page_map_revision(&conn, page_id)
+                .await?
+                .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
+            if current_revision != base_revision {
+                return Err(revision_conflict(page_id, current_revision, base_revision));
+            }
+
+            let parent = match read_map_node(&conn, page_id, parent_id).await? {
+                Some(p) => p,
+                None => return Err(missing_node_error(&conn, parent_id).await?),
+            };
+            let parent_ref = parent_ref_token(&parent);
+            let fingerprint = fingerprint_for(ref_kind, ref_id, &parent_ref);
+
+            let node_id = uuid::Uuid::new_v4().to_string();
+            let inserted = conn
+                .execute(
+                    "INSERT INTO page_map_nodes \
+                     (id, page_id, parent_id, rank, ref_kind, ref_id, label, status, fingerprint, provenance) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'suggested', ?8, ?9) \
+                     ON CONFLICT(page_id, fingerprint) DO NOTHING",
+                    libsql::params![
+                        node_id.clone(),
+                        page_id,
+                        parent_id,
+                        rank,
+                        ref_kind,
+                        ref_id,
+                        label,
+                        fingerprint.clone(),
+                        provenance
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("create_suggested_map_node insert: {e}"))
+                })?;
+
+            if inserted == 0 {
+                let existing = read_map_node_by_fingerprint(&conn, page_id, &fingerprint)
+                    .await?
+                    .ok_or_else(|| {
+                        WenlanError::VectorDb(
+                            "create_suggested_map_node: conflicting row vanished".to_string(),
+                        )
+                    })?;
+                return Ok(if existing.status == "dismissed" {
+                    CreateNodeOutcome::Tombstoned
+                } else {
+                    CreateNodeOutcome::Duplicate(existing)
+                });
+            }
+
+            bump_revision(&conn, page_id, current_revision).await?;
+            let created = read_map_node(&conn, page_id, &node_id)
+                .await?
+                .ok_or_else(|| {
+                    WenlanError::VectorDb(
+                        "create_suggested_map_node: row missing after insert".to_string(),
+                    )
+                })?;
+            Ok(CreateNodeOutcome::Created(created))
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("create_suggested_map_node commit: {e}"))
+                })?;
                 Ok(outcome)
             }
             Err(e) => {
@@ -974,6 +1123,114 @@ impl MemoryDB {
                 conn.execute("COMMIT", ())
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("create_map_edge commit: {e}")))?;
+                Ok(outcome)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Suggestion-path sibling of [`MemoryDB::create_map_edge`]: inserts an
+    /// edge with `status = 'suggested'` and a `provenance` stamp. INSERT-ONLY on
+    /// the `UNIQUE(page_id, from_node, to_node, kind)` key — re-proposing an
+    /// existing or dismissed edge is a no-op (`Duplicate` / `Tombstoned`),
+    /// mirroring the node sibling. Existing `create_map_edge` stays untouched.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_suggested_map_edge(
+        &self,
+        page_id: &str,
+        base_revision: i64,
+        from_node: &str,
+        to_node: &str,
+        kind: &str,
+        label: Option<&str>,
+        provenance: &str,
+    ) -> Result<CreateEdgeOutcome, WenlanError> {
+        if !matches!(kind, "link" | "suggested") {
+            return Err(WenlanError::Validation(format!(
+                "unknown edge kind '{kind}'"
+            )));
+        }
+        if from_node == to_node {
+            return Err(WenlanError::Validation(
+                "edge cannot connect a node to itself".to_string(),
+            ));
+        }
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("create_suggested_map_edge begin: {e}")))?;
+
+        let result = async {
+            let current_revision = read_page_map_revision(&conn, page_id)
+                .await?
+                .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
+            if current_revision != base_revision {
+                return Err(revision_conflict(page_id, current_revision, base_revision));
+            }
+            if read_map_node(&conn, page_id, from_node).await?.is_none() {
+                return Err(missing_node_error(&conn, from_node).await?);
+            }
+            if read_map_node(&conn, page_id, to_node).await?.is_none() {
+                return Err(missing_node_error(&conn, to_node).await?);
+            }
+
+            let edge_id = uuid::Uuid::new_v4().to_string();
+            let inserted = conn
+                .execute(
+                    "INSERT INTO page_map_edges \
+                     (id, page_id, from_node, to_node, kind, label, status, provenance) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'suggested', ?7) \
+                     ON CONFLICT(page_id, from_node, to_node, kind) DO NOTHING",
+                    libsql::params![
+                        edge_id.clone(),
+                        page_id,
+                        from_node,
+                        to_node,
+                        kind,
+                        label,
+                        provenance
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("create_suggested_map_edge insert: {e}"))
+                })?;
+
+            if inserted == 0 {
+                let existing = read_map_edge_by_key(&conn, page_id, from_node, to_node, kind)
+                    .await?
+                    .ok_or_else(|| {
+                        WenlanError::VectorDb(
+                            "create_suggested_map_edge: conflicting row vanished".to_string(),
+                        )
+                    })?;
+                return Ok(if existing.status == "dismissed" {
+                    CreateEdgeOutcome::Tombstoned
+                } else {
+                    CreateEdgeOutcome::Duplicate(existing)
+                });
+            }
+
+            bump_revision(&conn, page_id, current_revision).await?;
+            let created = read_map_edge(&conn, page_id, &edge_id)
+                .await?
+                .ok_or_else(|| {
+                    WenlanError::VectorDb(
+                        "create_suggested_map_edge: row missing after insert".to_string(),
+                    )
+                })?;
+            Ok(CreateEdgeOutcome::Created(created))
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("create_suggested_map_edge commit: {e}"))
+                })?;
                 Ok(outcome)
             }
             Err(e) => {

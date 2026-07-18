@@ -397,6 +397,7 @@ impl TriggerKind {
                     | Phase::ReDistill
                     | Phase::Overview
                     | Phase::DecisionLogs
+                    | Phase::PageMaps
             ),
             Self::Daily => matches!(
                 phase,
@@ -611,10 +612,12 @@ pub async fn run_periodic_steep_with_api(
 ) -> Result<SteepResult, WenlanError> {
     let steep_start = std::time::Instant::now();
     let deadline = trigger.deadline_secs(tuning.steep_deadline_secs);
-    // Per-job everyday source pin — read once per cycle from config; drives both
-    // the recap and entity-extraction phases below. Absent/unknown → auto chain.
-    let everyday_pin =
-        EverydaySource::parse(crate::config::load_config().everyday_source.as_deref());
+    // Config read once per cycle. `everyday_pin` drives the recap and
+    // entity-extraction phases (absent/unknown → auto chain);
+    // `page_map_auto_suggest` gates the proactive Page-Map phase below.
+    let cfg = crate::config::load_config();
+    let everyday_pin = EverydaySource::parse(cfg.everyday_source.as_deref());
+    let page_map_auto_suggest = cfg.page_map_auto_suggest;
     let mut phases: Vec<PhaseResult> = Vec::new();
     #[allow(unused_assignments)]
     let mut deadline_hit = false; // track if we've logged the first skip
@@ -1007,6 +1010,26 @@ pub async fn run_periodic_steep_with_api(
             let (nudge, headline) = crate::synthesis::decision_logs::classify_decision_logs(count);
             Ok(PhaseOutput {
                 items_processed: count,
+                nudge,
+                headline,
+            })
+        })
+        .await;
+        phases.push(phase);
+    }
+
+    // Phase: proactive Page-Map suggestions (Idle only; config-gated).
+    // Generates `status='suggested'` nodes/edges for recently-changed pages,
+    // insert-only. The explicit `POST /api/pages/{id}/map/improve` route runs
+    // the SAME pass but is NEVER gated by `page_map_auto_suggest` — only this
+    // background phase is. Bounded to 5 pages per pass. Always Silent (no
+    // user-facing nudge; suggestions surface in the map UI, not as a toast).
+    if page_map_auto_suggest && trigger.runs_phase(Phase::PageMaps) {
+        let phase = run_phase(Phase::PageMaps, || async {
+            let improved = crate::page_map_improve::run_proactive_page_maps(db_ref, 5).await?;
+            let (nudge, headline) = classify_backfill(improved);
+            Ok(PhaseOutput {
+                items_processed: improved,
                 nudge,
                 headline,
             })

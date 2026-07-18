@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Page Map (mind-map) v1 HTTP routes — stage 2 of the daemon feature. See
+//! Page Map (mind-map) v1 HTTP routes. See
 //! docs/superpowers/plans/2026-07-18-page-map-api-spec.md for the full
 //! contract; this module wires the wenlan-core data layer
 //! (`db::page_map`) to HTTP, staying thin per the crate boundary rule (no
-//! business logic here). `POST .../map/improve` (stage 3) is out of scope.
+//! business logic here). The improve pass itself lives in
+//! `wenlan_core::page_map_improve`; `handle_improve_page_map` only invokes it.
 
 use std::sync::Arc;
 
@@ -434,6 +435,47 @@ pub async fn handle_reset_page_map(
     Ok(Json(serde_json::json!({"status": "reset"})))
 }
 
+/// POST /api/pages/{id}/map/improve
+///
+/// Synchronous (mirrors `POST /api/steep`): runs the improve pass for this one
+/// page inline, then returns the refreshed map. INSERT-ONLY — the pass appends
+/// `status = 'suggested'` nodes/edges grounded in the page's real objects
+/// (entity, markdown sections, source memories, resolved wikilinks) and never
+/// touches an existing row; see `wenlan_core::page_map_improve`. This route is
+/// NEVER gated by the `page_map_auto_suggest` config flag — that flag gates only
+/// the background scheduler phase (`refinery::Phase::PageMaps`). Returns the
+/// full `PageMapResponse` (excluding dismissed rows) so the client reuses the
+/// same render path as GET; the freshly-suggested nodes surface with
+/// `status = "suggested"`.
+pub async fn handle_improve_page_map(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(page_id): Path<String>,
+) -> Result<Json<PageMapResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    ensure_page_exists(&db, &page_id).await?;
+
+    wenlan_core::page_map_improve::improve_page_map(&db, &page_id).await?;
+
+    // The pass always init's the map, so `get_page_map` returns Some here; the
+    // None arm is defensive and mirrors GET's empty-map shape.
+    let data = db.get_page_map(&page_id, false).await?;
+    let response = match data {
+        Some(data) => build_map_response(&db, &page_id, data).await?,
+        None => PageMapResponse {
+            page_id,
+            revision: 0,
+            map_schema: 1,
+            viewport: None,
+            nodes: vec![],
+            edges: vec![],
+        },
+    };
+    Ok(Json(response))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,6 +859,101 @@ mod tests {
         assert!(
             with.nodes.iter().any(|n| n.id == created.node.id),
             "?include=dismissed must surface the dismissed node"
+        );
+    }
+
+    #[tokio::test]
+    async fn improve_page_map_suggests_and_bumps_revision() {
+        let (db, _tmp) = new_test_db().await;
+        // seed_test_page attaches one source memory (`src-{title}`), which the
+        // improve pass turns into a suggested memory node.
+        let page_id = seed_test_page(&db, "Improve Route Page").await;
+        let state = state_with_db(db);
+
+        let Json(response) = handle_improve_page_map(State(state), Path(page_id.clone()))
+            .await
+            .expect("improve should return 200 for an existing page");
+
+        assert_eq!(response.page_id, page_id);
+        // init_page_map lifts the absent-map sentinel (0) to revision 1, then
+        // the suggested memory node bumps it again.
+        assert!(
+            response.revision >= 1,
+            "improve must bump the revision off the absent-map sentinel, got {}",
+            response.revision
+        );
+        assert!(
+            response.nodes.iter().any(|n| n.status == "suggested"),
+            "improve must surface at least one suggested node"
+        );
+    }
+
+    #[tokio::test]
+    async fn improve_page_map_404s_for_unknown_page() {
+        let (db, _tmp) = new_test_db().await;
+        let state = state_with_db(db);
+
+        let result =
+            handle_improve_page_map(State(state), Path("nonexistent-page".to_string())).await;
+
+        match result {
+            Err(ServerError::NotFound(_)) => {}
+            _ => panic!("expected NotFound for unknown page"),
+        }
+    }
+
+    // Regression guard: the explicit improve route must NEVER be gated by the
+    // `page_map_auto_suggest` config flag (that flag gates only the background
+    // `refinery::Phase::PageMaps` scheduler phase). We write a config with the
+    // flag OFF into a temp data dir, then confirm the handler still produces
+    // suggestions. Because the handler does not read config at all, this test
+    // is race-safe under cargo's parallel test threads (a concurrently-set
+    // `WENLAN_DATA_DIR` cannot change the handler's behavior); its teeth are on
+    // a *future* regression that wrongly wires the flag into this route.
+    #[tokio::test]
+    async fn improve_page_map_runs_when_auto_suggest_disabled() {
+        struct DataDirGuard {
+            _tmp: tempfile::TempDir,
+            previous: Option<std::ffi::OsString>,
+        }
+        impl DataDirGuard {
+            fn new() -> Self {
+                let tmp = tempfile::tempdir().unwrap();
+                let previous = std::env::var_os("WENLAN_DATA_DIR");
+                std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+                Self {
+                    _tmp: tmp,
+                    previous,
+                }
+            }
+        }
+        impl Drop for DataDirGuard {
+            fn drop(&mut self) {
+                match &self.previous {
+                    Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                    None => std::env::remove_var("WENLAN_DATA_DIR"),
+                }
+            }
+        }
+
+        let _env = DataDirGuard::new();
+        // Empty temp data dir → load_config returns defaults; set the flag OFF
+        // explicitly and persist it, so a hypothetical future gating of this
+        // route on the flag would read `false`.
+        let mut cfg = wenlan_core::config::load_config();
+        cfg.page_map_auto_suggest = false;
+        wenlan_core::config::save_config(&cfg).unwrap();
+
+        let (db, _tmp) = new_test_db().await;
+        let page_id = seed_test_page(&db, "Disabled Flag Page").await;
+        let state = state_with_db(db);
+
+        let Json(response) = handle_improve_page_map(State(state), Path(page_id))
+            .await
+            .expect("explicit improve must run even with auto_suggest disabled");
+        assert!(
+            response.nodes.iter().any(|n| n.status == "suggested"),
+            "explicit improve route must suggest regardless of the config flag"
         );
     }
 }

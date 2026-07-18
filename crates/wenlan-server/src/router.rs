@@ -272,6 +272,10 @@ pub fn build_router(state: SharedState) -> AppRouter {
                 .delete(page_map_routes::handle_delete_map_edge),
         )
         .route(
+            "/api/pages/{id}/map/improve",
+            post(page_map_routes::handle_improve_page_map),
+        )
+        .route(
             "/api/memory/{id}/revisions",
             get(memory_routes::handle_get_memory_revisions),
         )
