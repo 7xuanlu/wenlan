@@ -423,6 +423,15 @@ pub struct ConfigResponse {
     /// never serialized anywhere.
     #[serde(default)]
     pub external_llm_api_key_configured: bool,
+    /// Everyday-job source pin (raw config value): `"anthropic"` | `"external"`
+    /// | `"on_device"`, or absent/null when unpinned. Lets the app show the
+    /// pin the user chose distinctly from the resolved source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub everyday_source: Option<String>,
+    /// Synthesis-job source pin (raw config value): `"anthropic"` |
+    /// `"external"`, or absent/null when unpinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthesis_source: Option<String>,
 }
 
 // ===== On-device model =====
@@ -683,6 +692,13 @@ pub enum ProposalAction {
     PageMerge,
     CrossSpaceDiscovery,
     PageKeepOrArchive,
+    VocabPromote,
+    /// ponytail: deserialize-only catch-all. Lets a stale client decode a
+    /// newer daemon's action tag instead of failing the whole list. NEVER
+    /// constructed or serialized by the daemon (it only ever holds real
+    /// variants), so serialize-of-Unknown never happens in practice.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -738,6 +754,12 @@ pub enum RefinementPayload {
         source_count: usize,
         allowed_actions: Vec<RefinementCardAction>,
     },
+    VocabPromote {
+        kind: String,
+        old_value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -790,6 +812,7 @@ mod refinement_wire_tests {
                 "\"page_keep_or_archive\"",
                 ProposalAction::PageKeepOrArchive,
             ),
+            ("\"vocab_promote\"", ProposalAction::VocabPromote),
         ];
         for (json, expected) in cases {
             let parsed: ProposalAction = serde_json::from_str(json).unwrap();
@@ -797,6 +820,29 @@ mod refinement_wire_tests {
             let back = serde_json::to_string(&expected).unwrap();
             assert_eq!(back, json, "serialize {expected:?}");
         }
+    }
+
+    #[test]
+    fn vocab_promote_payload_round_trips() {
+        let p = RefinementPayload::VocabPromote {
+            kind: "relation".into(),
+            old_value: "design_inspiration".into(),
+            category: None,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: RefinementPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+        assert!(json.contains("\"action\":\"vocab_promote\""));
+    }
+
+    #[test]
+    fn proposal_action_unknown_future_variant_deserializes() {
+        // A stale client must decode a NEWER daemon's action tag to Unknown,
+        // never error the whole ListRefinementsResponse.
+        let parsed: ProposalAction = serde_json::from_str("\"future_unshipped_action\"").unwrap();
+        assert_eq!(parsed, ProposalAction::Unknown);
+        let parsed2: ProposalAction = serde_json::from_str("\"totally_new_action\"").unwrap();
+        assert_eq!(parsed2, ProposalAction::Unknown);
     }
 
     #[test]

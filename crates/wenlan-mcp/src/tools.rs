@@ -367,7 +367,7 @@ pub struct ConfirmMemoryParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListRefinementsParams {
     #[schemars(
-        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge."
+        description = "Optional action filter. One of: entity_merge, relation_conflict, detect_contradiction, suggest_entity, dedup_merge, vocab_promote."
     )]
     #[serde(default)]
     pub action: Option<String>,
@@ -2281,7 +2281,7 @@ impl WenlanMcpServer {
     // --- Review proposal tools ---
 
     #[tool(
-        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review — phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
+        description = "List pending review proposals from Wenlan's daemon-side queue. Use when the user wants to audit what the daemon has queued for review. Phrases like 'pending proposals', 'what's queued', 'check review queue'. Returns proposals with action (entity_merge/relation_conflict/detect_contradiction/suggest_entity/dedup_merge/vocab_promote), source ids, confidence, and typed payload. Filter by action with optional `action` param. Pair with `reject_refinement` to dismiss noise.",
         annotations(
             title = "List review proposals",
             read_only_hint = true,
@@ -2318,6 +2318,7 @@ impl WenlanMcpServer {
             relation_conflict: new relation supersedes. \
             detect_contradiction: previously-stored memory flagged for revision. \
             cross_space_discovery: pass `space` to choose the destination space. \
+            vocab_promote: promote a non-canonical entity or relation type to a first-class vocabulary type. \
             Returns 422 for suggest_entity (no producer) and dedup_merge (deprecated). \
             Not available over remote HTTP MCP transport (local stdio only).",
         annotations(
@@ -4208,6 +4209,21 @@ mod tests {
     }
 
     #[test]
+    fn list_refinements_description_mentions_vocab_promote() {
+        // Closed-set contract (spec §2.4): the list_refinements action enumeration
+        // must include vocab_promote, or the action ships half-wired (Task 6 wired
+        // the enum/parse/apply but missed this doc string).
+        let descriptions = tool_descriptions();
+        let list = descriptions
+            .get("list_refinements")
+            .expect("list_refinements tool exists");
+        assert!(
+            list.contains("vocab_promote"),
+            "list_refinements description must enumerate vocab_promote, got: {list}"
+        );
+    }
+
+    #[test]
     fn doctor_description_mentions_setup_mode() {
         let descriptions = tool_descriptions();
         let status = descriptions.get("doctor").expect("doctor tool exists");
@@ -5014,6 +5030,53 @@ mod tests {
         assert!(
             props.contains_key("space"),
             "space field must be present in capture schema when WENLAN_SPACE is not locked"
+        );
+    }
+
+    /// Collect `properties.<name>` entries whose schema is a bare boolean.
+    fn boolean_property_schemas(node: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+        match node {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                    for (name, schema) in props {
+                        if schema.is_boolean() {
+                            out.push(format!("{path}.{name}"));
+                        }
+                    }
+                }
+                for value in map.values() {
+                    boolean_property_schemas(value, path, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    boolean_property_schemas(item, path, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// No tool may expose a bare-boolean property schema.
+    ///
+    /// `#[schemars(with = "serde_json::Value")]` renders as the schema `true`. That is
+    /// legal JSON Schema 2020-12, but MCP clients that validate with Zod (Claude Code
+    /// among them) reject it. `tools/list` is all-or-nothing, so ONE such property makes
+    /// the whole listing fail and every tool disappears from the client — the server
+    /// still connects, which is why it presents as "tools fetch failed" rather than a
+    /// crash. Use `serde_json::Map<String, serde_json::Value>` instead: it renders as
+    /// `{"type": "object", "additionalProperties": true}` and validates.
+    #[test]
+    fn tool_schemas_have_no_boolean_property_schemas() {
+        let mut offenders = Vec::new();
+        for tool in WenlanMcpServer::tool_router().list_all() {
+            let schema = serde_json::Value::Object((*tool.input_schema).clone());
+            boolean_property_schemas(&schema, &tool.name, &mut offenders);
+        }
+        assert!(
+            offenders.is_empty(),
+            "bare-boolean property schemas would make Claude Code reject tools/list \
+             entirely, hiding EVERY tool: {offenders:?}"
         );
     }
 }

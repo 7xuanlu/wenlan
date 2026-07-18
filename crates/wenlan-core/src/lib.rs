@@ -68,14 +68,17 @@ pub mod tags;
 pub(crate) mod temporal_query;
 pub mod topic_match;
 pub mod tuning;
+pub mod vocab;
 
 // Re-exports for convenience.
 pub use error::WenlanError;
 pub use events::{EventEmitter, NoopEmitter};
 
-/// Crate version.
+/// Crate version. Release builds report the bare `CARGO_PKG_VERSION`; local
+/// source builds append a `+g<sha8>` dev suffix (emitted by build.rs) so the
+/// version-drift nudges can tell a dev daemon from a released one.
 pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    concat!(env!("CARGO_PKG_VERSION"), env!("WENLAN_VERSION_SUFFIX"))
 }
 
 #[cfg(test)]
@@ -85,5 +88,11 @@ mod tests {
     #[test]
     fn version_is_set() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn version_keeps_semver_prefix() {
+        // The dev suffix (if any) is appended, never replaces the base version.
+        assert!(version().starts_with(env!("CARGO_PKG_VERSION")));
     }
 }
