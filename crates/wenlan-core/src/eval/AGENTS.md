@@ -154,7 +154,7 @@ Seeding a cached scenario DB is ONE orchestrator, not a scatter of STEP tests: r
 - **Producer:** `seed_scenario_dbs_complete` asserts `complete()` — hard-fails on `memory_entities=0` (graph), `event_date=0` (temporal), or `pages=0` active (page channel; matches `MemoryDB::count_active_pages`). Presence checks, not percentages (percentages rot).
 - **Consumer:** every per-query collector calls `assert_feature_substrate_live(conn, feature)` at entry — a graph/temporal/page A/B over an empty substrate **errors ("EVAL REFUSED")** rather than emitting a null that reads as "doesn't help". A starved-substrate lie is structurally impossible.
 
-Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See root `AGENTS.md` "Eval seed + eval read: ONE route, ONE contract".
+Adding a channel with an A/B: add its step to the orchestrator, its floor to `SeedExpectations`, its key to `assert_feature_substrate_live`, and a `seed_contract.rs` unit test. See `crates/wenlan-core/AGENTS.md` "Eval seed + eval read: ONE route, ONE contract (no drift)".
 
 ---
 
