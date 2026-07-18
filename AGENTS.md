@@ -4,6 +4,20 @@ This file guides any coding agent working in this repository — Claude Code, Cu
 
 This repo holds the **daemon** (`wenlan-server`), the **CLI** (`wenlan`), shared **wire types** (`wenlan-types`), the **business-logic core** (`wenlan-core`), and the **MCP server** (`wenlan-mcp`). All five ship from this monorepo. The Tauri desktop app (`wenlan-app`) ships from a separate repo: [7xuanlu/wenlan-app](https://github.com/7xuanlu/wenlan-app). Public product surface lives at [wenlan.app](https://wenlan.app) (marketing, docs at `/docs`, longer-form writing at `/learn`).
 
+## Repo map
+
+Where things live. Subtree `AGENTS.md` files load automatically when you work under them (the [agents.md](https://agents.md/) hierarchy), so this file stays the always-loaded, cross-cutting layer and the detail lives next to its code.
+
+| Working on… | Start here |
+|---|---|
+| Cross-cutting rules — build/dev, CI layers, releasing, crate boundaries, async & SQL safety, dev gotchas | **this file** (loaded every session) |
+| Business logic — DB, engine, classify/extract, rerank, pages, retrieval + the deep flag reference | `crates/wenlan-core/AGENTS.md` |
+| HTTP daemon — router, routes, state, ingest batcher, scheduler, websocket | `crates/wenlan-server/AGENTS.md` |
+| Eval discipline — fixtures, baselines, seed scripts, cache TTL, faithfulness benches | `app/eval/AGENTS.md` |
+| Eval internals — runner conventions, paired-A/B apparatus, the G3 gate | `crates/wenlan-core/src/eval/AGENTS.md` |
+| CLI (`wenlan`) | "Key Modules — wenlan (CLI)" below (no subtree doc) |
+| Wire types (`wenlan-types`), MCP server (`wenlan-mcp`) | Architecture → Workspace Layout below (no subtree doc) |
+
 ## Design Philosophy
 
 - **Simple and elegant over clever** — prefer the straightforward solution; reads-like-easy-to-write usually is right.
