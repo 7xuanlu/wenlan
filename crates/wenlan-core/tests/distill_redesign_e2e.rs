@@ -533,6 +533,7 @@ async fn refresh_split_updates_machine_page_and_stages_human_revision_card() {
         UpdatePageRequest {
             content: "The amber release lane refreshes machine-owned pages in place while keeping source ids attached.".to_string(),
             source_memory_ids: source_ids.iter().map(|id| id.to_string()).collect(),
+            expected_version: None,
         },
         "agent_refresh",
         false,
@@ -578,6 +579,7 @@ async fn refresh_split_updates_machine_page_and_stages_human_revision_card() {
         UpdatePageRequest {
             content: manual_content.to_string(),
             source_memory_ids: source_ids.iter().map(|id| id.to_string()).collect(),
+            expected_version: None,
         },
         "manual_edit",
         false,
@@ -594,6 +596,7 @@ async fn refresh_split_updates_machine_page_and_stages_human_revision_card() {
             content: "The amber release lane agent refresh should become a pending revision card."
                 .to_string(),
             source_memory_ids: source_ids.iter().map(|id| id.to_string()).collect(),
+            expected_version: None,
         },
         "agent_refresh",
         false,

@@ -3555,6 +3555,7 @@ pub async fn handle_refresh_page(
             wenlan_types::requests::UpdatePageRequest {
                 content: req.content.clone(),
                 source_memory_ids: req.source_memory_ids.clone(),
+                expected_version: None,
             },
             "agent_refresh",
             false,

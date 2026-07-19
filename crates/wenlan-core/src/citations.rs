@@ -496,7 +496,11 @@ pub async fn run_citation_backfill_tick(
                         .await;
                 let existing_sources: Vec<&str> =
                     page.source_memory_ids.iter().map(String::as_str).collect();
-                let _ = db
+                // CAS on the version this annotation was generated from: the LLM
+                // call above is slow, and a human edit landing in that window
+                // must win. Losing the CAS drops the annotation rather than
+                // overwriting the edit — the next sweep regenerates it.
+                match db
                     .try_update_page_content_with_changelog(
                         &page_id,
                         &body,
@@ -505,8 +509,17 @@ pub async fn run_citation_backfill_tick(
                         false,
                         &changelog,
                         Some(&json),
+                        Some(page.version),
                     )
-                    .await;
+                    .await
+                {
+                    Ok(false) => log::info!(
+                        "[citation_backfill] {page_id} changed under v{}; discarding annotation",
+                        page.version
+                    ),
+                    Ok(true) => {}
+                    Err(e) => log::warn!("[citation_backfill] {page_id} write failed: {e}"),
+                }
                 let _ = db.set_app_metadata(&attempt_key(&page_id), "0").await;
             }
         } else {

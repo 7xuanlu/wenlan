@@ -7,8 +7,13 @@ use crate::pages::Page;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const KNOWLEDGE_STATE_SCHEMA_V2: u32 = 2;
+
+/// Process-local monotonic counter, combined with the pid, so concurrent
+/// `write_page` calls for the same page never pick the same temp filename.
+static TEMP_FILE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct KnowledgeState {
@@ -105,7 +110,32 @@ impl KnowledgeWriter {
         let file_path = self.path.join(&filename);
 
         let content = render_markdown(page);
-        std::fs::write(&file_path, &content)?;
+        // Write to a temp file in the same directory, then rename over the
+        // target: rename within one directory is atomic, so a reader (Obsidian,
+        // the fs watcher) never observes a half-written page file.
+        //
+        // ponytail: no fsync before the rename, so this buys atomicity for
+        // readers, NOT crash durability — after a power loss the target may hold
+        // either version, or a rename may be durable while its bytes are not.
+        // That is the intended trade: markdown is a repairable projection of the
+        // DB, recovered by the startup reconcile, and an fsync per page would be
+        // paid on every write of a bulk distill run. Add fsync (file, then the
+        // directory) only if the projection ever becomes authoritative.
+        let temp_filename = format!(
+            ".{}.{}.{}.tmp",
+            page.id,
+            std::process::id(),
+            TEMP_FILE_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let temp_path = self.path.join(&temp_filename);
+        if let Err(e) = std::fs::write(&temp_path, &content) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(e.into());
+        }
+        if let Err(e) = std::fs::rename(&temp_path, &file_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(e.into());
+        }
 
         // Project read-only source stubs so [[mem_*]] resolves in Obsidian.
         if let Err(e) = crate::export::provenance::project_stubs_for_page(
@@ -513,6 +543,51 @@ mod tests {
         // State reflects new version
         let state = writer.load_state();
         assert_eq!(state.pages["concept_test123"].version, 3);
+    }
+
+    /// `write_page` must replace the target file via temp-file-then-rename,
+    /// never via in-place truncate+write, so a concurrent reader can never
+    /// observe a half-written page file. A plain `fs::write`
+    /// truncates and rewrites the *same* inode, so its inode number is
+    /// unchanged across writes; an atomic rename swaps in a new inode. That
+    /// difference is deterministic (no thread timing needed) and is what
+    /// actually distinguishes this from the old, non-atomic implementation —
+    /// unlike the leftover-temp-file check below, which passes trivially on
+    /// old code too (it never created temp files to begin with).
+    #[cfg(unix)]
+    #[test]
+    fn write_page_replaces_file_via_atomic_rename_not_in_place_write() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+        let ino_before = std::fs::metadata(&path).unwrap().ino();
+
+        page.version = 3;
+        page.content = "## Updated\nNew content for atomicity check.".to_string();
+        writer.write_page_for_test(&page).unwrap();
+
+        let ino_after = std::fs::metadata(&path).unwrap().ino();
+        assert_ne!(
+            ino_before, ino_after,
+            "rewrite kept the same inode — target was truncated in place, not atomically renamed"
+        );
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, render_markdown_for(&page));
+
+        let leftover_temp_files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftover_temp_files.is_empty(),
+            "leftover temp file(s): {leftover_temp_files:?}"
+        );
     }
 
     #[test]

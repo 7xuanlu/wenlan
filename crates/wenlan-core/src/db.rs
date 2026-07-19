@@ -24956,6 +24956,11 @@ impl MemoryDB {
     /// `citations_json`: `Some(json)` writes fresh per-claim citation records
     /// atomically with the content; `None` resets `citations` to `'[]'` (stale
     /// claim-maps must never survive a content change — global constraint).
+    ///
+    /// `expected_version`: `Some(v)` folds an optimistic-concurrency guard into
+    /// the same UPDATE, so the row the caller made its ownership decision from is
+    /// provably the row being written. A mismatch affects zero rows and returns
+    /// `false` rather than clobbering whatever landed in between.
     #[allow(clippy::too_many_arguments)]
     pub async fn try_update_page_content_with_changelog(
         &self,
@@ -24966,6 +24971,7 @@ impl MemoryDB {
         require_stale: bool,
         changelog: &str,
         citations_json: Option<&str>,
+        expected_version: Option<i64>,
     ) -> Result<bool, WenlanError> {
         self.try_update_page_content(
             id,
@@ -24975,7 +24981,7 @@ impl MemoryDB {
             require_stale,
             Some(changelog),
             citations_json,
-            None,
+            expected_version,
             None,
         )
         .await
@@ -47159,6 +47165,7 @@ pub(crate) mod tests {
             false,
             "User-edited content",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -47187,6 +47194,7 @@ pub(crate) mod tests {
             "fs_edit",
             false,
             "user-edited",
+            None,
             None,
         )
         .await
@@ -53741,6 +53749,7 @@ pub(crate) mod tests {
                 "test",
                 false,
                 "[]",
+                None,
                 None,
             )
             .await

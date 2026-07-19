@@ -638,6 +638,15 @@ pub struct UpdatePageRequest {
     /// always populated by `post_write::update_page`.
     #[serde(default)]
     pub source_memory_ids: Vec<String>,
+    /// Optimistic-concurrency guard for the M0 write gate. `Some(v)` lands the
+    /// write only while the stored page is still at version `v`; a mismatch is
+    /// refused instead of overwriting whatever landed in between.
+    ///
+    /// Omitted by legacy clients, in which case the server guards on the version
+    /// it loaded to make the ownership decision — so the decision and the write
+    /// always describe the same row.
+    #[serde(default)]
+    pub expected_version: Option<i64>,
 }
 
 /// Body for `PUT /api/pages/{id}` — agent-side refresh of a stale page.

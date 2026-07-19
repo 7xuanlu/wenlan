@@ -515,6 +515,7 @@ pub(crate) async fn check_page_contradiction(
                 UpdatePageRequest {
                     content: page.content.clone(),
                     source_memory_ids: new_sources,
+                    expected_version: None,
                 },
                 "page_growth",
                 false,
@@ -726,6 +727,7 @@ pub(crate) async fn grow_page(
         UpdatePageRequest {
             content: updated_body,
             source_memory_ids: source_ids,
+            expected_version: None,
         },
         "page_growth",
         false,

@@ -1161,6 +1161,40 @@ pub async fn update_page(
     .await
 }
 
+/// Test-only seam. A test installs a `(parked, go)` handshake here and
+/// `update_page_impl` uses it once, *after* deciding ownership and *before*
+/// writing — i.e. in the exact window a competing edit has to land in. It
+/// announces that it is parked, then blocks until released, so the test can
+/// land a full competing write in between with no ordering guesswork.
+///
+/// This is the only way to deterministically exercise the version CAS: with no
+/// interleaving edit, a guarded write and an unguarded one behave identically.
+///
+/// One-shot (`take`), so the retry attempt after a CAS miss runs unblocked.
+/// Compiled out entirely in non-test builds.
+#[cfg(test)]
+type PreWriteGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[cfg(test)]
+pub(crate) static PRE_WRITE_GATE: std::sync::Mutex<Option<PreWriteGate>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+async fn pre_write_pause() {
+    let gate = PRE_WRITE_GATE.lock().unwrap().take();
+    if let Some((parked, go)) = gate {
+        let _ = parked.send(());
+        let _ = go.await;
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+async fn pre_write_pause() {}
+
 #[allow(clippy::too_many_arguments)]
 async fn update_page_impl(
     db: &MemoryDB,
@@ -1200,136 +1234,179 @@ async fn update_page_impl(
         }
     }
 
-    // ── Load current page for delta computation ─────────────────────────────
-    let current = db
-        .get_page(page_id)
-        .await?
-        .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
-    if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
-        return stage_page_revision_card(
-            db,
-            &current,
-            &req.content,
-            &req.source_memory_ids,
-            edited_by,
-        )
-        .await;
-    }
-    let current_version = current.version;
-    let new_version = current_version + 1;
-
-    // Shrink-guard (T17): opt-in via WENLAN_MERGE_SHRINK_GUARD=<f64>.
-    // OFF by default: unset/unparseable = None = zero regression.
-    // Only fires for LLM-rewrite edited_by; human edits are never blocked.
-    // Placed AFTER current page load (needs old body), BEFORE early-return.
-    // NOT inside the skip_hallucination_guard block: that skips page_growth/re_distill.
-    if is_llm_rewrite(edited_by) {
-        if let Some(threshold) = merge_shrink_threshold() {
-            if !crate::retrieval::integrity::body_shrink_ok(
-                &current.content,
-                &req.content,
-                threshold,
-            ) {
-                log::warn!(
-                    "[update_page] shrink-guard rejected {edited_by} on {page_id}: new body ({} chars) < {}% of old ({} chars)",
-                    req.content.chars().count(),
-                    (threshold * 100.0) as u32,
-                    current.content.chars().count(),
-                );
-                return Err(WenlanError::Validation(format!(
-                    "page body shrank below {:.0}% of original (shrink-guard); update rejected",
-                    threshold * 100.0
-                )));
-            }
-        }
-    }
-
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
-
-    // ── Build changelog entry ───────────────────────────────────────────────
-    let delta_summary = crate::db::compute_page_delta_summary(
-        &current.content,
-        &current.source_memory_ids,
-        &req.content,
-        &source_refs,
-        edited_by,
-    );
-
-    // Compute added sources for the changelog entry
-    let old_set: std::collections::HashSet<&str> = current
-        .source_memory_ids
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-    let new_set: std::collections::HashSet<&str> = source_refs.iter().copied().collect();
-
-    // Early return: identical content and identical source set — nothing to write.
-    if delta_summary.is_none() && old_set == new_set {
-        return Ok(WriteResult {
-            id: page_id.to_string(),
-            attached_to: None,
-            warnings: vec![],
-            wrote: false,
-            revision_card_id: None,
-            gated: false,
-        });
-    }
-
-    let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
-    added_sources.sort_unstable();
-    let added_sources_json = serde_json::Value::Array(
-        added_sources
-            .iter()
-            .map(|s| serde_json::Value::String(s.to_string()))
-            .collect(),
-    );
-
-    let mut entry = serde_json::json!({
-        "version": new_version,
-        "at": chrono::Utc::now().timestamp(),
-        "edited_by": edited_by,
-        "delta_summary": delta_summary,
-        "incoming_source_ids": added_sources_json,
-    });
-    if let Some((_, ref stats_summary)) = citations {
-        entry["citations_summary"] = serde_json::Value::String(stats_summary.clone());
-    }
-
-    // Read existing changelog and append the new entry
-    let existing_cl = db.get_page_changelog(page_id).await?;
-    const DEFAULT_CHANGELOG_CAP: usize = 20;
-    let new_changelog =
-        crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
-
-    // ── Apply DB update ─────────────────────────────────────────────────────
     let projection = knowledge_path.map(|path| {
         crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
     });
-    // citations: None -> resets `citations` to '[]' (no fresh citation source
-    // for this write; a stale claim-map must not survive a content change).
-    let wrote = db
-        .try_update_page_content_with_changelog(
-            page_id,
-            &req.content,
-            &source_refs,
-            edited_by,
-            require_stale,
-            &new_changelog,
-            citations.as_ref().map(|(json, _)| json.as_str()),
-        )
-        .await?;
 
-    if !wrote {
-        // CAS skipped — page was not stale; return empty warnings (no-op)
-        return Ok(WriteResult {
-            id: page_id.to_string(),
-            attached_to: None,
-            warnings: vec![],
-            wrote: false,
-            revision_card_id: None,
-            gated: false,
-        });
-    }
+    // ── Load, decide ownership, and write under one version CAS ─────────────
+    // The ownership decision is made from a loaded row, and the write CASes on
+    // *that row's* version — so the row we decided from is provably the row we
+    // wrote. An edit landing in the gap fails the CAS instead of being
+    // clobbered, and we reload and re-decide rather than forcing the write
+    // through: a page that became human-owned in the gap gets a revision card.
+    //
+    // Bounded because each retry only re-runs on a version that actually moved;
+    // a caller losing three races in a row is a write storm, not a lost update,
+    // and yielding is the safe answer.
+    const MAX_CAS_ATTEMPTS: usize = 3;
+    let no_op = |warnings: Vec<String>| WriteResult {
+        id: page_id.to_string(),
+        attached_to: None,
+        warnings,
+        wrote: false,
+        revision_card_id: None,
+        gated: false,
+    };
+
+    let (delta_summary, current_version, new_version) = 'cas: {
+        for attempt in 1..=MAX_CAS_ATTEMPTS {
+            let current = db.get_page(page_id).await?.ok_or_else(|| {
+                WenlanError::Validation(format!("page '{page_id}' does not exist"))
+            })?;
+
+            // Ownership gate, re-evaluated on every attempt. Inside the CAS loop
+            // it is no longer advisory: whatever it decided is what the write
+            // guards on.
+            if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
+                return stage_page_revision_card(
+                    db,
+                    &current,
+                    &req.content,
+                    &req.source_memory_ids,
+                    edited_by,
+                )
+                .await;
+            }
+
+            let current_version = current.version;
+            let new_version = current_version + 1;
+
+            // A caller-supplied `expected_version` is a precondition, not a retry
+            // hint: once it stops matching, the write is refused outright rather
+            // than re-aimed at a row the caller never saw. (A machine write whose
+            // page became human-owned is caught above and preserved as a card, so
+            // refusing here never silently drops agent work.)
+            if let Some(expected) = req.expected_version {
+                if expected != current_version {
+                    log::debug!(
+                        "[update_page] {page_id}: expected_version {expected} != current {current_version}; refusing write"
+                    );
+                    return Ok(no_op(vec![format!(
+                        "page moved to v{current_version} (expected v{expected}); write refused"
+                    )]));
+                }
+            }
+
+            // Shrink-guard (T17): opt-in via WENLAN_MERGE_SHRINK_GUARD=<f64>.
+            // OFF by default: unset/unparseable = None = zero regression.
+            // Only fires for LLM-rewrite edited_by; human edits are never blocked.
+            // Placed AFTER current page load (needs old body), BEFORE early-return.
+            // NOT inside the skip_hallucination_guard block: that skips page_growth/re_distill.
+            if is_llm_rewrite(edited_by) {
+                if let Some(threshold) = merge_shrink_threshold() {
+                    if !crate::retrieval::integrity::body_shrink_ok(
+                        &current.content,
+                        &req.content,
+                        threshold,
+                    ) {
+                        log::warn!(
+                            "[update_page] shrink-guard rejected {edited_by} on {page_id}: new body ({} chars) < {}% of old ({} chars)",
+                            req.content.chars().count(),
+                            (threshold * 100.0) as u32,
+                            current.content.chars().count(),
+                        );
+                        return Err(WenlanError::Validation(format!(
+                            "page body shrank below {:.0}% of original (shrink-guard); update rejected",
+                            threshold * 100.0
+                        )));
+                    }
+                }
+            }
+
+            // ── Build changelog entry ───────────────────────────────────────
+            let delta_summary = crate::db::compute_page_delta_summary(
+                &current.content,
+                &current.source_memory_ids,
+                &req.content,
+                &source_refs,
+                edited_by,
+            );
+
+            // Compute added sources for the changelog entry
+            let old_set: std::collections::HashSet<&str> = current
+                .source_memory_ids
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            let new_set: std::collections::HashSet<&str> = source_refs.iter().copied().collect();
+
+            // Early return: identical content and identical source set — nothing to write.
+            if delta_summary.is_none() && old_set == new_set {
+                return Ok(no_op(vec![]));
+            }
+
+            let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
+            added_sources.sort_unstable();
+            let added_sources_json = serde_json::Value::Array(
+                added_sources
+                    .iter()
+                    .map(|s| serde_json::Value::String(s.to_string()))
+                    .collect(),
+            );
+
+            let mut entry = serde_json::json!({
+                "version": new_version,
+                "at": chrono::Utc::now().timestamp(),
+                "edited_by": edited_by,
+                "delta_summary": delta_summary,
+                "incoming_source_ids": added_sources_json,
+            });
+            if let Some((_, ref stats_summary)) = citations {
+                entry["citations_summary"] = serde_json::Value::String(stats_summary.clone());
+            }
+
+            // Read existing changelog and append the new entry
+            let existing_cl = db.get_page_changelog(page_id).await?;
+            const DEFAULT_CHANGELOG_CAP: usize = 20;
+            let new_changelog =
+                crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
+
+            // ── Apply DB update ─────────────────────────────────────────────
+            pre_write_pause().await;
+            // citations: None -> resets `citations` to '[]' (no fresh citation source
+            // for this write; a stale claim-map must not survive a content change).
+            let wrote = db
+                .try_update_page_content_with_changelog(
+                    page_id,
+                    &req.content,
+                    &source_refs,
+                    edited_by,
+                    require_stale,
+                    &new_changelog,
+                    citations.as_ref().map(|(json, _)| json.as_str()),
+                    Some(current_version),
+                )
+                .await?;
+
+            if wrote {
+                break 'cas (delta_summary, current_version, new_version);
+            }
+
+            // Nothing was written. Two distinguishable causes share this branch:
+            // the `require_stale` gate (row untouched) and a version conflict
+            // (row moved under us). Only the latter is worth retrying.
+            let landed_version = db.get_page(page_id).await?.map(|p| p.version);
+            if landed_version != Some(current_version) && attempt < MAX_CAS_ATTEMPTS {
+                log::debug!(
+                    "[update_page] {page_id}: version moved {current_version} -> {landed_version:?} mid-write; reloading (attempt {attempt})"
+                );
+                continue;
+            }
+            return Ok(no_op(vec![]));
+        }
+        return Ok(no_op(vec![]));
+    };
 
     // ── md re-write ─────────────────────────────────────────────────────────
     if let Some(ref projection) = projection {
@@ -2832,6 +2909,7 @@ mod tests {
         let req2 = UpdatePageRequest {
             content: content_v2.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let r2 = update_page(&db, &page_id, req2, "re_distill", false, None, None)
             .await
@@ -2843,6 +2921,7 @@ mod tests {
         let req3 = UpdatePageRequest {
             content: content_v3.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let r3 = update_page(&db, &page_id, req3, "re_distill", false, None, None)
             .await
@@ -2874,6 +2953,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Rust is a systems language with memory safety and performance".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
@@ -2902,6 +2982,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
@@ -2928,6 +3009,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "manual_edit", false, None, None).await;
         assert!(
@@ -2948,6 +3030,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         // Should succeed without hallucination check
         update_page(&db, &page_id, req, "re_distill", false, None, None)
@@ -2971,6 +3054,7 @@ mod tests {
                 "Rust is a systems language with memory safety features, ownership and borrowing"
                     .to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         update_page(&db, &page_id, req, "fs_edit", false, None, None)
             .await
@@ -3008,6 +3092,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Rust is a systems language with memory safety (user edited)".to_string(),
             source_memory_ids: vec![ghost_source.to_string()],
+            expected_version: None,
         };
         update_page(&db, page_id, req, "fs_edit", false, None, None)
             .await
@@ -3028,6 +3113,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
@@ -3060,6 +3146,7 @@ mod tests {
                 content: "Rust is a systems language with ownership model and borrow checker"
                     .to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
             },
             "re_distill",
             false,
@@ -3091,6 +3178,7 @@ mod tests {
                     "Rust is a systems language with ownership model, borrow checker, and lifetimes"
                         .to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
             },
             "re_distill",
             false,
@@ -3130,6 +3218,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
@@ -3176,6 +3265,7 @@ mod tests {
                 req: UpdatePageRequest {
                     content: human_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: None,
                 },
                 edited_by: "fs_edit",
                 require_stale: false,
@@ -3201,6 +3291,7 @@ mod tests {
                 req: UpdatePageRequest {
                     content: machine_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
@@ -3324,6 +3415,304 @@ mod tests {
         .unwrap();
     }
 
+    /// M0 write gate: a content write whose `expected_version` no longer matches
+    /// the stored row must not land. Without the guard, a writer that loaded v1
+    /// and decided its ownership branch there overwrites whatever landed at v2.
+    #[tokio::test]
+    async fn page_write_update_with_stale_expected_version_does_not_clobber() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-stale";
+        let source_content = "Version guards keep concurrent page writers from losing updates";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_cas_stale";
+        db.insert_page(
+            page_id,
+            "Version Guards",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let loaded = db.get_page(page_id).await.unwrap().unwrap();
+        let stale_version = loaded.version;
+
+        // A concurrent writer lands first, advancing the stored version.
+        let winner_content =
+            "Version guards keep concurrent page writers from losing updates, landed first";
+        page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: winner_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(stale_version),
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let after_winner = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            after_winner.version > stale_version,
+            "precondition: the first writer advanced the page version"
+        );
+
+        // The writer still holding the pre-write version must be refused.
+        let result = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "Stale writer body that must never land".to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(stale_version),
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !result.wrote,
+            "a write carrying a stale expected_version must report wrote=false"
+        );
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, winner_content,
+            "the stale writer must not overwrite the content that landed first"
+        );
+        assert_eq!(
+            after.version, after_winner.version,
+            "a refused write must not bump the page version"
+        );
+    }
+
+    /// The load-bearing test for the M0 write gate: an edit that lands *inside*
+    /// the window between the ownership decision and the write must not be
+    /// clobbered.
+    ///
+    /// This is the only test here that fails when `Some(current_version)` is
+    /// dropped from the write — with no interleaving, a guarded write and an
+    /// unguarded one are byte-identical. Mutation check: pass `None` as the
+    /// guard and this test overwrites the human edit and reports v3.
+    #[tokio::test]
+    async fn page_write_update_edit_landing_mid_write_is_not_clobbered() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-interleave";
+        let source_content = "A write must land on the row its ownership decision was made from";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_cas_interleave";
+        db.insert_page(
+            page_id,
+            "Interleaved Write",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+        let start_version = db.get_page(page_id).await.unwrap().unwrap().version;
+
+        // Arm the seam: the machine write below parks after deciding ownership
+        // (page is still machine-owned) and before writing.
+        let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel();
+        *PRE_WRITE_GATE.lock().unwrap() = Some((parked_tx, go_rx));
+
+        // Close to the seeded source: `fs_edit` is not exempt from the
+        // hallucination guard, so an unrelated body would be rejected before
+        // ever reaching the write this test is about.
+        let human_content =
+            "A write must land on the row its ownership decision was made from, typed by hand";
+        let machine_write = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "Machine body computed from the pre-edit row".to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        );
+
+        // Runs to completion while the machine write is parked — a genuine
+        // interleaving, not a simulated one.
+        let human_edit = async {
+            parked_rx
+                .await
+                .expect("machine write must reach the pre-write gate");
+            let result = page_write(
+                &db,
+                PageWrite::Update {
+                    page_id,
+                    req: UpdatePageRequest {
+                        content: human_content.to_string(),
+                        source_memory_ids: vec![mem_id.to_string()],
+                        expected_version: None,
+                    },
+                    edited_by: "fs_edit",
+                    require_stale: false,
+                    knowledge_path: None,
+                    citations: None,
+                },
+            )
+            .await
+            .unwrap();
+            // Only now release the parked machine write, so it resumes against a
+            // page that has definitively moved.
+            go_tx.send(()).expect("machine write must still be parked");
+            result
+        };
+
+        let (machine_result, human_result) = tokio::join!(machine_write, human_edit);
+        let machine_result = machine_result.unwrap();
+
+        assert!(human_result.wrote, "the human edit itself must land");
+        assert!(
+            !machine_result.wrote,
+            "the machine write lost the CAS and must not report a write"
+        );
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, human_content,
+            "the edit that landed mid-write must survive"
+        );
+        assert_eq!(
+            after.version,
+            start_version + 1,
+            "only the human edit bumped the version; the losing write must not have applied"
+        );
+        assert!(
+            machine_result.revision_card_id.is_some(),
+            "on reload the page is human-owned, so the machine body is preserved as a card"
+        );
+    }
+
+    /// M0 write gate: the ownership decision must be re-made against the row the
+    /// write actually lands on. A machine writer that loaded a machine-owned page
+    /// and then lost the race to a human edit must stage a revision card,
+    /// never overwrite the human prose it never saw.
+    #[tokio::test]
+    async fn page_write_update_stale_version_on_human_owned_page_stages_card() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-owned";
+        let source_content = "Ownership is re-decided against the row the write lands on";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_cas_owned";
+        db.insert_page(
+            page_id,
+            "Ownership Recheck",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // The machine writer's view of the world: machine-owned, at this version.
+        let machine_view = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            !machine_view.user_edited,
+            "precondition: page starts machine-owned"
+        );
+
+        // A human edit lands underneath it, taking ownership and bumping version.
+        let human_content = "Ownership is re-decided against the row the write lands on, by hand";
+        page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: human_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(machine_view.version),
+                },
+                edited_by: "fs_edit",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap();
+        let owned = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            owned.user_edited,
+            "precondition: the human edit took ownership"
+        );
+
+        let pending_before = db.list_pending_revisions(10).await.unwrap().len();
+
+        // The machine writer proceeds from its stale view.
+        let result = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "Machine body that must never overwrite the human edit".to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(machine_view.version),
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !result.wrote,
+            "machine write must not land on a human-owned page"
+        );
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, human_content,
+            "human prose must survive the losing machine write"
+        );
+        assert_eq!(
+            after.version, owned.version,
+            "the refused machine write must not bump the version"
+        );
+        let pending_after = db.list_pending_revisions(10).await.unwrap().len();
+        assert_eq!(
+            pending_after,
+            pending_before + 1,
+            "losing the version race on a human-owned page must stage a revision card"
+        );
+    }
+
     #[tokio::test]
     async fn accept_pending_revision_writes_and_logs_on_first_call() {
         let (db, _tmp) = crate::db::tests::test_db().await;
@@ -3356,6 +3745,7 @@ mod tests {
             UpdatePageRequest {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
             },
             "fs_edit",
             false,
@@ -3583,6 +3973,7 @@ mod tests {
             UpdatePageRequest {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
             },
             "fs_edit",
             false,
@@ -3614,6 +4005,7 @@ mod tests {
             UpdatePageRequest {
                 content: newer_human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
             },
             "fs_edit",
             false,
@@ -3674,6 +4066,7 @@ mod tests {
             UpdatePageRequest {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
             },
             "fs_edit",
             false,
@@ -4065,6 +4458,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: short_body,
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "distill", false, None, None).await;
         assert!(
@@ -4098,6 +4492,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: long_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "page_growth", false, None, None).await;
         assert!(result.is_ok(), "shrink-guard must allow growing body");
@@ -4121,6 +4516,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: tiny_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         let result = update_page(&db, &page_id, req, "distill", false, None, None)
             .await
@@ -4149,6 +4545,7 @@ mod tests {
         let req = UpdatePageRequest {
             content: tiny_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
         };
         // manual_edit bypasses hallucination guard AND is NOT an LLM rewrite
         // so shrink-guard must NOT fire even though the body shrinks drastically

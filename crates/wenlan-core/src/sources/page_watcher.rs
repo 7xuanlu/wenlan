@@ -200,6 +200,7 @@ async fn sync_one_file(
     let req = wenlan_types::requests::UpdatePageRequest {
         content: body_norm,
         source_memory_ids: existing.source_memory_ids.clone(),
+        expected_version: None,
     };
     // Pass knowledge_path so update_page re-projects the md with the new
     // version stamp; without that the next tick would see origin_version
