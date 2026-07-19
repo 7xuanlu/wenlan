@@ -590,22 +590,23 @@ fn affected_record_for_target(target: &RepairTarget) -> Result<RepairAffectedRec
         .map_err(|error| WenlanError::Validation(error.to_string()))
 }
 
+fn source_check_in_report<'a>(
+    report: &'a wenlan_types::lint::LintReport,
+    check_id: &str,
+) -> Option<&'a LintCheckResult> {
+    report.checks().iter().find(|check| {
+        check.check_id() == check_id
+            && check.outcome() == LintOutcome::Finding
+            && check.gate_effect() == LintGateEffect::Actionable
+    })
+}
+
 fn source_check<'a>(request: &'a RepairPlanRequest, check_id: &str) -> Option<&'a LintCheckResult> {
-    request
-        .general_report()
-        .checks()
-        .iter()
-        .chain(
-            request
-                .deep_report()
-                .into_iter()
-                .flat_map(|report| report.checks()),
-        )
-        .find(|check| {
-            check.check_id() == check_id
-                && check.outcome() == LintOutcome::Finding
-                && check.gate_effect() == LintGateEffect::Actionable
-        })
+    source_check_in_report(request.general_report(), check_id).or_else(|| {
+        request
+            .deep_report()
+            .and_then(|report| source_check_in_report(report, check_id))
+    })
 }
 
 fn prepare_exact_manifest(
@@ -615,7 +616,6 @@ fn prepare_exact_manifest(
     exact: deterministic::ExactDeterministicRepair,
     now_epoch: i64,
 ) -> Result<RepairManifest, WenlanError> {
-    let deep = request.deep_report();
     let check_id = exact
         .source_check_ids
         .first()
@@ -630,26 +630,17 @@ fn prepare_exact_manifest(
         .skip(1)
         .map(|check_id| (*check_id).to_string())
         .collect::<Vec<_>>();
-    let source = match deep {
-        Some(deep) => RepairSource::try_new_deterministic(
-            request.scope().clone(),
-            request.general_report().scope().clone(),
-            check_id.to_string(),
-            check.evidence().to_vec(),
-            request.general_report().snapshots().clone(),
-            deep.snapshots().clone(),
-            request.general_report().producer_receipt().clone(),
-            deep.producer_receipt().clone(),
-        ),
-        None => RepairSource::try_new_general_only_deterministic(
-            request.scope().clone(),
-            request.general_report().scope().clone(),
-            check_id.to_string(),
-            check.evidence().to_vec(),
-            request.general_report().snapshots().clone(),
-            request.general_report().producer_receipt().clone(),
-        ),
-    }
+    // Deep is agent-assisted semantic input for the plan, not a verification
+    // prerequisite for an exact deterministic writer. Binding its full
+    // baseline here also makes the same General repair depend on plan profile.
+    let source = RepairSource::try_new_general_only_deterministic(
+        request.scope().clone(),
+        request.general_report().scope().clone(),
+        check_id.to_string(),
+        check.evidence().to_vec(),
+        request.general_report().snapshots().clone(),
+        request.general_report().producer_receipt().clone(),
+    )
     .map_err(|error| WenlanError::Validation(error.to_string()))?;
     let occurrence = candidate_occurrence_digest(
         check_id,
@@ -659,35 +650,13 @@ fn prepare_exact_manifest(
             "mutation": &exact.mutation,
         }),
     )?;
-    let post_assertions = match deep {
-        Some(deep) => {
-            let required_deep_check_ids = if deep
-                .checks()
-                .iter()
-                .any(|candidate| candidate.check_id() == check_id)
-            {
-                vec![check_id.to_string()]
-            } else {
-                Vec::new()
-            };
-            RepairPostAssertions::try_new_for_check(
-                check_id.to_string(),
-                plan_lint_digest(&occurrence)?,
-                repair_check_baseline(request.general_report())?,
-                repair_check_baseline(deep)?,
-                required_deep_check_ids,
-                allowed_non_target_check_deltas.clone(),
-            )
-        }
-        None => RepairPostAssertions::try_new_general_only_for_check(
-            check_id.to_string(),
-            plan_lint_digest(&occurrence)?,
-            repair_check_baseline(request.general_report())?,
-            allowed_non_target_check_deltas,
-        ),
-    };
-    let post_assertions =
-        post_assertions.map_err(|error| WenlanError::Validation(error.to_string()))?;
+    let post_assertions = RepairPostAssertions::try_new_general_only_for_check(
+        check_id.to_string(),
+        plan_lint_digest(&occurrence)?,
+        repair_check_baseline(request.general_report())?,
+        allowed_non_target_check_deltas,
+    )
+    .map_err(|error| WenlanError::Validation(error.to_string()))?;
     let post_assertions = if exact.writer == RepairWriter::DeleteTagRow {
         post_assertions
             .try_with_target_record_set(tag_record_set.cloned().ok_or_else(|| {
@@ -737,20 +706,56 @@ async fn materialize_deterministic(
         match resolution {
             deterministic::DeterministicResolution::Exact(exact) => {
                 let mut exact = *exact;
-                exact
+                let actionable_check_ids = exact
                     .source_check_ids
-                    .retain(|check_id| source_check(request, check_id).is_some());
-                if exact.source_check_ids.is_empty() {
+                    .iter()
+                    .copied()
+                    .filter(|check_id| source_check(request, check_id).is_some())
+                    .collect::<Vec<_>>();
+                if actionable_check_ids.is_empty() {
                     continue;
                 }
-                let check_ids = exact.source_check_ids.clone();
-                let primary_check_id = check_ids[0];
+                exact.source_check_ids.retain(|check_id| {
+                    source_check_in_report(request.general_report(), check_id).is_some()
+                });
                 let affected = affected_record_for_target(&exact.target)?;
                 let occurrence_base = serde_json::json!({
                     "target": &exact.target,
                     "writer": exact.writer,
                     "mutation": &exact.mutation,
                 });
+                if exact.source_check_ids.is_empty() {
+                    let primary_check_id = actionable_check_ids[0];
+                    for check_id in &actionable_check_ids {
+                        resolved_check_ids.insert((*check_id).to_string());
+                    }
+                    entries.push(
+                        RepairPlanEntry::try_new(
+                            RepairFindingKind::Deterministic,
+                            primary_check_id.to_string(),
+                            candidate_occurrence_digest(
+                                primary_check_id,
+                                &serde_json::json!({
+                                    "candidate": &occurrence_base,
+                                    "source_profile": LintProfile::Deep,
+                                }),
+                            )?,
+                            vec![affected],
+                            blocked(
+                                RepairBlockedReasonCode::MissingPrerequisite,
+                                format!(
+                                    "{primary_check_id} exact deterministic target is only backed by Deep"
+                                ),
+                                "rerun General with coverage that includes this target before preparing its deterministic repair"
+                                    .to_string(),
+                            )?,
+                        )
+                        .map_err(|error| WenlanError::Validation(error.to_string()))?,
+                    );
+                    continue;
+                }
+                let check_ids = exact.source_check_ids.clone();
+                let primary_check_id = check_ids[0];
                 let manifest =
                     prepare_exact_manifest(store, request, tag_record_set, exact, now_epoch)?;
                 for check_id in check_ids {

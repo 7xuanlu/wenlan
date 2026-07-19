@@ -9,9 +9,9 @@ use wenlan_types::{
         canonical_gate_effect, LintApplicability, LintCapabilityContext, LintCheckResult,
         LintCheckResultInput, LintConfigFingerprint, LintCoverage, LintDbSnapshotMode,
         LintDbSnapshotReceipt, LintDigest, LintEvidenceRef, LintGateEffect, LintMetric,
-        LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt, LintPrecondition,
-        LintProducerReceipt, LintProfile, LintRecommendationCode, LintReport, LintScope,
-        LintSemanticAction, LintSeverity, LintSnapshotReceipts, LintSummaryCode,
+        LintOpaqueDigest, LintOutcome, LintPageSnapshotMode, LintPageSnapshotReceipt,
+        LintPrecondition, LintProducerReceipt, LintProfile, LintRecommendationCode, LintReport,
+        LintScope, LintSemanticAction, LintSeverity, LintSnapshotReceipts, LintSummaryCode,
         LintValidationMethod, LINT_GENERAL_CHECK_COUNT, LINT_MAX_EVIDENCE_PER_CHECK,
     },
     repair::{RepairDigest, RepairLintScope},
@@ -324,6 +324,65 @@ fn with_completed_agent_work(report: LintReport) -> LintReport {
             )
             .unwrap(),
         ),
+    )
+    .unwrap()
+}
+
+fn with_large_non_target_evidence(report: LintReport) -> LintReport {
+    let mut checks = report.checks().to_vec();
+    for (check_index, target) in checks
+        .iter_mut()
+        .filter(|check| {
+            check.outcome() == LintOutcome::Pass
+                && check.applicability() == LintApplicability::Applicable
+        })
+        .take(6)
+        .enumerate()
+    {
+        let evidence = (0..usize::from(LINT_MAX_EVIDENCE_PER_CHECK))
+            .map(|evidence_index| LintEvidenceRef::OpaqueDigest {
+                opaque_digest: LintOpaqueDigest::from_hex(&format!(
+                    "{:064x}",
+                    1 + (check_index * usize::from(LINT_MAX_EVIDENCE_PER_CHECK)) + evidence_index
+                ))
+                .unwrap(),
+            })
+            .collect::<Vec<_>>();
+        *target = LintCheckResult::try_new_with_gate_effect(
+            LintCheckResultInput {
+                check_id: target.check_id().to_string(),
+                outcome: target.outcome(),
+                severity: target.severity(),
+                applicability: target.applicability(),
+                precondition: target.precondition(),
+                coverage: LintCoverage::new(
+                    LintValidationMethod::FullEnumeration,
+                    u64::from(LINT_MAX_EVIDENCE_PER_CHECK),
+                    u64::from(LINT_MAX_EVIDENCE_PER_CHECK),
+                    LINT_MAX_EVIDENCE_PER_CHECK,
+                    false,
+                    u64::from(LINT_MAX_EVIDENCE_PER_CHECK),
+                )
+                .unwrap(),
+                metrics: target.metrics().to_vec(),
+                summary_code: target.summary_code(),
+                recommendation_code: target.recommendation_code(),
+                evidence,
+                duration_ms: target.duration_ms(),
+            },
+            target.gate_effect(),
+        )
+        .unwrap();
+    }
+    LintReport::try_new_for_profile_with_agent_work(
+        report.profile(),
+        report.scope().clone(),
+        report.capability_context(),
+        report.snapshots().clone(),
+        report.config_fingerprint().clone(),
+        report.producer_receipt().clone(),
+        checks,
+        report.agent_work().cloned(),
     )
     .unwrap()
 }
@@ -855,6 +914,173 @@ async fn prepare_plan_emits_exact_manifest_without_mutating_canonical_memory() {
         .get::<Option<String>>(0)
         .unwrap();
     assert_eq!(source_agent.as_deref(), Some("   "));
+}
+
+#[tokio::test]
+async fn deep_plan_keeps_deterministic_manifest_general_only_and_pageable() {
+    use crate::lint::{
+        context::{CancellationToken, LintClock},
+        runner::LintRunner,
+    };
+    use wenlan_types::{
+        lint::{LintProfile, LintQuery},
+        repair::RepairWriter,
+    };
+
+    let (db, _dir) = crate::db::tests::test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  pending_revision,is_recap,supersede_mode,memory_type,source_agent,
+                  pinned,confirmed,stability)
+             VALUES ('row_pageable','pageable','memory','mem_pageable','pageable',0,1,'text',
+                     0,0,'hide','fact','   ',0,0,'new');",
+        )
+        .await
+        .unwrap();
+    let runner = || LintRunner::new(LintClock::fixed(), CancellationToken::new());
+    let general = runner()
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::General), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let deep = with_large_non_target_evidence(
+        runner()
+            .run(
+                &db,
+                &LintQuery::new(Some(LintProfile::Deep), None),
+                None,
+                false,
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(
+        serde_json::to_vec(&crate::repair::repair_check_baseline(&deep).unwrap())
+            .unwrap()
+            .len()
+            > REPAIR_PLAN_PAGE_MAX_BYTES
+    );
+    let repair_root = tempfile::tempdir().unwrap();
+    let store = crate::repair::RepairArtifactStore::new(repair_root.path().to_path_buf());
+    let plan = prepare_repair_plan(
+        &db,
+        &store,
+        RepairPlanRequest::try_new(RepairLintScope::global(), general, Some(deep)).unwrap(),
+        None,
+        1_721_000_000,
+    )
+    .await
+    .unwrap();
+    let manifest = plan
+        .entries()
+        .iter()
+        .find_map(|entry| match entry.resolution() {
+            RepairResolution::Ready { manifest }
+                if manifest.writer() == RepairWriter::NormalizeMemorySourceAgent =>
+            {
+                Some(manifest)
+            }
+            _ => None,
+        })
+        .expect("normalize source-agent manifest");
+    assert!(manifest.source().is_general_only_deterministic());
+    assert!(manifest
+        .post_assertions()
+        .verification_policy()
+        .is_general_only());
+    store
+        .load_plan_entries_page(
+            &RepairPlanEntriesRequest::try_new(
+                plan.plan_id().to_string(),
+                plan.plan_digest().clone(),
+                0,
+                plan.entries().len().min(100),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn deep_only_deterministic_finding_is_visible_but_not_general_only_ready() {
+    use crate::lint::{
+        context::{CancellationToken, LintClock},
+        runner::LintRunner,
+    };
+    use wenlan_types::{
+        lint::{LintProfile, LintQuery},
+        repair::RepairWriter,
+    };
+
+    let (db, _dir) = crate::db::tests::test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  pending_revision,is_recap,supersede_mode,memory_type,source_agent,
+                  pinned,confirmed,stability)
+             VALUES ('row_deep_only','deep only','memory','mem_deep_only','deep only',0,1,'text',
+                     0,0,'hide','fact','   ',0,0,'new');",
+        )
+        .await
+        .unwrap();
+    let runner = || LintRunner::new(LintClock::fixed(), CancellationToken::new());
+    let general = with_check_outcome(
+        runner()
+            .run(
+                &db,
+                &LintQuery::new(Some(LintProfile::General), None),
+                None,
+                false,
+            )
+            .await
+            .unwrap(),
+        "identity.memory_state_integrity",
+        LintOutcome::Pass,
+    );
+    let deep = runner()
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::Deep), None),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let repair_root = tempfile::tempdir().unwrap();
+    let plan = prepare_repair_plan(
+        &db,
+        &crate::repair::RepairArtifactStore::new(repair_root.path().to_path_buf()),
+        RepairPlanRequest::try_new(RepairLintScope::global(), general, Some(deep)).unwrap(),
+        None,
+        1_721_000_000,
+    )
+    .await
+    .unwrap();
+    assert!(!plan.entries().iter().any(|entry| matches!(
+        entry.resolution(),
+        RepairResolution::Ready { manifest }
+            if manifest.writer() == RepairWriter::NormalizeMemorySourceAgent
+    )));
+    assert!(plan.entries().iter().any(|entry| {
+        entry.check_id() == "identity.memory_state_integrity"
+            && matches!(
+                entry.resolution(),
+                RepairResolution::Blocked { blocked }
+                    if blocked.reason_code() == RepairBlockedReasonCode::MissingPrerequisite
+                        && blocked.detail().contains("only backed by Deep")
+            )
+    }));
 }
 
 #[tokio::test]
@@ -2575,24 +2801,14 @@ async fn page_projection_manifest_repairs_only_the_named_page_projection() {
         )
         .await
         .unwrap();
-    let deep = runner()
-        .run(
-            &db,
-            &LintQuery::new(Some(LintProfile::Deep), None),
-            Some(page_root.path()),
-            true,
-        )
-        .await
-        .unwrap();
     let error = crate::repair::record_repair_verification(
         &db,
         &store,
-        VerifyRepairRequest::try_new(
+        VerifyRepairRequest::try_new_general_only(
             manifest.manifest_id().to_string(),
             manifest.manifest_digest().clone(),
             apply_receipt.receipt_digest().clone(),
             general,
-            deep,
         )
         .unwrap(),
         Some(page_root.path()),

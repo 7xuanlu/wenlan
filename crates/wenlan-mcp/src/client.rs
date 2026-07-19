@@ -317,6 +317,8 @@ fn parse_api_error_reason(bytes: &[u8]) -> Option<String> {
             | "repair_write_fence_conflict"
             | "repair_write_fence_expired"
             | "repair_handoff_manifest_mismatch"
+            | "repair_plan_entry_too_large"
+            | "repair_source_reports_stale"
             | "noise_pattern"
             | "too_short"
             | "not_novel"
@@ -339,6 +341,8 @@ mod tests {
             "repair_write_fence_conflict",
             "repair_write_fence_expired",
             "repair_handoff_manifest_mismatch",
+            "repair_plan_entry_too_large",
+            "repair_source_reports_stale",
         ] {
             let body = format!(r#"{{"error":"{code}","detail":"PRIVATE_SENTINEL"}}"#);
             let reason = parse_api_error_reason(body.as_bytes()).expect("typed reason survives");
