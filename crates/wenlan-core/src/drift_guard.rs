@@ -461,6 +461,54 @@ fn windows_ort_distribution_violations(
     let pr_build = workflow_step_run(&ci, "Build Windows release binaries").unwrap_or_default();
     let pr_smoke =
         workflow_step_run(&ci, "Native ORT smoke (Windows; release profile)").unwrap_or_default();
+    let windows_test_bootstrap =
+        workflow_step_run(&ci, "Stage ONNX Runtime for Windows tests").unwrap_or_default();
+    if !windows_test_bootstrap.contains("scripts/stage-onnxruntime-windows.ps1")
+        || !windows_test_bootstrap.contains("ORT_DYLIB_PATH=")
+        || !windows_test_bootstrap.contains("$env:GITHUB_ENV")
+    {
+        violations.push(
+            "Windows tests do not pin ORT_DYLIB_PATH to the verified runtime before inference"
+                .into(),
+        );
+    }
+    let test_steps = ci["jobs"]["test"]["steps"].as_sequence();
+    let bootstrap_step = test_steps.and_then(|steps| {
+        steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some("Stage ONNX Runtime for Windows tests"))
+    });
+    if !bootstrap_step
+        .and_then(|step| step["if"].as_str())
+        .is_some_and(|condition| condition.contains("matrix.os == 'windows-2022'"))
+    {
+        violations.push("Windows ORT test bootstrap is not guarded for windows-2022".into());
+    }
+    let bootstrap_index = test_steps.and_then(|steps| {
+        steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some("Stage ONNX Runtime for Windows tests"))
+    });
+    let bootstrap_precedes_consumers = test_steps.is_some_and(|steps| {
+        let Some(bootstrap_index) = bootstrap_index else {
+            return false;
+        };
+        [
+            "Page lint scale gate (Windows functional)",
+            "Integration tests wenlan-cli + wenlan-server",
+        ]
+        .iter()
+        .filter_map(|name| {
+            steps
+                .iter()
+                .position(|step| step["name"].as_str() == Some(*name))
+        })
+        .all(|consumer_index| bootstrap_index < consumer_index)
+    });
+    if !bootstrap_precedes_consumers {
+        violations
+            .push("Windows ORT test bootstrap must run before inference-capable tests".into());
+    }
     if !pr_build.contains("cargo build --release")
         || !pr_smoke.contains("scripts/stage-onnxruntime-windows.ps1")
         || !pr_smoke.contains("scripts/smoke-windows.ps1")
@@ -528,6 +576,12 @@ jobs:
     assert!(
         violations
             .iter()
+            .any(|violation| violation.contains("ORT_DYLIB_PATH")),
+        "fixture must reject Windows tests that can load a runner DLL: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
             .any(|violation| violation.contains("extracted")),
         "fixture must reject an untested archive: {violations:?}"
     );
@@ -536,6 +590,35 @@ jobs:
             .iter()
             .any(|violation| violation.contains("vector inference")),
         "fixture must reject a smoke with no module proof: {violations:?}"
+    );
+}
+
+#[test]
+fn windows_ort_distribution_contract_rejects_late_or_wrong_os_test_bootstrap() {
+    let workflow = r#"
+jobs:
+  test:
+    steps:
+      - name: Integration tests wenlan-cli + wenlan-server
+        run: cargo nextest run
+      - name: Stage ONNX Runtime for Windows tests
+        if: matrix.os == 'macos-14'
+        run: |
+          scripts/stage-onnxruntime-windows.ps1
+          "ORT_DYLIB_PATH=x" | Out-File $env:GITHUB_ENV
+"#;
+    let violations = windows_ort_distribution_violations(workflow, workflow, "health only");
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("guarded for windows-2022")),
+        "fixture must reject the wrong bootstrap OS gate: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("before inference-capable tests")),
+        "fixture must reject a late ORT bootstrap: {violations:?}"
     );
 }
 
