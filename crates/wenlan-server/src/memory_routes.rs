@@ -3433,6 +3433,12 @@ pub async fn handle_update_page(
         &id,
         wenlan_types::requests::UpdatePageRequest {
             content: req.content,
+            // ponytail: these are the page's current sources, not the caller's,
+            // and they go into the retry digest. If another writer changes the
+            // source list between a write and its retry, the digest shifts and an
+            // honest retry is told its operation id was reused for a different
+            // write. Wrong error, but no double-write — the receipt still guards
+            // the mutation. Fix by digesting the caller's request only.
             source_memory_ids: existing.source_memory_ids,
             expected_version: req.expected_version,
             caller_id: req.caller_id,
@@ -3445,15 +3451,29 @@ pub async fn handle_update_page(
     )
     .await?;
 
-    // A refused write is a conflict, not a success. Reporting ok:true here
-    // would tell the editor its text was saved when the page still holds
-    // somebody else's.
-    if !result.wrote {
-        return Err(ServerError::Conflict(format!(
+    // A refused write is a conflict, not a success — reporting ok:true would
+    // tell the editor its text was saved when the page still holds somebody
+    // else's. But "nothing changed" is not a conflict, and this route sends the
+    // page's own sources back, so saving a page without editing it lands on the
+    // no-change path. Branching on `wrote` alone answered that routine save with
+    // "somebody else edited this," which is both wrong and unactionable.
+    use wenlan_core::post_write::WriteOutcome;
+    match result.outcome {
+        WriteOutcome::Wrote | WriteOutcome::Unchanged => {
+            Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
+        }
+        WriteOutcome::Refused => Err(ServerError::Conflict(format!(
             "page {id} changed while this edit was open; reload and reapply"
-        )));
+        ))),
+        WriteOutcome::Contended => Err(ServerError::Conflict(format!(
+            "page {id} is being written too fast to edit safely; try again"
+        ))),
+        // Unreachable: gating is for machine writers, and this route is
+        // `manual_edit`. Answered honestly rather than folded into a catch-all.
+        WriteOutcome::Gated => Err(ServerError::Conflict(format!(
+            "edit to page {id} was staged for review instead of applied"
+        ))),
     }
-    Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
 }
 
 /// PUT /api/pages/{id}

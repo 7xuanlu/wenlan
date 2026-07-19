@@ -81,6 +81,7 @@ pub async fn resolve_proposal(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: crate::post_write::WriteOutcome::Wrote,
     })
 }
 

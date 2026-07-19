@@ -127,6 +127,40 @@ async fn manual_edit_with_stale_expected_version_is_refused() {
     );
 }
 
+/// Saving a page without having changed anything is a no-op, not a conflict.
+///
+/// The route sends the page's own sources back, so an unedited save reaches the
+/// "content is already what you asked for" path and returns `wrote: false`.
+/// Branching on that alone told the user "page changed while this edit was
+/// open; reload and reapply" for a routine save — a false conflict reporting an
+/// edit that never happened, with instructions that would discard their work.
+#[tokio::test]
+async fn manual_edit_with_no_changes_is_not_a_conflict() {
+    let (app, _tmp, db) = common::test_app().await;
+    let body = "Mosses have no vascular tissue.";
+    let page_id = common::create_page_fixture(&db, "Mosses", body, None, &[], "authored").await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+
+    // Byte-identical to what the page already holds — the save button on an
+    // untouched editor.
+    let response = app
+        .oneshot(post_page(&page_id, serde_json::json!({ "content": body })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "an unchanged save must succeed; a conflict here tells the user someone \
+         edited their page when nobody did"
+    );
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(
+        after.version, before.version,
+        "a no-op save must not burn a version"
+    );
+}
+
 /// Editing a page that does not exist used to return `ok: true` — the DB
 /// update matched zero rows and the route reported success anyway.
 #[tokio::test]

@@ -27,6 +27,45 @@ pub struct WriteResult {
     pub revision_card_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub gated: bool,
+    /// Why the write did or did not land. `wrote` says whether the page moved;
+    /// this says why not, which is what a caller needs to answer the user.
+    ///
+    /// Branch on this, never on `warnings` — the strings are for humans reading
+    /// logs and will get reworded.
+    #[serde(default)]
+    pub outcome: WriteOutcome,
+}
+
+/// The distinguishable ends of a page write.
+///
+/// Without this, every unsuccessful write looked the same to a caller: "content
+/// was already correct" and "somebody else holds the page" both arrived as
+/// `wrote: false` and an empty warning list. The manual-edit route guessed
+/// conflict for both and told users their routine no-op save had been
+/// overwritten by someone else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteOutcome {
+    /// The page was updated.
+    ///
+    /// Default because the only `WriteResult`s that predate this field are the
+    /// ones stored in idempotency receipts, and a receipt is only ever written
+    /// inside a transaction that committed — so a receipt without an outcome
+    /// describes a write that landed.
+    #[default]
+    Wrote,
+    /// The page already said what the caller asked for, or the caller asked to
+    /// write only if stale and it wasn't. Nothing to do, and nothing wrong.
+    Unchanged,
+    /// The caller declared an `expected_version` that no longer matches. Its
+    /// content was computed against a version that has moved on.
+    Refused,
+    /// The page kept moving and the write lost every CAS attempt. The caller's
+    /// content was discarded.
+    Contended,
+    /// A machine write to a human-owned page, preserved as a revision card
+    /// rather than applied. See `revision_card_id`.
+    Gated,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -220,6 +259,7 @@ async fn replace_source_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
     })
 }
 
@@ -241,6 +281,7 @@ async fn attach_page_sources_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
     })
 }
 
@@ -311,6 +352,7 @@ pub async fn create_entity(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            outcome: WriteOutcome::Unchanged,
         });
     }
 
@@ -325,6 +367,7 @@ pub async fn create_entity(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            outcome: WriteOutcome::Unchanged,
         });
     }
 
@@ -344,6 +387,7 @@ pub async fn create_entity(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                outcome: WriteOutcome::Unchanged,
             });
         }
     }
@@ -362,6 +406,7 @@ pub async fn create_entity(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                outcome: WriteOutcome::Unchanged,
             });
         }
     }
@@ -452,6 +497,7 @@ pub async fn create_entity(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
     })
 }
 
@@ -497,6 +543,7 @@ pub async fn create_relation(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                outcome: WriteOutcome::Unchanged,
             });
         }
     }
@@ -599,6 +646,7 @@ pub async fn create_relation(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
     })
 }
 
@@ -661,6 +709,7 @@ pub async fn add_observation(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
     })
 }
 
@@ -995,6 +1044,7 @@ async fn create_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
     })
 }
 
@@ -1104,6 +1154,7 @@ pub async fn stage_page_revision_card(
         wrote: false,
         revision_card_id: Some(revision_card_id),
         gated: true,
+        outcome: WriteOutcome::Gated,
     })
 }
 
@@ -1327,13 +1378,14 @@ async fn update_page_impl(
     // a caller losing three races in a row is a write storm, not a lost update,
     // and yielding is the safe answer.
     const MAX_CAS_ATTEMPTS: usize = 3;
-    let no_op = |warnings: Vec<String>| WriteResult {
+    let no_op = |outcome: WriteOutcome, warnings: Vec<String>| WriteResult {
         id: page_id.to_string(),
         attached_to: None,
         warnings,
         wrote: false,
         revision_card_id: None,
         gated: false,
+        outcome,
     };
 
     let (delta_summary, current_version, new_version) = 'cas: {
@@ -1360,15 +1412,25 @@ async fn update_page_impl(
                     log::debug!(
                         "[update_page] {page_id}: expected_version {expected} != current {current_version}; refusing write"
                     );
-                    return Ok(no_op(vec![format!(
-                        "page moved to v{current_version} (expected v{expected}); write refused"
-                    )]));
+                    return Ok(no_op(
+                        WriteOutcome::Refused,
+                        vec![format!(
+                            "page moved to v{current_version} (expected v{expected}); write refused"
+                        )],
+                    ));
                 }
             }
 
             // Ownership gate, re-evaluated on every attempt. Inside the CAS loop
             // it is no longer advisory: whatever it decided is what the write
             // guards on.
+            //
+            // ponytail: staging is a durable write with a fresh id and records no
+            // receipt, so a client retrying an operation whose first attempt was
+            // gated stages one duplicate card per retry — "same pair replays" does
+            // not hold on this branch. Harmless today (resolution takes the latest
+            // card) and it costs a receipt write on a path that ends in human
+            // review; fix when cards get deduped, not before.
             if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
                 return stage_page_revision_card(
                     db,
@@ -1425,7 +1487,7 @@ async fn update_page_impl(
 
             // Early return: identical content and identical source set — nothing to write.
             if delta_summary.is_none() && old_set == new_set {
-                return Ok(no_op(vec![]));
+                return Ok(no_op(WriteOutcome::Unchanged, vec![]));
             }
 
             let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
@@ -1466,6 +1528,7 @@ async fn update_page_impl(
                     wrote: true,
                     revision_card_id: None,
                     gated: false,
+                    outcome: WriteOutcome::Wrote,
                 })?),
                 None => None,
             };
@@ -1526,16 +1589,19 @@ async fn update_page_impl(
                 log::warn!(
                     "[update_page] {page_id}: gave up after {MAX_CAS_ATTEMPTS} attempts; page still moving"
                 );
-                return Ok(no_op(vec![format!(
-                    "page kept moving under this write ({MAX_CAS_ATTEMPTS} attempts); nothing was written"
-                )]));
+                return Ok(no_op(
+                    WriteOutcome::Contended,
+                    vec![format!(
+                        "page kept moving under this write ({MAX_CAS_ATTEMPTS} attempts); nothing was written"
+                    )],
+                ));
             }
-            return Ok(no_op(vec![]));
+            return Ok(no_op(WriteOutcome::Unchanged, vec![]));
         }
         // Unreachable: every path through the loop returns, continues, or breaks
         // with a value. The compiler cannot prove that, so the block needs a
         // tail value.
-        return Ok(no_op(vec![]));
+        return Ok(no_op(WriteOutcome::Unchanged, vec![]));
     };
 
     // ── md re-write ─────────────────────────────────────────────────────────
@@ -1555,6 +1621,7 @@ async fn update_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
     })
 }
 
