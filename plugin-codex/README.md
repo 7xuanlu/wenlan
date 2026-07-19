@@ -4,11 +4,18 @@ The Codex plugin wraps the shared `wenlan-mcp` server with Codex slash skills.
 Use it when you want the session workflow commands in Codex, not just raw MCP
 tools.
 
-## Install from this repo
+## Install
+
+Install the runtime using the host-specific path in [Set up Wenlan with your AI client](../docs/setup-with-ai.md). On macOS Apple Silicon, that step is:
 
 ```bash
 npx -y wenlan setup
-codex plugin marketplace add .
+```
+
+Then install the Codex plugin:
+
+```bash
+codex plugin marketplace add 7xuanlu/wenlan
 codex plugin add wenlan@7xuanlu-wenlan
 ```
 
