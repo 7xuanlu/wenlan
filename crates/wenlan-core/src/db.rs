@@ -24669,6 +24669,42 @@ impl MemoryDB {
         Ok(true)
     }
 
+    async fn page_status_on_conn(
+        conn: &libsql::Connection,
+        page_id: &str,
+    ) -> Result<Option<String>, WenlanError> {
+        let mut rows = conn
+            .query(
+                "SELECT status FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page status: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page status row: {e}")))?
+        {
+            Some(row) => row
+                .get::<String>(0)
+                .map(Some)
+                .map_err(|e| WenlanError::VectorDb(format!("page status value: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    async fn reject_page_draft_on_conn(
+        conn: &libsql::Connection,
+        page_id: &str,
+    ) -> Result<(), WenlanError> {
+        if Self::page_status_on_conn(conn, page_id).await?.as_deref() == Some("draft") {
+            return Err(WenlanError::Validation(format!(
+                "Page {page_id} is not active"
+            )));
+        }
+        Ok(())
+    }
+
     /// Retrieve a page by id. Returns None if not found.
     pub async fn get_page(&self, id: &str) -> Result<Option<Page>, WenlanError> {
         let conn = self.conn.lock().await;
@@ -24792,6 +24828,7 @@ impl MemoryDB {
     /// can write through afterwards.
     pub async fn clear_user_edited(&self, page_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET user_edited = 0, stale_reason = 'manual_force' WHERE id = ?1",
             libsql::params![page_id],
@@ -25031,6 +25068,7 @@ impl MemoryDB {
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("update_page_content begin: {e}")))?;
@@ -25604,6 +25642,7 @@ impl MemoryDB {
     pub async fn archive_page(&self, id: &str) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, id).await?;
         conn.execute(
             "UPDATE pages SET status = 'archived', last_modified = ?1 WHERE id = ?2",
             libsql::params![now, id],
@@ -25928,6 +25967,7 @@ impl MemoryDB {
 
     pub async fn delete_page(&self, id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_page begin: {e}")))?;
@@ -26139,6 +26179,7 @@ impl MemoryDB {
         links: &[crate::synthesis::wikilinks::Wikilink],
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, source_page_id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("replace_page_links begin: {e}")))?;
@@ -26526,7 +26567,8 @@ impl MemoryDB {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT id, title, summary FROM pages WHERE embedding IS NULL",
+                    "SELECT id, title, summary FROM pages \
+                     WHERE embedding IS NULL AND status != 'draft'",
                     (),
                 )
                 .await
@@ -26563,7 +26605,8 @@ impl MemoryDB {
             let emb_sql = Self::vec_to_sql(emb);
             if conn
                 .execute(
-                    "UPDATE pages SET embedding = vector32(?1) WHERE id = ?2",
+                    "UPDATE pages SET embedding = vector32(?1) \
+                     WHERE id = ?2 AND status != 'draft'",
                     libsql::params![emb_sql, id.clone()],
                 )
                 .await
@@ -26680,6 +26723,7 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("link_page_source begin: {e}")))?;
@@ -26734,6 +26778,7 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources begin: {e}")))?;
@@ -26966,6 +27011,7 @@ impl MemoryDB {
         citations_json: Option<&str>,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET citations = ?1 WHERE id = ?2",
             libsql::params![citations_json, page_id],
@@ -26989,6 +27035,7 @@ impl MemoryDB {
         changelog_json: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET citations = ?1, changelog = ?2 WHERE id = ?3",
             libsql::params![citations_json, changelog_json, page_id],
@@ -27028,6 +27075,7 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -27587,6 +27635,7 @@ impl MemoryDB {
     /// Mark a page as stale with a specific reason.
     pub async fn set_page_stale(&self, page_id: &str, reason: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET stale_reason = ?1 WHERE id = ?2",
             libsql::params![reason, page_id],
@@ -27604,6 +27653,7 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET review_status = ?1, last_modified = ?2 WHERE id = ?3",
             libsql::params![status, now, page_id],
@@ -27633,6 +27683,7 @@ impl MemoryDB {
     /// Increment a page's sources_updated_count (for trivial/non-conflicting source changes).
     pub async fn increment_page_sources_updated(&self, page_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET sources_updated_count = sources_updated_count + 1 WHERE id = ?1",
             libsql::params![page_id],
@@ -27725,6 +27776,7 @@ impl MemoryDB {
     /// Clear staleness fields after successful re-distillation.
     pub async fn clear_page_staleness(&self, page_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET stale_reason = NULL, sources_updated_count = 0 WHERE id = ?1",
             libsql::params![page_id],
@@ -27745,6 +27797,7 @@ impl MemoryDB {
         summary: Option<&str>,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE pages SET summary = ?1, last_modified = ?2 WHERE id = ?3",
@@ -47150,6 +47203,186 @@ pub(crate) mod tests {
             Some("manual_force"),
             "clear_user_edited should mark stale so refinery picks it up"
         );
+    }
+
+    #[tokio::test]
+    async fn production_page_mutators_reject_drafts_without_changing_owned_state() {
+        let (db, _tmp) = test_db().await;
+        let page_id = "page_draft_isolation_floor";
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            page_id,
+            "Draft isolation guard",
+            None,
+            "Exact editor-owned body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET status='draft', embedding=NULL WHERE id=?1",
+                libsql::params![page_id],
+            )
+            .await
+            .unwrap();
+        }
+
+        let draft = db.get_page(page_id).await.unwrap().unwrap();
+        let original = serde_json::to_value(&draft).unwrap();
+        let link = crate::synthesis::wikilinks::Wikilink {
+            label: "Derived target".to_string(),
+            target_page_id: None,
+        };
+        let citations = r#"[{"occurrence":1,"marker":1,"source_kind":"memory","locator":"mem-citation","score":1.0,"status":"verified","scope":"sentence"}]"#;
+        let changelog = r#"[{"edited_by":"citation_backfill","at":1,"delta_summary":"mutated"}]"#;
+        let expected_error = format!("Page {page_id} is not active");
+
+        let outcomes = vec![
+            ("archive_page", db.archive_page(page_id).await),
+            ("delete_page", db.delete_page(page_id).await),
+            (
+                "update_page_content",
+                db.update_page_content(page_id, "mutated", &[], "manual_edit")
+                    .await,
+            ),
+            ("clear_user_edited", db.clear_user_edited(page_id).await),
+            (
+                "replace_page_links",
+                db.replace_page_links(page_id, &[link]).await,
+            ),
+            (
+                "link_page_source",
+                db.link_page_source(page_id, "mem-source-a", "test").await,
+            ),
+            (
+                "replace_page_sources",
+                db.replace_page_sources(page_id, &["mem-source-b"], "test")
+                    .await,
+            ),
+            (
+                "set_page_citations",
+                db.set_page_citations(page_id, Some(citations)).await,
+            ),
+            (
+                "set_page_citations_with_changelog",
+                db.set_page_citations_with_changelog(page_id, Some(citations), changelog)
+                    .await,
+            ),
+            (
+                "link_page_evidence",
+                db.link_page_evidence(page_id, "authored", None, Some("Editor note"), "test")
+                    .await,
+            ),
+            (
+                "set_page_stale",
+                db.set_page_stale(page_id, "source_updated").await,
+            ),
+            (
+                "set_page_review_status",
+                db.set_page_review_status(page_id, "confirmed").await,
+            ),
+            (
+                "increment_page_sources_updated",
+                db.increment_page_sources_updated(page_id).await,
+            ),
+            (
+                "clear_page_staleness",
+                db.clear_page_staleness(page_id).await,
+            ),
+            (
+                "update_page_summary",
+                db.update_page_summary(page_id, Some("mutated summary"))
+                    .await,
+            ),
+        ];
+
+        for (name, outcome) in outcomes {
+            match outcome {
+                Err(WenlanError::Validation(message)) => {
+                    assert_eq!(message, expected_error, "{name} rejection");
+                }
+                other => panic!("{name} must reject a draft as not active, got {other:?}"),
+            }
+        }
+        assert_eq!(db.backfill_page_embeddings().await.unwrap(), 0);
+
+        let current = db
+            .get_page(page_id)
+            .await
+            .unwrap()
+            .expect("production mutators must not remove a draft");
+        assert_eq!(serde_json::to_value(&current).unwrap(), original);
+        for table in ["page_sources", "page_evidence", "page_links"] {
+            let key = if table == "page_links" {
+                "source_page_id"
+            } else {
+                "page_id"
+            };
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE {key}=?1"),
+                    libsql::params![page_id],
+                )
+                .await
+                .unwrap();
+            let count = rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap();
+            assert_eq!(count, 0, "{table} must remain empty for a draft");
+        }
+    }
+
+    #[tokio::test]
+    async fn draft_isolation_preserves_archived_and_missing_mutator_behavior() {
+        let (db, _tmp) = test_db().await;
+        let page_id = "page_draft_archived_control";
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            page_id,
+            "Archived control",
+            None,
+            "Original body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.archive_page(page_id).await.unwrap();
+
+        db.update_page_content(
+            page_id,
+            "Archived body with [[Unresolved target]]",
+            &[],
+            "test",
+        )
+        .await
+        .unwrap();
+        let archived = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(archived.status, "archived");
+        assert_eq!(archived.content, "Archived body with [[Unresolved target]]");
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET embedding = NULL WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(db.backfill_page_embeddings().await.unwrap(), 1);
+
+        db.update_page_summary("missing_page", Some("ignored"))
+            .await
+            .unwrap();
+        db.clear_user_edited("missing_page").await.unwrap();
+        db.delete_page("missing_page").await.unwrap();
     }
 
     // ── migration 50 replay test ──────────────────────────────────────────────
