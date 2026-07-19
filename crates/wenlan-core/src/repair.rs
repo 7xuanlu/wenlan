@@ -3000,10 +3000,6 @@ where
     } else {
         Some(store.load_rollback(&manifest)?.0)
     };
-    let post_apply_db_digest = apply_receipt
-        .post_apply_db_digest()
-        .expect("legacy receipts returned above")
-        .clone();
     validate_verification_reports(&manifest, request.general_report(), request.deep_report())?;
     validate_current_page_receipts(request.general_report(), request.deep_report(), page_root)
         .await?;
@@ -3028,12 +3024,12 @@ where
         .map_err(|error| WenlanError::VectorDb(format!("repair verify begin: {error}")))?;
     let result = async {
         validate_current_db_receipts(db, request.general_report(), request.deep_report()).await?;
-        let current = database_content_digest(&connection).await?;
-        if current != post_apply_db_digest {
-            return Err(WenlanError::Conflict(
-                "repair_non_target_state_changed".to_string(),
-            ));
-        }
+        // The durable content-addressed apply receipt records an apply-time
+        // effect guard and rejects unequal non_target_before/non_target_after
+        // values. Verification binds a fresh report to the current DB snapshot
+        // and rechecks the target receipt below. Unrelated writes after that
+        // completed apply transaction must not strand an otherwise valid
+        // receipt.
         validate_tag_record_set_on_connection(
             &connection,
             &manifest,
@@ -6697,8 +6693,9 @@ pub(crate) fn lint_review_owner_binding_digest(
 
 /// Logical digest of every ordinary SQLite table, streamed one row at a time.
 /// This is intentionally separate from lint's cheap structural snapshot: a
-/// repair verification must detect in-place updates that preserve schema and
-/// row counts without loading the whole database into memory.
+/// repair apply receipt keeps this apply-time forensic/content anchor so
+/// persisted receipt versions remain auditable without loading the whole
+/// database into memory.
 pub(crate) async fn database_content_digest(
     connection: &libsql::Connection,
 ) -> Result<RepairDigest, WenlanError> {
@@ -8301,7 +8298,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_rejects_unrelated_write_after_apply_even_when_reports_are_fresh() {
+    async fn verification_accepts_unrelated_write_after_apply_when_reports_are_fresh() {
         let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
         let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
         let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
@@ -8312,6 +8309,71 @@ mod tests {
             .await
             .execute(
                 "UPDATE memories SET title='changed' WHERE id='row-other'",
+                (),
+            )
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+
+        let receipt = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            receipt.apply_receipt_digest(),
+            apply_receipt.receipt_digest()
+        );
+    }
+
+    #[tokio::test]
+    async fn verification_accepts_in_place_metadata_update_when_reports_are_fresh() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        db.set_app_metadata("repair_digest_probe", "before")
+            .await
+            .unwrap();
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        db.set_app_metadata("repair_digest_probe", "after")
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+
+        let receipt = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            receipt.apply_receipt_digest(),
+            apply_receipt.receipt_digest()
+        );
+    }
+
+    #[tokio::test]
+    async fn verification_rejects_target_owner_change_after_apply_even_with_fresh_reports() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE memories SET title='changed' WHERE id='row-target'",
                 (),
             )
             .await
@@ -8329,37 +8391,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(WenlanError::Conflict(message)) if message == "repair_non_target_state_changed"
-        ));
-    }
-
-    #[tokio::test]
-    async fn verification_rejects_in_place_metadata_update_that_preserves_row_counts() {
-        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
-        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
-        db.set_app_metadata("repair_digest_probe", "before")
-            .await
-            .unwrap();
-        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
-            .await
-            .unwrap();
-        db.set_app_metadata("repair_digest_probe", "after")
-            .await
-            .unwrap();
-        let (general, deep) = verification_reports(&db).await;
-
-        let result = record_repair_verification(
-            &db,
-            &store,
-            exact_verify(&manifest, &apply_receipt, general, deep),
-            None,
-            1_721_000_002,
-        )
-        .await;
-
-        assert!(matches!(
-            result,
-            Err(WenlanError::Conflict(message)) if message == "repair_non_target_state_changed"
+            Err(WenlanError::Conflict(message)) if message == "repair_verification_state_changed"
         ));
     }
 
