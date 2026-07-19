@@ -1,0 +1,412 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use super::MemoryDB;
+use crate::error::WenlanError;
+use crate::pages::{Page, PageDraftDeleteOutcome, PageDraftUpdateOutcome};
+
+const PAGE_COLUMNS: &str = "id, title, summary, content, entity_id, space,
+    source_memory_ids, version, status, created_at, last_compiled, last_modified,
+    COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0),
+    COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'),
+    COALESCE(review_status, 'confirmed'), workspace, citations";
+
+fn ensure_meaningful_snapshot(title: &str, content: &str) -> Result<(), WenlanError> {
+    if title.trim().is_empty() && content.trim().is_empty() {
+        return Err(WenlanError::Validation(
+            "a Page draft needs a title or body".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_meaningful_draft_snapshot(title: &str, content: &str) -> Result<(), WenlanError> {
+    let canonical_content = crate::export::provenance::sanitize_ingress_content(content);
+    ensure_meaningful_snapshot(title, &canonical_content)
+}
+
+fn ensure_client_page_draft_id(id: &str) -> Result<(), WenlanError> {
+    let Some(uuid_text) = id.strip_prefix("page_") else {
+        return Err(WenlanError::Validation(
+            "Page draft id must use the page_<uuid-v4> format".to_string(),
+        ));
+    };
+    let uuid = uuid::Uuid::parse_str(uuid_text).map_err(|_| {
+        WenlanError::Validation("Page draft id must use the page_<uuid-v4> format".to_string())
+    })?;
+    if uuid.get_version_num() != 4
+        || uuid.get_variant() != uuid::Variant::RFC4122
+        || uuid.hyphenated().to_string() != uuid_text
+    {
+        return Err(WenlanError::Validation(
+            "Page draft id must use the page_<uuid-v4> format".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_draft(page: &Page) -> Result<(), WenlanError> {
+    if page.status != "draft" {
+        return Err(WenlanError::Validation(format!(
+            "Page {} is not a draft",
+            page.id
+        )));
+    }
+    Ok(())
+}
+
+impl MemoryDB {
+    async fn registered_page_draft_space_on_conn(
+        conn: &libsql::Connection,
+        requested: Option<&str>,
+    ) -> Result<Option<String>, WenlanError> {
+        let Some(space) = requested.map(str::trim).filter(|space| !space.is_empty()) else {
+            return Ok(None);
+        };
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM spaces WHERE name=?1 LIMIT 1",
+                libsql::params![space],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("validate Page draft Space: {error}"))
+            })?;
+        if rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("validate Page draft Space: {error}")))?
+            .is_some()
+        {
+            Ok(Some(space.to_string()))
+        } else {
+            Err(WenlanError::Validation(format!(
+                "Space {space:?} is not registered"
+            )))
+        }
+    }
+
+    async fn page_draft_on_conn(
+        conn: &libsql::Connection,
+        id: &str,
+    ) -> Result<Option<Page>, WenlanError> {
+        let mut rows = conn
+            .query(
+                &format!("SELECT {PAGE_COLUMNS} FROM pages WHERE id=?1"),
+                libsql::params![id],
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("load Page draft: {error}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("load Page draft row: {error}")))?
+        {
+            Some(row) => Ok(Some(Self::row_to_page(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn required_page_draft_on_conn(
+        conn: &libsql::Connection,
+        id: &str,
+    ) -> Result<Page, WenlanError> {
+        Self::page_draft_on_conn(conn, id)
+            .await?
+            .ok_or_else(|| WenlanError::NotFound(format!("Page draft {id}")))
+    }
+
+    /// Create the first durable, meaningful Page draft snapshot.
+    pub async fn create_page_draft(
+        &self,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+    ) -> Result<Page, WenlanError> {
+        let id = crate::pages::new_page_id();
+        self.create_page_draft_with_id(&id, title, content, space, workspace)
+            .await
+    }
+
+    /// Create a Page draft under a stable client-generated id.
+    ///
+    /// Replaying the exact same first snapshot is idempotent. Reusing the id
+    /// for any other snapshot, or for an active Page, is a conflict.
+    pub async fn create_page_draft_with_id(
+        &self,
+        id: &str,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+    ) -> Result<Page, WenlanError> {
+        self.create_page_draft_with_id_impl(id, title, content, space, workspace, false)
+            .await
+    }
+
+    /// Validate and insert the requested Space in one `Immediate` transaction.
+    pub async fn create_page_draft_with_id_in_registered_space(
+        &self,
+        id: &str,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+    ) -> Result<Page, WenlanError> {
+        self.create_page_draft_with_id_impl(id, title, content, space, space, true)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_page_draft_with_id_impl(
+        &self,
+        id: &str,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+        validate_space: bool,
+    ) -> Result<Page, WenlanError> {
+        ensure_client_page_draft_id(id)?;
+        ensure_meaningful_draft_snapshot(title, content)?;
+        let requested_space = if validate_space {
+            space
+                .map(str::trim)
+                .filter(|space| !space.is_empty())
+                .map(str::to_string)
+        } else {
+            space.map(str::to_string)
+        };
+        let requested_workspace = if validate_space {
+            requested_space.clone()
+        } else {
+            workspace.map(str::to_string)
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("create Page draft begin: {error}")))?;
+        if let Some(existing) = Self::page_draft_on_conn(&tx, id).await? {
+            if existing.status == "draft"
+                && existing.title == title
+                && existing.content == content
+                && existing.space.as_deref() == requested_space.as_deref()
+                && existing.workspace.as_deref() == requested_workspace.as_deref()
+            {
+                return Ok(existing);
+            }
+            return Err(WenlanError::PageDraftIdConflict(id.to_string()));
+        }
+        let normalized_space = if validate_space {
+            Self::registered_page_draft_space_on_conn(&tx, requested_space.as_deref()).await?
+        } else {
+            requested_space
+        };
+        let normalized_workspace = if validate_space {
+            normalized_space.clone()
+        } else {
+            requested_workspace
+        };
+        #[cfg(test)]
+        if validate_space {
+            super::page_drafts_test::transaction_test_hooks::after_space_validation(id).await;
+        }
+
+        tx.execute(
+            "INSERT INTO pages (
+                    id, title, summary, content, entity_id, space, source_memory_ids,
+                    version, status, embedding, created_at, last_compiled,
+                    last_modified, sources_updated_count, stale_reason, user_edited,
+                    changelog, creation_kind, review_status, workspace, citations
+                 ) VALUES (
+                    ?1, ?2, NULL, ?3, NULL, ?4, '[]',
+                    1, 'draft', NULL, ?5, ?5,
+                    ?5, 0, NULL, 1,
+                    '[]', 'authored', 'unconfirmed', ?6, '[]'
+                 )",
+            libsql::params![
+                id,
+                title,
+                content,
+                normalized_space,
+                now,
+                normalized_workspace
+            ],
+        )
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("create Page draft: {error}")))?;
+        #[cfg(test)]
+        super::page_drafts_test::transaction_test_hooks::after_create_insert(id).await;
+        let page = Self::required_page_draft_on_conn(&tx, id).await?;
+        tx.commit()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("create Page draft commit: {error}")))?;
+        Ok(page)
+    }
+
+    /// Replace one complete draft snapshot if the caller still holds its version.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_page_draft(
+        &self,
+        id: &str,
+        expected_version: i64,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+    ) -> Result<PageDraftUpdateOutcome, WenlanError> {
+        self.update_page_draft_impl(
+            id,
+            expected_version,
+            title,
+            content,
+            space,
+            workspace,
+            false,
+        )
+        .await
+    }
+
+    /// Recognize an exact ambiguous retry, otherwise preserve version-conflict
+    /// precedence, then validate and write the requested Space atomically.
+    pub async fn update_page_draft_in_registered_space(
+        &self,
+        id: &str,
+        expected_version: i64,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+    ) -> Result<PageDraftUpdateOutcome, WenlanError> {
+        self.update_page_draft_impl(id, expected_version, title, content, space, space, true)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_page_draft_impl(
+        &self,
+        id: &str,
+        expected_version: i64,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+        validate_space: bool,
+    ) -> Result<PageDraftUpdateOutcome, WenlanError> {
+        ensure_meaningful_draft_snapshot(title, content)?;
+        let requested_space = if validate_space {
+            space
+                .map(str::trim)
+                .filter(|space| !space.is_empty())
+                .map(str::to_string)
+        } else {
+            space.map(str::to_string)
+        };
+        let requested_workspace = if validate_space {
+            requested_space.clone()
+        } else {
+            workspace.map(str::to_string)
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("update Page draft begin: {error}")))?;
+
+        let current = Self::required_page_draft_on_conn(&tx, id).await?;
+        ensure_draft(&current)?;
+        if expected_version.checked_add(1) == Some(current.version)
+            && current.title == title
+            && current.content == content
+            && current.space.as_deref() == requested_space.as_deref()
+            && current.workspace.as_deref() == requested_workspace.as_deref()
+        {
+            return Ok(PageDraftUpdateOutcome::Updated(current));
+        }
+        if current.version != expected_version {
+            return Ok(PageDraftUpdateOutcome::VersionConflict {
+                current_version: current.version,
+            });
+        }
+        let normalized_space = if validate_space {
+            Self::registered_page_draft_space_on_conn(&tx, requested_space.as_deref()).await?
+        } else {
+            requested_space
+        };
+        let normalized_workspace = if validate_space {
+            normalized_space.clone()
+        } else {
+            requested_workspace
+        };
+        #[cfg(test)]
+        if validate_space {
+            super::page_drafts_test::transaction_test_hooks::after_space_validation(id).await;
+        }
+        let affected = tx
+            .execute(
+                "UPDATE pages
+                     SET title=?1, content=?2, space=?3, workspace=?4,
+                         version=version+1, last_modified=?5
+                     WHERE id=?6 AND status='draft' AND version=?7",
+                libsql::params![
+                    title,
+                    content,
+                    normalized_space,
+                    normalized_workspace,
+                    now,
+                    id,
+                    expected_version
+                ],
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("update Page draft row: {error}")))?;
+        if affected != 1 {
+            return Err(WenlanError::Conflict(format!(
+                "Page draft {id} changed during update"
+            )));
+        }
+        let outcome =
+            PageDraftUpdateOutcome::Updated(Self::required_page_draft_on_conn(&tx, id).await?);
+        tx.commit()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("update Page draft commit: {error}")))?;
+        Ok(outcome)
+    }
+
+    /// Delete a draft only when the version supplied by the client is current.
+    pub async fn delete_page_draft(
+        &self,
+        id: &str,
+        expected_version: i64,
+    ) -> Result<PageDraftDeleteOutcome, WenlanError> {
+        let conn = self.conn.lock().await;
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("delete Page draft begin: {error}")))?;
+        let current = Self::required_page_draft_on_conn(&tx, id).await?;
+        ensure_draft(&current)?;
+        if current.version != expected_version {
+            return Ok(PageDraftDeleteOutcome::VersionConflict {
+                current_version: current.version,
+            });
+        }
+        let affected = tx
+            .execute(
+                "DELETE FROM pages WHERE id=?1 AND status='draft' AND version=?2",
+                libsql::params![id, expected_version],
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("delete Page draft row: {error}")))?;
+        if affected != 1 {
+            return Err(WenlanError::Conflict(format!(
+                "Page draft {id} changed during delete"
+            )));
+        }
+        tx.commit()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("delete Page draft commit: {error}")))?;
+        Ok(PageDraftDeleteOutcome::Deleted)
+    }
+}

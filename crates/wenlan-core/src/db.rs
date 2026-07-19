@@ -18,9 +18,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 mod count;
+mod page_drafts;
 mod scoped_entities;
 mod scoped_pages;
 
+#[cfg(test)]
+mod page_drafts_test;
 #[cfg(test)]
 mod scoped_entities_test;
 #[cfg(test)]
@@ -7313,74 +7316,67 @@ impl MemoryDB {
     ) -> Result<Space, WenlanError> {
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().timestamp() as f64;
-
-        conn.execute("BEGIN", ())
+        let page_now = chrono::Utc::now().to_rfc3339();
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .map_err(|e| WenlanError::VectorDb(format!("update_space begin: {}", e)))?;
 
-        let txn_result = async {
-            let updated_spaces = conn
-                .execute(
+        let updated_spaces = tx
+            .execute(
                 "UPDATE spaces SET name = ?1, description = ?2, updated_at = ?3 WHERE name = ?4",
                 libsql::params![new_name, description, now, name],
             )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
-            if updated_spaces == 0 {
-                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
-            }
-
-            if name != new_name {
-                conn.execute(
-                    "UPDATE memories SET space = ?1 WHERE space = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade memories: {}", e))
-                })?;
-
-                conn.execute(
-                    "UPDATE entities SET space = ?1 WHERE space = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade entities: {}", e))
-                })?;
-
-                conn.execute(
-                    "UPDATE pages SET space = ?1 WHERE space = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade pages.space: {}", e))
-                })?;
-
-                conn.execute(
-                    "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade pages.workspace: {}", e))
-                })?;
-            }
-
-            conn.execute("COMMIT", ())
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("update_space commit: {}", e)))?;
-
-            Ok::<(), WenlanError>(())
-        }
-        .await;
-
-        if let Err(e) = txn_result {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(e);
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+        if updated_spaces == 0 {
+            return Err(WenlanError::NotFound(format!("space '{name}' not found")));
         }
 
+        if name != new_name {
+            tx.execute(
+                "UPDATE memories SET space = ?1 WHERE space = ?2",
+                libsql::params![new_name, name],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space cascade memories: {}", e)))?;
+
+            tx.execute(
+                "UPDATE entities SET space = ?1 WHERE space = ?2",
+                libsql::params![new_name, name],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space cascade entities: {}", e)))?;
+
+            tx.execute(
+                "UPDATE pages
+                     SET version = CASE
+                             WHEN status='draft' THEN version+1
+                             ELSE version
+                         END,
+                         last_modified = CASE
+                             WHEN status='draft' THEN ?1
+                             ELSE last_modified
+                         END,
+                         space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                         workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
+                     WHERE space=?2 OR workspace=?2",
+                libsql::params![page_now, name, new_name],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("update_space cascade pages scope: {}", e))
+            })?;
+            #[cfg(test)]
+            page_drafts_test::transaction_test_hooks::after_space_cascade(&format!(
+                "update_space:{name}"
+            ))
+            .await;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space commit: {}", e)))?;
         drop(conn);
         self.get_space(new_name)
             .await?
@@ -7394,158 +7390,155 @@ impl MemoryDB {
     /// - "move:target" = memories moved to target space
     pub async fn delete_space(&self, name: &str, memory_action: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        let page_now = chrono::Utc::now().to_rfc3339();
 
-        conn.execute("BEGIN", ())
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_space begin: {}", e)))?;
 
-        let txn_result = async {
-            let mut source_rows = conn
-                .query(
-                    "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+        let mut source_rows = tx
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![name],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
+        let source_count = if let Some(row) = source_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(source_rows);
+        if source_count == 0 {
+            return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+        }
+
+        match memory_action {
+            "keep" => { /* do nothing — orphan memories with space tag intact */ }
+            "unassign" => {
+                tx.execute(
+                    "UPDATE memories SET space = NULL WHERE space = ?1",
                     libsql::params![name],
                 )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
-            let source_count = if let Some(row) = source_rows
-                .next()
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space unassign memories: {}", e))
+                })?;
+                tx.execute(
+                    "UPDATE entities SET space = NULL WHERE space = ?1",
+                    libsql::params![name],
+                )
                 .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-            {
-                row.get::<i64>(0).unwrap_or(0)
-            } else {
-                0
-            };
-            drop(source_rows);
-            if source_count == 0 {
-                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space unassign entities: {}", e))
+                })?;
             }
-
-            match memory_action {
-                "keep" => { /* do nothing — orphan memories with space tag intact */ }
-                "unassign" => {
-                    conn.execute(
-                        "UPDATE memories SET space = NULL WHERE space = ?1",
-                        libsql::params![name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space unassign memories: {}", e))
-                    })?;
-                    conn.execute(
-                        "UPDATE entities SET space = NULL WHERE space = ?1",
-                        libsql::params![name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space unassign entities: {}", e))
-                    })?;
-                }
-                "delete" => {
-                    conn.execute(
-                        "DELETE FROM memories WHERE space = ?1 AND source IN ('memory','episode')",
-                        libsql::params![name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space delete memories: {}", e))
-                    })?;
-                    conn.execute(
-                        "DELETE FROM entities WHERE space = ?1",
-                        libsql::params![name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space delete entities: {}", e))
-                    })?;
-                }
-                other if other.starts_with("move:") => {
-                    let target = &other[5..];
-                    if target == name {
-                        return Err(WenlanError::Validation(
-                            "destination space must differ from source space".to_string(),
-                        ));
-                    }
-                    let mut rows = conn
-                        .query(
-                            "SELECT COUNT(*) FROM spaces WHERE name = ?1",
-                            libsql::params![target],
-                        )
-                        .await
-                        .map_err(|e| {
-                            WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
-                        })?;
-                    let target_count = if let Some(row) = rows
-                        .next()
-                        .await
-                        .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-                    {
-                        row.get::<i64>(0).unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    drop(rows);
-                    if target_count == 0 {
-                        return Err(WenlanError::VectorDb(format!(
-                            "destination space not found: {target}"
-                        )));
-                    }
-
-                    conn.execute(
-                        "UPDATE memories SET space = ?1 WHERE space = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move memories: {}", e))
-                    })?;
-                    conn.execute(
-                        "UPDATE entities SET space = ?1 WHERE space = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move entities: {}", e))
-                    })?;
-                    conn.execute(
-                        "UPDATE pages SET space = ?1 WHERE space = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move pages.space: {}", e))
-                    })?;
-                    conn.execute(
-                        "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move pages.workspace: {}", e))
-                    })?;
-                }
-                _ => { /* unknown action — treat as keep */ }
-            }
-
-            let deleted_spaces = conn
-                .execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
+            "delete" => {
+                tx.execute(
+                    "DELETE FROM memories WHERE space = ?1 AND source IN ('memory','episode')",
+                    libsql::params![name],
+                )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete_space: {}", e)))?;
-            if deleted_spaces != 1 {
-                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
-            }
-
-            conn.execute("COMMIT", ())
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space delete memories: {}", e))
+                })?;
+                tx.execute(
+                    "DELETE FROM entities WHERE space = ?1",
+                    libsql::params![name],
+                )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete_space commit: {}", e)))?;
-            Ok::<(), WenlanError>(())
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space delete entities: {}", e))
+                })?;
+            }
+            other if other.starts_with("move:") => {
+                let target = &other[5..];
+                if target == name {
+                    return Err(WenlanError::Validation(
+                        "destination space must differ from source space".to_string(),
+                    ));
+                }
+                let mut rows = tx
+                    .query(
+                        "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                        libsql::params![target],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
+                    })?;
+                let target_count = if let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+                {
+                    row.get::<i64>(0).unwrap_or(0)
+                } else {
+                    0
+                };
+                drop(rows);
+                if target_count == 0 {
+                    return Err(WenlanError::VectorDb(format!(
+                        "destination space not found: {target}"
+                    )));
+                }
+
+                tx.execute(
+                    "UPDATE memories SET space = ?1 WHERE space = ?2",
+                    libsql::params![target, name],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_space move memories: {}", e)))?;
+                tx.execute(
+                    "UPDATE entities SET space = ?1 WHERE space = ?2",
+                    libsql::params![target, name],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_space move entities: {}", e)))?;
+                tx.execute(
+                    "UPDATE pages
+                             SET version = CASE
+                                     WHEN status='draft' THEN version+1
+                                     ELSE version
+                                 END,
+                                 last_modified = CASE
+                                     WHEN status='draft' THEN ?1
+                                     ELSE last_modified
+                                 END,
+                                 space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                                 workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
+                             WHERE space=?2 OR workspace=?2",
+                    libsql::params![page_now, name, target],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space move pages scope: {}", e))
+                })?;
+                #[cfg(test)]
+                page_drafts_test::transaction_test_hooks::after_space_cascade(&format!(
+                    "delete_space:{name}"
+                ))
+                .await;
+            }
+            _ => { /* unknown action — treat as keep */ }
         }
-        .await;
 
-        if let Err(e) = txn_result {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(e);
+        let deleted_spaces = tx
+            .execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_space: {}", e)))?;
+        if deleted_spaces != 1 {
+            return Err(WenlanError::NotFound(format!("space '{name}' not found")));
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_space commit: {}", e)))?;
         Ok(())
     }
 
@@ -7557,9 +7550,20 @@ impl MemoryDB {
         from: &str,
         to: &str,
     ) -> Result<usize, WenlanError> {
+        if from == to {
+            return Err(WenlanError::Validation(
+                "destination space must differ from source space".to_string(),
+            ));
+        }
         let conn = self.conn.lock().await;
+        let page_now = chrono::Utc::now().to_rfc3339();
 
-        let mut rows = conn
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign_memories_space begin: {}", e)))?;
+
+        let mut rows = tx
             .query(
                 "SELECT COUNT(*) FROM spaces WHERE name = ?1",
                 libsql::params![from],
@@ -7582,7 +7586,7 @@ impl MemoryDB {
             )));
         }
 
-        let mut rows = conn
+        let mut rows = tx
             .query(
                 "SELECT COUNT(*) FROM spaces WHERE name = ?1",
                 libsql::params![to],
@@ -7605,55 +7609,48 @@ impl MemoryDB {
             )));
         }
 
-        conn.execute("BEGIN", ())
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign_memories_space begin: {}", e)))?;
-
-        let txn_result = async {
-            let updated = conn
-                .execute(
-                    "UPDATE memories SET space = ?1 WHERE space = ?2",
-                    libsql::params![to, from],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("reassign memories: {}", e)))?;
-
-            conn.execute(
-                "UPDATE entities SET space = ?1 WHERE space = ?2",
+        let updated = tx
+            .execute(
+                "UPDATE memories SET space = ?1 WHERE space = ?2",
                 libsql::params![to, from],
             )
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign entities: {}", e)))?;
+            .map_err(|e| WenlanError::VectorDb(format!("reassign memories: {}", e)))?;
 
-            conn.execute(
-                "UPDATE pages SET space = ?1 WHERE space = ?2",
-                libsql::params![to, from],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.space: {}", e)))?;
+        tx.execute(
+            "UPDATE entities SET space = ?1 WHERE space = ?2",
+            libsql::params![to, from],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("reassign entities: {}", e)))?;
 
-            conn.execute(
-                "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
-                libsql::params![to, from],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.workspace: {}", e)))?;
-
-            conn.execute("COMMIT", ()).await.map_err(|e| {
-                WenlanError::VectorDb(format!("reassign_memories_space commit: {}", e))
-            })?;
-
-            Ok::<usize, WenlanError>(updated as usize)
-        }
+        tx.execute(
+            "UPDATE pages
+                 SET version = CASE
+                         WHEN status='draft' THEN version+1
+                         ELSE version
+                     END,
+                     last_modified = CASE
+                         WHEN status='draft' THEN ?1
+                         ELSE last_modified
+                     END,
+                     space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                     workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
+                 WHERE space=?2 OR workspace=?2",
+            libsql::params![page_now, from, to],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("reassign pages scope: {}", e)))?;
+        #[cfg(test)]
+        page_drafts_test::transaction_test_hooks::after_space_cascade(&format!(
+            "reassign_memories_space:{from}"
+        ))
         .await;
 
-        match txn_result {
-            Ok(n) => Ok(n),
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                Err(e)
-            }
-        }
+        tx.commit()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign_memories_space commit: {}", e)))?;
+        Ok(updated as usize)
     }
 
     pub async fn confirm_space(&self, name: &str) -> Result<(), WenlanError> {
