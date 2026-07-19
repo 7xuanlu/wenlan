@@ -1211,7 +1211,11 @@ async fn update_page_impl(
             "page content must not be empty".into(),
         ));
     }
-    if req.source_memory_ids.is_empty() {
+    // A machine write must carry provenance. A human write need not: an
+    // authored page is legitimately born with zero sources (create_page
+    // allows exactly that), so demanding one here would reject every later
+    // human edit of that page — in the app and in the vault alike.
+    if req.source_memory_ids.is_empty() && is_machine_page_write(edited_by) {
         return Err(WenlanError::Validation(
             "page must cite at least one source memory".into(),
         ));

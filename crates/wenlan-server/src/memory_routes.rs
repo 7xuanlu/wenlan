@@ -3393,6 +3393,17 @@ pub async fn handle_list_orphan_links(
     }))
 }
 
+/// POST /api/memory/{id}/update-page
+///
+/// Manual edit from the app. Goes through the one page-write gate, so a hand
+/// edit is treated like every other write: version CAS, changelog entry,
+/// history row, and an md re-projection. It used to call the DB directly and
+/// got none of those — an in-app edit left no trail and could silently
+/// overwrite a change that landed while the editor was open.
+///
+/// `expected_version` is optional. Sending it makes the edit a precondition
+/// (refused outright if the page moved); omitting it guards on the version the
+/// server itself loaded, so the write still cannot clobber an interleaved one.
 pub async fn handle_update_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -3405,16 +3416,41 @@ pub async fn handle_update_page(
     // Preserve existing source_memory_ids — the HTTP request only carries
     // the new content body. Passing &[] here would wipe the page's
     // source list, causing silent data loss.
-    let existing_sources: Vec<String> = db
+    let existing = db
         .get_page(&id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
-        .map(|c| c.source_memory_ids)
-        .unwrap_or_default();
-    let existing_refs: Vec<&str> = existing_sources.iter().map(String::as_str).collect();
-    db.update_page_content(&id, &req.content, &existing_refs, "manual_edit")
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .ok_or_else(|| ServerError::NotFound(format!("page {id} not found")))?;
+
+    // knowledge_path=None: this route does not re-project the md, so an
+    // in-app edit leaves the vault copy stale until the next re-distill (the
+    // watcher sees the daemon ahead and skips rather than reverting, so the
+    // DB stays authoritative and nothing is lost). Projecting here needs the
+    // knowledge path to come from ServerState — reading global config inside
+    // a handler would point tests at the user's real vault. Tracked separately.
+    let result = wenlan_core::post_write::update_page(
+        &db,
+        &id,
+        wenlan_types::requests::UpdatePageRequest {
+            content: req.content,
+            source_memory_ids: existing.source_memory_ids,
+            expected_version: req.expected_version,
+        },
+        "manual_edit",
+        false,
+        None,
+        None,
+    )
+    .await?;
+
+    // A refused write is a conflict, not a success. Reporting ok:true here
+    // would tell the editor its text was saved when the page still holds
+    // somebody else's.
+    if !result.wrote {
+        return Err(ServerError::Conflict(format!(
+            "page {id} changed while this edit was open; reload and reapply"
+        )));
+    }
     Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
 }
 
@@ -3423,7 +3459,7 @@ pub async fn handle_update_page(
 /// Agent-side refresh of a page from its current sources. Replaces content,
 /// source list, optional summary; clears `stale_reason` so the refinery's
 /// re-distill skips on its next tick (CAS pattern — see refinery
-/// `re_distill_stale_pages`). Distinct from POST `/api/pages/{id}`
+/// `re_distill_stale_pages`). Distinct from POST `/api/memory/{id}/update-page`
 /// (manual edit, flips `user_edited`, preserves sources).
 ///
 /// Atomicity mirrors `handle_create_page`: write md first, persist DB index
