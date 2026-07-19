@@ -147,19 +147,10 @@ async fn sync_one_file(
     // bumped version without re-projecting (e.g. refinery write without
     // KnowledgeWriter call), the md is behind — we'd otherwise roll the
     // DB back to a stale body.
-    // Accept `origin_version: 3`, `origin_version: 3.0`, or
-    // `origin_version: "3"` — YAML parses each into a different serde_yaml
-    // shape and a hand-edited frontmatter shouldn't lock the user out of
-    // future fs_edits just because they retyped the field as a float.
-    let md_version: i64 = fm
-        .fields
-        .get("origin_version")
-        .and_then(|v| {
-            v.as_i64()
-                .or_else(|| v.as_f64().map(|f| f as i64))
-                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
-        })
-        .unwrap_or(0);
+    // Shared with the startup reconcile, which repairs exactly the files this
+    // branch declines to touch — they must read the stamp identically or
+    // reconcile would overwrite what this skip protects.
+    let md_version = crate::export::knowledge::projected_origin_version(&fm);
     if md_version < existing.version {
         return Ok(Outcome::SkippedDaemonAhead { page_id });
     }

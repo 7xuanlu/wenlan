@@ -445,6 +445,62 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
+    // Startup reconcile: repair the markdown projection from the DB.
+    //
+    // `write_page` renames a temp file over the target without an fsync — that
+    // buys readers atomicity, not crash durability. So a crash can leave a
+    // page's file missing, holding the previous version's bytes, or
+    // zero-length, plus `.tmp` orphans from a write that died mid-rename.
+    // This is the pass that makes "the md is a repairable projection" true.
+    //
+    // Runs synchronously, before `axum::serve`, for the same reason the
+    // backfill above does: no HTTP write and no scheduler tick can race the
+    // repair, so the pass needs no locking. The listener is already bound
+    // (see the bind-first block up top), so a slow pass on a large corpus
+    // delays serving, never the port handoff.
+    //
+    // ponytail: same 10k page ceiling as the backfill, and one pass reads
+    // every projected file. If a corpus ever outgrows that, page the scan or
+    // move it behind the listener — do NOT background it naively, since a
+    // concurrent page write would race the repair.
+    {
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+        if knowledge_path.exists() {
+            match db_arc.list_pages("active", 10_000, 0).await {
+                Ok(pages) => {
+                    let projection = wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(
+                        knowledge_path.clone(),
+                        &db_arc,
+                    );
+                    match projection.reconcile(&pages) {
+                        Ok(stats)
+                            if stats.rewritten > 0
+                                || stats.temp_files_removed > 0
+                                || stats.errors > 0 =>
+                        {
+                            tracing::info!(
+                                "[reconcile] projection repaired: {} checked, {} rewritten, \
+                                 {} temp leftover(s) swept, {} failed",
+                                stats.checked,
+                                stats.rewritten,
+                                stats.temp_files_removed,
+                                stats.errors
+                            );
+                        }
+                        Ok(stats) => {
+                            tracing::debug!(
+                                "[reconcile] {} page(s) checked, all clean",
+                                stats.checked
+                            );
+                        }
+                        Err(e) => tracing::warn!("[reconcile] pass failed: {e}"),
+                    }
+                }
+                Err(e) => tracing::warn!("[reconcile] list_pages failed: {e}"),
+            }
+        }
+    }
+
     // Load intelligence config
     server_state.prompts = wenlan_core::prompts::PromptRegistry::load(
         &wenlan_core::prompts::PromptRegistry::override_dir(),
