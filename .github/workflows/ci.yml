@@ -56,6 +56,8 @@ jobs:
               - 'scripts/lint-scale-gate.sh'
               - 'scripts/stage-onnxruntime-windows.ps1'
               - 'scripts/smoke-windows.ps1'
+              - 'scripts/smoke-windows-llm.ps1'
+              - 'scripts/smoke-windows-llm.test.ps1'
               - 'scripts/verify-ort-source-pin.py'
               - 'scripts/verify-ort-source-pin.test.py'
               # Release PRs must run the drift guard: 0.10.1 merged with
@@ -106,8 +108,13 @@ jobs:
               - 'crates/wenlan-mcp/npm/install.js'
               - 'scripts/stage-onnxruntime-windows.ps1'
               - 'scripts/smoke-windows.ps1'
+              - 'scripts/smoke-windows-llm.ps1'
+              - 'scripts/smoke-windows-llm.test.ps1'
               - 'scripts/lint-scale-gate.sh'
               - 'crates/wenlan-core/src/lint/**'
+              - 'crates/wenlan-core/src/engine.rs'
+              - 'crates/wenlan-core/src/llm_provider.rs'
+              - 'crates/wenlan-core/src/bin/model_probe.rs'
               - 'crates/wenlan-core/Cargo.toml'
               - 'install.sh'
               - 'Cargo.toml'
@@ -391,7 +398,28 @@ jobs:
       - name: Build Windows release binaries
         if: matrix.os == 'windows-2022'
         shell: pwsh
-        run: cargo build --release -p wenlan -p wenlan-server
+        run: |
+          cargo build --release -p wenlan -p wenlan-server
+          cargo build --release -p wenlan-core --bin model_probe
+
+      - name: Validate Windows LLM probe and smoke harness
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          cargo test -p wenlan-core --bin model_probe
+
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts\smoke-windows-llm.ps1"),
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -ne 0) {
+            $parseErrors | Format-List | Out-String | Write-Error
+            throw "scripts\smoke-windows-llm.ps1 has PowerShell parse errors"
+          }
+          & scripts/smoke-windows-llm.test.ps1
 
       - name: Native ORT smoke (Windows; release profile)
         if: matrix.os == 'windows-2022'
