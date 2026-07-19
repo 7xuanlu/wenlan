@@ -1342,6 +1342,30 @@ async fn update_page_impl(
                 WenlanError::Validation(format!("page '{page_id}' does not exist"))
             })?;
 
+            let current_version = current.version;
+            let new_version = current_version + 1;
+
+            // A caller-supplied `expected_version` is a precondition, not a retry
+            // hint: once it stops matching, the write is refused outright rather
+            // than re-aimed at a row the caller never saw.
+            //
+            // This has to come BEFORE the ownership gate, not after. Staging a
+            // card first would take content the agent computed against an old
+            // base and bind it to the version we just loaded — so accepting that
+            // card silently reverts whatever the human wrote in between. Refusing
+            // first drops no agent work either: the caller re-reads the fresh
+            // content and stages a better card against it.
+            if let Some(expected) = req.expected_version {
+                if expected != current_version {
+                    log::debug!(
+                        "[update_page] {page_id}: expected_version {expected} != current {current_version}; refusing write"
+                    );
+                    return Ok(no_op(vec![format!(
+                        "page moved to v{current_version} (expected v{expected}); write refused"
+                    )]));
+                }
+            }
+
             // Ownership gate, re-evaluated on every attempt. Inside the CAS loop
             // it is no longer advisory: whatever it decided is what the write
             // guards on.
@@ -1354,25 +1378,6 @@ async fn update_page_impl(
                     edited_by,
                 )
                 .await;
-            }
-
-            let current_version = current.version;
-            let new_version = current_version + 1;
-
-            // A caller-supplied `expected_version` is a precondition, not a retry
-            // hint: once it stops matching, the write is refused outright rather
-            // than re-aimed at a row the caller never saw. (A machine write whose
-            // page became human-owned is caught above and preserved as a card, so
-            // refusing here never silently drops agent work.)
-            if let Some(expected) = req.expected_version {
-                if expected != current_version {
-                    log::debug!(
-                        "[update_page] {page_id}: expected_version {expected} != current {current_version}; refusing write"
-                    );
-                    return Ok(no_op(vec![format!(
-                        "page moved to v{current_version} (expected v{expected}); write refused"
-                    )]));
-                }
             }
 
             // Shrink-guard (T17): opt-in via WENLAN_MERGE_SHRINK_GUARD=<f64>.
@@ -1500,15 +1505,36 @@ async fn update_page_impl(
             // Nothing was written. Two distinguishable causes share this branch:
             // the `require_stale` gate (row untouched) and a version conflict
             // (row moved under us). Only the latter is worth retrying.
+            //
+            // Losing every CAS attempt used to return a bare no-op — byte-identical
+            // to the "content is already what you asked for" return above. A caller
+            // whose work was thrown away under contention could not tell that apart
+            // from having had nothing to do, so it now says so.
+            //
+            // The `require_stale` skip stays silent on purpose: the caller asked to
+            // write only if the page was stale, and it wasn't. That is the answer to
+            // the question it asked, not a discarded write, and it is the common
+            // path on every re-distill sweep.
             let landed_version = db.get_page(page_id).await?.map(|p| p.version);
-            if landed_version != Some(current_version) && attempt < MAX_CAS_ATTEMPTS {
-                log::debug!(
-                    "[update_page] {page_id}: version moved {current_version} -> {landed_version:?} mid-write; reloading (attempt {attempt})"
+            if landed_version != Some(current_version) {
+                if attempt < MAX_CAS_ATTEMPTS {
+                    log::debug!(
+                        "[update_page] {page_id}: version moved {current_version} -> {landed_version:?} mid-write; reloading (attempt {attempt})"
+                    );
+                    continue;
+                }
+                log::warn!(
+                    "[update_page] {page_id}: gave up after {MAX_CAS_ATTEMPTS} attempts; page still moving"
                 );
-                continue;
+                return Ok(no_op(vec![format!(
+                    "page kept moving under this write ({MAX_CAS_ATTEMPTS} attempts); nothing was written"
+                )]));
             }
             return Ok(no_op(vec![]));
         }
+        // Unreachable: every path through the loop returns, continues, or breaks
+        // with a value. The compiler cannot prove that, so the block needs a
+        // tail value.
         return Ok(no_op(vec![]));
     };
 
@@ -1617,6 +1643,13 @@ async fn resolve_page_revision_card(
     }))
 }
 
+// ponytail: a card records no base version, so accept writes its body over
+// whatever the page holds now. If the page moved after the card was staged, the
+// accepted body silently reverts that change. M0 closes this for writers that
+// declare a base (they are refused instead of carded); a writer that passed
+// `expected_version: None` can still stage a stale-based card. Closing it needs
+// the base version stored on the card and re-checked here — that is the M5
+// claim-revision problem, not M0's.
 async fn accept_page_revision_card(
     db: &MemoryDB,
     card: PageRevisionCard,
@@ -4185,12 +4218,27 @@ mod tests {
         );
     }
 
-    /// M0 write gate: the ownership decision must be re-made against the row the
-    /// write actually lands on. A machine writer that loaded a machine-owned page
-    /// and then lost the race to a human edit must stage a revision card,
-    /// never overwrite the human prose it never saw.
+    /// A machine writer that DECLARED the version it read (`expected_version`)
+    /// and lost the race to a human edit is refused outright — it does not get a
+    /// revision card.
+    ///
+    /// This reverses what this test asserted when M0-C landed. Carding looked
+    /// like the conservative choice ("never drop agent work"), but a card is not
+    /// inert: `accept_page_revision_card` re-reads the page and writes the card's
+    /// body over whatever it finds, without checking the base that body was
+    /// computed from. So a card staged from a stale base silently reverts the
+    /// human edit the moment someone accepts it — the exact loss M0 exists to
+    /// prevent, just deferred to accept time. Refusing drops no agent work
+    /// either: the caller sees the conflict, re-reads, and stages a card against
+    /// the real content.
+    ///
+    /// Only writers that declare a base get this. A machine write with
+    /// `expected_version: None` never told us what it read, so a card is still
+    /// the best available answer — see
+    /// `page_write_update_edit_landing_mid_write_is_not_clobbered`, which is
+    /// unaffected by this and still stages one.
     #[tokio::test]
-    async fn page_write_update_stale_version_on_human_owned_page_stages_card() {
+    async fn page_write_update_stale_version_on_human_owned_page_is_refused() {
         let (db, _dir) = test_db().await;
         let mem_id = "mem-cas-owned";
         let source_content = "Ownership is re-decided against the row the write lands on";
@@ -4271,6 +4319,11 @@ mod tests {
             !result.wrote,
             "machine write must not land on a human-owned page"
         );
+        assert!(
+            result.warnings.iter().any(|w| w.contains("write refused")),
+            "the caller must be told its write was refused, not handed a silent no-op; got {:?}",
+            result.warnings
+        );
         let after = db.get_page(page_id).await.unwrap().unwrap();
         assert_eq!(
             after.content, human_content,
@@ -4282,9 +4335,9 @@ mod tests {
         );
         let pending_after = db.list_pending_revisions(10).await.unwrap().len();
         assert_eq!(
-            pending_after,
-            pending_before + 1,
-            "losing the version race on a human-owned page must stage a revision card"
+            pending_after, pending_before,
+            "a declared-base conflict is refused outright; staging a card here would \
+             let accept-time silently revert the human edit"
         );
     }
 
