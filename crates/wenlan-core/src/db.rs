@@ -529,7 +529,17 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 72;
+pub const SCHEMA_VERSION: u32 = 73;
+
+/// One recorded version of a page, as stored in `page_history`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageHistoryEntry {
+    pub version: i64,
+    pub content: String,
+    pub source_memory_ids: Vec<String>,
+    pub edited_by: String,
+    pub created_at: i64,
+}
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -7020,6 +7030,57 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("migration 72 bump: {e}")))?;
                 log::info!(
                     "[migration] Migration 72 applied: dismissed deprecated dedup_merge rows"
+                );
+            }
+
+            // Migration 73: page_history. One immutable row per page version,
+            // written in the same transaction as the page write itself, so a
+            // version can never exist without the snapshot that produced it.
+            // This is what makes page evolution inspectable and a version
+            // recoverable; the `changelog` column on `pages` stays as the
+            // FIFO-capped summary the app already reads.
+            //
+            // UNIQUE(page_id, version) is the real guard: it makes a double
+            // append for one version an error rather than a silent duplicate.
+            //
+            // ponytail: full content per version, no delta compression and no
+            // retention cap. Storage is bounded by edit volume, and a page body
+            // is small; add compaction when a real corpus says it matters.
+            if version < 73 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        page_id TEXT NOT NULL,
+                        version INTEGER NOT NULL,
+                        content TEXT NOT NULL,
+                        source_memory_ids TEXT NOT NULL DEFAULT '[]',
+                        edited_by TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        UNIQUE(page_id, version)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_page_history_page
+                        ON page_history(page_id, version DESC);",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 73 DDL: {e}")))?;
+                // Seed the current state of every existing page as its first
+                // history row, so a page that predates this table still has a
+                // recoverable version rather than an empty timeline.
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_history \
+                       (page_id, version, content, source_memory_ids, edited_by, created_at) \
+                     SELECT id, version, content, source_memory_ids, 'migration_73', ?1 \
+                     FROM pages",
+                    libsql::params![chrono::Utc::now().timestamp()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 73 seed: {e}")))?;
+                conn.execute("PRAGMA user_version = 73", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 73 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 73 applied: page_history table seeded from current pages"
                 );
             }
         }
@@ -24518,6 +24579,23 @@ impl MemoryDB {
             )));
         }
 
+        // A page's first version is history too — without this row a freshly
+        // created page has an empty timeline until someone happens to edit it.
+        // Same transaction as the INSERT, same reasoning as the update path.
+        if let Err(e) = conn
+            .execute(
+                "INSERT OR IGNORE INTO page_history \
+                   (page_id, version, content, source_memory_ids, edited_by, created_at) \
+                 SELECT id, version, content, source_memory_ids, 'create', ?2 \
+                 FROM pages WHERE id = ?1",
+                libsql::params![id, linked_at],
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!("insert_page history: {e}")));
+        }
+
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("insert_page commit: {e}")))?;
@@ -24891,6 +24969,42 @@ impl MemoryDB {
             results.push(Self::row_to_page(&row)?);
         }
         Ok(results)
+    }
+
+    /// Every recorded version of a page, newest first. The version a page is
+    /// currently at is always the first entry — `page_history` is written in the
+    /// same transaction as the page itself, so it cannot lag behind.
+    pub async fn list_page_history(
+        &self,
+        page_id: &str,
+        limit: i64,
+    ) -> Result<Vec<PageHistoryEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT version, content, source_memory_ids, edited_by, created_at \
+                 FROM page_history WHERE page_id = ?1 \
+                 ORDER BY version DESC LIMIT ?2",
+                libsql::params![page_id, limit],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_page_history: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_page_history row: {e}")))?
+        {
+            let source_ids_json: String = row.get(2).unwrap_or_else(|_| "[]".to_string());
+            out.push(PageHistoryEntry {
+                version: row.get(0).unwrap_or(0),
+                content: row.get(1).unwrap_or_default(),
+                source_memory_ids: serde_json::from_str(&source_ids_json).unwrap_or_default(),
+                edited_by: row.get(3).unwrap_or_default(),
+                created_at: row.get(4).unwrap_or(0),
+            });
+        }
+        Ok(out)
     }
 
     /// Update a page's content + source memory ids in a single atomic UPDATE
@@ -25371,6 +25485,28 @@ impl MemoryDB {
                     "pending page revision was already consumed: {revision_id}"
                 )));
             }
+        }
+
+        // Append the immutable history row for the version this write produced.
+        // `SELECT ... FROM pages` reads the row we just updated, inside the same
+        // transaction, so the snapshot and its version number can never disagree
+        // with what landed — and no caller has to compute the post-bump version.
+        // A history row is therefore not "written alongside" the page; either
+        // both exist or neither does.
+        if let Err(e) = conn
+            .execute(
+                "INSERT INTO page_history \
+                   (page_id, version, content, source_memory_ids, edited_by, created_at) \
+                 SELECT id, version, content, source_memory_ids, ?2, ?3 \
+                 FROM pages WHERE id = ?1",
+                libsql::params![id, link_reason, now_ts],
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "update_page_content history: {e}"
+            )));
         }
 
         conn.execute("COMMIT", ())
@@ -51855,7 +51991,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
+        assert_eq!(uv, 73);
     }
 
     #[tokio::test]
@@ -51872,7 +52008,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv, 73,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51906,7 +52042,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
+        assert_eq!(uv, 73);
     }
 
     #[tokio::test]
@@ -51923,7 +52059,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv, 73,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51972,8 +52108,8 @@ pub(crate) mod tests {
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 72,
-            "terminal version is 72 after dedup_merge retirement"
+            uv, 73,
+            "terminal version is 73 after the page_history migration"
         );
     }
 
@@ -51991,7 +52127,7 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv, 73,
             "user_version restored to current terminal version after idempotent re-run"
         );
 

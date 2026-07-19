@@ -3503,6 +3503,143 @@ mod tests {
         );
     }
 
+    /// Every page write appends exactly one immutable `page_history` row, and
+    /// the snapshot it stores is the body at *that* version — so a page's
+    /// evolution is reconstructable rather than inferred.
+    ///
+    /// Mutation check: drop the history INSERT from `try_update_page_content`
+    /// and the version sequence collapses to `[1]`; store the pre-write body
+    /// instead of the post-write one and the content assertions invert.
+    #[tokio::test]
+    async fn page_write_records_one_history_row_per_version() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-history";
+        let source_content = "Every version of a page is recorded as its own history row";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_history_seq";
+        db.insert_page(
+            page_id,
+            "History",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Creation is itself a version: the timeline is never empty.
+        let at_create = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(
+            at_create.len(),
+            1,
+            "a newly created page must already have its v1 history row"
+        );
+        assert_eq!(at_create[0].content, source_content);
+
+        let v2 =
+            "Every version of a page is recorded as its own history row, appended in the write";
+        let v3 = "Every version of a page is recorded as its own history row, appended in the write transaction";
+        for body in [v2, v3] {
+            let result = page_write(
+                &db,
+                PageWrite::Update {
+                    page_id,
+                    req: UpdatePageRequest {
+                        content: body.to_string(),
+                        source_memory_ids: vec![mem_id.to_string()],
+                        expected_version: None,
+                    },
+                    edited_by: "re_distill",
+                    require_stale: false,
+                    knowledge_path: None,
+                    citations: None,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(result.wrote, "each update must land");
+        }
+
+        let history = db.list_page_history(page_id, 10).await.unwrap();
+        let versions: Vec<i64> = history.iter().map(|h| h.version).collect();
+        assert_eq!(
+            versions,
+            vec![3, 2, 1],
+            "one row per version, newest first, no gaps and no duplicates"
+        );
+
+        // Each row holds the body *at* its version, not the body it replaced.
+        assert_eq!(history[0].content, v3);
+        assert_eq!(history[1].content, v2);
+        assert_eq!(history[2].content, source_content);
+        assert_eq!(history[0].edited_by, "re_distill");
+        assert_eq!(history[2].edited_by, "create");
+
+        // The history head must agree with the page itself — that is the whole
+        // point of writing them in one transaction.
+        let page = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, history[0].version);
+        assert_eq!(page.content, history[0].content);
+    }
+
+    /// A write that loses the CAS must leave no trace: no version bump and no
+    /// history row. Otherwise the timeline would record edits that never
+    /// happened, which is worse than no timeline at all.
+    #[tokio::test]
+    async fn page_write_refused_by_cas_appends_no_history_row() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-history-refused";
+        let source_content = "A refused write must not appear in the page timeline";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_history_refused";
+        db.insert_page(
+            page_id,
+            "Refused",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+        let stale_version = db.get_page(page_id).await.unwrap().unwrap().version;
+
+        let result = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "A refused write must not appear in the page timeline at all"
+                        .to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(stale_version + 5),
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote, "precondition: the write must be refused");
+        let history = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(
+            history.len(),
+            1,
+            "a refused write must not append a history row"
+        );
+        assert_eq!(history[0].version, stale_version);
+    }
+
     /// The load-bearing test for the M0 write gate: an edit that lands *inside*
     /// the window between the ownership decision and the write must not be
     /// clobbered.
