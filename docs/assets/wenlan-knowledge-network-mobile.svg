@@ -1,0 +1,186 @@
+<svg width="720" height="2000" viewBox="0 0 720 2000" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+    <title id="title">Connected like a graph. Readable like a wiki.</title>
+    <desc id="desc">Knowledge and source Pages connect through Entities; atomic Memories preserve the evidence behind them.</desc>
+    <style>text { font-kerning: normal; }</style>
+    <rect width="720" height="2000" fill="#FCFCFB"/>
+
+    <g transform="translate(40 48) scale(0.11328125)">
+    <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="url(#network-en-mobile-ring)" stroke-width="76"/>
+    <circle cx="322" cy="160" r="42" fill="url(#network-en-mobile-orb)"/>
+  </g>
+    <g data-fit-region="network-en-mobile-heading" data-fit-x="122" data-fit-y="44" data-fit-width="558" data-fit-height="266" data-check-overlap="false">
+
+        <text x="122" y="70" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">KNOWLEDGE GRAPH</text>
+        <text x="122" y="116" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Connected like a graph.</text>
+<text x="122" y="158" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Readable like a wiki.</text>
+        <text x="122" y="210" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">Knowledge and source Pages</text>
+<text x="122" y="240" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">connect through Entities;</text>
+<text x="122" y="270" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">atomic Memories preserve</text>
+<text x="122" y="300" font-family="&quot;Instrument Sans&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="23" font-weight="400" fill="#586174" text-anchor="start">the evidence behind them.</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-graph-field" data-fit-x="40" data-fit-y="290" data-fit-width="640" data-fit-height="1600" data-check-overlap="true">
+    <path d="M292 1110 C394 1028 610 1060 672 1220 C724 1400 680 1720 562 1840 C438 1936 300 1780 286 1550 C270 1360 228 1186 292 1110Z" fill="#F2F7F3" fill-opacity="0.76" stroke="#C7DACB" stroke-width="1.8"/>
+    <text x="520" y="1070" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#4F7558" text-anchor="middle">ENTITY COMMUNITY</text>
+    <text x="520" y="1096" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="14" font-weight="500" fill="#8B93A3" text-anchor="middle">GROUPED BY RELATION DENSITY</text>
+    <path d="M224 452 C264 534 284 612 300 658" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.48" stroke-linecap="round"/>
+    <path d="M504 496 C462 560 430 610 414 648" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.48" stroke-linecap="round"/>
+    <path d="M268 610 C300 628 316 650 326 664" fill="none" stroke="#5E58C8" stroke-width="2.1" stroke-opacity="0.68" stroke-linecap="round"/>
+    <path d="M494 650 C466 668 446 684 432 700" fill="none" stroke="#5E58C8" stroke-width="2.1" stroke-opacity="0.68" stroke-linecap="round"/>
+    <path d="M384 974 C378 1016 386 1054 404 1084" fill="none" stroke="#5E58C8" stroke-width="2.1" stroke-opacity="0.66" stroke-linecap="round"/>
+    <path d="M222 1008 C276 956 290 924 300 892" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.48" stroke-linecap="round"/>
+    <path d="M476 1164 C520 1194 548 1232 558 1266" fill="none" stroke="#6F8F76" stroke-width="2.8" stroke-opacity="0.78" stroke-linecap="round" marker-end="url(#network-en-mobile-relation-arrow)"/>
+    <path d="M446 1240 C430 1320 416 1384 408 1426" fill="none" stroke="#6F8F76" stroke-width="1.8" stroke-opacity="0.68" stroke-linecap="round" marker-end="url(#network-en-mobile-relation-arrow)"/>
+    <path d="M490 1664 C300 1510 300 1370 380 1260" fill="none" stroke="#6F8F76" stroke-width="4" stroke-opacity="0.84" stroke-linecap="round" marker-end="url(#network-en-mobile-relation-arrow)"/>
+    <path d="M526 1402 C548 1490 548 1596 536 1654" fill="none" stroke="#6F8F76" stroke-width="1.5" stroke-opacity="0.6" stroke-linecap="round" marker-end="url(#network-en-mobile-relation-arrow)"/>
+    <path d="M400 1590 C430 1644 462 1670 482 1674" fill="none" stroke="#6F8F76" stroke-width="1.8" stroke-opacity="0.66" stroke-linecap="round" marker-end="url(#network-en-mobile-relation-arrow)"/>
+    <g data-fit-region="network-en-mobile-source-User interviews" data-fit-x="72" data-fit-y="302" data-fit-width="176" data-fit-height="176" data-check-overlap="true">
+
+      <circle cx="160" cy="390" r="88" fill="#F7F8FA" stroke="#E3E7EE" stroke-width="1.5"/>
+      <g fill="none" stroke="#586174" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M150 329h11l6 6v19H150z"/>
+    <path d="M161 329v7h6"/>
+    <path d="M154 342h9M154 347h9"/>
+  </g>
+      <text x="160" y="374" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">SOURCE PAGE</text>
+      <text x="160" y="412" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="middle">User interviews</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-source-LLM-wiki notes" data-fit-x="472" data-fit-y="342" data-fit-width="176" data-fit-height="176" data-check-overlap="true">
+
+      <circle cx="560" cy="430" r="88" fill="#F7F8FA" stroke="#E3E7EE" stroke-width="1.5"/>
+      <g fill="none" stroke="#586174" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M550 369h11l6 6v19H550z"/>
+    <path d="M561 369v7h6"/>
+    <path d="M554 382h9M554 387h9"/>
+  </g>
+      <text x="560" y="414" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">SOURCE PAGE</text>
+      <text x="560" y="452" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="middle">LLM-wiki notes</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-memory-mem_42" data-fit-x="80" data-fit-y="582" data-fit-width="150" data-fit-height="58" data-check-overlap="true">
+
+      <circle cx="250" cy="610" r="10" fill="#5E58C8"/>
+      <circle cx="250" cy="610" r="18" fill="none" stroke="#D2CFF0"/>
+      <text x="230" y="607" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#1A1A2E" text-anchor="end">mem_42</text>
+      <text x="230" y="632" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="end">MEMORY</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-memory-mem_77" data-fit-x="332" data-fit-y="622" data-fit-width="150" data-fit-height="58" data-check-overlap="true">
+
+      <circle cx="500" cy="650" r="10" fill="#5E58C8"/>
+      <circle cx="500" cy="650" r="18" fill="none" stroke="#D2CFF0"/>
+      <text x="482" y="647" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#1A1A2E" text-anchor="end">mem_77</text>
+      <text x="482" y="672" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="end">MEMORY</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-hero" data-fit-x="190" data-fit-y="640" data-fit-width="340" data-fit-height="340" data-check-overlap="false">
+
+      <circle cx="360" cy="810" r="170" fill="#F3F2FC" fill-opacity="0.72" stroke="#D2CFF0" stroke-width="1.5"/>
+      <g filter="url(#network-en-mobile-page-shadow)">
+        <rect x="210" y="723" width="300" height="174" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
+      </g>
+      <text x="238" y="759" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#5E58C8" text-anchor="start">KNOWLEDGE PAGE</text>
+      <g>
+      <rect x="390" y="741" width="92" height="34" rx="17" fill="#F2F7F3" stroke="#C7DACB"/>
+      <text x="436" y="763.7" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="15" font-weight="500" fill="#4F7558" text-anchor="middle">CURRENT</text>
+    </g>
+      <text x="238" y="811" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="27" font-weight="600" fill="#1A1A2E" text-anchor="start">Wenlan positioning</text>
+      <text x="238" y="841" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="16" font-weight="500" fill="#8B93A3" text-anchor="start">v7 / 12 supporting records</text>
+      <line x1="238" y1="859" x2="482" y2="859" stroke="#E3E7EE"/>
+      <rect x="238" y="873" width="168" height="7" rx="4" fill="#D9DEE7"/>
+      <rect x="418" y="873" width="56" height="7" rx="4" fill="#E3E7EE"/>
+
+  </g>
+    <g data-fit-region="network-en-mobile-knowledge-Launch strategy" data-fit-x="58" data-fit-y="988" data-fit-width="164" data-fit-height="164" data-check-overlap="true">
+
+      <circle cx="140" cy="1070" r="82" fill="#FFFFFF" stroke="#5E58C8" stroke-width="1.6"/>
+      <text x="140" y="1050" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">KNOWLEDGE PAGE</text>
+      <text x="140" y="1088" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="20" font-weight="600" fill="#1A1A2E" text-anchor="middle">Launch strategy</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-entity-Wenlan" data-fit-x="318" data-fit-y="1082" data-fit-width="176" data-fit-height="176" data-check-overlap="true">
+
+      <circle cx="406" cy="1170" r="88" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
+      <text x="406" y="1142" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
+      <text x="406" y="1175" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Wenlan</text>
+      <text x="406" y="1204" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">PROJECT</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-entity-Obsidian" data-fit-x="496" data-fit-y="1270" data-fit-width="156" data-fit-height="156" data-check-overlap="true">
+
+      <circle cx="574" cy="1348" r="78" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
+      <text x="574" y="1320" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
+      <text x="574" y="1353" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Obsidian</text>
+      <text x="574" y="1382" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">TECHNOLOGY</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-entity-LLM-wiki" data-fit-x="322" data-fit-y="1430" data-fit-width="164" data-fit-height="164" data-check-overlap="true">
+
+      <circle cx="404" cy="1512" r="82" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
+      <text x="404" y="1484" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
+      <text x="404" y="1517" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">LLM-wiki</text>
+      <text x="404" y="1546" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">CONCEPT</text>
+
+  </g>
+    <g data-fit-region="network-en-mobile-entity-Knowledge graph" data-fit-x="454" data-fit-y="1658" data-fit-width="164" data-fit-height="164" data-check-overlap="true">
+
+      <circle cx="536" cy="1740" r="82" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
+      <text x="536" y="1712" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
+      <text x="536" y="1745" font-family="&quot;Fraunces&quot;, Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="middle">Knowledge graph</text>
+      <text x="536" y="1774" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">CONCEPT</text>
+
+  </g>
+    <g>
+    <rect x="223" y="522" width="70" height="29" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="258" y="544" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#586174" text-anchor="middle">CITES</text>
+  </g>
+    <g>
+    <rect x="255.5" y="664" width="101" height="29" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="306" y="686" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#586174" text-anchor="middle">SUPPORTS</text>
+  </g>
+    <g>
+    <rect x="359" y="1012" width="70" height="29" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="394" y="1034" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#586174" text-anchor="middle">ABOUT</text>
+  </g>
+    <g>
+    <rect x="200.5" y="948" width="91" height="29" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="246" y="970" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#586174" text-anchor="middle">REFINES</text>
+  </g>
+    <g>
+    <rect x="444.5" y="1218" width="183" height="29" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="536" y="1240" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#586174" text-anchor="middle">RELATED TO · 0.82</text>
+  </g>
+    <g>
+    <rect x="272.5" y="1376" width="87" height="29" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="316" y="1398" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="17" font-weight="500" fill="#586174" text-anchor="middle">PART OF</text>
+  </g>
+    </g>
+    <g data-fit-region="network-en-mobile-footer" data-fit-x="40" data-fit-y="1910" data-fit-width="640" data-fit-height="58" data-check-overlap="false">
+
+        <line x1="40" y1="1910" x2="680" y2="1910" stroke="#E3E7EE"/>
+        <text x="360" y="1952" font-family="&quot;JetBrains Mono&quot;, ui-monospace, monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">Readable Pages · Atomic evidence · Typed connections</text>
+
+  </g>
+
+    <defs>
+      <linearGradient id="network-en-mobile-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C63FF"/>
+      <stop offset="0.5" stop-color="#5BA3E6"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </linearGradient>
+    <radialGradient id="network-en-mobile-orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(310 144) rotate(52.125) scale(76.0263)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#A5C4F7"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </radialGradient>
+      <marker id="network-en-mobile-relation-arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M2 2 L9 6 L2 10" fill="none" stroke="#6F8F76" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+      <filter id="network-en-mobile-page-shadow" x="-20%" y="-20%" width="140%" height="150%">
+        <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#1A1A2E" flood-opacity="0.09"/>
+        <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1A1A2E" flood-opacity="0.05"/>
+      </filter>
+    </defs>
+  </svg>

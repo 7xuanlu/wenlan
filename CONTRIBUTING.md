@@ -6,7 +6,9 @@ This repo holds the daemon (`wenlan-server`), the CLI (`wenlan`), the MCP server
 
 ## Development Setup
 
-**Requirements:** macOS (arm64 + x64), Linux (x86_64 + arm64; glibc), or Windows (x86_64); platform build tools ([Xcode Command Line Tools](https://developer.apple.com/xcode/resources/) on macOS, MSVC Build Tools on Windows, gcc + make on Linux); [Rust](https://rustup.rs/) (stable).
+**Requirements:** macOS arm64, Linux (x86_64 + arm64; glibc), or Windows x86_64; platform build tools ([Xcode Command Line Tools](https://developer.apple.com/xcode/resources/) on macOS, MSVC Build Tools on Windows, gcc + make on Linux); [Rust](https://rustup.rs/) (stable).
+
+macOS Intel is not currently a supported stock build target because the pinned ONNX Runtime dependency has no prebuilt x86_64 macOS binary. See the [platform note](crates/wenlan-cli/README.md#macos-intel).
 
 ```bash
 git clone https://github.com/7xuanlu/wenlan.git
@@ -20,12 +22,12 @@ Run the daemon directly:
 cargo run -p wenlan-server
 ```
 
-Or install as a launchd service:
+Or register it as the per-user background service:
 
 ```bash
 cargo build --release -p wenlan -p wenlan-server
 ./target/release/wenlan setup --basic
-./target/release/wenlan install
+./target/release/wenlan background on
 ./target/release/wenlan status
 ```
 

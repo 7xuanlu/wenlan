@@ -44,14 +44,17 @@ pub use narrative::NarrativeResponse;
 pub use pages::{Page, PageEvidence};
 pub use repair::*;
 pub use repair_plan::*;
-pub use requests::AcceptRefinementRequest;
+pub use requests::{
+    AcceptRefinementRequest, CreatePageDraftRequest, PageDraftVersionRequest,
+    UpdatePageDraftRequest,
+};
 pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
     ListPageRevisionsResponse, ListRefinementsResponse, MemoryDetail, MemoryRevisionEntry,
     OnDeviceModelEntry, OnDeviceModelResponse, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
-    PageWriteResponse, PendingRevision, PendingRevisionItem, ProposalAction, RefinementCardAction,
-    RefinementPayload, RefinementProposalSummary, RejectRefinementResponse, RevisionAcceptResponse,
-    RevisionDismissResponse,
+    PageDraftResponse, PageWriteResponse, PendingRevision, PendingRevisionItem, ProposalAction,
+    RefinementCardAction, RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
+    RevisionAcceptResponse, RevisionDismissResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 

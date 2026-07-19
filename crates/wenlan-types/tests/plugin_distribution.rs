@@ -47,6 +47,8 @@ fn plugin_setup_repairs_stale_daemon_versions() {
             "curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash",
             "wenlan setup --basic",
             "wenlan background on",
+            "Runtime and plugin versions still differ after repair",
+            "update the Wenlan plugin",
         ] {
             assert!(
                 text.contains(needle),

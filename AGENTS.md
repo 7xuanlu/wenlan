@@ -83,7 +83,7 @@ Pre-commit auto-formats Rust and runs Clippy on changed crates. Pre-push runs wo
 
 ## Cross-platform
 
-Wenlan builds from source on macOS (arm64, x86_64), Linux (x86_64, aarch64; glibc), and Windows (x86_64). Current prebuilt releases cover macOS arm64, Linux x86_64/aarch64 with glibc, and Windows x86_64; macOS x86_64 is source-build only.
+Supported builds and prebuilt releases cover macOS arm64, Linux x86_64/aarch64 with glibc, and Windows x86_64. macOS x86_64 is not a supported stock source-build target: the pinned ONNX Runtime dependency has no prebuilt Intel macOS binary, so a custom build must compile ONNX Runtime separately and provide it through `ORT_LIB_LOCATION`.
 
 | OS | Data dir | Service registration |
 |---|---|---|
