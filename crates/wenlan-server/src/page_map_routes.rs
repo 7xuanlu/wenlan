@@ -35,6 +35,19 @@ async fn ensure_page_exists(db: &MemoryDB, page_id: &str) -> Result<(), ServerEr
     Ok(())
 }
 
+async fn ensure_page_is_active(db: &MemoryDB, page_id: &str) -> Result<(), ServerError> {
+    let page = db
+        .get_page(page_id)
+        .await?
+        .ok_or_else(|| ServerError::NotFound(format!("page {page_id} not found")))?;
+    if page.status != "active" {
+        return Err(ServerError::ValidationError(format!(
+            "Page {page_id} is not active"
+        )));
+    }
+    Ok(())
+}
+
 fn root_node_id(nodes: &[CoreNode]) -> Option<String> {
     nodes
         .iter()
@@ -181,7 +194,7 @@ pub async fn handle_put_page_map_layout(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     let viewport_json = req
         .viewport
@@ -236,7 +249,7 @@ pub async fn handle_create_map_node(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     let ref_kind = req
         .ref_kind
@@ -296,7 +309,7 @@ pub async fn handle_patch_map_node(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     let base_revision = req.base_revision;
     let patch = NodePatch {
@@ -325,7 +338,7 @@ pub async fn handle_delete_map_node(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     let node = db
         .delete_map_node(&page_id, req.base_revision, &node_id)
@@ -351,7 +364,7 @@ pub async fn handle_create_map_edge(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     let outcome = db
         .create_map_edge(
@@ -390,7 +403,7 @@ pub async fn handle_patch_map_edge(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     let base_revision = req.base_revision;
     let patch = EdgePatch {
@@ -416,7 +429,7 @@ pub async fn handle_delete_map_edge(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     let edge = db
         .delete_map_edge(&page_id, req.base_revision, &edge_id)
@@ -436,7 +449,7 @@ pub async fn handle_reset_page_map(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     db.reset_page_map(&page_id).await?;
     Ok(Json(serde_json::json!({"status": "reset"})))
@@ -462,7 +475,7 @@ pub async fn handle_improve_page_map(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    ensure_page_exists(&db, &page_id).await?;
+    ensure_page_is_active(&db, &page_id).await?;
 
     wenlan_core::page_map_improve::improve_page_map(&db, &page_id).await?;
 
@@ -682,6 +695,37 @@ mod tests {
         match result {
             Err(ServerError::NotFound(_)) => {}
             _ => panic!("expected NotFound for unknown page"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_map_node_rejects_non_active_pages_without_creating_map_rows() {
+        let (db, _tmp) = new_test_db().await;
+        let draft = db
+            .create_page_draft("Draft", "Body", None, None)
+            .await
+            .unwrap();
+        let archived_id = seed_test_page(&db, "Archived Map Page").await;
+        db.archive_page(&archived_id).await.unwrap();
+        seed_memory(&db, "mem-1").await;
+        let state = state_with_db(db.clone());
+
+        for page_id in [draft.id, archived_id] {
+            let result = handle_create_map_node(
+                State(state.clone()),
+                Path(page_id.clone()),
+                Json(create_node_request("mem-1", 0)),
+            )
+            .await;
+
+            match result {
+                Err(ServerError::ValidationError(_)) => {}
+                _ => panic!("expected non-active Page to reject Page Map mutation"),
+            }
+            assert!(
+                db.get_page_map(&page_id, true).await.unwrap().is_none(),
+                "rejected mutation must not create derived Page Map rows"
+            );
         }
     }
 
