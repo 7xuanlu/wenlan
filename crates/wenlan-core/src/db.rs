@@ -18,6 +18,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 mod count;
+pub mod page_map;
 mod scoped_entities;
 mod scoped_pages;
 
@@ -529,7 +530,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 72;
+pub const SCHEMA_VERSION: u32 = 75;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -7020,6 +7021,78 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("migration 72 bump: {e}")))?;
                 log::info!(
                     "[migration] Migration 72 applied: dismissed deprecated dedup_merge rows"
+                );
+            }
+
+            // Migration 75 (Page Map v1): page_maps / page_map_nodes / page_map_edges.
+            // Numbered 75, not 73: versions 73/74 were already claimed on live
+            // user DBs by the in-flight wiki-spaces branch (page_evidence /
+            // document_enrichment_queue / derived_artifact_sweeps), and a
+            // `< 73` guard silently skips on any DB those daemons touched.
+            // Presentation-only per-page mind map: page_maps carries the
+            // optimistic-concurrency revision + viewport, page_map_nodes is the
+            // parent_id spine (the flextree input, dedup+tombstone keyed by
+            // `fingerprint`), page_map_edges holds only cross-links and
+            // suggested links (tree edges are derived from the spine, never
+            // stored). See
+            // docs/superpowers/plans/2026-07-18-page-map-api-spec.md.
+            if version < 75 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_maps (
+                        page_id     TEXT PRIMARY KEY REFERENCES pages(id),
+                        revision    INTEGER NOT NULL DEFAULT 0,
+                        map_schema  INTEGER NOT NULL DEFAULT 1,
+                        viewport    TEXT,
+                        generated_at TEXT,
+                        created_at  TEXT DEFAULT (datetime('now')),
+                        updated_at  TEXT DEFAULT (datetime('now'))
+                    );
+
+                    CREATE TABLE IF NOT EXISTS page_map_nodes (
+                        id          TEXT PRIMARY KEY,
+                        page_id     TEXT NOT NULL REFERENCES page_maps(page_id) ON DELETE CASCADE,
+                        parent_id   TEXT REFERENCES page_map_nodes(id),
+                        rank        REAL NOT NULL DEFAULT 0,
+                        ref_kind    TEXT NOT NULL CHECK (ref_kind IN ('memory','entity','page','section')),
+                        ref_id      TEXT NOT NULL,
+                        label       TEXT,
+                        status      TEXT NOT NULL DEFAULT 'active'
+                                    CHECK (status IN ('suggested','active','dismissed')),
+                        pinned      INTEGER NOT NULL DEFAULT 0,
+                        placed      INTEGER NOT NULL DEFAULT 0,
+                        collapsed   INTEGER NOT NULL DEFAULT 0,
+                        x REAL, y REAL, width REAL, height REAL,
+                        fingerprint TEXT NOT NULL,
+                        provenance  TEXT,
+                        created_at  TEXT DEFAULT (datetime('now')),
+                        updated_at  TEXT DEFAULT (datetime('now'))
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_pmn_fp ON page_map_nodes(page_id, fingerprint);
+                    CREATE INDEX IF NOT EXISTS idx_pmn_page ON page_map_nodes(page_id, status);
+
+                    CREATE TABLE IF NOT EXISTS page_map_edges (
+                        id         TEXT PRIMARY KEY,
+                        page_id    TEXT NOT NULL REFERENCES page_maps(page_id) ON DELETE CASCADE,
+                        from_node  TEXT NOT NULL REFERENCES page_map_nodes(id) ON DELETE CASCADE,
+                        to_node    TEXT NOT NULL REFERENCES page_map_nodes(id) ON DELETE CASCADE,
+                        kind       TEXT NOT NULL DEFAULT 'link' CHECK (kind IN ('link','suggested')),
+                        label      TEXT,
+                        status     TEXT NOT NULL DEFAULT 'active'
+                                   CHECK (status IN ('suggested','active','dismissed')),
+                        provenance TEXT,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        CHECK (from_node <> to_node),
+                        UNIQUE (page_id, from_node, to_node, kind)
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m75 create page_map tables: {e}")))?;
+                conn.execute("PRAGMA user_version = 75", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m75 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 75 applied: page_maps + page_map_nodes + page_map_edges (Page Map v1)"
                 );
             }
         }
@@ -51847,7 +51920,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51864,7 +51936,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51898,7 +51971,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51915,7 +51987,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51963,10 +52036,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(
-            uv, 72,
-            "terminal version is 72 after dedup_merge retirement"
-        );
     }
 
     #[tokio::test]
@@ -51983,7 +52052,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
