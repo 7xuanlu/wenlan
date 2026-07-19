@@ -3220,7 +3220,7 @@ async fn decompose_ce_probe_emit() {
 
     write_paired_rows("decompose_ce", "lme", &rows);
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         out_dir.display()
     );
 }
@@ -3336,7 +3336,7 @@ async fn paired_ab_emit() {
     }
 
     println!(
-        "=== PAIRED A/B EMIT done -> run analyze_paired.py on {} ===",
+        "=== PAIRED A/B EMIT done -> run scripts/analyze_paired.py on {} ===",
         paired_out_dir().display()
     );
 }
@@ -3416,7 +3416,7 @@ async fn paired_cross_rerank_emit() {
     );
 
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -3567,7 +3567,7 @@ async fn rerank_blend_paired_ab() {
     .await;
 
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -3638,7 +3638,7 @@ async fn rerank_window_paired_ab() {
     .await;
 
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -3700,7 +3700,7 @@ async fn rerank_window_knee_sweep() {
     .await;
 
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -3953,7 +3953,7 @@ async fn rerank_model_sweep() {
     );
 
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -8246,7 +8246,7 @@ async fn temporal_oracle_probe() {
     run_temporal_oracle_probe(reranker).await;
 
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -8271,7 +8271,7 @@ async fn temporal_oracle_probe() {
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     query_intent_llm_probe -- --ignored --nocapture --test-threads=1
-///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/intent_llm_out
+///   python3 scripts/analyze_paired.py --dir $HOME/.cache/origin-eval/intent_llm_out
 #[tokio::test]
 #[ignore = "needs local GPU LLM (Qwen3.5-9B) + locomo10.json; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn query_intent_llm_probe() {
@@ -8326,7 +8326,7 @@ async fn query_intent_llm_probe() {
     write_paired_rows("query_intent_llm", "locomo", &off_rows);
     write_paired_rows("query_intent_llm", "locomo", &on_rows);
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -8345,7 +8345,7 @@ async fn query_intent_llm_probe() {
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     expand_temp_isolation_probe -- --ignored --nocapture --test-threads=1
-///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/expand_temp_out
+///   python3 scripts/analyze_paired.py --dir $HOME/.cache/origin-eval/expand_temp_out
 #[tokio::test]
 #[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn expand_temp_isolation_probe() {
@@ -8397,7 +8397,7 @@ async fn expand_temp_isolation_probe() {
     write_paired_rows("expand_temp", "locomo", &off_rows);
     write_paired_rows("expand_temp", "locomo", &on_rows);
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -8422,7 +8422,7 @@ async fn expand_temp_isolation_probe() {
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     graph_stream_pair_locomo -- --ignored --nocapture --test-threads=1
-///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_out
+///   python3 scripts/analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_out
 #[tokio::test]
 #[ignore = "needs local LLM + LoCoMo fixture; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn graph_stream_pair_locomo() {
@@ -8480,7 +8480,7 @@ async fn graph_stream_pair_locomo() {
     write_paired_rows("graph_stream", "locomo", &off_rows);
     write_paired_rows("graph_stream", "locomo", &on_rows);
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }
@@ -8493,7 +8493,7 @@ async fn graph_stream_pair_locomo() {
 ///   CARGO_TARGET_DIR=/Users/lucian/Repos/origin/target \
 ///     cargo test -p origin-core --features eval-harness --test eval_harness \
 ///     graph_stream_pair_lme -- --ignored --nocapture --test-threads=1
-///   python3 analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_lme_out
+///   python3 scripts/analyze_paired.py --dir $HOME/.cache/origin-eval/graph_stream_lme_out
 #[tokio::test]
 #[ignore = "needs local LLM + LME fixture; L7 manual. Set WENLAN_EVAL_ROOT + EVAL_OUT"]
 async fn graph_stream_pair_lme() {
@@ -8547,7 +8547,7 @@ async fn graph_stream_pair_lme() {
     write_paired_rows("graph_stream", "lme", &off_rows);
     write_paired_rows("graph_stream", "lme", &on_rows);
     println!(
-        "=== done -> python3 analyze_paired.py --dir {} ===",
+        "=== done -> python3 scripts/analyze_paired.py --dir {} ===",
         paired_out_dir().display()
     );
 }

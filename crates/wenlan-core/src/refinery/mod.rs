@@ -394,6 +394,7 @@ impl TriggerKind {
                     | Phase::ReDistill
                     | Phase::Overview
                     | Phase::DecisionLogs
+                    | Phase::PageMaps
             ),
             Self::Daily => matches!(
                 phase,
@@ -608,10 +609,12 @@ pub async fn run_periodic_steep_with_api(
 ) -> Result<SteepResult, WenlanError> {
     let steep_start = std::time::Instant::now();
     let deadline = trigger.deadline_secs(tuning.steep_deadline_secs);
-    // Per-job everyday source pin — read once per cycle from config; drives both
-    // the recap and entity-extraction phases below. Absent/unknown → auto chain.
-    let everyday_pin =
-        EverydaySource::parse(crate::config::load_config().everyday_source.as_deref());
+    // Config read once per cycle. `everyday_pin` drives the recap and
+    // entity-extraction phases (absent/unknown → auto chain);
+    // `page_map_auto_suggest` gates the proactive Page-Map phase below.
+    let cfg = crate::config::load_config();
+    let everyday_pin = EverydaySource::parse(cfg.everyday_source.as_deref());
+    let page_map_auto_suggest = cfg.page_map_auto_suggest;
     let mut phases: Vec<PhaseResult> = Vec::new();
     #[allow(unused_assignments)]
     let mut deadline_hit = false; // track if we've logged the first skip
@@ -1007,6 +1010,26 @@ pub async fn run_periodic_steep_with_api(
             let (nudge, headline) = crate::synthesis::decision_logs::classify_decision_logs(count);
             Ok(PhaseOutput {
                 items_processed: count,
+                nudge,
+                headline,
+            })
+        })
+        .await;
+        phases.push(phase);
+    }
+
+    // Phase: proactive Page-Map suggestions (Idle only; config-gated).
+    // Generates `status='suggested'` nodes/edges for recently-changed pages,
+    // insert-only. The explicit `POST /api/pages/{id}/map/improve` route runs
+    // the SAME pass but is NEVER gated by `page_map_auto_suggest` — only this
+    // background phase is. Bounded to 5 pages per pass. Always Silent (no
+    // user-facing nudge; suggestions surface in the map UI, not as a toast).
+    if page_map_auto_suggest && trigger.runs_phase(Phase::PageMaps) {
+        let phase = run_phase(Phase::PageMaps, || async {
+            let improved = crate::page_map_improve::run_proactive_page_maps(db_ref, 5).await?;
+            let (nudge, headline) = classify_backfill(improved);
+            Ok(PhaseOutput {
+                items_processed: improved,
                 nudge,
                 headline,
             })
@@ -2301,7 +2324,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_idle_trigger_runs_only_synthesis_phases() {
+        // The page_maps phase is gated on `config.page_map_auto_suggest`,
+        // which the steep reads via `load_config()` — pin WENLAN_DATA_DIR to
+        // a temp config so the phase list doesn't depend on the host's
+        // config.json (absent on CI → gate off → phase missing).
+        let _env_serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
 
         db.upsert_documents(vec![make_memory(
             "idle_test",
@@ -2312,21 +2342,31 @@ mod tests {
         .await
         .unwrap();
 
-        let result = run_periodic_steep_with_api(
-            &db,
-            None,
-            None,
-            None,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-            &crate::tuning::ConfidenceConfig::default(),
-            &crate::tuning::DistillationConfig::default(),
-            None,
-            TriggerKind::Idle,
-        )
-        .await
-        .unwrap();
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    page_map_auto_suggest: true,
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    None,
+                    TriggerKind::Idle,
+                )
+                .await
+            })
+            .await
+            .unwrap();
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
@@ -2338,6 +2378,7 @@ mod tests {
             "re-distill",
             "overview",
             "decision_logs",
+            "page_maps",
         ];
         for &exp in expected {
             assert!(
@@ -2448,9 +2489,16 @@ mod tests {
     async fn test_backstop_trigger_runs_all_phases() {
         // Backstop always runs the Evict phase gate and this test asserts
         // an EXACT phase count — same ambient-`WENLAN_ENABLE_EVICTION`
-        // dependency as the Daily test above, same lock required.
+        // dependency as the Daily test above, same lock required. The
+        // page_maps phase is additionally gated on
+        // `config.page_map_auto_suggest` read via `load_config()`, so pin
+        // WENLAN_DATA_DIR to a temp config (host config.json is absent on
+        // CI → gate off → phase missing).
         let _serial = EVICT_ENV_LOCK.lock().await;
+        let _env_serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
 
         db.upsert_documents(vec![make_memory(
             "backstop_test",
@@ -2461,21 +2509,31 @@ mod tests {
         .await
         .unwrap();
 
-        let result = run_periodic_steep_with_api(
-            &db,
-            None,
-            None,
-            None,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-            &crate::tuning::ConfidenceConfig::default(),
-            &crate::tuning::DistillationConfig::default(),
-            None,
-            TriggerKind::Backstop,
-        )
-        .await
-        .unwrap();
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    page_map_auto_suggest: true,
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    None,
+                    TriggerKind::Backstop,
+                )
+                .await
+            })
+            .await
+            .unwrap();
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
@@ -2496,6 +2554,7 @@ mod tests {
             "overview",
             "refinement_queue",
             "decision_logs",
+            "page_maps",
             "prune_rejections",
             "kg_rethink",
         ];

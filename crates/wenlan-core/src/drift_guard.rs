@@ -550,3 +550,166 @@ fn root_agents_md_stays_lean() {
          (it scans every tracked *AGENTS.md). Raising BUDGET is the wrong fix."
     );
 }
+
+// ── Teeth #6: quoted AGENTS.md section-heading resolver ──
+//
+// Teeth #1 verifies a referenced *path* exists, but a cross-reference like
+//   See `crates/wenlan-core/AGENTS.md` "Eval seed + eval read: ONE route, ONE contract".
+// also names a *section heading* inside that file. When a doc-tiering refactor moves or
+// renames a section, the path stays valid while the quoted heading silently dangles —
+// the failure a Codex review caught on the index-and-pointer refactor. This tooth
+// resolves each quoted heading against the target file's actual headings
+// (case-insensitively, since prose sometimes lowercases the title).
+
+/// Parse `<…AGENTS.md> "<heading>"` cross-references from one markdown file's text.
+/// Returns (target_relative_to_root, quoted_heading); a bare `AGENTS.md` (no `/`)
+/// resolves to the root AGENTS.md. Only a quote immediately following the AGENTS.md
+/// mention (one optional backtick + whitespace) counts, which keeps unrelated quotes
+/// out. Skips code fences and `<!-- drift-ok -->` lines, mirroring teeth #1.
+fn extract_section_refs(md: &str) -> Vec<(String, String)> {
+    let re = regex::Regex::new(r#"`?([A-Za-z0-9_./\-]*AGENTS\.md)`?\s+"([^"]{3,})""#).unwrap();
+    let mut refs = Vec::new();
+    let mut in_fence = false;
+    for line in md.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence || line.contains("<!-- drift-ok -->") {
+            continue;
+        }
+        for c in re.captures_iter(line) {
+            let token = &c[1];
+            let target = if token.contains('/') {
+                token.to_string()
+            } else {
+                "AGENTS.md".to_string() // bare/`root` reference => root file
+            };
+            refs.push((target, c[2].to_string()));
+        }
+    }
+    refs
+}
+
+/// ATX headings (`#`..`######`) of a markdown file, heading text only, fences skipped.
+fn md_headings(md: &str) -> Vec<String> {
+    let re = regex::Regex::new(r"^\s*#{1,6}\s+(.*?)\s*$").unwrap();
+    let mut headings = Vec::new();
+    let mut in_fence = false;
+    for line in md.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if let Some(c) = re.captures(line) {
+            headings.push(c[1].to_string());
+        }
+    }
+    headings
+}
+
+#[test]
+fn section_ref_extractor_parses_forms_and_skips_noise() {
+    let md = "\
+See `crates/wenlan-core/AGENTS.md` \"Eval seed contract\".
+Also root `AGENTS.md` \"Eval Citation Discipline\" applies.
+```
+`crates/x/AGENTS.md` \"fenced ref\" must be ignored
+```
+An unquoted root AGENTS.md Some Heading must not match.
+A suppressed `app/eval/AGENTS.md` \"skip me\" line. <!-- drift-ok -->
+";
+    let refs = extract_section_refs(md);
+    assert!(refs.contains(&(
+        "crates/wenlan-core/AGENTS.md".to_string(),
+        "Eval seed contract".to_string()
+    )));
+    assert!(refs.contains(&(
+        "AGENTS.md".to_string(),
+        "Eval Citation Discipline".to_string()
+    )));
+    assert!(
+        !refs.iter().any(|(_, h)| h == "fenced ref"),
+        "fenced ref leaked"
+    );
+    assert!(
+        !refs.iter().any(|(_, h)| h == "Some Heading"),
+        "unquoted heading matched"
+    );
+    assert!(
+        !refs.iter().any(|(_, h)| h == "skip me"),
+        "drift-ok line leaked"
+    );
+}
+
+#[test]
+fn doc_section_references_resolve() {
+    let root = repo_root();
+    let mut dangling = Vec::new();
+    for f in git_ls_files(&root, "*.md") {
+        // Same aspirational/historical skips as teeth #1.
+        if f.starts_with("docs/plans/")
+            || f.starts_with("docs/superpowers/")
+            || f.ends_with("AUDIT.md")
+        {
+            continue;
+        }
+        let txt = std::fs::read_to_string(root.join(&f)).unwrap_or_default();
+        for (target, heading) in extract_section_refs(&txt) {
+            let Ok(target_txt) = std::fs::read_to_string(root.join(&target)) else {
+                // A missing target *path* is teeth #1's job for slash refs; only flag
+                // here for the root file, which teeth #1's '/'-gated extractor skips.
+                if !target.contains('/') {
+                    dangling.push(format!(
+                        "{f} -> {target} unreadable (heading \"{heading}\")"
+                    ));
+                }
+                continue;
+            };
+            let want = heading.to_lowercase();
+            let found = md_headings(&target_txt)
+                .iter()
+                .any(|h| h.to_lowercase() == want);
+            if !found {
+                dangling.push(format!("{f} -> {target} has no section \"{heading}\""));
+            }
+        }
+    }
+    assert!(
+        dangling.is_empty(),
+        "quoted AGENTS.md section references that don't resolve to a heading \
+         (fix the pointer, fix the heading, or add <!-- drift-ok -->):\n{}",
+        dangling.join("\n")
+    );
+}
+
+#[test]
+fn section_resolver_detects_moved_heading() {
+    // Positive control: a quoted heading absent from the target must be flagged,
+    // and a present one (case-insensitively) must be accepted.
+    let src = "See `crates/wenlan-core/AGENTS.md` \"Gone Section\" for details.";
+    let target = "# Title\n\n## Present Section\n\nbody\n### another one\n";
+    let refs = extract_section_refs(src);
+    assert_eq!(
+        refs,
+        vec![(
+            "crates/wenlan-core/AGENTS.md".to_string(),
+            "Gone Section".to_string()
+        )]
+    );
+    let headings = md_headings(target);
+    let want = refs[0].1.to_lowercase();
+    assert!(
+        !headings.iter().any(|h| h.to_lowercase() == want),
+        "resolver must flag a heading absent from the target"
+    );
+    assert!(
+        headings
+            .iter()
+            .any(|h| h.to_lowercase() == "present section"),
+        "resolver must accept a heading present in the target"
+    );
+}

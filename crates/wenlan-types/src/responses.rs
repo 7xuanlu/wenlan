@@ -433,6 +433,9 @@ pub struct ConfigResponse {
     /// `"external"`, or absent/null when unpinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synthesis_source: Option<String>,
+    /// Whether the proactive Page-Map suggestion phase is enabled. Default true.
+    #[serde(default)]
+    pub page_map_auto_suggest: bool,
 }
 
 // ===== On-device model =====

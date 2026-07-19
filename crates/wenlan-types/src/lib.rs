@@ -15,6 +15,7 @@ pub mod memory;
 pub mod memory_type;
 pub mod narrative;
 pub mod onboarding;
+pub mod page_map;
 pub mod pages;
 pub mod repair;
 pub mod repair_plan;

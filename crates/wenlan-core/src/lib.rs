@@ -47,6 +47,7 @@ pub mod migrations;
 pub mod narrative;
 pub mod on_device_models;
 pub mod onboarding;
+pub mod page_map_improve;
 pub mod page_projection_tracker;
 pub mod pages;
 pub mod post_ingest;
