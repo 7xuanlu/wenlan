@@ -2307,7 +2307,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_idle_trigger_runs_only_synthesis_phases() {
+        // The page_maps phase is gated on `config.page_map_auto_suggest`,
+        // which the steep reads via `load_config()` — pin WENLAN_DATA_DIR to
+        // a temp config so the phase list doesn't depend on the host's
+        // config.json (absent on CI → gate off → phase missing).
+        let _env_serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
 
         db.upsert_documents(vec![make_memory(
             "idle_test",
@@ -2318,21 +2325,31 @@ mod tests {
         .await
         .unwrap();
 
-        let result = run_periodic_steep_with_api(
-            &db,
-            None,
-            None,
-            None,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-            &crate::tuning::ConfidenceConfig::default(),
-            &crate::tuning::DistillationConfig::default(),
-            None,
-            TriggerKind::Idle,
-        )
-        .await
-        .unwrap();
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    page_map_auto_suggest: true,
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    None,
+                    TriggerKind::Idle,
+                )
+                .await
+            })
+            .await
+            .unwrap();
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
@@ -2455,9 +2472,16 @@ mod tests {
     async fn test_backstop_trigger_runs_all_phases() {
         // Backstop always runs the Evict phase gate and this test asserts
         // an EXACT phase count — same ambient-`WENLAN_ENABLE_EVICTION`
-        // dependency as the Daily test above, same lock required.
+        // dependency as the Daily test above, same lock required. The
+        // page_maps phase is additionally gated on
+        // `config.page_map_auto_suggest` read via `load_config()`, so pin
+        // WENLAN_DATA_DIR to a temp config (host config.json is absent on
+        // CI → gate off → phase missing).
         let _serial = EVICT_ENV_LOCK.lock().await;
+        let _env_serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let data_dir_var = data_dir.path().to_string_lossy().to_string();
 
         db.upsert_documents(vec![make_memory(
             "backstop_test",
@@ -2468,21 +2492,31 @@ mod tests {
         .await
         .unwrap();
 
-        let result = run_periodic_steep_with_api(
-            &db,
-            None,
-            None,
-            None,
-            None,
-            &PromptRegistry::default(),
-            &crate::tuning::RefineryConfig::default(),
-            &crate::tuning::ConfidenceConfig::default(),
-            &crate::tuning::DistillationConfig::default(),
-            None,
-            TriggerKind::Backstop,
-        )
-        .await
-        .unwrap();
+        let result =
+            temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
+                let config = crate::config::Config {
+                    page_map_auto_suggest: true,
+                    ..crate::config::Config::default()
+                };
+                crate::config::save_config(&config).unwrap();
+
+                run_periodic_steep_with_api(
+                    &db,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &PromptRegistry::default(),
+                    &crate::tuning::RefineryConfig::default(),
+                    &crate::tuning::ConfidenceConfig::default(),
+                    &crate::tuning::DistillationConfig::default(),
+                    None,
+                    TriggerKind::Backstop,
+                )
+                .await
+            })
+            .await
+            .unwrap();
 
         let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
 
