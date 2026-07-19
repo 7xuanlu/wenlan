@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn space_header_attached_when_locked() {
         // Share ENV_LOCK with lock_state::tests to prevent env var races.
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn space_header_absent_when_unlocked() {
         // Share ENV_LOCK with lock_state::tests to prevent env var races.
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 

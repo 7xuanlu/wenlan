@@ -4253,7 +4253,7 @@ mod tests {
             repair::RepairLintScope,
         };
 
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.lock().await;
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
         let server = make_server(TransportMode::Stdio, "agent", None);
@@ -4378,7 +4378,7 @@ mod tests {
             repair::RepairLintScope,
         };
 
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.lock().await;
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
         let server = make_server(TransportMode::Stdio, "agent", None);
@@ -6679,7 +6679,7 @@ mod tests {
 
     #[test]
     fn locked_overrides_inbound_space() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
@@ -6690,7 +6690,7 @@ mod tests {
 
     #[test]
     fn unlocked_passes_inbound_through() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
@@ -6701,7 +6701,7 @@ mod tests {
 
     #[test]
     fn locked_with_no_inbound_yields_locked() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
@@ -6712,7 +6712,7 @@ mod tests {
 
     #[test]
     fn unlocked_with_no_inbound_yields_none() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
@@ -6723,7 +6723,7 @@ mod tests {
 
     #[test]
     fn unlocked_empty_inbound_yields_none() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
@@ -6734,7 +6734,7 @@ mod tests {
 
     #[test]
     fn unlocked_whitespace_inbound_yields_none() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
@@ -6747,7 +6747,7 @@ mod tests {
 
     #[test]
     fn locked_repair_scope_overrides_global_inbound() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
@@ -6763,7 +6763,7 @@ mod tests {
 
     #[test]
     fn locked_repair_scope_overrides_other_registered_inbound() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
@@ -6782,7 +6782,7 @@ mod tests {
 
     #[test]
     fn unlocked_repair_scope_preserves_explicit_inbound() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
@@ -6820,7 +6820,7 @@ mod tests {
     /// When locked, `strip_space_from_tool_schema` removes `space` from properties.
     #[test]
     fn capture_tool_schema_omits_space_when_locked() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
@@ -6851,7 +6851,7 @@ mod tests {
     /// Unlocked: `list_tools` equivalent — raw router listing preserves `space`.
     #[test]
     fn capture_tool_schema_includes_space_when_unlocked() {
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 
