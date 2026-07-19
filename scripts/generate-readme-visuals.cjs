@@ -8,6 +8,7 @@ const path = require("node:path");
 
 const {
   makeOverview,
+  makeKnowledgeNetwork,
   makeLifecycle,
 } = require("./readme-product-visuals.cjs");
 
@@ -157,10 +158,15 @@ function selectedAssets(only) {
     makeLifecycle(locale, "desktop"),
     makeLifecycle(locale, "mobile"),
   ]);
+  const network = ["en", "zh-Hans", "zh-Hant"].flatMap((locale) => [
+    makeKnowledgeNetwork(locale, "desktop"),
+    makeKnowledgeNetwork(locale, "mobile"),
+  ]);
   if (only === "banner") return banner;
   if (only === "overview") return overview;
   if (only === "lifecycle") return lifecycle;
-  return [...banner, ...overview, ...lifecycle];
+  if (only === "network") return network;
+  return [...banner, ...overview, ...network, ...lifecycle];
 }
 
 async function renderSvgToPng(asset, pngPath) {
@@ -432,7 +438,7 @@ function parseArgs(argv) {
   if (!mode) {
     throw new Error("Use --write or --check");
   }
-  if (!["all", "banner", "overview", "lifecycle"].includes(only)) {
+  if (!["all", "banner", "overview", "network", "lifecycle"].includes(only)) {
     throw new Error(`Unknown --only value: ${only}`);
   }
   return { mode, only };

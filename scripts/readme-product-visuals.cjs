@@ -7,6 +7,10 @@ const VIEWPORTS = {
     desktop: { width: 1800, height: 1120 },
     mobile: { width: 720, height: 2820 },
   },
+  network: {
+    desktop: { width: 1800, height: 1120 },
+    mobile: { width: 720, height: 2000 },
+  },
 };
 
 const C = {
@@ -320,6 +324,110 @@ const LIFECYCLE_COPY = {
     runs: "校正",
     schedule: "本地模型 / 預設關閉 / 明確啟用",
     archive: "只封存，不刪除。",
+  },
+};
+
+const NETWORK_COPY = {
+  en: {
+    description: "Knowledge and source Pages connect through Entities; atomic Memories preserve the evidence behind them.",
+    eyebrow: "KNOWLEDGE GRAPH",
+    title: "Connected like a graph. Readable like a wiki.",
+    mobileTitle: ["Connected like a graph.", "Readable like a wiki."],
+    subtitle: "Knowledge and source Pages connect through Entities; atomic Memories preserve the evidence behind them.",
+    mobileSubtitle: [
+      "Knowledge and source Pages",
+      "connect through Entities;",
+      "atomic Memories preserve",
+      "the evidence behind them.",
+    ],
+    knowledgePage: "KNOWLEDGE PAGE",
+    entity: "ENTITY",
+    sourcePage: "SOURCE PAGE",
+    memory: "MEMORY",
+    current: "CURRENT",
+    heroTitle: "Wenlan positioning",
+    heroMeta: "v7 / 12 supporting records",
+    sourceOne: "User interviews",
+    sourceTwo: "LLM-wiki notes",
+    entityCommunity: "ENTITY COMMUNITY",
+    communityMethod: "GROUPED BY RELATION DENSITY",
+    entityOne: "Wenlan",
+    entityTwo: "Obsidian",
+    entityThree: "LLM-wiki",
+    entityFour: "Knowledge graph",
+    project: "PROJECT",
+    tool: "TECHNOLOGY",
+    method: "CONCEPT",
+    concept: "CONCEPT",
+    linkedPage: "Launch strategy",
+    edgeLabels: ["CITES", "SUPPORTS", "ABOUT", "REFINES", "RELATED TO · 0.82", "PART OF"],
+    footer: "Readable Pages · Atomic evidence · Typed connections",
+  },
+  "zh-Hans": {
+    description: "知识页面与来源页面通过实体相连；原子记忆保留背后的依据。",
+    eyebrow: "知识图谱",
+    title: "像图谱一样相连，像 Wiki 一样可读。",
+    mobileTitle: ["像图谱一样相连，", "像 Wiki 一样可读。"],
+    subtitle: "知识页面与来源页面通过实体相连；原子记忆保留背后的依据。",
+    mobileSubtitle: [
+      "知识页面与来源页面通过实体相连；",
+      "原子记忆保留背后的依据。",
+    ],
+    knowledgePage: "知识页面",
+    entity: "实体",
+    sourcePage: "来源页面",
+    memory: "记忆",
+    current: "当前",
+    heroTitle: "Wenlan 定位",
+    heroMeta: "v7 / 12 条支撑记录",
+    sourceOne: "用户访谈",
+    sourceTwo: "LLM-wiki 笔记",
+    entityCommunity: "实体群组",
+    communityMethod: "按关系密度分组",
+    entityOne: "Wenlan",
+    entityTwo: "Obsidian",
+    entityThree: "LLM-wiki",
+    entityFour: "知识图谱",
+    project: "项目",
+    tool: "技术",
+    method: "概念",
+    concept: "概念",
+    linkedPage: "发布策略",
+    edgeLabels: ["引用", "支撑", "关于", "延伸", "相关 · 0.82", "属于"],
+    footer: "可读页面 · 原子依据 · 明确关系",
+  },
+  "zh-Hant": {
+    description: "知識頁面與來源頁面透過實體相連；原子記憶保留背後的依據。",
+    eyebrow: "知識圖譜",
+    title: "像圖譜一樣相連，像 Wiki 一樣可讀。",
+    mobileTitle: ["像圖譜一樣相連，", "像 Wiki 一樣可讀。"],
+    subtitle: "知識頁面與來源頁面透過實體相連；原子記憶保留背後的依據。",
+    mobileSubtitle: [
+      "知識頁面與來源頁面透過實體相連；",
+      "原子記憶保留背後的依據。",
+    ],
+    knowledgePage: "知識頁面",
+    entity: "實體",
+    sourcePage: "來源頁面",
+    memory: "記憶",
+    current: "目前",
+    heroTitle: "Wenlan 定位",
+    heroMeta: "v7 / 12 條支撐紀錄",
+    sourceOne: "使用者訪談",
+    sourceTwo: "LLM-wiki 筆記",
+    entityCommunity: "實體群組",
+    communityMethod: "依關係密度分組",
+    entityOne: "Wenlan",
+    entityTwo: "Obsidian",
+    entityThree: "LLM-wiki",
+    entityFour: "知識圖譜",
+    project: "專案",
+    tool: "技術",
+    method: "概念",
+    concept: "概念",
+    linkedPage: "發布策略",
+    edgeLabels: ["引用", "支撐", "關於", "延伸", "相關 · 0.82", "屬於"],
+    footer: "可讀頁面 · 原子依據 · 明確關係",
   },
 };
 
@@ -1053,6 +1161,372 @@ function makeOverview(locale, viewport) {
   };
 }
 
+function networkEdgeLabel({
+  locale,
+  x,
+  y,
+  value,
+  size = 11,
+}) {
+  const width = approximateWidth(value, locale, true, size) + 18;
+  return `<g>
+    <rect x="${x - width / 2}" y="${y - size - 5}" width="${width}" height="${size + 12}" rx="4" fill="${C.paper}" fill-opacity="0.94"/>
+    ${text({
+      locale,
+      x,
+      y,
+      value,
+      size,
+      kind: "mono",
+      weight: 500,
+      fill: C.secondary,
+      anchor: "middle",
+    })}
+  </g>`;
+}
+
+function networkEntityNode({
+  locale,
+  c,
+  prefix,
+  cx,
+  cy,
+  radius,
+  title,
+  subtype,
+}) {
+  const titleSize = locale === "en" && approximateWidth(title, locale, false, 21) > radius * 1.7
+    ? 18
+    : (locale === "en" ? 21 : 22);
+  return region({
+    id: `${prefix}-entity-${title}`,
+    x: cx - radius,
+    y: cy - radius,
+    width: radius * 2,
+    height: radius * 2,
+    content: `
+      <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${C.indigoSoft}" stroke="#AAA5E5" stroke-width="1.5"/>
+      ${text({ locale, x: cx, y: cy - 28, value: c.entity, size: 10, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
+      ${text({ locale, x: cx, y: cy + 5, value: title, size: titleSize, kind: "heading", weight: 600, anchor: "middle" })}
+      ${text({ locale, x: cx, y: cy + 34, value: subtype, size: 10, kind: "mono", weight: 500, fill: C.secondary, anchor: "middle" })}
+    `,
+  });
+}
+
+function networkSourceNode({
+  locale,
+  c,
+  prefix,
+  cx,
+  cy,
+  radius,
+  title,
+}) {
+  return region({
+    id: `${prefix}-source-${title}`,
+    x: cx - radius,
+    y: cy - radius,
+    width: radius * 2,
+    height: radius * 2,
+    content: `
+      <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${C.raised}" stroke="${C.border}" stroke-width="1.5"/>
+      ${documentGlyph({ x: cx - 13, y: cy - 62, color: C.secondary })}
+      ${text({ locale, x: cx, y: cy - 16, value: c.sourcePage, size: 10, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
+      ${text({ locale, x: cx, y: cy + 22, value: title, size: locale === "en" ? 19 : 20, kind: "heading", weight: 600, anchor: "middle" })}
+    `,
+  });
+}
+
+function networkKnowledgeNode({
+  locale,
+  c,
+  prefix,
+  cx,
+  cy,
+  radius,
+  title,
+}) {
+  return region({
+    id: `${prefix}-knowledge-${title}`,
+    x: cx - radius,
+    y: cy - radius,
+    width: radius * 2,
+    height: radius * 2,
+    content: `
+      <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${C.surface}" stroke="${C.indigo}" stroke-width="1.6"/>
+      ${text({ locale, x: cx, y: cy - 20, value: c.knowledgePage, size: 10, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
+      ${text({ locale, x: cx, y: cy + 18, value: title, size: locale === "en" ? 20 : 22, kind: "heading", weight: 600, anchor: "middle" })}
+    `,
+  });
+}
+
+function networkMemoryNode({
+  locale,
+  c,
+  prefix,
+  cx,
+  cy,
+  id,
+  labelX = cx + 20,
+  labelAnchor = "start",
+  mobile = false,
+}) {
+  const width = mobile ? 150 : 132;
+  const x = labelAnchor === "end" ? labelX - width : cx - 18;
+  return region({
+    id: `${prefix}-memory-${id}`,
+    x,
+    y: cy - 28,
+    width,
+    height: 58,
+    content: `
+      <circle cx="${cx}" cy="${cy}" r="${mobile ? 10 : 9}" fill="${C.indigo}"/>
+      <circle cx="${cx}" cy="${cy}" r="${mobile ? 18 : 16}" fill="none" stroke="#D2CFF0"/>
+      ${text({ locale, x: labelX, y: cy - 3, value: id, size: mobile ? 17 : 13, kind: "mono", weight: 500, fill: C.ink, anchor: labelAnchor })}
+      ${text({ locale, x: labelX, y: cy + (mobile ? 22 : 17), value: c.memory, size: mobile ? 15 : 10, kind: "mono", weight: 500, fill: C.tertiary, anchor: labelAnchor })}
+    `,
+  });
+}
+
+function networkHero({
+  locale,
+  c,
+  prefix,
+  cx,
+  cy,
+  mobile = false,
+}) {
+  const radius = mobile ? 170 : 190;
+  const width = mobile ? 300 : 330;
+  const height = mobile ? 174 : 190;
+  const x = cx - width / 2;
+  const y = cy - height / 2;
+  const pad = mobile ? 28 : 30;
+  const currentWidth = locale === "en" ? (mobile ? 92 : 82) : (mobile ? 82 : 72);
+  return region({
+    id: `${prefix}-hero`,
+    x: cx - radius,
+    y: cy - radius,
+    width: radius * 2,
+    height: radius * 2,
+    checkOverlap: false,
+    content: `
+      <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${C.indigoSoft}" fill-opacity="0.72" stroke="#D2CFF0" stroke-width="1.5"/>
+      <g filter="url(#${prefix}-page-shadow)">
+        <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" fill="${C.surface}" stroke="${C.border}"/>
+      </g>
+      ${text({ locale, x: x + pad, y: y + 36, value: c.knowledgePage, size: mobile ? 17 : 11, kind: "mono", weight: 500, fill: C.indigo })}
+      ${chip({
+        locale,
+        x: x + width - currentWidth - pad,
+        y: y + (mobile ? 18 : 16),
+        label: c.current,
+        width: currentWidth,
+        height: mobile ? 34 : 28,
+        fill: C.sageSoft,
+        stroke: "#C7DACB",
+        color: C.sageDark,
+        mono: true,
+        size: mobile ? 15 : 11,
+      }).markup}
+      ${text({ locale, x: x + pad, y: y + (mobile ? 88 : 82), value: c.heroTitle, size: mobile ? (locale === "en" ? 27 : 28) : (locale === "en" ? 30 : 31), kind: "heading", weight: 600 })}
+      ${text({ locale, x: x + pad, y: y + (mobile ? 118 : 112), value: c.heroMeta, size: mobile ? 16 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
+      <line x1="${x + pad}" y1="${y + (mobile ? 136 : 132)}" x2="${x + width - pad}" y2="${y + (mobile ? 136 : 132)}" stroke="${C.border}"/>
+      <rect x="${x + pad}" y="${y + (mobile ? 150 : 150)}" width="${mobile ? 168 : 184}" height="${mobile ? 7 : 8}" rx="4" fill="#D9DEE7"/>
+      <rect x="${x + pad + (mobile ? 180 : 196)}" y="${y + (mobile ? 150 : 150)}" width="${mobile ? 56 : 70}" height="${mobile ? 7 : 8}" rx="4" fill="#E3E7EE"/>
+    `,
+  });
+}
+
+function networkDesktop(c, locale, prefix) {
+  const edge = (d, color = C.indigo, width = 1.5, opacity = 0.46, directed = false) => (
+    `<path d="${d}" fill="none" stroke="${color}" stroke-width="${width}" stroke-opacity="${opacity}" stroke-linecap="round"${directed ? ` marker-end="url(#${prefix}-relation-arrow)"` : ""}/>`
+  );
+  const labels = c.edgeLabels;
+
+  return `
+    ${logo({ x: 68, y: 60, size: 58, prefix })}
+    ${region({
+      id: `${prefix}-heading`,
+      x: 148,
+      y: 56,
+      width: 1578,
+      height: 138,
+      checkOverlap: false,
+      content: `
+        ${text({ locale, x: 148, y: 84, value: c.eyebrow, size: 13, kind: "mono", weight: 500, fill: C.tertiary })}
+        ${text({ locale, x: 148, y: 136, value: c.title, size: locale === "en" ? 44 : 43, kind: "heading", weight: 600 })}
+        ${text({ locale, x: 148, y: 178, value: c.subtitle, size: locale === "en" ? 18 : 19, fill: C.secondary })}
+      `,
+    })}
+    <g data-fit-region="${prefix}-graph-field" data-fit-x="80" data-fit-y="230" data-fit-width="1640" data-fit-height="780" data-check-overlap="true">
+    <path d="M1090 292 C1248 214 1514 232 1662 354 C1768 474 1720 752 1560 890 C1420 1002 1170 944 1082 778 C1008 638 988 420 1090 292Z" fill="${C.sageSoft}" fill-opacity="0.76" stroke="#C7DACB" stroke-width="1.5"/>
+    ${text({ locale, x: 1110, y: 298, value: c.entityCommunity, size: 11, kind: "mono", weight: 500, fill: C.sageDark })}
+    ${text({ locale, x: 1110, y: 318, value: c.communityMethod, size: 9, kind: "mono", weight: 500, fill: C.tertiary })}
+    ${edge("M350 405 C454 428 520 492 590 540")}
+    ${edge("M448 778 C522 760 566 700 610 680")}
+    ${edge("M496 536 C542 540 558 566 580 580", C.indigo, 1.8, 0.62)}
+    ${edge("M520 900 C546 812 592 762 650 740", C.indigo, 1.8, 0.62)}
+    ${edge("M944 566 C1026 546 1064 506 1080 490", C.indigo, 1.8, 0.62)}
+    ${edge("M872 744 C902 792 932 812 966 826")}
+    ${edge("M328 450 C430 650 650 934 910 900", C.secondary, 1.2, 0.32)}
+    ${edge("M1260 420 C1312 382 1348 354 1360 344", C.sage, 2.2, 0.78, true)}
+    ${edge("M1270 512 C1360 530 1408 560 1422 588", C.sage, 1.6, 0.68, true)}
+    ${edge("M1302 724 C1270 704 1246 660 1224 576", C.sage, 3.4, 0.84, true)}
+    ${edge("M1492 422 C1524 466 1538 504 1534 518", C.sage, 1.4, 0.60, true)}
+    ${edge("M1460 680 C1436 700 1420 714 1412 724", C.sage, 1.8, 0.66, true)}
+    ${edge("M1068 858 C1144 844 1202 824 1242 800")}
+    ${networkSourceNode({ locale, c, prefix, cx: 270, cy: 360, radius: 92, title: c.sourceOne })}
+    ${networkSourceNode({ locale, c, prefix, cx: 360, cy: 800, radius: 94, title: c.sourceTwo })}
+    ${networkMemoryNode({ locale, c, prefix, cx: 480, cy: 535, id: "mem_42", labelX: 460, labelAnchor: "end" })}
+    ${networkMemoryNode({ locale, c, prefix, cx: 520, cy: 915, id: "mem_77" })}
+    ${networkHero({ locale, c, prefix, cx: 770, cy: 610 })}
+    ${networkKnowledgeNode({ locale, c, prefix, cx: 1000, cy: 890, radius: 90, title: c.linkedPage })}
+    ${networkEntityNode({ locale, c, prefix, cx: 1180, cy: 480, radius: 100, title: c.entityOne, subtype: c.project })}
+    ${networkEntityNode({ locale, c, prefix, cx: 1450, cy: 345, radius: 84, title: c.entityTwo, subtype: c.tool })}
+    ${networkEntityNode({ locale, c, prefix, cx: 1510, cy: 610, radius: 88, title: c.entityThree, subtype: c.method })}
+    ${networkEntityNode({ locale, c, prefix, cx: 1340, cy: 790, radius: 92, title: c.entityFour, subtype: c.concept })}
+    ${networkEdgeLabel({ locale, x: 450, y: 444, value: labels[0] })}
+    ${networkEdgeLabel({ locale, x: 548, y: 574, value: labels[1] })}
+    ${networkEdgeLabel({ locale, x: 1026, y: 528, value: labels[2] })}
+    ${networkEdgeLabel({ locale, x: 910, y: 786, value: labels[3] })}
+    ${networkEdgeLabel({ locale, x: 1324, y: 374, value: labels[4] })}
+    ${networkEdgeLabel({ locale, x: 1262, y: 654, value: labels[5] })}
+    </g>
+    ${region({
+      id: `${prefix}-footer`,
+      x: 80,
+      y: 1018,
+      width: 1640,
+      height: 58,
+      checkOverlap: false,
+      content: `
+        <line x1="80" y1="1018" x2="1720" y2="1018" stroke="${C.border}"/>
+        ${text({ locale, x: 900, y: 1060, value: c.footer, size: locale === "en" ? 15 : 16, kind: "mono", weight: 500, fill: C.secondary, anchor: "middle" })}
+      `,
+    })}
+  `;
+}
+
+function networkMobile(c, locale, prefix) {
+  const edge = (d, color = C.indigo, width = 1.8, opacity = 0.48, directed = false) => (
+    `<path d="${d}" fill="none" stroke="${color}" stroke-width="${width}" stroke-opacity="${opacity}" stroke-linecap="round"${directed ? ` marker-end="url(#${prefix}-relation-arrow)"` : ""}/>`
+  );
+  const labels = c.edgeLabels;
+
+  return `
+    ${logo({ x: 40, y: 48, size: 58, prefix })}
+    ${region({
+      id: `${prefix}-heading`,
+      x: 122,
+      y: 44,
+      width: 558,
+      height: 266,
+      checkOverlap: false,
+      content: `
+        ${text({ locale, x: 122, y: 70, value: c.eyebrow, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
+        ${lines({ locale, x: 122, y: 116, values: c.mobileTitle, size: locale === "en" ? 34 : 36, lineHeight: 42, kind: "heading", weight: 600 })}
+        ${lines({ locale, x: 122, y: 210, values: c.mobileSubtitle, size: locale === "en" ? 23 : 24, lineHeight: 30, fill: C.secondary })}
+      `,
+    })}
+    <g data-fit-region="${prefix}-graph-field" data-fit-x="40" data-fit-y="290" data-fit-width="640" data-fit-height="1600" data-check-overlap="true">
+    <path d="M292 1110 C394 1028 610 1060 672 1220 C724 1400 680 1720 562 1840 C438 1936 300 1780 286 1550 C270 1360 228 1186 292 1110Z" fill="${C.sageSoft}" fill-opacity="0.76" stroke="#C7DACB" stroke-width="1.8"/>
+    ${text({ locale, x: 520, y: 1070, value: c.entityCommunity, size: 17, kind: "mono", weight: 500, fill: C.sageDark, anchor: "middle" })}
+    ${text({ locale, x: 520, y: 1096, value: c.communityMethod, size: 14, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
+    ${edge("M224 452 C264 534 284 612 300 658")}
+    ${edge("M504 496 C462 560 430 610 414 648")}
+    ${edge("M268 610 C300 628 316 650 326 664", C.indigo, 2.1, 0.68)}
+    ${edge("M494 650 C466 668 446 684 432 700", C.indigo, 2.1, 0.68)}
+    ${edge("M384 974 C378 1016 386 1054 404 1084", C.indigo, 2.1, 0.66)}
+    ${edge("M222 1008 C276 956 290 924 300 892")}
+    ${edge("M476 1164 C520 1194 548 1232 558 1266", C.sage, 2.8, 0.78, true)}
+    ${edge("M446 1240 C430 1320 416 1384 408 1426", C.sage, 1.8, 0.68, true)}
+    ${edge("M490 1664 C300 1510 300 1370 380 1260", C.sage, 4, 0.84, true)}
+    ${edge("M526 1402 C548 1490 548 1596 536 1654", C.sage, 1.5, 0.60, true)}
+    ${edge("M400 1590 C430 1644 462 1670 482 1674", C.sage, 1.8, 0.66, true)}
+    ${networkSourceNode({ locale, c, prefix, cx: 160, cy: 390, radius: 88, title: c.sourceOne })}
+    ${networkSourceNode({ locale, c, prefix, cx: 560, cy: 430, radius: 88, title: c.sourceTwo })}
+    ${networkMemoryNode({ locale, c, prefix, cx: 250, cy: 610, id: "mem_42", labelX: 230, labelAnchor: "end", mobile: true })}
+    ${networkMemoryNode({ locale, c, prefix, cx: 500, cy: 650, id: "mem_77", labelX: 482, labelAnchor: "end", mobile: true })}
+    ${networkHero({ locale, c, prefix, cx: 360, cy: 810, mobile: true })}
+    ${networkKnowledgeNode({ locale, c, prefix, cx: 140, cy: 1070, radius: 82, title: c.linkedPage })}
+    ${networkEntityNode({ locale, c, prefix, cx: 406, cy: 1170, radius: 88, title: c.entityOne, subtype: c.project })}
+    ${networkEntityNode({ locale, c, prefix, cx: 574, cy: 1348, radius: 78, title: c.entityTwo, subtype: c.tool })}
+    ${networkEntityNode({ locale, c, prefix, cx: 404, cy: 1512, radius: 82, title: c.entityThree, subtype: c.method })}
+    ${networkEntityNode({ locale, c, prefix, cx: 536, cy: 1740, radius: 82, title: c.entityFour, subtype: c.concept })}
+    ${networkEdgeLabel({ locale, x: 258, y: 544, value: labels[0], size: 17 })}
+    ${networkEdgeLabel({ locale, x: 306, y: 686, value: labels[1], size: 17 })}
+    ${networkEdgeLabel({ locale, x: 394, y: 1034, value: labels[2], size: 17 })}
+    ${networkEdgeLabel({ locale, x: 246, y: 970, value: labels[3], size: 17 })}
+    ${networkEdgeLabel({ locale, x: 536, y: 1240, value: labels[4], size: 17 })}
+    ${networkEdgeLabel({ locale, x: 316, y: 1398, value: labels[5], size: 17 })}
+    </g>
+    ${region({
+      id: `${prefix}-footer`,
+      x: 40,
+      y: 1910,
+      width: 640,
+      height: 58,
+      checkOverlap: false,
+      content: `
+        <line x1="40" y1="1910" x2="680" y2="1910" stroke="${C.border}"/>
+        ${text({ locale, x: 360, y: 1952, value: c.footer, size: locale === "en" ? 18 : 19, kind: "mono", weight: 500, fill: C.secondary, anchor: "middle" })}
+      `,
+    })}
+  `;
+}
+
+function makeKnowledgeNetwork(locale, viewport) {
+  const c = NETWORK_COPY[locale];
+  if (!c) throw new Error(`Unknown knowledge-network locale: ${locale}`);
+  const { width, height } = VIEWPORTS.network[viewport];
+  const prefix = `network-${locale}-${viewport}`;
+  const body = viewport === "mobile"
+    ? networkMobile(c, locale, prefix)
+    : networkDesktop(c, locale, prefix);
+  const suffix = locale === "en" ? "" : `-${locale}`;
+  const name = `wenlan-knowledge-network${suffix}${viewport === "mobile" ? "-mobile" : ""}`;
+  const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+    <title id="title">${esc(c.title)}</title>
+    <desc id="desc">${esc(c.description)}</desc>
+    <style>text { font-kerning: normal; }</style>
+    <rect width="${width}" height="${height}" fill="${C.paper}"/>
+    ${body}
+    <defs>
+      ${logoDefs(prefix)}
+      <marker id="${prefix}-relation-arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M2 2 L9 6 L2 10" fill="none" stroke="${C.sage}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+      <filter id="${prefix}-page-shadow" x="-20%" y="-20%" width="140%" height="150%">
+        <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#1A1A2E" flood-opacity="0.09"/>
+        <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1A1A2E" flood-opacity="0.05"/>
+      </filter>
+    </defs>
+  </svg>
+`.replace(/[ \t]+$/gmu, "");
+  return {
+    group: "network",
+    name,
+    width,
+    height,
+    background: C.paper,
+    requiredCopy: [
+      c.eyebrow,
+      c.title,
+      c.knowledgePage,
+      c.entity,
+      c.sourcePage,
+      c.memory,
+      c.heroTitle,
+      c.entityCommunity,
+      c.communityMethod,
+      ...c.edgeLabels,
+      c.footer,
+    ],
+    svg,
+  };
+}
+
 function memoryObjectDesktop(c, locale, prefix) {
   const learned = chip({
     locale,
@@ -1520,5 +1994,6 @@ function makeLifecycle(locale, viewport) {
 module.exports = {
   family,
   makeOverview,
+  makeKnowledgeNetwork,
   makeLifecycle,
 };

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=66dab17b8efb516d4b36c2fcdb1c6fed02fa21b127d482ac21730bbf218fecc1 -->
+<!-- README_SYNC: source=README.md sha256=d2ed67bd1a4b51576c1c33d57e40262cb257bec83b097e8f595d574f3c5e25bf -->
 
 <p align="center">
   <picture>
@@ -30,6 +30,10 @@
 
 <p align="center">
   <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan 桌面 app，展示有来源支撑的 wiki 页面与可检查的引用。" width="100%">
+</p>
+
+<p align="center">
+  <sub>桌面 app 中持续维护的页面：打开任意引用，就能检查这条结论背后的来源或记忆。</sub>
 </p>
 
 ---
@@ -79,7 +83,7 @@ Wenlan connection，以及一次 capture/recall round trip。
 npx -y wenlan setup
 ```
 
-这个命令会下载预编译的 CLI、后台服务（daemon）与 MCP 连接器，启动并验证本地服务；不需要安装 Rust 或 Cargo。Linux x64/ARM64 可以使用自动化的 [shell 设置流程](docs/setup-with-ai.md#install-the-runtime)；Windows x64 请从 [Releases](https://github.com/7xuanlu/wenlan/releases/latest) 下载对应的 archive。macOS Intel 目前[没有受支持的完整 runtime 安装方式](crates/wenlan-cli/README.md#macos-intel)。
+这个命令会下载预编译的 CLI、后台服务（daemon）与 MCP 连接器，启动并验证本地服务；不需要安装 Rust 或 Cargo。使用 glibc 的 Linux x64/ARM64 可以采用自动化的 [shell 设置流程](docs/setup-with-ai.md#install-the-runtime)；Windows x64 请从 [Releases](https://github.com/7xuanlu/wenlan/releases/latest) 下载对应的 archive。macOS Intel 目前[没有受支持的完整 runtime 安装方式](crates/wenlan-cli/README.md#macos-intel)。
 
 手动与各 client 设置说明：[AI 辅助设置](docs/setup-with-ai.md) · [Claude Code plugin](plugin/.claude-plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 与 MCP](crates/wenlan-cli/README.md)。
 
@@ -105,13 +109,13 @@ Wenlan 把文档、笔记和过去的 AI 对话整理成会随工作持续更新
 
 **一个知识系统，三种角色：**
 
-- **来源保留原始材料。** 文档、笔记与导入的对话都能追溯。
+- **来源让 Wenlan 读到的材料始终可追溯。** 导入的对话保留为捕获时的记录；已注册文件会随内容变化同步当前版本。
 - **记忆保留工作真正教会你的内容。** AI agent 捕获原子的决策、经验、修正与取代关系，并保留出处。
 - **页面汇总当前知识。** Wenlan 把相关来源与记忆整理成带引用的 Markdown，让你反复使用、刷新与审核。
 
 **在 LLM-wiki 的基础上继续推进：**
 
-- **[LLM-wiki v1](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：** Karpathy 提出不可变的来源、由 AI 维护的 Markdown Wiki，以及会随你和 AI 一起演进、规定组织与维护方式的 Schema（规则层）。Wenlan 以明确的记忆字段与内建规则，落实页面结构、出处、引用、刷新、归属和审核。
+- **[LLM-wiki v1](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：** Karpathy 提出不可变的来源、由 AI 维护的 Markdown Wiki，以及会随你和 AI 一起演进、规定组织与维护方式的 Schema（规则层）。Wenlan 以[类型化记忆字段](docs/technical-foundations.md#typed-memory-schema)与内建规则，落实页面结构、出处、引用、刷新、归属和审核。
 - **[LLM-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2)：** Rohitg00 加入记忆生命周期。Wenlan 把这个方向做成可以直接使用的产品：可追溯的来源、由 AI agent 按 Zettelkasten（卡片盒笔记法）捕获的原子记忆（每条只表达一个完整想法），以及同时由两者建立并持续维护的页面。
 
 **Wenlan 最独特的做法：** 来源与原子记忆会分别支撑持续维护的页面。记忆历史保留知识如何改变；页面历史说明当前结论由哪些依据支撑。机器维护的页面可以依当前依据重建；对人工文字的改动则成为可审核的修订，不会直接覆盖。
@@ -124,12 +128,21 @@ Wenlan 把文档、笔记和过去的 AI 对话整理成会随工作持续更新
 
 ### 越用越有价值的知识图谱
 
-配置 enrichment 模型后，Wenlan 会从记忆中提取本地实体关系图：人物、项目与概念成为带类型的实体，相关说法成为观察，带类型的关系则把它们连接起来。实体链接与解析会复用已有节点，而不是把每次提及都当成新事物；每条记忆仍保留来源，并可连接多个实体。
+实体关系图谱只是 Wenlan 更大连接式 wiki 的一部分。**知识页面**保留持续维护的结论，**实体**固定可复用的人物、项目与概念，**来源页面**让导入或同步的材料可检查，原子**记忆**则保留决策与变化。它们通过彼此分开的明确连接协作：页面间的 wikilink、页面依据、记忆到实体的连接，以及实体间的有向关系。
 
-- **积累：** 新内容可以扩展图谱，同时保留原始来源与完整的记忆历史。
-- **连接：** 人物、概念、决策与依据能跨工具、跨对话保持关联。
-- **复用：** 已建立的连接能帮助之后的工作找到相关记忆与依据，不必每次从头重建脉络。
-- **比较与修正：** 相关说法更容易放在一起检查；修正与明确的取代关系会保留前后脉络，而不是静默覆盖历史。
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-knowledge-network-zh-Hans-mobile.png">
+    <img src="./docs/assets/wenlan-knowledge-network-zh-Hans.png" alt="Wenlan 连接式知识系统的概念图：知识页面、来源页面、原子记忆与实体通过页面链接、依据、记忆到实体的连接和实体关系互相连接。" width="100%">
+  </picture>
+</p>
+
+在实体图谱这一层，配置 enrichment 模型后，Wenlan 会从记忆中提取带类型的实体、观察与有方向的关系。实体链接与解析会复用已有节点，而不是把每次提及都当成新事物；每条记忆仍保留来源，并可连接多个实体。[查看连接模型如何存储 ->](docs/technical-foundations.md#connected-knowledge-model)
+
+- **含义与方向：** 关系使用 `uses`、`part_of`、`contradicts`、`replaced_by` 等预置词汇；未知类型会回退为 `related_to`，并成为可审核的词汇提案。
+- **强度与出处：** 关系可以保存置信度、解释与对应的来源记忆，让强弱不同的主张仍可区分、可检查。
+- **形成可复用群组：** 标签传播会依关系密度为实体分组，并按每对实体之间的关系数量加权。这些群组可组织可选的全局摘要，实体链接也会为检索补充脉络。
+- **修正但不抹除：** 相关说法、修正与明确的取代关系可以放在一起检查，原始来源与记忆历史仍会保留。
 
 检索时，Wenlan 会用实体向量匹配找到与问题相关的实体。存在符合条件的图谱链接时，默认开启的图谱记忆信号（graph-memory stream）会把相连记忆作为第三路 [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf) 排名信号加以提升。这个路径取决于现有图谱数据与读取范围，Space 边界仍然有效。[查看图谱检索如何工作 ->](docs/technical-foundations.md#graph-assisted-retrieval)
 
@@ -222,17 +235,17 @@ a1b2c3d distill: 4 pages
 - **文档来源：** 导入单个 `.md`、`.txt` 或可提取文本的 `.pdf`，递归读取包含它们的文件夹，或索引 Obsidian 仓库中的 Markdown。
 - **增量同步：** 单个文件与普通文件夹来源会在后台追踪变化；Obsidian 仓库保持只读，按需重新同步。
 - **原子记忆（Atomic Memory）：** MCP 客户端把一个完整的决策、经验、更正、偏好或事实存成一条，并用[溯源与取代](https://wenlan.app/learn/ai-memory-provenance)记录它来自哪里、替代了什么。
-- **类型化补全（Typed enrichment）：** 配好模型后，Wenlan 会分类每条记忆，并补上按类型定义的 schema 字段、日期、标签、检索提示与图谱链接。
+- **[类型化补全（Typed enrichment）](docs/technical-foundations.md#typed-memory-schema)：** 配好模型后，Wenlan 会分类每条记忆，并补上该类型定义的结构化字段、日期、标签、检索提示与图谱链接。
 - **[来源支撑页面（Source-backed Pages）](https://wenlan.app/docs/source-backed-pages)：** 把相关来源与记忆提炼成带来源标记与 `[[wikilinks]]` 的 Markdown 页面；daemon 还能验证并记录逐条引用。
-- **引用门控更新（Citation-gated refresh）：** 依据不足的草稿会被拒绝；机器页面可更新，用户文字只进入待审修订。
+- **引用门控更新（Citation-gated refresh）：** 自动刷新时，引用支撑不足的草稿会被拒绝；机器页面可更新，用户文字只进入待审修订。
 - **[混合检索（Hybrid retrieval）](docs/technical-foundations.md#retrieval-pipeline)：** FTS5 找原词，本地 BGE embedding 找语义，RRF 融合排序，图谱链接补充脉络。
 - **[检索通道（Retrieval channels）](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选的页面、情节记忆（episodic）与逐事实（per-fact）通道扩大召回；cross-encoder 重排提高精度。
 - **[知识图谱（Knowledge graph）](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 类型化实体、关系与观察连接人物、项目、主张及其支撑记忆。
 - **[人在回路审查（Human-in-the-loop）](https://wenlan.app/docs/review-and-trust)：** 日常工作保持自动；受保护冲突、页面修订、实体合并与新词汇才等待判断。
 - **[空间（Spaces）](https://wenlan.app/docs/spaces)：** 用明确范围隔开工作、个人、客户与代码库的记忆、页面和检索结果。
-- **[本地 daemon + MCP](https://wenlan.app/docs/architecture)：** 一个轻量 Rust 服务留在本机，让桌面 app、CLI、Claude Code、Codex、Cursor、Claude Desktop、VS Code 与 Gemini CLI 共用同一份知识。
+- **[本地 daemon + MCP](https://wenlan.app/docs/architecture)：** 一个轻量 Rust daemon 作为本地唯一事实来源。桌面 app 与 CLI 直接调用它；各 AI client 通过小型 MCP 连接器访问同一份知识。
 - **自定义集成：** localhost HTTP API 可接收其他采集流程准备好的文本、网页内容与记忆。
-- **后台维护：** 受管理模式可在没有客户端窗口时执行已配置的同步、补全、引用与页面更新。
+- **后台维护：** 关闭桌面 app 后，daemon 仍会继续执行已配置的同步、补全、引用与页面更新。
 - **[模型选择](docs/technical-foundations.md#model-roles)：** 基础检索留在本机；补全与合成可用设备端 Qwen、兼容 OpenAI 的本地接口或云端模型。
 - **[可检查的所有权](https://wenlan.app/learn/markdown-local-index-ai-memory)：** 记忆与图谱留在本地 libSQL；Markdown、引用、修订、git 历史与 Obsidian 导出都可检查。
 - **只读健康检查：** [`doctor`](https://wenlan.app/docs/diagnostics-and-issue-reports) 检查本地服务；[`lint`](plugin/skills/lint/SKILL.md) 找出格式错误的引用、孤立链接、损坏的 embedding，以及搜索索引或图谱完整性问题，但不会改写知识。
@@ -258,6 +271,7 @@ a1b2c3d distill: 4 pages
 - **本地基础检索：** [BGE 向量模型（embedding model）](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) 通过 FastEmbed 在你的设备上运行，用于混合搜索，不需要 API key。
 - **可选的设备端整理：** 内容补充（enrichment）与页面汇总可以使用你选择的 [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) 或 [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF)，并通过 [llama.cpp](https://github.com/ggml-org/llama.cpp) 运行。你没有选择前，Wenlan 不会下载或启用语言模型。
 - **其他模型来源：** Ollama 或 LM Studio 等 OpenAI 兼容的本地端点，或已设置的云端 provider，也可以提供模型支持的内容补充与页面汇总。
+- **云端说明：** 如果你选择的模型端点位于远端，Wenlan 会把该任务需要的 system prompt 与 user prompt 发给它。本地检索与设备端整理仍留在你的设备上。
 - **无遥测：** Wenlan 不发送使用遥测。
 
 完整 workflow 参考：[plugin/skills](plugin/skills/README.md)。模型分工与限制见：[技术基础（英文）](docs/technical-foundations.md#model-roles)。
@@ -309,14 +323,14 @@ a1b2c3d distill: 4 pages
 
 ## 贡献
 
-欢迎 bug fixes、eval cases、文档与功能。安装 Wenlan 不需要从源码构建；本地开发主要使用下面两组命令：
+欢迎 bug fixes、eval cases、文档与功能。安装 Wenlan 不需要从源码构建。本地开发时，请从对应 repository 的根目录运行每组命令：
 
 ```bash
-# Runtime、CLI 与 MCP（本 repository）
+# 7xuanlu/wenlan — runtime、CLI 与 MCP
 cargo build --workspace
 cargo test --workspace
 
-# 桌面 app（7xuanlu/wenlan-app）
+# 7xuanlu/wenlan-app — 桌面 app
 pnpm install
 pnpm tauri dev
 pnpm build:all

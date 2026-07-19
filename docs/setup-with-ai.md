@@ -63,7 +63,7 @@ codex plugin add wenlan@7xuanlu-wenlan
 
 Start a new Codex task so the plugin and MCP server load, then run `/setup`. Detailed workflows: [Codex plugin](../plugin-codex/README.md).
 
-## Cursor, Claude Desktop, VS Code, or Gemini CLI
+## MCP-only setup and other clients
 
 Install the runtime using the host-specific path above, then configure only the client the user named:
 
@@ -71,7 +71,7 @@ Install the runtime using the host-specific path above, then configure only the 
 wenlan connect <client>
 ```
 
-Supported values are `cursor`, `claude-desktop`, `vscode`, and `gemini`. The CLI makes a backup before replacing an existing JSON configuration. Full command reference: [CLI and MCP setup](../crates/wenlan-cli/README.md).
+Use `claude-code` or `codex` when the user wants MCP without the plugin. Supported values are `claude-code`, `codex`, `cursor`, `claude-desktop`, `vscode`, and `gemini`. The CLI makes a backup before replacing an existing JSON configuration. Full command reference: [CLI and MCP setup](../crates/wenlan-cli/README.md).
 
 ## Verify
 

@@ -60,17 +60,43 @@ For global vector search, libSQL's `vector_top_k` uses the DiskANN index. A
 selected Space applies its scope filter before cosine ordering instead of
 querying the global index, preserving the requested read boundary.
 
+## Connected knowledge model
+
+The README visual is a product-level model, not a claim that every object lives
+in one homogeneous graph table. Wenlan connects four explicit structures:
+
+- **Page links:** `[[wikilinks]]` resolve into `page_links`, including orphan
+  labels that can resolve when the target Page appears later.
+- **Page evidence:** `page_evidence` records whether a Page is supported by a
+  Memory, external URL, external file, or authored material.
+- **Memory-Entity links:** `memory_entities` connects each atomic Memory to
+  every extracted Entity while the Memory retains its original provenance.
+- **Entity relations:** `relations` stores directed, typed edges between
+  Entities, with optional confidence, explanation, and source-Memory
+  provenance.
+
+Together these structures keep Pages readable and source-backed while the
+entity graph remains available for connection, grouping, and retrieval. They
+have different ownership and update rules, so Wenlan does not collapse them
+into one undifferentiated graph store.
+
 ## Graph data and entity resolution
 
 With an enrichment model configured, Wenlan extracts and stores:
 
 - **Entities:** named people, projects, concepts, places, and other typed nodes.
 - **Typed relations:** directed edges such as one entity using or belonging to
-  another, with source-Memory provenance when available.
+  another. A relation can store confidence, an extraction explanation, and
+  source-Memory provenance.
 - **Observations:** claims attached to an entity.
 - **Memory links:** a many-to-many `memory_entities` table connecting each
   Memory to every extracted entity, while the Memory retains its original
   source.
+
+Relation types are normalized against a seeded vocabulary. An unknown
+snake-case type is stored as `related_to` and queued as a reviewable
+`vocab_promote` proposal, so the vocabulary can grow without silently
+fragmenting the graph.
 
 Entity resolution follows an explicit cascade:
 
@@ -80,6 +106,13 @@ Entity resolution follows an explicit cascade:
    Jaccard similarity (`>= 0.9`).
 4. Reuse the nearest BGE entity vector when cosine similarity is above `0.9`.
 5. Create a new entity only when the earlier steps do not resolve the mention.
+
+The refinement cycle also runs label-propagation community detection over the
+entity-relation graph. For this grouping step, relations are treated as
+undirected and each entity pair is weighted by its number of distinct relation
+rows; relation confidence is stored separately and is not the community edge
+weight. The resulting `community_id` can group linked Memories for the optional
+global-context summary path.
 
 Automatic post-ingest extraction currently creates entities without a Space
 value. Those entities can anchor Global and Uncategorized graph searches, but a
@@ -126,6 +159,20 @@ Page, episode, and fact-channel failures are logged and fall back to the
 remaining retrieval signals. If a cross-encoder fails or returns no scores,
 Wenlan preserves the pre-rerank ordering.
 
+## Typed Memory schema
+
+Wenlan's llm-wiki schema foundation is concrete in `MemorySchema`: each Memory
+type has required and optional structured fields plus a retrieval-cue template.
+`identity`, `preference`, and `decision` have specialized shapes; `fact`,
+`lesson`, `gotcha`, and unknown types currently use the fact shape. Validation
+reports missing required fields, and enrichment can turn populated fields into
+deterministic retrieval cues.
+
+This is a typed Memory schema, not a claim that every Page has a user-editable
+schema. Page structure is governed separately by the synthesis prompts,
+canonical Page write path, provenance records, citation processing, and review
+rules.
+
 ## Model roles
 
 | Role | Current choices | Notes |
@@ -165,10 +212,15 @@ Ollama or LM Studio and configured cloud providers remain alternatives.
 
 - Hybrid retrieval, vector schema, RRF, graph stream, and optional channels:
   [`db.rs`](../crates/wenlan-core/src/db.rs)
+- Page links, typed evidence, Memory-Entity links, and Entity relations:
+  [`db.rs`](../crates/wenlan-core/src/db.rs) and
+  [`synthesis/wikilinks.rs`](../crates/wenlan-core/src/synthesis/wikilinks.rs)
 - Graph extraction and Memory-entity linking:
   [`kg/entity_extraction.rs`](../crates/wenlan-core/src/kg/entity_extraction.rs)
 - Entity resolution:
   [`post_write.rs`](../crates/wenlan-core/src/post_write.rs)
+- Typed Memory fields and retrieval-cue templates:
+  [`schema.rs`](../crates/wenlan-core/src/schema.rs)
 - Bounded graph-traversal scaffold (not a live Memory-retrieval channel):
   [`retrieval/traversal.rs`](../crates/wenlan-core/src/retrieval/traversal.rs)
 - Cross-encoder modes and fallback contract:
