@@ -2807,6 +2807,22 @@ impl MemoryDB {
         };
         drop(rows);
 
+        // A database migrated by a NEWER daemon is not ours to write to. Every
+        // migration below is gated `if version < N`, so a newer user_version
+        // silently skips all of them and we would go on writing against a
+        // schema we cannot see — ignoring columns and constraints added after
+        // us. This is not hypothetical: an older installed build can still be
+        // running and reopening the same file every few seconds.
+        //
+        // Refusing to open is the recoverable failure; writing is not.
+        if version > i64::from(SCHEMA_VERSION) {
+            return Err(WenlanError::VectorDb(format!(
+                "database schema is version {version}, newer than this build supports \
+                 ({SCHEMA_VERSION}); a newer Wenlan has already migrated it. Upgrade \
+                 Wenlan (or quit the older copy) rather than letting this one write to it."
+            )));
+        }
+
         if version < 1 {
             // Migration 1: reserved (initial schema — no-op since CREATE TABLE IF NOT EXISTS handles it)
             conn.execute("PRAGMA user_version = 1", ())
@@ -52305,6 +52321,87 @@ pub(crate) mod tests {
             .unwrap();
         let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(present, 1, "child_vectors survives idempotent re-run");
+    }
+
+    /// A database a NEWER daemon already migrated must not be opened. Every
+    /// migration is gated `if version < N`, so a newer `user_version` skips all
+    /// of them silently — without this check an older build would go on writing
+    /// against columns and constraints it cannot see. Refusing is recoverable;
+    /// writing is not.
+    #[tokio::test]
+    async fn opening_a_newer_schema_database_is_refused() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                &format!("PRAGMA user_version = {}", crate::db::SCHEMA_VERSION + 1),
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let err = db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect_err("a newer schema must be refused, not silently accepted");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("newer than this build supports"),
+            "the error must say why it refused, not just fail; got: {msg}"
+        );
+    }
+
+    /// A fresh install and an upgraded install must end up with the same
+    /// schema. They share one incremental chain, so this holds by construction
+    /// today — the test is here to catch the day someone adds a fresh-path DDL
+    /// shortcut and the two paths quietly diverge.
+    ///
+    /// Exercises the real upgrade for M0's migrations: drop what 73 and 74
+    /// added, rewind the version, and re-migrate.
+    #[tokio::test]
+    async fn fresh_and_upgraded_schemas_agree() {
+        async fn schema_of(db: &MemoryDB) -> Vec<(String, String)> {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT name, COALESCE(sql, '') FROM sqlite_master \
+                     WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut out = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                out.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+            }
+            out
+        }
+
+        let (fresh, _fresh_dir) = test_db().await;
+        let (upgraded, _up_dir) = test_db().await;
+
+        // Rewind `upgraded` to a genuine pre-M0 database.
+        {
+            let conn = upgraded.conn.lock().await;
+            conn.execute("DROP TABLE IF EXISTS operation_receipts", ())
+                .await
+                .unwrap();
+            conn.execute("DROP TABLE IF EXISTS page_history", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 72", ()).await.unwrap();
+        }
+        upgraded
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migrating a pre-M0 database must succeed");
+
+        assert_eq!(
+            schema_of(&fresh).await,
+            schema_of(&upgraded).await,
+            "a fresh install and an upgraded one must have identical schemas"
+        );
     }
 
     #[tokio::test]
