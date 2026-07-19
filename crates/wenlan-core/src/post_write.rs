@@ -16,7 +16,7 @@ use wenlan_types::{
     MemoryType, RawDocument,
 };
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WriteResult {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1196,6 +1196,48 @@ async fn pre_write_pause() {
 async fn pre_write_pause() {}
 
 #[allow(clippy::too_many_arguments)]
+/// The advisory line a successful page update returns. Shared between the
+/// receipt and the return value so a replay hands back exactly what the
+/// original call did, rather than a lookalike rebuilt at replay time.
+fn write_warnings(delta_summary: &Option<String>, from: i64, to: i64) -> Vec<String> {
+    match delta_summary {
+        Some(summary) => vec![format!("v{from} → v{to}: {summary}")],
+        None => vec![],
+    }
+}
+
+/// Fingerprint of a page write, used to tell an honest retry (same request,
+/// replay the stored response) from an operation id being reused for a
+/// different write (a conflict).
+///
+/// Covers everything that decides what the write does: which page, the body,
+/// the sources, who is writing, and the version precondition. Field lengths
+/// are hashed alongside the values so two different requests cannot collide by
+/// shifting a boundary — `["ab","c"]` and `["a","bc"]` must not agree.
+fn page_write_digest(page_id: &str, req: &UpdatePageRequest, edited_by: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut field = |bytes: &[u8]| {
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    };
+    field(page_id.as_bytes());
+    field(req.content.as_bytes());
+    field(edited_by.as_bytes());
+    field(&(req.source_memory_ids.len() as u64).to_le_bytes());
+    for sid in &req.source_memory_ids {
+        field(sid.as_bytes());
+    }
+    match req.expected_version {
+        Some(v) => {
+            field(b"v");
+            field(&v.to_le_bytes());
+        }
+        None => field(b"-"),
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 async fn update_page_impl(
     db: &MemoryDB,
     page_id: &str,
@@ -1242,6 +1284,37 @@ async fn update_page_impl(
     let projection = knowledge_path.map(|path| {
         crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
     });
+
+    // ── Retry identity ──────────────────────────────────────────────────────
+    // A caller that sends both ids gets exactly-once semantics. The same pair
+    // with the same request replays the recorded response without writing
+    // again; the same pair with a different request is refused rather than
+    // quietly becoming a second version. Either id alone is ignored — an
+    // operation id only means anything within the caller that minted it.
+    let retry = match (req.caller_id.as_deref(), req.operation_id.as_deref()) {
+        (Some(caller), Some(operation)) if !caller.is_empty() && !operation.is_empty() => Some((
+            caller.to_string(),
+            operation.to_string(),
+            page_write_digest(page_id, &req, edited_by),
+        )),
+        _ => None,
+    };
+    if let Some((caller, operation, digest)) = retry.as_ref() {
+        if let Some(stored) = db.get_operation_receipt(caller, operation).await? {
+            if stored.request_digest != *digest {
+                return Err(WenlanError::Conflict(format!(
+                    "operation id '{operation}' was already used by '{caller}' for a \
+                     different page write"
+                )));
+            }
+            log::debug!("[update_page] {page_id}: replaying receipt for {caller}/{operation}");
+            return serde_json::from_str::<WriteResult>(&stored.response).map_err(|e| {
+                WenlanError::VectorDb(format!(
+                    "receipt for {caller}/{operation} is unreadable: {e}"
+                ))
+            });
+        }
+    }
 
     // ── Load, decide ownership, and write under one version CAS ─────────────
     // The ownership decision is made from a loaded row, and the write CASes on
@@ -1377,6 +1450,32 @@ async fn update_page_impl(
                 crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
 
             // ── Apply DB update ─────────────────────────────────────────────
+            // The receipt records the response this call is about to return,
+            // so a replay hands back the identical envelope rather than a
+            // reconstruction. It commits inside the write's own transaction.
+            let receipt_response = match retry {
+                Some(_) => Some(serde_json::to_string(&WriteResult {
+                    id: page_id.to_string(),
+                    attached_to: None,
+                    warnings: write_warnings(&delta_summary, current_version, new_version),
+                    wrote: true,
+                    revision_card_id: None,
+                    gated: false,
+                })?),
+                None => None,
+            };
+            let receipt = match (retry.as_ref(), receipt_response.as_deref()) {
+                (Some((caller, operation, digest)), Some(response)) => {
+                    Some(crate::db::OperationReceipt {
+                        caller_id: caller,
+                        operation_id: operation,
+                        request_digest: digest,
+                        response,
+                    })
+                }
+                _ => None,
+            };
+
             pre_write_pause().await;
             // citations: None -> resets `citations` to '[]' (no fresh citation source
             // for this write; a stale claim-map must not survive a content change).
@@ -1390,6 +1489,7 @@ async fn update_page_impl(
                     &new_changelog,
                     citations.as_ref().map(|(json, _)| json.as_str()),
                     Some(current_version),
+                    receipt,
                 )
                 .await?;
 
@@ -1422,16 +1522,10 @@ async fn update_page_impl(
     }
     drop(projection);
 
-    // ── Build warnings ──────────────────────────────────────────────────────
-    let warnings = match delta_summary {
-        Some(ref summary) => vec![format!("v{current_version} → v{new_version}: {summary}")],
-        None => vec![],
-    };
-
     Ok(WriteResult {
         id: page_id.to_string(),
         attached_to: None,
-        warnings,
+        warnings: write_warnings(&delta_summary, current_version, new_version),
         wrote: true,
         revision_card_id: None,
         gated: false,
@@ -2914,6 +3008,8 @@ mod tests {
             content: content_v2.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let r2 = update_page(&db, &page_id, req2, "re_distill", false, None, None)
             .await
@@ -2926,6 +3022,8 @@ mod tests {
             content: content_v3.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let r3 = update_page(&db, &page_id, req3, "re_distill", false, None, None)
             .await
@@ -2958,6 +3056,8 @@ mod tests {
             content: "Rust is a systems language with memory safety and performance".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
@@ -2987,6 +3087,8 @@ mod tests {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
@@ -3014,6 +3116,8 @@ mod tests {
             content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "manual_edit", false, None, None).await;
         assert!(
@@ -3035,6 +3139,8 @@ mod tests {
             content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         // Should succeed without hallucination check
         update_page(&db, &page_id, req, "re_distill", false, None, None)
@@ -3059,6 +3165,8 @@ mod tests {
                     .to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         update_page(&db, &page_id, req, "fs_edit", false, None, None)
             .await
@@ -3097,6 +3205,8 @@ mod tests {
             content: "Rust is a systems language with memory safety (user edited)".to_string(),
             source_memory_ids: vec![ghost_source.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         update_page(&db, page_id, req, "fs_edit", false, None, None)
             .await
@@ -3118,6 +3228,8 @@ mod tests {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
@@ -3151,6 +3263,8 @@ mod tests {
                     .to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
                 expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "re_distill",
             false,
@@ -3183,6 +3297,8 @@ mod tests {
                         .to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
                 expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "re_distill",
             false,
@@ -3223,6 +3339,8 @@ mod tests {
             content: content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
@@ -3270,6 +3388,8 @@ mod tests {
                     content: human_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "fs_edit",
                 require_stale: false,
@@ -3296,6 +3416,8 @@ mod tests {
                     content: machine_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
@@ -3457,6 +3579,8 @@ mod tests {
                     content: winner_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: Some(stale_version),
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
@@ -3482,6 +3606,8 @@ mod tests {
                     content: "Stale writer body that must never land".to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: Some(stale_version),
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
@@ -3556,6 +3682,8 @@ mod tests {
                         content: body.to_string(),
                         source_memory_ids: vec![mem_id.to_string()],
                         expected_version: None,
+                        caller_id: None,
+                        operation_id: None,
                     },
                     edited_by: "re_distill",
                     require_stale: false,
@@ -3588,6 +3716,302 @@ mod tests {
         let page = db.get_page(page_id).await.unwrap().unwrap();
         assert_eq!(page.version, history[0].version);
         assert_eq!(page.content, history[0].content);
+    }
+
+    /// Seed a page and return `(db, tempdir, page_id, memory_id)` for the
+    /// retry-receipt tests below.
+    async fn receipt_fixture(
+        page_id: &'static str,
+    ) -> (MemoryDB, tempfile::TempDir, &'static str, &'static str) {
+        let (db, dir) = test_db().await;
+        let mem_id = "mem-receipt";
+        let body = "A retried write must not become a second version of the page";
+        seed_memory(&db, mem_id, body).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(page_id, "Receipts", None, body, None, None, &[mem_id], &now)
+            .await
+            .unwrap();
+        (db, dir, page_id, mem_id)
+    }
+
+    fn retry_req(content: &str, mem_id: &str, operation_id: &str) -> UpdatePageRequest {
+        UpdatePageRequest {
+            content: content.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: Some("app".to_string()),
+            operation_id: Some(operation_id.to_string()),
+        }
+    }
+
+    /// The lost-response case: the client never saw the reply and sent the very
+    /// same write again. It must get the original response back and the page
+    /// must be untouched — one version, one history row, not two.
+    #[tokio::test]
+    async fn page_write_same_operation_id_replays_instead_of_writing_again() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_replay").await;
+        let body = "A retried write must not become a second version of the page, ever";
+
+        let first = update_page(
+            &db,
+            page_id,
+            retry_req(body, mem_id, "op-1"),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(first.wrote);
+        let after_first = db.get_page(page_id).await.unwrap().unwrap();
+
+        let replay = update_page(
+            &db,
+            page_id,
+            retry_req(body, mem_id, "op-1"),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_string(&replay).unwrap(),
+            serde_json::to_string(&first).unwrap(),
+            "a replay returns the recorded response verbatim"
+        );
+        let after_replay = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_replay.version, after_first.version,
+            "the replay must not bump the version"
+        );
+        let versions: Vec<i64> = db
+            .list_page_history(page_id, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|h| h.version)
+            .collect();
+        assert_eq!(
+            versions,
+            vec![2, 1],
+            "the replay must not append a second history row"
+        );
+    }
+
+    /// The same operation id carrying a *different* write is not a retry — it
+    /// is an id being reused. Replaying the old response would tell the caller
+    /// their new text was saved when it never was, so refuse instead.
+    #[tokio::test]
+    async fn page_write_same_operation_id_with_different_body_is_a_conflict() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_conflict").await;
+
+        update_page(
+            &db,
+            page_id,
+            retry_req(
+                "A retried write must not become a second version of the page, ever",
+                mem_id,
+                "op-1",
+            ),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let after_first = db.get_page(page_id).await.unwrap().unwrap();
+
+        let err = update_page(
+            &db,
+            page_id,
+            retry_req(
+                "A retried write must not become a second version of the page — different text",
+                mem_id,
+                "op-1",
+            ),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .expect_err("reusing an operation id for a different write must be refused");
+        assert!(
+            matches!(err, WenlanError::Conflict(_)),
+            "expected a conflict, got {err:?}"
+        );
+
+        let unchanged = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(unchanged.content, after_first.content);
+        assert_eq!(unchanged.version, after_first.version);
+    }
+
+    /// A distinct operation id from the same caller is a distinct write and
+    /// must land normally — the receipt table must not become a write blocker.
+    #[tokio::test]
+    async fn page_write_different_operation_id_writes_normally() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_distinct").await;
+
+        for (op, body) in [
+            (
+                "op-1",
+                "A retried write must not become a second version of the page, once",
+            ),
+            (
+                "op-2",
+                "A retried write must not become a second version of the page, twice",
+            ),
+        ] {
+            let r = update_page(
+                &db,
+                page_id,
+                retry_req(body, mem_id, op),
+                "re_distill",
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(r.wrote, "operation {op} must land");
+        }
+
+        let versions: Vec<i64> = db
+            .list_page_history(page_id, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|h| h.version)
+            .collect();
+        assert_eq!(versions, vec![3, 2, 1]);
+    }
+
+    /// A write refused by the version precondition must leave no receipt, or
+    /// the caller's next honest attempt would replay a response for a write
+    /// that never happened. (This pins the refusal path only — the refusal
+    /// returns before the receipt is ever written. The transaction claim is
+    /// pinned by `page_write_crash_before_commit_leaves_no_receipt`.)
+    #[tokio::test]
+    async fn page_write_refused_by_cas_records_no_receipt() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_rollback").await;
+        let current = db.get_page(page_id).await.unwrap().unwrap();
+
+        let mut req = retry_req(
+            "A retried write must not become a second version of the page, refused",
+            mem_id,
+            "op-doomed",
+        );
+        req.expected_version = Some(current.version + 99);
+
+        let result = update_page(&db, page_id, req, "re_distill", false, None, None)
+            .await
+            .unwrap();
+        assert!(!result.wrote, "precondition: the write must be refused");
+
+        assert!(
+            db.get_operation_receipt("app", "op-doomed")
+                .await
+                .unwrap()
+                .is_none(),
+            "a refused write must leave no receipt behind"
+        );
+    }
+
+    /// The crash window: the page row, the history row, and the receipt are all
+    /// staged, and the process dies before COMMIT. Nothing may survive — least
+    /// of all the receipt, which would answer the caller's retry with "already
+    /// done" about a version that does not exist. This is the only test that
+    /// can tell an in-transaction receipt from an after-COMMIT one.
+    #[tokio::test]
+    async fn page_write_crash_before_commit_leaves_no_receipt() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_crash").await;
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+
+        *crate::db::FAIL_BEFORE_COMMIT.lock().unwrap() = Some(page_id.to_string());
+        let result = update_page(
+            &db,
+            page_id,
+            retry_req(
+                "A retried write must not become a second version of the page, crashed",
+                mem_id,
+                "op-crash",
+            ),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "precondition: the injected fault must abort the write; got {result:?}"
+        );
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            (after.content, after.version),
+            (before.content, before.version),
+            "the aborted write must have rolled back entirely"
+        );
+        assert!(
+            db.get_operation_receipt("app", "op-crash")
+                .await
+                .unwrap()
+                .is_none(),
+            "a receipt must not outlive the transaction that wrote it"
+        );
+
+        // The retry now behaves as if the first attempt never happened.
+        let retry = update_page(
+            &db,
+            page_id,
+            retry_req(
+                "A retried write must not become a second version of the page, crashed",
+                mem_id,
+                "op-crash",
+            ),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            retry.wrote,
+            "after a rolled-back attempt the same operation id must still be usable"
+        );
+    }
+
+    /// One id without the other is not a retry identity, and must not silently
+    /// behave like one — otherwise two callers could collide on "op-1".
+    #[tokio::test]
+    async fn page_write_partial_retry_identity_is_ignored() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_partial").await;
+
+        let mut req = retry_req(
+            "A retried write must not become a second version of the page, partial",
+            mem_id,
+            "op-partial",
+        );
+        req.caller_id = None;
+
+        update_page(&db, page_id, req, "re_distill", false, None, None)
+            .await
+            .unwrap();
+
+        assert!(
+            db.get_operation_receipt("", "op-partial")
+                .await
+                .unwrap()
+                .is_none(),
+            "an operation id with no caller must not be recorded"
+        );
     }
 
     /// A write that loses the CAS must leave no trace: no version bump and no
@@ -3624,6 +4048,8 @@ mod tests {
                         .to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: Some(stale_version + 5),
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
@@ -3693,6 +4119,8 @@ mod tests {
                     content: "Machine body computed from the pre-edit row".to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
@@ -3715,6 +4143,8 @@ mod tests {
                         content: human_content.to_string(),
                         source_memory_ids: vec![mem_id.to_string()],
                         expected_version: None,
+                        caller_id: None,
+                        operation_id: None,
                     },
                     edited_by: "fs_edit",
                     require_stale: false,
@@ -3797,6 +4227,8 @@ mod tests {
                     content: human_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: Some(machine_view.version),
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "fs_edit",
                 require_stale: false,
@@ -3823,6 +4255,8 @@ mod tests {
                     content: "Machine body that must never overwrite the human edit".to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
                     expected_version: Some(machine_view.version),
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
@@ -3887,6 +4321,8 @@ mod tests {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
                 expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -4115,6 +4551,8 @@ mod tests {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
                 expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -4147,6 +4585,8 @@ mod tests {
                 content: newer_human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
                 expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -4208,6 +4648,8 @@ mod tests {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
                 expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -4600,6 +5042,8 @@ mod tests {
             content: short_body,
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "distill", false, None, None).await;
         assert!(
@@ -4634,6 +5078,8 @@ mod tests {
             content: long_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "page_growth", false, None, None).await;
         assert!(result.is_ok(), "shrink-guard must allow growing body");
@@ -4658,6 +5104,8 @@ mod tests {
             content: tiny_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "distill", false, None, None)
             .await
@@ -4687,6 +5135,8 @@ mod tests {
             content: tiny_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         // manual_edit bypasses hallucination guard AND is NOT an LLM rewrite
         // so shrink-guard must NOT fire even though the body shrinks drastically

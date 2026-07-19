@@ -1332,6 +1332,8 @@ pub(crate) async fn refresh_page_with_prompt(
             content,
             source_memory_ids: source_ids,
             expected_version: None,
+            caller_id: None,
+            operation_id: None,
         },
         reason.edited_by(),
         true,

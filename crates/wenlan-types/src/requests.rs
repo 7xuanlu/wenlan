@@ -647,6 +647,18 @@ pub struct UpdatePageRequest {
     /// always describe the same row.
     #[serde(default)]
     pub expected_version: Option<i64>,
+    /// Retry identity. Sent together, `caller_id` and `operation_id` make the
+    /// write replayable: the same pair with the same request replays the
+    /// stored response instead of writing again, and the same pair with a
+    /// different request is a conflict. This is what turns "the response was
+    /// lost, the client retried" into a no-op rather than a second version.
+    ///
+    /// Either one alone is ignored — an operation id is only meaningful
+    /// within the caller that minted it.
+    #[serde(default)]
+    pub caller_id: Option<String>,
+    #[serde(default)]
+    pub operation_id: Option<String>,
 }
 
 /// Body for `PUT /api/pages/{id}` — agent-side refresh of a stale page.

@@ -201,6 +201,8 @@ async fn sync_one_file(
         content: body_norm,
         source_memory_ids: existing.source_memory_ids.clone(),
         expected_version: None,
+        caller_id: None,
+        operation_id: None,
     };
     // Pass knowledge_path so update_page re-projects the md with the new
     // version stamp; without that the next tick would see origin_version

@@ -510,6 +510,7 @@ pub async fn run_citation_backfill_tick(
                         &changelog,
                         Some(&json),
                         Some(page.version),
+                        None,
                     )
                     .await
                 {
