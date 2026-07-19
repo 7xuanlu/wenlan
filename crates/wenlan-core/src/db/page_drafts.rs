@@ -115,6 +115,61 @@ impl MemoryDB {
             .ok_or_else(|| WenlanError::NotFound(format!("Page draft {id}")))
     }
 
+    async fn page_draft_create_request_matches_on_conn(
+        conn: &libsql::Connection,
+        id: &str,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+    ) -> Result<bool, WenlanError> {
+        let mut rows = conn
+            .query(
+                "SELECT 1
+                   FROM page_draft_create_requests
+                  WHERE page_id=?1
+                    AND title=?2
+                    AND content=?3
+                    AND space IS ?4
+                    AND workspace IS ?5
+                  LIMIT 1",
+                libsql::params![id, title, content, space, workspace],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("load Page draft create request: {error}"))
+            })?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("load Page draft create request row: {error}"))
+            })?
+            .is_some())
+    }
+
+    async fn page_draft_create_request_exists_on_conn(
+        conn: &libsql::Connection,
+        id: &str,
+    ) -> Result<bool, WenlanError> {
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM page_draft_create_requests WHERE page_id=?1 LIMIT 1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("check Page draft create request: {error}"))
+            })?;
+        Ok(rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("check Page draft create request row: {error}"))
+            })?
+            .is_some())
+    }
+
     /// Create the first durable, meaningful Page draft snapshot.
     pub async fn create_page_draft(
         &self,
@@ -130,8 +185,9 @@ impl MemoryDB {
 
     /// Create a Page draft under a stable client-generated id.
     ///
-    /// Replaying the exact same first snapshot is idempotent. Reusing the id
-    /// for any other snapshot, or for an active Page, is a conflict.
+    /// Replaying the immutable first request is idempotent even when mutable
+    /// Page scope has since changed on the server. Reusing the id for any other
+    /// request, or for an active Page, is a conflict.
     pub async fn create_page_draft_with_id(
         &self,
         id: &str,
@@ -189,13 +245,21 @@ impl MemoryDB {
             .map_err(|error| WenlanError::VectorDb(format!("create Page draft begin: {error}")))?;
         if let Some(existing) = Self::page_draft_on_conn(&tx, id).await? {
             if existing.status == "draft"
-                && existing.title == title
-                && existing.content == content
-                && existing.space.as_deref() == requested_space.as_deref()
-                && existing.workspace.as_deref() == requested_workspace.as_deref()
+                && Self::page_draft_create_request_matches_on_conn(
+                    &tx,
+                    id,
+                    title,
+                    content,
+                    requested_space.as_deref(),
+                    requested_workspace.as_deref(),
+                )
+                .await?
             {
                 return Ok(existing);
             }
+            return Err(WenlanError::PageDraftIdConflict(id.to_string()));
+        }
+        if Self::page_draft_create_request_exists_on_conn(&tx, id).await? {
             return Err(WenlanError::PageDraftIdConflict(id.to_string()));
         }
         let normalized_space = if validate_space {
@@ -229,13 +293,29 @@ impl MemoryDB {
                 id,
                 title,
                 content,
-                normalized_space,
+                normalized_space.as_deref(),
                 now,
-                normalized_workspace
+                normalized_workspace.as_deref()
             ],
         )
         .await
         .map_err(|error| WenlanError::VectorDb(format!("create Page draft: {error}")))?;
+        tx.execute(
+            "INSERT INTO page_draft_create_requests (
+                page_id, title, content, space, workspace
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            libsql::params![
+                id,
+                title,
+                content,
+                normalized_space.as_deref(),
+                normalized_workspace.as_deref()
+            ],
+        )
+        .await
+        .map_err(|error| {
+            WenlanError::VectorDb(format!("create Page draft request fingerprint: {error}"))
+        })?;
         #[cfg(test)]
         super::page_drafts_test::transaction_test_hooks::after_create_insert(id).await;
         let page = Self::required_page_draft_on_conn(&tx, id).await?;
@@ -404,6 +484,20 @@ impl MemoryDB {
                 "Page draft {id} changed during delete"
             )));
         }
+        tx.execute(
+            "INSERT INTO page_draft_create_requests (page_id)
+             VALUES (?1)
+             ON CONFLICT(page_id) DO UPDATE SET
+                title=NULL,
+                content=NULL,
+                space=NULL,
+                workspace=NULL",
+            libsql::params![id],
+        )
+        .await
+        .map_err(|error| {
+            WenlanError::VectorDb(format!("scrub Page draft create request: {error}"))
+        })?;
         tx.commit()
             .await
             .map_err(|error| WenlanError::VectorDb(format!("delete Page draft commit: {error}")))?;

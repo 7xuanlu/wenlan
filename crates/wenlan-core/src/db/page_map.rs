@@ -604,6 +604,43 @@ async fn bump_revision(
     Ok(base_revision + 1)
 }
 
+async fn ensure_page_map_owner_active(
+    conn: &libsql::Connection,
+    page_id: &str,
+) -> Result<(), WenlanError> {
+    let mut rows = conn
+        .query(
+            "SELECT status FROM pages WHERE id=?1 LIMIT 1",
+            libsql::params![page_id],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("load Page Map owner status: {e}")))?;
+    let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("load Page Map owner status row: {e}")))?
+    else {
+        return Err(WenlanError::NotFound(format!("Page {page_id}")));
+    };
+    let status: String = row
+        .get(0)
+        .map_err(|e| WenlanError::VectorDb(format!("Page Map owner status: {e}")))?;
+    if status != "active" {
+        return Err(WenlanError::Validation(format!(
+            "Page {page_id} is not active"
+        )));
+    }
+    Ok(())
+}
+
+async fn read_active_page_map_revision(
+    conn: &libsql::Connection,
+    page_id: &str,
+) -> Result<Option<i64>, WenlanError> {
+    ensure_page_map_owner_active(conn, page_id).await?;
+    read_page_map_revision(conn, page_id).await
+}
+
 impl MemoryDB {
     /// Full map read. Non-dismissed nodes/edges by default; pass
     /// `include_dismissed = true` for the `?include=dismissed` audit view.
@@ -654,6 +691,7 @@ impl MemoryDB {
         generated_at: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        ensure_page_map_owner_active(&conn, page_id).await?;
         conn.execute(
             "UPDATE page_maps SET generated_at = ?2 WHERE page_id = ?1",
             libsql::params![page_id, generated_at],
@@ -681,15 +719,15 @@ impl MemoryDB {
     /// stale `base_revision` silently succeed instead of 409ing.
     pub async fn init_page_map(&self, page_id: &str) -> Result<(PageMapData, bool), WenlanError> {
         let conn = self.conn.lock().await;
-        if let Some(existing) = load_page_map_data(&conn, page_id, true).await? {
-            return Ok((existing, false));
-        }
-
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("init_page_map begin: {e}")))?;
 
         let result: Result<bool, WenlanError> = async {
+            ensure_page_map_owner_active(&conn, page_id).await?;
+            if load_page_map_data(&conn, page_id, true).await?.is_some() {
+                return Ok(false);
+            }
             let root_id = uuid::Uuid::new_v4().to_string();
             let fingerprint = fingerprint_for("page", page_id, "~");
             let inserted = conn
@@ -770,7 +808,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("create_map_node begin: {e}")))?;
 
         let result = async {
-            let current_revision = read_page_map_revision(&conn, page_id)
+            let current_revision = read_active_page_map_revision(&conn, page_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
             if current_revision != base_revision {
@@ -881,7 +919,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("create_suggested_map_node begin: {e}")))?;
 
         let result = async {
-            let current_revision = read_page_map_revision(&conn, page_id)
+            let current_revision = read_active_page_map_revision(&conn, page_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
             if current_revision != base_revision {
@@ -985,7 +1023,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("patch_map_node begin: {e}")))?;
 
         let result = async {
-            let current_revision = read_page_map_revision(&conn, page_id)
+            let current_revision = read_active_page_map_revision(&conn, page_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
             if current_revision != base_revision {
@@ -1175,7 +1213,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("create_map_edge begin: {e}")))?;
 
         let result = async {
-            let current_revision = read_page_map_revision(&conn, page_id)
+            let current_revision = read_active_page_map_revision(&conn, page_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
             if current_revision != base_revision {
@@ -1280,7 +1318,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("create_suggested_map_edge begin: {e}")))?;
 
         let result = async {
-            let current_revision = read_page_map_revision(&conn, page_id)
+            let current_revision = read_active_page_map_revision(&conn, page_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
             if current_revision != base_revision {
@@ -1383,7 +1421,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("patch_map_edge begin: {e}")))?;
 
         let result = async {
-            let current_revision = read_page_map_revision(&conn, page_id)
+            let current_revision = read_active_page_map_revision(&conn, page_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
             if current_revision != base_revision {
@@ -1485,7 +1523,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("put_page_map_layout begin: {e}")))?;
 
         let result = async {
-            let current_revision = read_page_map_revision(&conn, page_id)
+            let current_revision = read_active_page_map_revision(&conn, page_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("no page_map for page {page_id}")))?;
             if current_revision != base_revision {
@@ -1550,6 +1588,7 @@ impl MemoryDB {
     /// is a no-op.
     pub async fn reset_page_map(&self, page_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        ensure_page_map_owner_active(&conn, page_id).await?;
         conn.execute(
             "DELETE FROM page_maps WHERE page_id = ?1",
             libsql::params![page_id],

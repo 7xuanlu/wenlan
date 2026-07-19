@@ -228,6 +228,58 @@ async fn client_uuid_is_validated_idempotent_and_collision_safe() {
     ));
 }
 
+#[tokio::test]
+async fn create_replay_returns_the_server_mutated_scope_after_space_rename() {
+    let (db, _tmp) = test_db().await;
+    db.create_space("work", None, false).await.unwrap();
+    let id = "page_00000000-0000-4000-8000-000000000003";
+
+    let created = db
+        .create_page_draft_with_id_in_registered_space(id, "Draft", "Body", Some("work"))
+        .await
+        .unwrap();
+    db.update_space("work", "work-renamed", None).await.unwrap();
+
+    let replay = db
+        .create_page_draft_with_id_in_registered_space(id, "Draft", "Body", Some("work"))
+        .await
+        .unwrap();
+
+    assert_eq!(replay.id, created.id);
+    assert_eq!(replay.version, created.version + 1);
+    assert_eq!(replay.space.as_deref(), Some("work-renamed"));
+    assert_eq!(replay.workspace.as_deref(), Some("work-renamed"));
+    assert_eq!(
+        scalar_i64(&db, "SELECT COUNT(*) FROM pages WHERE id=?1", id).await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn create_replay_rejects_a_different_scope_even_when_authored_content_matches() {
+    let (db, _tmp) = test_db().await;
+    db.create_space("work", None, false).await.unwrap();
+    db.create_space("personal", None, false).await.unwrap();
+    let id = "page_00000000-0000-4000-8000-000000000004";
+
+    db.create_page_draft_with_id_in_registered_space(id, "Draft", "Body", Some("work"))
+        .await
+        .unwrap();
+
+    for conflicting_space in [Some("personal"), None, Some("missing")] {
+        assert!(matches!(
+            db.create_page_draft_with_id_in_registered_space(
+                id,
+                "Draft",
+                "Body",
+                conflicting_space,
+            )
+            .await,
+            Err(WenlanError::PageDraftIdConflict(conflict_id)) if conflict_id == id
+        ));
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn simultaneous_same_id_creates_are_idempotent_or_conflict_by_snapshot() {
     let (db, _tmp) = test_db().await;
@@ -452,6 +504,55 @@ async fn delete_is_version_safe_and_rejects_active_and_missing_pages() {
         db.delete_page_draft("page_missing", 1).await,
         Err(WenlanError::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn deleted_draft_id_cannot_be_replayed_or_reused() {
+    let (db, _tmp) = test_db().await;
+    let id = "page_00000000-0000-4000-8000-000000000005";
+    let created = db
+        .create_page_draft_with_id(id, "Draft", "Body", Some("work"), Some("work"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        db.delete_page_draft(id, created.version).await.unwrap(),
+        PageDraftDeleteOutcome::Deleted
+    ));
+    {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT title, content, space, workspace
+                   FROM page_draft_create_requests
+                  WHERE page_id=?1",
+                libsql::params![id],
+            )
+            .await
+            .unwrap();
+        let row = rows
+            .next()
+            .await
+            .unwrap()
+            .expect("UUID tombstone must remain");
+        for column in 0..4 {
+            assert!(
+                row.get::<Option<String>>(column).unwrap().is_none(),
+                "discard must scrub the fingerprint payload and scope"
+            );
+        }
+    }
+
+    for (title, content, space, workspace) in [
+        ("Draft", "Body", Some("work"), Some("work")),
+        ("Different", "Request", None, None),
+    ] {
+        assert!(matches!(
+            db.create_page_draft_with_id(id, title, content, space, workspace)
+                .await,
+            Err(WenlanError::PageDraftIdConflict(conflict_id)) if conflict_id == id
+        ));
+    }
+    assert!(db.get_page(id).await.unwrap().is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

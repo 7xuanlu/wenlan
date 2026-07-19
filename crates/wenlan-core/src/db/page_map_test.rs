@@ -47,6 +47,49 @@ async fn init_page_map_idempotent() {
 }
 
 #[tokio::test]
+async fn page_map_mutations_reject_non_active_pages_at_the_core_boundary() {
+    let (db, _tmp) = test_db().await;
+    let draft = db
+        .create_page_draft("Draft", "Body", None, None)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        db.init_page_map(&draft.id).await,
+        Err(crate::WenlanError::Validation(_))
+    ));
+    assert!(db.get_page_map(&draft.id, true).await.unwrap().is_none());
+
+    seed_page(&db, "page-archived").await;
+    let (map, _created) = db.init_page_map("page-archived").await.unwrap();
+    let root = root_id(&map.nodes);
+    db.archive_page("page-archived").await.unwrap();
+
+    assert!(matches!(
+        db.create_map_node(
+            "page-archived",
+            map.map.revision,
+            &root,
+            "memory",
+            "mem-1",
+            None,
+            0.0,
+        )
+        .await,
+        Err(crate::WenlanError::Validation(_))
+    ));
+    assert!(matches!(
+        db.reset_page_map("page-archived").await,
+        Err(crate::WenlanError::Validation(_))
+    ));
+    assert!(db
+        .get_page_map("page-archived", true)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
 async fn create_map_node_fingerprint_dedup() {
     let (db, _tmp) = test_db().await;
     seed_page(&db, "page-1").await;

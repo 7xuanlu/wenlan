@@ -533,7 +533,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 75;
+pub const SCHEMA_VERSION: u32 = 76;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -7096,6 +7096,34 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("m75 bump: {e}")))?;
                 log::info!(
                     "[migration] Migration 75 applied: page_maps + page_map_nodes + page_map_edges (Page Map v1)"
+                );
+            }
+
+            // Migration 76: preserve the immutable first Page-draft request.
+            // Mutable Page columns cannot identify an ambiguous create retry
+            // after a server-side Space rename, move, or unassign. The ledger
+            // deliberately outlives Page deletion so a delayed retry cannot
+            // resurrect a draft that the user discarded.
+            if version < 76 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_draft_create_requests (
+                        page_id   TEXT PRIMARY KEY,
+                        title     TEXT,
+                        content   TEXT,
+                        space     TEXT,
+                        workspace TEXT
+                    );",
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("m76 create page_draft_create_requests: {e}"))
+                })?;
+                conn.execute("PRAGMA user_version = 76", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m76 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 76 applied: immutable Page draft create requests"
                 );
             }
         }
