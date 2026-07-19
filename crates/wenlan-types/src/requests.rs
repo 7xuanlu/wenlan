@@ -528,6 +528,10 @@ pub struct UpdateConfigRequest {
     /// `""` = clear; validated by the config route.
     #[serde(default)]
     pub synthesis_source: Option<String>,
+    /// Gates the proactive Page-Map suggestion phase in the scheduler. Omitted =
+    /// preserve stored value; present = set. Never gates the explicit improve route.
+    #[serde(default)]
+    pub page_map_auto_suggest: Option<bool>,
 }
 
 // ===== Chunks / indexed files =====
