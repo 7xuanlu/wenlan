@@ -1,0 +1,26 @@
+<svg width="720" height="300" viewBox="0 0 720 300" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Wenlan README banner</title>
+  <desc id="desc">Wenlan: your source-backed knowledge base, built to compound.</desc>
+  <rect width="720" height="300" fill="#101024"/>
+  <rect x="24" y="16" width="672" height="268" rx="24" fill="#101024" stroke="#2F3769"/>
+  <g transform="translate(294 30) scale(0.2578125)">
+    <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="url(#banner-mobile-ring)" stroke-width="76"/>
+    <circle cx="322" cy="160" r="42" fill="url(#banner-mobile-orb)"/>
+  </g>
+  <text x="360" y="190" fill="#93E3F2" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="28" font-weight="700" text-anchor="middle" letter-spacing="4">WENLAN</text>
+  <text x="360" y="232" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="34" font-weight="700" text-anchor="middle">Your source-backed knowledge base,</text>
+  <text x="360" y="270" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="34" font-weight="700" text-anchor="middle">built to compound.</text>
+  <defs>
+    <linearGradient id="banner-mobile-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C63FF"/>
+      <stop offset="0.5" stop-color="#5BA3E6"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </linearGradient>
+    <radialGradient id="banner-mobile-orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(310 144) rotate(52.125) scale(76.0263)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#A5C4F7"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </radialGradient>
+  </defs>
+</svg>

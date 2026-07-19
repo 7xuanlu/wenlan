@@ -5,8 +5,8 @@ A living knowledge base your agents build as they work. What they learn becomes 
 ## 30-Second Setup
 
 ```text
-0s   /plugin marketplace add 7xuanlu/claude-plugins
-     /plugin install wenlan@7xuanlu
+0s   /plugin marketplace add 7xuanlu/wenlan
+     /plugin install wenlan@7xuanlu-wenlan
 5s   restart Claude Code
 10s  /setup  auto-installs local runtime if missing, configures local memory,
             verifies runtime + MCP + round-trip, prints "Wenlan ready"
@@ -21,19 +21,20 @@ if the runtime ever stops.
 ## Install
 
 ```text
-/plugin marketplace add 7xuanlu/claude-plugins
-/plugin install wenlan@7xuanlu
+/plugin marketplace add 7xuanlu/wenlan
+/plugin install wenlan@7xuanlu-wenlan
 ```
 
-`7xuanlu` is the GitHub repo owner. If you fork Wenlan, use your own handle.
+`7xuanlu-wenlan` is the marketplace name declared by this repository.
 
 The marketplace is defined in [`../../.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) (at the repo root). The plugin metadata is defined in [`plugin.json`](plugin.json). MCP configuration is in [`../.mcp.json`](../.mcp.json) (this plugin's `.mcp.json`), which delegates to [`../bin/wenlan-mcp-runner.sh`](../bin/wenlan-mcp-runner.sh).
 
-The runner picks the MCP server binary in three paths, in order:
+The runner picks the MCP server binary from four paths, in order:
 
 1. **Filesystem override** — if `plugin/bin/wenlan-mcp.local` exists (typically a symlink to a locally-built binary, gitignored), the runner exec's it. Most reliable: survives plugin reloads that don't re-read env.
-2. **Env var override** — `ORIGIN_MCP_DEV_BIN=/abs/path/to/wenlan-mcp`. Convenient if you already export it; requires Claude Code to inherit the var at startup.
-3. **Default** — `npx -y origin-mcp@^X.Y.Z`. What end users get after installing the plugin.
+2. **Env var override** — `WENLAN_MCP_DEV_BIN=/abs/path/to/wenlan-mcp` (or the legacy `ORIGIN_MCP_DEV_BIN`). Convenient if you already export it; requires Claude Code to inherit the var at startup.
+3. **Installed runtime** — `~/.wenlan/bin/wenlan-mcp`, when `/setup` has installed it.
+4. **Default** — `npx -y wenlan-mcp@^0.13.2`. What end users get before local setup completes.
 
 To set up the filesystem override during dev:
 

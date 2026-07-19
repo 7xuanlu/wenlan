@@ -1,0 +1,26 @@
+<svg width="1280" height="440" viewBox="0 0 1280 440" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Wenlan README banner</title>
+  <desc id="desc">Wenlan: your source-backed knowledge base, built to compound.</desc>
+  <rect width="1280" height="440" fill="#101024"/>
+  <rect x="64" y="28" width="1152" height="384" rx="30" fill="#101024" stroke="#2F3769"/>
+  <g transform="translate(144 104) scale(0.453125)">
+    <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="url(#banner-desktop-ring)" stroke-width="76"/>
+    <circle cx="322" cy="160" r="42" fill="url(#banner-desktop-orb)"/>
+  </g>
+  <text x="440" y="174" fill="#93E3F2" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="34" font-weight="700" letter-spacing="4">WENLAN</text>
+  <text x="440" y="235" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="42" font-weight="700">Your source-backed knowledge base,</text>
+  <text x="440" y="283" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="42" font-weight="700">built to compound.</text>
+  <defs>
+    <linearGradient id="banner-desktop-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C63FF"/>
+      <stop offset="0.5" stop-color="#5BA3E6"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </linearGradient>
+    <radialGradient id="banner-desktop-orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(310 144) rotate(52.125) scale(76.0263)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#A5C4F7"/>
+      <stop offset="1" stop-color="#4AC8E8"/>
+    </radialGradient>
+  </defs>
+</svg>

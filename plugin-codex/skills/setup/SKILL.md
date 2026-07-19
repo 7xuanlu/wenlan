@@ -66,7 +66,9 @@ wenlan setup --basic
 wenlan background on
 ```
 
-Then re-probe health.
+Then continue to the health and version re-probe below. The installer deliberately
+targets the latest stable runtime. Do not downgrade a newer runtime to match a
+stale plugin cache.
 
 ### 3. Bootstrap
 
@@ -95,7 +97,7 @@ wenlan background on
 `wenlan setup --basic` is idempotent. `wenlan background on` starts the
 managed background process.
 
-### 4. Re-probe health
+### 4. Re-probe health and version
 
 ```bash
 for i in 1 2 3 4 5; do
@@ -107,6 +109,19 @@ done
 If the local runtime still is not reachable after about five seconds, surface
 the error and stop. Likely causes: launchd load failure, port 7878 already in
 use, or a local runtime crash.
+
+Once healthy, repeat the version comparison from step 2. If the versions still
+differ, stop instead of claiming setup succeeded:
+
+```text
+Runtime and plugin versions still differ after repair; update the Wenlan plugin,
+restart Codex, then run /wenlan:setup again.
+```
+
+This usually means the runtime is newer than the plugin cached by the current
+Codex process. Updating the plugin is safer than silently downgrading the
+runtime, and the restart is required before this session can load new plugin
+code.
 
 ### 5. Doctor
 

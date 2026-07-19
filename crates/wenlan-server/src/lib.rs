@@ -13,6 +13,7 @@ pub mod knowledge_routes;
 pub mod lint_routes;
 pub mod memory_routes;
 pub mod onboarding_routes;
+pub mod page_map_routes;
 pub mod read_scope;
 pub mod refinery_routes;
 pub mod reflection_debounce;
