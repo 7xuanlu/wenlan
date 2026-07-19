@@ -3606,56 +3606,88 @@ pub async fn handle_refresh_page(
         .write_page(&refreshed_page)
         .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
 
-    let db_result: Result<(), wenlan_core::error::WenlanError> = async {
-        wenlan_core::post_write::update_page(
-            &db,
-            &id,
-            wenlan_types::requests::UpdatePageRequest {
-                content: req.content.clone(),
-                source_memory_ids: req.source_memory_ids.clone(),
-                expected_version: None,
-                caller_id: None,
-                operation_id: None,
-            },
-            "agent_refresh",
-            false,
-            None,
-            None,
-        )
-        .await?;
-        if let Some(opt) = &summary_update {
-            db.update_page_summary(&id, opt.as_deref()).await?;
-        }
-        db.clear_page_staleness(&id).await?;
-        Ok(())
-    }
-    .await;
-
-    if let Err(e) = db_result {
-        // Roll back md to the snapshotted content so the two stores stay
-        // consistent. If the file existed before and we have its bytes,
-        // rewrite them; otherwise drop the projection.
-        let rollback = match (existing_state_file, existing_md_content) {
-            (Some(filename), Some(prev)) => {
-                std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
+    use wenlan_core::post_write::WriteOutcome;
+    let db_result: Result<wenlan_core::post_write::WriteResult, wenlan_core::error::WenlanError> =
+        async {
+            let result = wenlan_core::post_write::update_page(
+                &db,
+                &id,
+                wenlan_types::requests::UpdatePageRequest {
+                    content: req.content.clone(),
+                    source_memory_ids: req.source_memory_ids.clone(),
+                    expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
+                },
+                "agent_refresh",
+                false,
+                None,
+                None,
+            )
+            .await?;
+            // Carry the rest of the refresh only when the DB agrees with what the
+            // agent asked for. A Gated/Refused/Contended outcome means a human owns
+            // this prose right now — rewriting its summary or clearing its staleness
+            // would apply half of a refresh the gate just declined.
+            if matches!(
+                result.outcome,
+                WriteOutcome::Wrote | WriteOutcome::Unchanged
+            ) {
+                if let Some(opt) = &summary_update {
+                    db.update_page_summary(&id, opt.as_deref()).await?;
+                }
+                db.clear_page_staleness(&id).await?;
             }
-            _ => projection.remove_page(&id).map_err(|err| err.to_string()),
-        };
-        if let Err(rb) = rollback {
+            Ok(result)
+        }
+        .await;
+
+    // Roll back md to the snapshotted content so the two stores stay consistent.
+    // If the file existed before and we have its bytes, rewrite them; otherwise
+    // drop the projection.
+    let roll_back_md = || match (&existing_state_file, &existing_md_content) {
+        (Some(filename), Some(prev)) => {
+            std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
+        }
+        _ => projection.remove_page(&id).map_err(|err| err.to_string()),
+    };
+
+    let result = match db_result {
+        Ok(result) => result,
+        Err(e) => {
+            if let Err(rb) = roll_back_md() {
+                tracing::warn!(
+                    "[page] PUT failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                    id,
+                    e,
+                    rb
+                );
+            }
+            return Err(ServerError::IngestFailed(e.to_string()));
+        }
+    };
+
+    // The md was written before the gate ran, stamped `version + 1`. If the write
+    // did not land, that stamp is a lie the page watcher will act on: it ingests
+    // any md whose `origin_version` is >= the DB version as an `fs_edit`
+    // (sources/page_watcher.rs), which would re-apply this agent content AS A
+    // HUMAN WRITE and flip `user_edited` — laundering it straight past the gate
+    // that just refused it. Restore the vault to what the DB actually holds.
+    if result.outcome != WriteOutcome::Wrote {
+        if let Err(rb) = roll_back_md() {
             tracing::warn!(
-                "[page] PUT failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                "[page] PUT did not write ({:?}) and md rollback failed for {}: {}",
+                result.outcome,
                 id,
-                e,
                 rb
             );
         }
-        return Err(ServerError::IngestFailed(e.to_string()));
     }
 
     Ok(Json(wenlan_types::responses::PageWriteResponse {
         ok: true,
-        revision_card_id: None,
-        gated: false,
+        revision_card_id: result.revision_card_id,
+        gated: result.gated,
     }))
 }
 
