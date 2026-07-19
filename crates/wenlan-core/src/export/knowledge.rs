@@ -3012,7 +3012,10 @@ fn sync_projection_dirs(
 
 #[cfg(unix)]
 fn sync_dir_capability(directory: &Dir) -> Result<(), WenlanError> {
-    directory.try_clone()?.into_std_file().sync_all()?;
+    // cap-std opens directory capabilities with O_PATH on Linux. Cloning that
+    // descriptor preserves O_PATH, which cannot be fsynced (EBADF). Reopen the
+    // same directory through the capability to obtain a syncable descriptor.
+    directory.open(".")?.sync_all()?;
     Ok(())
 }
 
