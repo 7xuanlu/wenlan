@@ -669,6 +669,27 @@ describe("Main search", () => {
     expect(await screen.findByTestId("spaces-overview")).toBeInTheDocument();
   });
 
+  it("registers a quit guard that flushes only while a draft editor is active", async () => {
+    const onRegisterQuitGuard = vi.fn();
+    const user = userEvent.setup();
+    renderMain({ onRegisterQuitGuard });
+    const lastRegistration = onRegisterQuitGuard.mock.calls[
+      onRegisterQuitGuard.mock.calls.length - 1
+    ];
+    const guard = lastRegistration?.[0] as () => Promise<boolean>;
+
+    await expect(guard()).resolves.toBe(true);
+    expect(draftFlushMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Open wiki" }));
+    await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
+    draftFlushMock.mockResolvedValue(false);
+
+    await expect(guard()).resolves.toBe(false);
+    expect(draftFlushMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("page-draft-editor")).toBeInTheDocument();
+  });
+
   it("promotes a newly saved draft into history before leaving for Graph", async () => {
     const user = userEvent.setup();
     renderMain();

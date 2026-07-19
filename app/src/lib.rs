@@ -63,6 +63,58 @@ fn app_log_file_name() -> &'static str {
     "wenlan.log"
 }
 
+static QUIT_GUARD_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardedQuitAction {
+    RequestFrontendGuard,
+    ForceShutdown,
+}
+
+fn guarded_quit_action(pending: &std::sync::atomic::AtomicBool) -> GuardedQuitAction {
+    if pending.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        GuardedQuitAction::ForceShutdown
+    } else {
+        GuardedQuitAction::RequestFrontendGuard
+    }
+}
+
+fn cancel_guarded_quit(pending: &std::sync::atomic::AtomicBool) {
+    pending.store(false, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(not(feature = "review-fixtures"))]
+#[tauri::command]
+fn cancel_guarded_quit_request() {
+    cancel_guarded_quit(&QUIT_GUARD_PENDING);
+}
+
+#[cfg(not(feature = "review-fixtures"))]
+fn force_full_quit(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::lifecycle::quit_origin(&app).await {
+            log::error!("[app] forced quit failed: {e}");
+            app.exit(1);
+        }
+    });
+}
+
+#[cfg(not(feature = "review-fixtures"))]
+fn request_full_quit(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
+    use tauri::Emitter;
+    match guarded_quit_action(&QUIT_GUARD_PENDING) {
+        GuardedQuitAction::RequestFrontendGuard => {
+            if let Err(error) = app.emit("quit-requested", ()) {
+                cancel_guarded_quit(&QUIT_GUARD_PENDING);
+                return Err(error);
+            }
+        }
+        GuardedQuitAction::ForceShutdown => force_full_quit(app.clone()),
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn startup_reveal_fallback_delay() -> std::time::Duration {
     std::time::Duration::from_millis(1200)
@@ -594,13 +646,10 @@ pub fn run() {
                             }
                         }
                         "quit" => {
-                            let h = handle_for_menu.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = crate::lifecycle::quit_origin(&h).await {
-                                    log::error!("[tray] quit_origin failed: {e}");
-                                    h.exit(1);
-                                }
-                            });
+                            if let Err(e) = request_full_quit(&handle_for_menu) {
+                                log::error!("[tray] failed to request guarded quit: {e}");
+                                force_full_quit(handle_for_menu.clone());
+                            }
                         }
                         _ => {}
                     });
@@ -957,28 +1006,39 @@ pub fn run() {
             search::set_run_at_login,
             search::quit_wenlan_full,
             search::quit_origin_full,
+            cancel_guarded_quit_request,
             daemon_start::start_daemon_sidecar,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen {
-                has_visible_windows,
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested {
+                code: None,
+                api,
                 ..
-            } = event
-            {
-                use tauri::Emitter;
-                use tauri::Manager;
-                if let Some(window) = app.get_webview_window("main") {
-                    if !has_visible_windows {
-                        let _ = app.emit("show-memory", ());
-                    }
-                    set_main_window_dock_visibility(app, true);
-                    let _ = window.show();
-                    let _ = window.set_focus();
+            } if !lifecycle::is_quitting() => {
+                match request_full_quit(app) {
+                    Ok(()) => api.prevent_exit(),
+                    Err(e) => log::error!("[app] failed to request guarded quit: {e}"),
                 }
             }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                    use tauri::Emitter;
+                    use tauri::Manager;
+                    if let Some(window) = app.get_webview_window("main") {
+                        if !has_visible_windows {
+                            let _ = app.emit("show-memory", ());
+                        }
+                        set_main_window_dock_visibility(app, true);
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+            }
+            _ => {}
         });
 }
 
@@ -1029,5 +1089,25 @@ mod tests {
         assert!(startup_reveal_fallback_needed(false, true));
         assert!(startup_reveal_fallback_needed(true, false));
         assert!(startup_reveal_fallback_needed(false, false));
+    }
+
+    #[test]
+    fn repeated_guarded_quit_forces_shutdown_until_the_frontend_cancels() {
+        let pending = std::sync::atomic::AtomicBool::new(false);
+
+        assert_eq!(
+            guarded_quit_action(&pending),
+            GuardedQuitAction::RequestFrontendGuard
+        );
+        assert_eq!(
+            guarded_quit_action(&pending),
+            GuardedQuitAction::ForceShutdown
+        );
+
+        cancel_guarded_quit(&pending);
+        assert_eq!(
+            guarded_quit_action(&pending),
+            GuardedQuitAction::RequestFrontendGuard
+        );
     }
 }

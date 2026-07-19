@@ -1,10 +1,37 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import App from "./App";
 
+const eventListeners = vi.hoisted(
+  () => new Map<string, (event: { payload: unknown }) => void>(),
+);
+const quitGuardMock = vi.hoisted(
+  () => vi.fn<() => Promise<boolean>>(),
+);
+const quitWenlanFullMock = vi.hoisted(
+  () => vi.fn<() => Promise<void>>(),
+);
+const cancelGuardedQuitRequestMock = vi.hoisted(
+  () => vi.fn<() => Promise<void>>(),
+);
+const hideWindowMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const showWindowMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const focusWindowMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const emitMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: emitMock,
+  listen: vi.fn((event: string, handler: (event: { payload: unknown }) => void) => {
+    eventListeners.set(event, handler);
+    return Promise.resolve(() => eventListeners.delete(event));
+  }),
+}));
+
 vi.mock("./lib/tauri", () => ({
+  cancelGuardedQuitRequest: cancelGuardedQuitRequestMock,
+  quitWenlanFull: quitWenlanFullMock,
   shouldShowWizard: vi.fn(),
   setSetupCompleted: vi.fn().mockResolvedValue(undefined),
   setTrafficLightsVisible: vi.fn().mockResolvedValue(undefined),
@@ -19,8 +46,9 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     setAlwaysOnTop: vi.fn(),
     isVisible: vi.fn().mockResolvedValue(true),
-    show: vi.fn(),
-    setFocus: vi.fn(),
+    hide: hideWindowMock,
+    show: showWindowMock,
+    setFocus: focusWindowMock,
     setSize: vi.fn().mockResolvedValue(undefined),
     setPosition: vi.fn().mockResolvedValue(undefined),
     scaleFactor: vi.fn().mockResolvedValue(1),
@@ -33,7 +61,16 @@ vi.mock("@tauri-apps/api/window", () => ({
 // Heavy real children — swap for markers so this test only pins App's own
 // wizard-vs-home branching, not Main's or SetupWizard's internals.
 vi.mock("./components/memory/Main", () => ({
-  default: () => <div data-testid="home-main">home</div>,
+  default: (props: {
+    onRegisterQuitGuard?: (guard: (() => Promise<boolean>) | null) => void;
+  }) => {
+    props.onRegisterQuitGuard?.(quitGuardMock);
+    return (
+      <div data-testid="home-main">
+        <input aria-label="Draft title" />
+      </div>
+    );
+  },
 }));
 
 vi.mock("./components/SetupWizard", () => ({
@@ -70,6 +107,14 @@ function renderApp() {
 
 describe("App - first-run wizard gate", () => {
   beforeEach(() => {
+    eventListeners.clear();
+    emitMock.mockReset().mockResolvedValue(undefined);
+    focusWindowMock.mockReset().mockResolvedValue(undefined);
+    hideWindowMock.mockReset().mockResolvedValue(undefined);
+    quitGuardMock.mockReset().mockResolvedValue(true);
+    cancelGuardedQuitRequestMock.mockReset().mockResolvedValue(undefined);
+    quitWenlanFullMock.mockReset().mockResolvedValue(undefined);
+    showWindowMock.mockReset().mockResolvedValue(undefined);
     vi.mocked(shouldShowWizard).mockReset();
   });
 
@@ -126,4 +171,120 @@ describe("App - first-run wizard gate", () => {
     },
     25000,
   );
+
+  it("waits for the active editor guard before an explicit quit reaches Tauri", async () => {
+    let resolveFlush!: (saved: boolean) => void;
+    quitGuardMock.mockReturnValue(new Promise((resolve) => {
+      resolveFlush = resolve;
+    }));
+    vi.mocked(shouldShowWizard).mockResolvedValue(false);
+    renderApp();
+    await screen.findByTestId("home-main");
+
+    await act(async () => {
+      eventListeners.get("quit-requested")?.({ payload: null });
+      await Promise.resolve();
+    });
+    expect(quitGuardMock).toHaveBeenCalledTimes(1);
+    expect(quitWenlanFullMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveFlush(true);
+    });
+    await waitFor(() => expect(quitWenlanFullMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("waits for the native window to hide before starting the draft flush", async () => {
+    let resolveHide!: () => void;
+    hideWindowMock.mockReturnValue(new Promise<void>((resolve) => {
+      resolveHide = resolve;
+    }));
+    vi.mocked(shouldShowWizard).mockResolvedValue(false);
+    renderApp();
+    await screen.findByTestId("home-main");
+
+    await act(async () => {
+      eventListeners.get("quit-requested")?.({ payload: null });
+      await Promise.resolve();
+    });
+    expect(hideWindowMock).toHaveBeenCalledTimes(1);
+    expect(quitGuardMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveHide();
+    });
+    await waitFor(() => expect(quitGuardMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps the native app hidden after flushing while teardown is still pending", async () => {
+    let resolveTeardown!: () => void;
+    quitWenlanFullMock.mockReturnValue(new Promise<void>((resolve) => {
+      resolveTeardown = resolve;
+    }));
+    vi.mocked(shouldShowWizard).mockResolvedValue(false);
+    renderApp();
+    await screen.findByTestId("home-main");
+
+    await act(async () => {
+      eventListeners.get("quit-requested")?.({ payload: null });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(quitWenlanFullMock).toHaveBeenCalledTimes(1));
+
+    expect(hideWindowMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveTeardown();
+    });
+  });
+
+  it("aborts quit and reveals the editor when its pending draft cannot be saved", async () => {
+    quitGuardMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    vi.mocked(shouldShowWizard).mockResolvedValue(false);
+    renderApp();
+    await screen.findByTestId("home-main");
+
+    await act(async () => {
+      eventListeners.get("quit-requested")?.({ payload: null });
+      await Promise.resolve();
+    });
+    expect(quitWenlanFullMock).not.toHaveBeenCalled();
+    expect(hideWindowMock).toHaveBeenCalledTimes(1);
+    expect(showWindowMock).toHaveBeenCalledTimes(1);
+    expect(focusWindowMock).toHaveBeenCalledTimes(1);
+    expect(cancelGuardedQuitRequestMock).toHaveBeenCalledTimes(1);
+    expect(emitMock).not.toHaveBeenCalledWith("quit-cancelled");
+
+    await act(async () => {
+      eventListeners.get("quit-requested")?.({ payload: null });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(quitWenlanFullMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("unlocks and reveals the app when native teardown rejects", async () => {
+    quitWenlanFullMock.mockRejectedValue(new Error("shutdown failed"));
+    hideWindowMock.mockImplementationOnce(async () => {
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    });
+    vi.mocked(shouldShowWizard).mockResolvedValue(false);
+    renderApp();
+    const title = await screen.findByRole("textbox", { name: "Draft title" });
+    title.focus();
+    expect(title).toHaveFocus();
+
+    await act(async () => {
+      eventListeners.get("quit-requested")?.({ payload: null });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(showWindowMock).toHaveBeenCalledTimes(1));
+    expect(hideWindowMock).toHaveBeenCalledTimes(1);
+    expect(focusWindowMock).toHaveBeenCalledTimes(1);
+    expect(cancelGuardedQuitRequestMock).toHaveBeenCalledTimes(1);
+    expect(emitMock).not.toHaveBeenCalledWith("quit-cancelled");
+    expect(title).toHaveFocus();
+  });
 });

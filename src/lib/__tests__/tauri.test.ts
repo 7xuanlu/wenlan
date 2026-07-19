@@ -223,6 +223,14 @@ describe("sources, page export, and knowledge wrappers", () => {
     expect(invoke).toHaveBeenCalledWith("quit_wenlan_full");
   });
 
+  it("cancelGuardedQuitRequest synchronously clears the native quit guard", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { cancelGuardedQuitRequest } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    await cancelGuardedQuitRequest();
+    expect(invoke).toHaveBeenCalledWith("cancel_guarded_quit_request");
+  });
+
   it("quitOriginFull remains a legacy alias", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     const { quitOriginFull } = await import("../tauri");

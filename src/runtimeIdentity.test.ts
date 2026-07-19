@@ -117,6 +117,24 @@ describe("runtime product identity", () => {
     expect(lib).not.toContain("setFrameOrigin(button");
   });
 
+  it("routes native and tray quit requests through the frontend persistence gate", () => {
+    const lib = readFileSync(resolve(root, "app/src/lib.rs"), "utf8");
+
+    expect(lib).toContain('emit("quit-requested"');
+    expect(lib).toContain("RunEvent::ExitRequested");
+    expect(lib).toContain("code: None");
+    expect(lib).toContain("api.prevent_exit()");
+    expect(lib).toContain("lifecycle::is_quitting()");
+    expect(lib).toContain("fn cancel_guarded_quit_request()");
+    expect(lib).toContain("cancel_guarded_quit_request,");
+    expect(lib).not.toContain('handle.listen("quit-cancelled"');
+    const exitBranch = lib.slice(lib.indexOf("RunEvent::ExitRequested"));
+    expect(exitBranch.indexOf("request_full_quit(app)")).toBeLessThan(
+      exitBranch.indexOf("api.prevent_exit()"),
+    );
+    expect(lib).not.toContain('"quit" => {\n                            let h = handle_for_menu.clone();\n                            tauri::async_runtime::spawn');
+  });
+
   it("prepares sidecar binaries before Tauri validates external bins", () => {
     const tauri = JSON.parse(
       readFileSync(resolve(root, "app/tauri.conf.json"), "utf8"),

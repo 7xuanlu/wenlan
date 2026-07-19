@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { resizeWindow, resizeWindowCentered } from "./lib/resizeWindow";
-import { setTrafficLightsVisible, shouldShowWizard, setSetupCompleted, type IndexedFileInfo } from "./lib/tauri";
+import {
+  cancelGuardedQuitRequest,
+  quitWenlanFull,
+  setTrafficLightsVisible,
+  shouldShowWizard,
+  setSetupCompleted,
+  type IndexedFileInfo,
+} from "./lib/tauri";
 import { markProcessing, clearProcessing } from "./lib/processingStore";
 import { recordCapture } from "./lib/captureHeartbeat";
 import Spotlight from "./components/Spotlight";
@@ -49,11 +57,77 @@ export default function App() {
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [initialView, setInitialView] = useState<"import" | null>(null);
   const [prevPage, setPrevPage] = useState<Page>("spotlight");
+  const quitGuardRef = useRef<(() => Promise<boolean>) | null>(null);
+  const quitAttemptRef = useRef<Promise<void> | null>(null);
+
+  const registerQuitGuard = useCallback((guard: (() => Promise<boolean>) | null) => {
+    quitGuardRef.current = guard;
+  }, []);
 
   // Signal backend that the webview has loaded, so it can focus the already
   // visible main window after the frontend is ready.
   useEffect(() => {
     emit("app-ready");
+  }, []);
+
+  // Native app-menu and tray quits arrive here before Rust shuts down the
+  // daemon. This lets the active editor bypass its debounce and make the last
+  // keystroke durable. A failed save aborts quit and reveals the existing retry
+  // surface instead of silently dropping text.
+  useEffect(() => {
+    const cancelQuitRequest = async () => {
+      try {
+        await cancelGuardedQuitRequest();
+      } catch {
+        // A failed cancellation signal must not hide the editor recovery path.
+      }
+    };
+    const revealMainWindow = async (focusTarget: HTMLElement | null) => {
+      try {
+        const win = getCurrentWindow();
+        await win.show();
+        await win.setFocus();
+      } catch {
+        // The safe fallback is still to leave the process running.
+      }
+      await Promise.resolve();
+      if (focusTarget?.isConnected) focusTarget.focus();
+    };
+    const unlisten = listen("quit-requested", () => {
+      if (quitAttemptRef.current) return;
+      const focusTarget = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      const attempt = (async () => {
+        try {
+          await getCurrentWindow().hide();
+        } catch {
+          await cancelQuitRequest();
+          await revealMainWindow(focusTarget);
+          return;
+        }
+        let persisted = false;
+        try {
+          persisted = quitGuardRef.current ? await quitGuardRef.current() : true;
+        } catch {
+          persisted = false;
+        }
+        if (!persisted) {
+          await cancelQuitRequest();
+          await revealMainWindow(focusTarget);
+          return;
+        }
+        await quitWenlanFull();
+      })();
+      quitAttemptRef.current = attempt;
+      void attempt.catch(async () => {
+        await cancelQuitRequest();
+        await revealMainWindow(focusTarget);
+      }).finally(() => {
+        if (quitAttemptRef.current === attempt) quitAttemptRef.current = null;
+      });
+    });
+    return () => { unlisten.then((f) => f()); };
   }, []);
 
   // Embedding migration progress overlay
@@ -198,6 +272,7 @@ export default function App() {
           initialMemoryId={selectedMemoryId}
           initialPageId={selectedPageId}
           initialView={initialView}
+          onRegisterQuitGuard={registerQuitGuard}
           onBackFromDetail={() => { setSelectedMemoryId(null); setSelectedPageId(null); setPage("home"); }}
         />
       )}

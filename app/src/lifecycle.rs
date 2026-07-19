@@ -10,9 +10,43 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::AppHandle;
 
-/// Process-wide guard that prevents `quit_origin` from running twice. Set on
-/// first entry; never cleared (the process is exiting).
+/// Process-wide guard that prevents `quit_origin` from running twice. A failed
+/// teardown releases it so the recovered app can guard a later retry.
 static QUITTING: AtomicBool = AtomicBool::new(false);
+
+struct QuitAttemptGuard<'a> {
+    flag: &'a AtomicBool,
+    committed: bool,
+}
+
+impl<'a> QuitAttemptGuard<'a> {
+    fn try_begin(flag: &'a AtomicBool) -> Option<Self> {
+        if flag.swap(true, Ordering::AcqRel) {
+            None
+        } else {
+            Some(Self {
+                flag,
+                committed: false,
+            })
+        }
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for QuitAttemptGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.flag.store(false, Ordering::Release);
+        }
+    }
+}
+
+pub fn is_quitting() -> bool {
+    QUITTING.load(Ordering::Acquire)
+}
 
 /// Spec line 198: set_run_at_login holds a global Mutex for the duration of
 /// the toggle to prevent concurrent install/uninstall races (G2).
@@ -594,9 +628,9 @@ pub async fn set_run_at_login(enabled: bool, launchctl: &dyn LaunchctlExec) -> R
 pub async fn quit_origin(app_handle: &AppHandle) -> Result<()> {
     // Debounce: tray menu Quit Wenlan item stays clickable during the 500ms
     // shutdown sleep; double-click would otherwise spawn 2× POSTs (H1).
-    if QUITTING.swap(true, Ordering::AcqRel) {
+    let Some(attempt) = QuitAttemptGuard::try_begin(&QUITTING) else {
         return Ok(());
-    }
+    };
 
     // Spec lifecycle invariant #4: "Quit Wenlan = full off; both plists
     // unloaded, both processes exit, no auto-restart on reboot." (H2)
@@ -630,6 +664,7 @@ pub async fn quit_origin(app_handle: &AppHandle) -> Result<()> {
 
     // 3. Tauri-graceful exit.
     app_handle.exit(0);
+    attempt.commit();
     Ok(())
 }
 
@@ -1156,6 +1191,22 @@ mod tests {
         );
         // Cleanup so other tests start fresh.
         reset_quitting_flag_for_test();
+    }
+
+    #[test]
+    fn recoverable_quit_error_releases_the_process_wide_guard() {
+        let flag = AtomicBool::new(false);
+
+        {
+            let _attempt = QuitAttemptGuard::try_begin(&flag)
+                .expect("first quit attempt should acquire the guard");
+            assert!(flag.load(Ordering::Acquire));
+        }
+
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "dropping an uncommitted attempt must allow a guarded retry"
+        );
     }
 
     #[test]

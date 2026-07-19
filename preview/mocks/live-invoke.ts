@@ -651,6 +651,7 @@ export const DEFAULTS: Record<string, unknown> = {
   get_skip_apps: [],
   get_skip_title_patterns: [],
   suggest_tags: [],
+  cancel_guarded_quit_request: null,
   quit_wenlan_full: null,
   quit_origin_full: null,
   // Preview's daemon is reachable (wire_state above), so a Start would find it up.

@@ -57,6 +57,7 @@ interface MainProps {
   initialPageId?: string | null;
   initialView?: "import" | null;
   onBackFromDetail?: () => void;
+  onRegisterQuitGuard?: (guard: (() => Promise<boolean>) | null) => void;
 }
 const SIDEBAR_KEY = "wenlan-sidebar-collapsed";
 const LEGACY_SIDEBAR_KEY = "origin-sidebar-collapsed";
@@ -80,7 +81,13 @@ function scrollDestinationKey(view: View): string {
   }
 }
 
-export default function Main({ initialMemoryId, initialPageId, initialView, onBackFromDetail }: MainProps) {
+export default function Main({
+  initialMemoryId,
+  initialPageId,
+  initialView,
+  onBackFromDetail,
+  onRegisterQuitGuard,
+}: MainProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const mainContentRef = useRef<HTMLElement>(null);
@@ -100,6 +107,8 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
     : initialView === "import" ? { kind: "import" }
     : { kind: "home" },
   );
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
   const [activeTab, setActiveTab] = useState<"home" | "activity">("home");
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -108,6 +117,17 @@ export default function Main({ initialMemoryId, initialPageId, initialView, onBa
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [pendingDraftSearchQuery, setPendingDraftSearchQuery] = useState<string | null>(null);
   const viewScrollDestination = scrollDestinationKey(view);
+
+  const prepareForQuit = useCallback(async (): Promise<boolean> => {
+    const editor = pageDraftEditorRef.current;
+    if (viewRef.current.kind !== "page-draft" || !editor) return true;
+    return editor.flush();
+  }, []);
+
+  useEffect(() => {
+    onRegisterQuitGuard?.(prepareForQuit);
+    return () => onRegisterQuitGuard?.(null);
+  }, [onRegisterQuitGuard, prepareForQuit]);
 
   useLayoutEffect(() => {
     if (!mainContentRef.current) return;
