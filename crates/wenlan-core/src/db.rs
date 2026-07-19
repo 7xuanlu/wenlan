@@ -530,7 +530,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 73;
+pub const SCHEMA_VERSION: u32 = 75;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -7024,7 +7024,11 @@ impl MemoryDB {
                 );
             }
 
-            // Migration 73 (Page Map v1): page_maps / page_map_nodes / page_map_edges.
+            // Migration 75 (Page Map v1): page_maps / page_map_nodes / page_map_edges.
+            // Numbered 75, not 73: versions 73/74 were already claimed on live
+            // user DBs by the in-flight wiki-spaces branch (page_evidence /
+            // document_enrichment_queue / derived_artifact_sweeps), and a
+            // `< 73` guard silently skips on any DB those daemons touched.
             // Presentation-only per-page mind map: page_maps carries the
             // optimistic-concurrency revision + viewport, page_map_nodes is the
             // parent_id spine (the flextree input, dedup+tombstone keyed by
@@ -7032,7 +7036,7 @@ impl MemoryDB {
             // suggested links (tree edges are derived from the spine, never
             // stored). See
             // docs/superpowers/plans/2026-07-18-page-map-api-spec.md.
-            if version < 73 {
+            if version < 75 {
                 let conn = self.conn.lock().await;
                 conn.execute_batch(
                     "CREATE TABLE IF NOT EXISTS page_maps (
@@ -7083,12 +7087,12 @@ impl MemoryDB {
                     );",
                 )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("m73 create page_map tables: {e}")))?;
-                conn.execute("PRAGMA user_version = 73", ())
+                .map_err(|e| WenlanError::VectorDb(format!("m75 create page_map tables: {e}")))?;
+                conn.execute("PRAGMA user_version = 75", ())
                     .await
-                    .map_err(|e| WenlanError::VectorDb(format!("m73 bump: {e}")))?;
+                    .map_err(|e| WenlanError::VectorDb(format!("m75 bump: {e}")))?;
                 log::info!(
-                    "[migration] Migration 73 applied: page_maps + page_map_nodes + page_map_edges (Page Map v1)"
+                    "[migration] Migration 75 applied: page_maps + page_map_nodes + page_map_edges (Page Map v1)"
                 );
             }
         }

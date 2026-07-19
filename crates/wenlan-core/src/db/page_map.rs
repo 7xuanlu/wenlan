@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Page Map (mind-map) v1 — db-layer types + accessors over migration 73's
+// Page Map (mind-map) v1 — db-layer types + accessors over migration 75's
 // `page_maps` / `page_map_nodes` / `page_map_edges` tables. See
 // docs/superpowers/plans/2026-07-18-page-map-api-spec.md for the full
 // contract (data model, identity/tombstone rule, state machine, graph
