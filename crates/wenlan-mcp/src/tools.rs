@@ -4253,6 +4253,9 @@ mod tests {
             repair::RepairLintScope,
         };
 
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("WENLAN_SPACE");
+        crate::lock_state::init_from_env();
         let server = make_server(TransportMode::Stdio, "agent", None);
         let scope = RepairLintScope::global();
         {
@@ -4375,11 +4378,9 @@ mod tests {
             repair::RepairLintScope,
         };
 
-        {
-            let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
-            std::env::remove_var("WENLAN_SPACE");
-            crate::lock_state::init_from_env();
-        }
+        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("WENLAN_SPACE");
+        crate::lock_state::init_from_env();
         let server = make_server(TransportMode::Stdio, "agent", None);
         let scope = RepairLintScope::global();
         server.lint_report_cache.lock().unwrap().record_general(

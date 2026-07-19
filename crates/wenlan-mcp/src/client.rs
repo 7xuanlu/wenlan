@@ -311,12 +311,19 @@ fn parse_api_error_reason(bytes: &[u8]) -> Option<String> {
 
     let body: ApiErrorBody = serde_json::from_slice(bytes).ok()?;
     let reason = body.error.or(body.reason)?;
+    let code = reason
+        .split_once(':')
+        .map_or(reason.as_str(), |(code, _)| code);
     let safe = matches!(
-        reason.as_str(),
+        code,
         "repair_background_writer_busy"
             | "repair_write_fence_conflict"
             | "repair_write_fence_expired"
             | "repair_handoff_manifest_mismatch"
+            | "repair_verification_manifest_mismatch"
+            | "repair_non_target_state_changed"
+            | "repair_verification_state_changed"
+            | "repair_verification_reports_stale"
             | "repair_plan_entry_too_large"
             | "repair_source_reports_stale"
             | "noise_pattern"
@@ -327,7 +334,7 @@ fn parse_api_error_reason(bytes: &[u8]) -> Option<String> {
             | "duplicate"
             | "unknown"
     );
-    safe.then_some(reason)
+    safe.then(|| code.to_string())
 }
 
 #[cfg(test)]
@@ -341,6 +348,10 @@ mod tests {
             "repair_write_fence_conflict",
             "repair_write_fence_expired",
             "repair_handoff_manifest_mismatch",
+            "repair_verification_manifest_mismatch",
+            "repair_non_target_state_changed",
+            "repair_verification_state_changed",
+            "repair_verification_reports_stale",
             "repair_plan_entry_too_large",
             "repair_source_reports_stale",
         ] {
@@ -363,6 +374,14 @@ mod tests {
             parse_api_error_reason(br#"{"error":"private_project_codename"}"#),
             None,
             "unknown machine-looking strings must not cross the MCP boundary"
+        );
+        assert_eq!(
+            parse_api_error_reason(
+                br#"{"error":"repair_verification_reports_stale: PRIVATE_SENTINEL"}"#
+            )
+            .as_deref(),
+            Some("repair_verification_reports_stale"),
+            "known reason prefixes survive without leaking daemon detail"
         );
     }
 
