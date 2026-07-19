@@ -54,6 +54,10 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
               - 'scripts/lint-scale-gate.sh'
+              - 'scripts/stage-onnxruntime-windows.ps1'
+              - 'scripts/smoke-windows.ps1'
+              - 'scripts/verify-ort-source-pin.py'
+              - 'scripts/verify-ort-source-pin.test.py'
               # Release PRs must run the drift guard: 0.10.1 merged with
               # version drift precisely because these two files don't match
               # any glob above, so the rust tests (incl. drift_guard) skipped
@@ -100,9 +104,11 @@ jobs:
               - 'crates/wenlan-cli/tests/distribution.rs'
               - 'crates/wenlan-server/src/main.rs'
               - 'crates/wenlan-mcp/npm/install.js'
+              - 'scripts/stage-onnxruntime-windows.ps1'
               - 'scripts/smoke-windows.ps1'
               - 'scripts/lint-scale-gate.sh'
               - 'crates/wenlan-core/src/lint/**'
+              - 'crates/wenlan-core/Cargo.toml'
               - 'install.sh'
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -204,6 +210,11 @@ jobs:
         with:
           shared-key: test
           cache-all-crates: "true"
+      - name: Verify ort-sys source pin
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          python3 scripts/verify-ort-source-pin.test.py
+          python3 scripts/verify-ort-source-pin.py
       # Windows needs sqlite3.lib for libsql linking (libsql does not bundle
       # SQLite on Windows). vcpkg ships sqlite3 prebuilt; one-shot install
       # before any cargo step.
@@ -361,12 +372,22 @@ jobs:
       - name: E2E folder ingest over HTTP (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: bash scripts/smoke-folder-ingest.sh
-      # Linux Docker smoke + Windows release-build smoke previously ran here.
-      # Both duplicated work that release.yml already does on every tag push
-      # (Docker daemon image + Windows release matrix). Dropping them shaves
-      # ~10min Linux + ~12min Windows per PR. Keep the schtasks background
-      # round-trip below — that's the only contract test PR CI uniquely
-      # exercises.
+      # The Windows release-profile smoke is intentionally PR-gated to the
+      # windows-affecting path filter above. It proves the dynamically loaded
+      # ORT DLL before a release tag can publish an unusable backend.
+      - name: Build Windows release binaries
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: cargo build --release -p wenlan -p wenlan-server
+
+      - name: Native ORT smoke (Windows; release profile)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          & scripts/stage-onnxruntime-windows.ps1 `
+            -DestinationDirectory "target\release"
+          & scripts/smoke-windows.ps1 `
+            -ExePath "target\release\wenlan-server.exe"
 
       # `wenlan background on` on Windows registers a per-user Task Scheduler
       # ONLOGON entry via schtasks.exe and triggers it immediately. We
@@ -377,8 +398,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build -p wenlan -p wenlan-server
-          $backgroundOnOut = & target\debug\wenlan.exe background on 2>&1
+          $backgroundOnOut = & target\release\wenlan.exe background on 2>&1
           $backgroundOnCode = $LASTEXITCODE
           Write-Host "background on exit=$backgroundOnCode out=$backgroundOnOut"
           if ($backgroundOnCode -ne 0) { throw "background on failed: $backgroundOnOut" }
@@ -402,7 +422,7 @@ jobs:
           }
           Write-Host "    daemon healthy under scheduled task"
 
-          $backgroundOffOut = & target\debug\wenlan.exe background off 2>&1
+          $backgroundOffOut = & target\release\wenlan.exe background off 2>&1
           $backgroundOffCode = $LASTEXITCODE
           Write-Host "background off exit=$backgroundOffCode out=$backgroundOffOut"
           if ($backgroundOffCode -ne 0) { throw "background off failed: $backgroundOffOut" }

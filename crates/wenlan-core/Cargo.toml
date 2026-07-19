@@ -36,7 +36,6 @@ encoding_rs = { workspace = true }
 # Memory DB (phase 3c)
 tokio = { workspace = true }
 libsql = { workspace = true }
-fastembed = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 lru = { workspace = true }
@@ -73,6 +72,14 @@ env_logger = "0.11"
 # eval modules are not feature-gated, so their deps are regular deps.
 tiktoken-rs = "0.6"
 futures = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+fastembed = { workspace = true, features = ["ort-load-dynamic"] }
+
+[target.'cfg(not(windows))'.dependencies]
+# Keep the existing static ORT path outside Windows. The native-TLS download
+# feature is intentional: its rustls variant does not fetch ort-sys binaries.
+fastembed = { workspace = true, features = ["ort-download-binaries-native-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "0.1", features = ["metal", "sampler"] }

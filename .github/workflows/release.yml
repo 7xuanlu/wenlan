@@ -259,31 +259,14 @@ jobs:
         run: |
           find "target/${{ matrix.target }}/release" -maxdepth 1 -mindepth 1 -print | sort | head -30
 
-      # ort 2.x caches link-time `.lib` artifacts under
-      # `%LOCALAPPDATA%\ort.pyke.io\...` but does NOT keep onnxruntime.dll
-      # there on Windows — the build script needs only the import lib for
-      # link time. The bundled zip needs the runtime DLL co-located with
-      # the .exe so users get a self-contained extract. Download ONNX
-      # Runtime 1.20.0 (matches ort 2.0.0-rc.11) from Microsoft's releases
-      # and stage onnxruntime.dll into target/release before packaging.
+      # Windows builds FastEmbed with ort-load-dynamic. The shared stager pins
+      # the ort 2.0.0-rc.11-compatible DLL and verifies the archive SHA-256.
       - name: Bundle onnxruntime.dll (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $ortVersion = "1.20.0"
-          $zipUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/onnxruntime-win-x64-$ortVersion.zip"
-          $zipPath = "$env:RUNNER_TEMP\onnxruntime.zip"
-          Write-Host "Downloading $zipUrl"
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\ort-extracted" -Force
-          $dll = Get-ChildItem -Path "$env:RUNNER_TEMP\ort-extracted" -Recurse -Filter onnxruntime.dll | Select-Object -First 1
-          if (-not $dll) {
-            Get-ChildItem -Path "$env:RUNNER_TEMP\ort-extracted" -Recurse | Format-Table FullName, Length
-            throw "onnxruntime.dll not found in extracted zip"
-          }
-          $dest = "target\${{ matrix.target }}\release\onnxruntime.dll"
-          Copy-Item -Path $dll.FullName -Destination $dest -Force
-          Write-Host "Copied $($dll.FullName) -> $dest"
+          & scripts/stage-onnxruntime-windows.ps1 `
+            -DestinationDirectory "target\${{ matrix.target }}\release"
 
       - name: Package
         shell: bash
@@ -303,6 +286,25 @@ jobs:
             tar -C "target/${{ matrix.target }}/release" -czf "dist/${{ matrix.artifact_name }}.tar.gz" \
               wenlan wenlan-server wenlan-mcp
           fi
+
+      - name: Smoke packaged Windows release
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $ExtractDir = Join-Path $env:RUNNER_TEMP "wenlan-packaged-smoke"
+          Expand-Archive `
+            -Path "dist\${{ matrix.artifact_name }}.zip" `
+            -DestinationPath $ExtractDir
+          $ServerPath = Join-Path $ExtractDir "wenlan-server.exe"
+          $OrtPath = Join-Path $ExtractDir "onnxruntime.dll"
+          if (-not (Test-Path $ServerPath)) {
+            throw "packaged wenlan-server.exe is missing"
+          }
+          if (-not (Test-Path $OrtPath)) {
+            throw "packaged onnxruntime.dll is missing"
+          }
+          & scripts/smoke-windows.ps1 `
+            -ExePath $ServerPath
 
       # Per-binary archive for wenlan-mcp consumed by the Homebrew tap formula.
       # Produced only on the darwin-arm64 leg to match the existing tap entry.
