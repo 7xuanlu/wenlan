@@ -288,6 +288,72 @@ describe("PageDraftEditor", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("opens a later active Page when it is newer than the attempted publish", async () => {
+    const conflict = Object.assign(new Error("stale"), {
+      code: "draft_version_conflict",
+      currentVersion: 5,
+    });
+    vi.mocked(getPage)
+      .mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(page({ status: "active", version: 5 }));
+    vi.mocked(publishPageDraft).mockRejectedValueOnce(conflict);
+    const { onOpenExisting, onPublished, queryClient } = renderEditor({ draftId: "draft-1" });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+
+    await waitFor(() => expect(getPage).toHaveBeenLastCalledWith("draft-1"));
+    expect(onPublished).toHaveBeenCalledWith("draft-1");
+    expect(onOpenExisting).not.toHaveBeenCalled();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["pages", "active"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["pages", "draft"] });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps a structured publish conflict blocked when reconciliation fails", async () => {
+    const conflict = Object.assign(new Error("stale"), {
+      code: "draft_version_conflict",
+      currentVersion: 5,
+    });
+    vi.mocked(getPage)
+      .mockResolvedValueOnce(page())
+      .mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(publishPageDraft).mockRejectedValueOnce(conflict);
+    renderEditor({ draftId: "draft-1" });
+
+    const publish = await screen.findByRole("button", { name: "Publish" });
+    await userEvent.click(publish);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This draft changed elsewhere.",
+    );
+    expect(screen.getByRole("button", { name: "Reload latest" })).toBeInTheDocument();
+    expect(publish).toBeDisabled();
+  });
+
+  it("adopts a renamed Space returned by create replay without saving the obsolete name", async () => {
+    vi.mocked(createPageDraft)
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockImplementationOnce(async (input) => page({
+        id: input.clientDraftId,
+        title: input.title,
+        content: input.content,
+        space: "Work renamed",
+        version: 2,
+      }));
+    renderEditor({ space: "Work" });
+    await userEvent.type(await screen.findByRole("textbox", { name: "Title" }), "Draft title");
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByRole("alert");
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry save" }));
+
+    await waitFor(() => expect(
+      screen.getByRole("combobox", { name: "Space" }),
+    ).toHaveValue("Work renamed"));
+    expect(updatePageDraft).not.toHaveBeenCalled();
+  });
+
   it("single-flights Publish from the first click and locks every editable field during flush", async () => {
     let resolveCreate!: (value: Page) => void;
     vi.mocked(createPageDraft).mockReturnValue(new Promise((resolve) => {
@@ -493,6 +559,7 @@ describe("PageDraftEditor", () => {
     });
     vi.mocked(getPage)
       .mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(page({ version: 4 }))
       .mockResolvedValueOnce(page({ version: 4 }));
     vi.mocked(publishPageDraft).mockRejectedValueOnce(conflict);
     renderEditor({ draftId: "draft-1" });

@@ -12,6 +12,45 @@ import { baseResponse } from "./baseResponses";
 import { ConfiguredTauriFailureError, TauriMockArgumentError } from "./errors";
 import type { MockCommandCall, MockFailure } from "./types";
 
+const CLIENT_PAGE_DRAFT_ID =
+  /^page_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SOURCES_BLOCK_START = "<!-- origin:sources:start -->";
+const SOURCES_BLOCK_END = "<!-- origin:sources:end -->";
+
+type PageDraftCreateRequest = {
+  readonly title: string;
+  readonly content: string;
+  readonly space: string | null;
+};
+
+function canonicalizePageBody(body: string): string {
+  const start = body.indexOf(SOURCES_BLOCK_START);
+  if (start < 0) return body.trimEnd();
+  const afterStart = start + SOURCES_BLOCK_START.length;
+  const relativeEnd = body.slice(afterStart).indexOf(SOURCES_BLOCK_END);
+  if (relativeEnd < 0) return body.trimEnd();
+  const end = afterStart + relativeEnd + SOURCES_BLOCK_END.length;
+  const head = body.slice(0, start).trimEnd();
+  const tail = body.slice(end).trimStart();
+  return (tail ? `${head}\n\n${tail}` : head).trimEnd();
+}
+
+function sanitizeIngressContent(content: string): string {
+  return canonicalizePageBody(content)
+    .replaceAll(SOURCES_BLOCK_START, "")
+    .replaceAll(SOURCES_BLOCK_END, "")
+    .trimEnd();
+}
+
+function nextFixtureTimestamp(previous: string | null | undefined): string {
+  const floor = Date.parse("2026-07-10T12:34:00Z");
+  const previousMs = typeof previous === "string" ? Date.parse(previous) : Number.NaN;
+  return new Date(Math.max(
+    floor,
+    Number.isFinite(previousMs) ? previousMs + 1 : 0,
+  )).toISOString();
+}
+
 function optionalValue(args: unknown, key: string): unknown {
   return typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
 }
@@ -60,6 +99,7 @@ export class TauriMockRuntime {
   private readonly callsLog: MockCommandCall[] = [];
   private readonly failures = new Map<string, string[]>();
   private readonly activityRows: readonly Record<string, unknown>[];
+  private readonly pageDraftCreateRequests = new Map<string, PageDraftCreateRequest | null>();
   private pageSequence: number;
 
   constructor(
@@ -179,7 +219,29 @@ export class TauriMockRuntime {
     if (index < 0) throw new TauriMockArgumentError("update_space", "name");
     const current = this.spaces[index];
     if (!current) throw new TauriMockArgumentError("update_space", "name");
+    if (
+      name !== newName
+      && this.spaces.some((space, candidateIndex) =>
+        candidateIndex !== index && space.name === newName
+      )
+    ) {
+      throw new Error(`Space ${JSON.stringify(newName)} already exists`);
+    }
     const updated = { ...current, name: newName, description: optionalString(args, "description") };
+    if (name !== newName) {
+      this.pages = this.pages.map((page) => {
+        if (page.space !== name && page.domain !== name) return page;
+        return {
+          ...page,
+          space: page.space === name ? newName : page.space,
+          domain: page.domain === name ? newName : page.domain,
+          version: page.status === "draft" ? page.version + 1 : page.version,
+          last_modified: page.status === "draft"
+            ? nextFixtureTimestamp(page.last_modified)
+            : page.last_modified,
+        };
+      });
+    }
     this.spaces[index] = updated;
     return { ...updated };
   }
@@ -310,23 +372,43 @@ export class TauriMockRuntime {
 
   private createPageDraft(args: unknown): KnowledgePage {
     const id = requiredString("create_page_draft", args, "clientDraftId");
+    if (!CLIENT_PAGE_DRAFT_ID.test(id)) {
+      throw new Error("Page draft id must use the page_<uuid-v4> format");
+    }
     const title = stringValue("create_page_draft", args, "title");
     const content = stringValue("create_page_draft", args, "content");
-    if (!title.trim() && !content.trim()) {
+    if (!title.trim() && !sanitizeIngressContent(content).trim()) {
       throw new Error(JSON.stringify({
         code: "invalid_page_draft",
         error: "A Page draft needs a title or content",
       }));
     }
+    const requestedSpace = this.normalizedDraftSpace(args);
     const existing = this.pages.find((page) => page.id === id);
-    if (existing?.status === "draft") return { ...existing };
     if (existing) {
+      const request = this.pageDraftCreateRequests.get(id);
+      if (
+        existing.status === "draft"
+        && request !== null
+        && request !== undefined
+        && request.title === title
+        && request.content === content
+        && request.space === requestedSpace
+      ) {
+        return { ...existing };
+      }
       throw new Error(JSON.stringify({
         code: "page_draft_id_conflict",
-        error: "Page draft id already belongs to a published Page",
+        error: "Page draft id already belongs to another Page",
       }));
     }
-    const space = optionalString(args, "space")?.trim() || null;
+    if (this.pageDraftCreateRequests.has(id)) {
+      throw new Error(JSON.stringify({
+        code: "page_draft_id_conflict",
+        error: "Page draft id was already used",
+      }));
+    }
+    const space = this.registeredDraftSpace(args);
     const now = "2026-07-10T12:30:00Z";
     const page: KnowledgePage = {
       id,
@@ -346,7 +428,20 @@ export class TauriMockRuntime {
       last_modified: now,
     };
     this.pages = [page, ...this.pages];
+    this.pageDraftCreateRequests.set(id, { title, content, space });
     return { ...page };
+  }
+
+  private normalizedDraftSpace(args: unknown): string | null {
+    return optionalString(args, "space")?.trim() || null;
+  }
+
+  private registeredDraftSpace(args: unknown): string | null {
+    const space = this.normalizedDraftSpace(args);
+    if (space && !this.spaces.some((candidate) => candidate.name === space)) {
+      throw new Error(`Space ${JSON.stringify(space)} is not registered`);
+    }
+    return space;
   }
 
   private draftFor(command: string, args: unknown): { page: KnowledgePage; index: number } {
@@ -380,16 +475,27 @@ export class TauriMockRuntime {
   private updatePageDraft(args: unknown): KnowledgePage {
     const command = "update_page_draft";
     const { page, index } = this.draftFor(command, args);
-    this.assertDraftVersion(command, args, page);
+    const expectedVersion = requiredNumber(command, args, "expectedVersion");
     const title = stringValue(command, args, "title");
     const content = stringValue(command, args, "content");
-    if (!title.trim() && !content.trim()) {
+    if (!title.trim() && !sanitizeIngressContent(content).trim()) {
       throw new Error(JSON.stringify({
         code: "invalid_page_draft",
         error: "A Page draft needs a title or content",
       }));
     }
-    const space = optionalString(args, "space")?.trim() || null;
+    const requestedSpace = this.normalizedDraftSpace(args);
+    if (
+      page.version === expectedVersion + 1
+      && page.title === title
+      && page.content === content
+      && page.space === requestedSpace
+      && page.domain === requestedSpace
+    ) {
+      return { ...page };
+    }
+    this.assertDraftVersion(command, args, page);
+    const space = this.registeredDraftSpace(args);
     const updated: KnowledgePage = {
       ...page,
       title,
@@ -405,10 +511,26 @@ export class TauriMockRuntime {
 
   private publishPageDraft(args: unknown): KnowledgePage {
     const command = "publish_page_draft";
+    const id = requiredString(command, args, "id");
+    const expectedVersion = requiredNumber(command, args, "expectedVersion");
+    const publishedReplay = this.pages.find((page) => page.id === id);
+    if (
+      publishedReplay?.status === "active"
+      && publishedReplay.version === expectedVersion + 1
+    ) {
+      return { ...publishedReplay };
+    }
+    if (publishedReplay && publishedReplay.version !== expectedVersion) {
+      this.assertDraftVersion(command, args, publishedReplay);
+    }
+    if (publishedReplay?.status === "active") {
+      throw new Error(`Page ${id} is not a draft`);
+    }
     const { page, index } = this.draftFor(command, args);
     this.assertDraftVersion(command, args, page);
     const title = page.title.trim();
-    if (!title || !page.content.trim()) {
+    const content = sanitizeIngressContent(page.content);
+    if (!title || !content.trim()) {
       throw new Error(JSON.stringify({
         code: "invalid_page_draft",
         error: "Title and content are required",
@@ -432,6 +554,7 @@ export class TauriMockRuntime {
     const published: KnowledgePage = {
       ...page,
       title,
+      content,
       status: "active",
       review_status: "unconfirmed",
       version: page.version + 1,
@@ -447,6 +570,7 @@ export class TauriMockRuntime {
     const { page, index } = this.draftFor(command, args);
     this.assertDraftVersion(command, args, page);
     this.pages.splice(index, 1);
+    this.pageDraftCreateRequests.set(page.id, null);
     return null;
   }
 

@@ -117,10 +117,14 @@ const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditor
       content: initialPage?.content ?? "",
       space: initialPage?.space ?? initialSpace ?? null,
     }), [initialPage, initialSpace]);
+    const reconcileSpace = useCallback((reconciledSpace: string | null) => {
+      setSpace(reconciledSpace ?? "");
+    }, []);
     const autosave = usePageDraftAutosave({
       draftId: initialPage?.id,
       initial: initialSnapshot,
       initialVersion: initialPage?.version,
+      onSpaceReconciled: reconcileSpace,
       snapshot,
     });
 
@@ -242,12 +246,14 @@ const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditor
         setPublishConflict(null);
         setPublishVersionConflict(false);
         let attemptedDraftId: string | null = null;
+        let attemptedVersion: number | null = null;
         try {
           if (!await autosave.flush()) return;
 
           const identity = autosave.getIdentity();
           if (!identity.draftId || identity.version == null) return;
           attemptedDraftId = identity.draftId;
+          attemptedVersion = identity.version;
           const published = await publishPageDraft({
             id: identity.draftId,
             expectedVersion: identity.version,
@@ -259,10 +265,17 @@ const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditor
           if (
             attemptedDraftId
             && code !== "page_title_conflict"
-            && code !== "draft_version_conflict"
           ) {
             try {
               const reconciled = await getPage(attemptedDraftId);
+              if (
+                reconciled?.status === "active"
+                && attemptedVersion !== null
+                && reconciled.version === attemptedVersion + 1
+              ) {
+                await finishPublished(reconciled);
+                return;
+              }
               if (reconciled?.status === "active") {
                 await finishPublished(reconciled);
                 return;

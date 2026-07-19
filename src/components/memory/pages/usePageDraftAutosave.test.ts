@@ -107,6 +107,32 @@ describe("usePageDraftAutosave", () => {
     expect(result.current.status).toBe("saved");
   });
 
+  it("flushes text typed inside the debounce window without waiting 700ms", async () => {
+    vi.mocked(createPageDraft).mockResolvedValue(page({
+      id: "draft-quit",
+      title: "Last keystroke",
+      content: "",
+      version: 1,
+    }));
+    const { result, rerender } = renderHook(
+      ({ snapshot }) => usePageDraftAutosave({ initial: EMPTY, snapshot }),
+      { initialProps: { snapshot: EMPTY }, wrapper },
+    );
+
+    rerender({ snapshot: { title: "Last keystroke", content: "", space: null } });
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true);
+    });
+
+    expect(createPageDraft).toHaveBeenCalledWith({
+      clientDraftId: expect.stringMatching(/^page_[0-9a-f-]+$/),
+      title: "Last keystroke",
+      content: "",
+      space: null,
+    });
+    expect(result.current.draftId).toBe("draft-quit");
+  });
+
   it("persists a body-only draft while preserving raw body whitespace", async () => {
     vi.mocked(createPageDraft).mockResolvedValue(page({
       id: "draft-1",
@@ -234,6 +260,28 @@ describe("usePageDraftAutosave", () => {
     expect(result.current.status).toBe("saved");
   });
 
+  it("stops autosaving after a Space validation rejection until explicitly retried", async () => {
+    const validation = new Error('Space "missing" is not registered');
+    vi.mocked(createPageDraft).mockRejectedValue(validation);
+    const snapshot = {
+      title: "Strictly scoped",
+      content: "Body",
+      space: "missing",
+    };
+    const { result } = renderHook(
+      () => usePageDraftAutosave({ initial: EMPTY, snapshot }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+
+    expect(createPageDraft).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("error");
+    expect(result.current.error).toBe(validation);
+  });
+
   it("updates newer edits after an idempotent retry returns the earlier committed snapshot", async () => {
     vi.mocked(createPageDraft)
       .mockRejectedValueOnce(new Error("response lost"))
@@ -241,6 +289,7 @@ describe("usePageDraftAutosave", () => {
         id: input.clientDraftId,
         title: "First title",
         content: "First body",
+        space: "Wenlan Core",
         version: 1,
       }));
     vi.mocked(updatePageDraft).mockImplementation(async (input) => page({
@@ -253,15 +302,20 @@ describe("usePageDraftAutosave", () => {
     const first: PageDraftSnapshot = {
       title: "First title",
       content: "First body",
-      space: null,
+      space: "Wenlan",
     };
     const second: PageDraftSnapshot = {
       title: "Newer title",
       content: "Newer body",
-      space: "Wenlan",
+      space: "Research",
     };
+    const onSpaceReconciled = vi.fn();
     const { result, rerender } = renderHook(
-      ({ snapshot }) => usePageDraftAutosave({ initial: EMPTY, snapshot }),
+      ({ snapshot }) => usePageDraftAutosave({
+        initial: EMPTY,
+        onSpaceReconciled,
+        snapshot,
+      }),
       { initialProps: { snapshot: first }, wrapper },
     );
 
@@ -285,6 +339,47 @@ describe("usePageDraftAutosave", () => {
       expectedVersion: 1,
       ...second,
     });
+    expect(result.current.status).toBe("saved");
+    expect(result.current.version).toBe(2);
+    expect(onSpaceReconciled).not.toHaveBeenCalled();
+  });
+
+  it("adopts a renamed server Space after create replay instead of PUTting the obsolete name", async () => {
+    vi.mocked(createPageDraft)
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockImplementationOnce(async (input) => page({
+        id: input.clientDraftId,
+        title: input.title,
+        content: input.content,
+        space: "Wenlan Core",
+        version: 2,
+      }));
+    const snapshot: PageDraftSnapshot = {
+      title: "Replay identity",
+      content: "Body",
+      space: "Wenlan",
+    };
+    const onSpaceReconciled = vi.fn();
+    const { result } = renderHook(
+      () => usePageDraftAutosave({
+        initial: EMPTY,
+        onSpaceReconciled,
+        snapshot,
+      }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
+    });
+    expect(result.current.status).toBe("error");
+
+    await act(async () => {
+      expect(await result.current.retry()).toBe(true);
+    });
+
+    expect(updatePageDraft).not.toHaveBeenCalled();
+    expect(onSpaceReconciled).toHaveBeenCalledWith("Wenlan Core");
     expect(result.current.status).toBe("saved");
     expect(result.current.version).toBe(2);
   });

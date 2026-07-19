@@ -43,6 +43,7 @@ type UsePageDraftAutosaveOptions = {
   readonly enabled?: boolean;
   readonly initial: PageDraftSnapshot;
   readonly initialVersion?: number;
+  readonly onSpaceReconciled?: (space: string | null) => void;
   readonly snapshot: PageDraftSnapshot;
 };
 
@@ -90,6 +91,7 @@ export function usePageDraftAutosave({
   enabled = true,
   initial,
   initialVersion,
+  onSpaceReconciled,
   snapshot,
 }: UsePageDraftAutosaveOptions) {
   const queryClient = useQueryClient();
@@ -198,9 +200,21 @@ export function usePageDraftAutosave({
             pendingCreateRef.current = null;
             draftIdRef.current = saved.id;
             versionRef.current = saved.version;
-            persistedRef.current = saved.id === pendingCreate.clientDraftId
+            const savedSnapshot = saved.id === pendingCreate.clientDraftId
               ? snapshotFromPage(saved)
               : pendingCreate.snapshot;
+            if (
+              saved.id === pendingCreate.clientDraftId
+              && latestRef.current.space === pendingCreate.snapshot.space
+              && savedSnapshot.space !== pendingCreate.snapshot.space
+            ) {
+              latestRef.current = {
+                ...latestRef.current,
+                space: savedSnapshot.space,
+              };
+              if (mountedRef.current) onSpaceReconciled?.(savedSnapshot.space);
+            }
+            persistedRef.current = savedSnapshot;
             if (mountedRef.current) {
               setDraftId(saved.id);
               setVersion(saved.version);
@@ -289,7 +303,7 @@ export function usePageDraftAutosave({
     } finally {
       if (loopRef.current === loop) loopRef.current = null;
     }
-  }, [enabled, invalidateInventories, updateState]);
+  }, [enabled, invalidateInventories, onSpaceReconciled, updateState]);
 
   const flush = useCallback(async (): Promise<boolean> => {
     if (timerRef.current) {
