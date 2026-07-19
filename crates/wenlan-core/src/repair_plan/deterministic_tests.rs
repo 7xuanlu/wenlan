@@ -161,6 +161,193 @@ fn exact_apply_request(manifest: &RepairManifest) -> ApplyRepairRequest {
     .unwrap()
 }
 
+struct StaleProjectionPlanFixture {
+    db: crate::db::MemoryDB,
+    _db_dir: tempfile::TempDir,
+    page_root: tempfile::TempDir,
+    _repair_root: tempfile::TempDir,
+    store: RepairArtifactStore,
+    manifests: Vec<RepairManifest>,
+}
+
+async fn stale_projection_plan_fixture(page_ids: &[&str]) -> StaleProjectionPlanFixture {
+    let (db, db_dir) = test_db().await;
+    let page_root = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(page_root.path().join(".wenlan")).unwrap();
+    let pages = page_ids
+        .iter()
+        .enumerate()
+        .map(|(index, page_id)| {
+            (
+                (*page_id).to_string(),
+                serde_json::json!({
+                    "file": format!("{index}.md"),
+                    "version": 1,
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    std::fs::write(
+        page_root.path().join(".wenlan/state.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
+            "pages": pages,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for (index, page_id) in page_ids.iter().enumerate() {
+        std::fs::write(
+            page_root.path().join(format!("{index}.md")),
+            format!("---\norigin_id: {page_id}\norigin_version: 1\n---\n{page_id}\n"),
+        )
+        .unwrap();
+    }
+    let repair_root = tempfile::TempDir::new().unwrap();
+    let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+    let general = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .run(
+            &db,
+            &LintQuery::new(Some(LintProfile::General), None),
+            Some(page_root.path()),
+            true,
+        )
+        .await
+        .unwrap();
+    let plan = crate::repair_plan::prepare_repair_plan(
+        &db,
+        &store,
+        RepairPlanRequest::try_new(RepairLintScope::global(), general, None).unwrap(),
+        Some(page_root.path()),
+        1_721_000_000,
+    )
+    .await
+    .unwrap();
+    let manifests = plan
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry.resolution() {
+            RepairResolution::Ready { manifest }
+                if manifest.writer() == RepairWriter::QuarantineStalePageProjection =>
+            {
+                Some(manifest.as_ref().clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(manifests.len(), page_ids.len(), "plan: {plan:#?}");
+    StaleProjectionPlanFixture {
+        db,
+        _db_dir: db_dir,
+        page_root,
+        _repair_root: repair_root,
+        store,
+        manifests,
+    }
+}
+
+fn stale_projection_manifest_paths(manifest: &RepairManifest) -> (&str, &str) {
+    match manifest.mutation() {
+        RepairMutation::QuarantineStalePageProjection {
+            source_path,
+            quarantine_path,
+        } => (source_path, quarantine_path),
+        mutation => panic!("unexpected stale projection mutation: {mutation:?}"),
+    }
+}
+
+fn stale_projection_manifest_page_id(manifest: &RepairManifest) -> &str {
+    match manifest.target() {
+        RepairTarget::PageProjection { page_id, .. } => page_id,
+        target => panic!("unexpected stale projection target: {target:?}"),
+    }
+}
+
+fn persist_test_stale_projection_apply_journal(
+    store: &RepairArtifactStore,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+) {
+    #[derive(serde::Serialize)]
+    struct Draft<'a> {
+        format_version: u16,
+        manifest_id: &'a str,
+        manifest_digest: &'a wenlan_types::repair::RepairDigest,
+        rollback: &'a crate::repair::StoredRollbackArtifact,
+    }
+    #[derive(serde::Serialize)]
+    struct Journal<'a> {
+        format_version: u16,
+        manifest_id: &'a str,
+        manifest_digest: &'a wenlan_types::repair::RepairDigest,
+        rollback: &'a crate::repair::StoredRollbackArtifact,
+        journal_digest: wenlan_types::repair::RepairDigest,
+    }
+    let draft = Draft {
+        format_version: 1,
+        manifest_id: manifest.manifest_id(),
+        manifest_digest: manifest.manifest_digest(),
+        rollback,
+    };
+    let journal_digest = crate::repair::repair_digest(&serde_json::to_vec(&draft).unwrap());
+    let journal = Journal {
+        format_version: draft.format_version,
+        manifest_id: draft.manifest_id,
+        manifest_digest: draft.manifest_digest,
+        rollback: draft.rollback,
+        journal_digest,
+    };
+    std::fs::write(
+        store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join(".stale-page-projection-apply-journal-v1.json"),
+        serde_json::to_vec_pretty(&journal).unwrap(),
+    )
+    .unwrap();
+}
+
+async fn apply_and_verify_stale_projection_manifest(
+    fixture: &StaleProjectionPlanFixture,
+    manifest: &RepairManifest,
+    applied_at: i64,
+) -> wenlan_types::repair::RepairApplyReceipt {
+    let receipt = crate::repair::apply_repair_with_pages(
+        &fixture.db,
+        &fixture.store,
+        exact_apply_request(manifest),
+        Some(fixture.page_root.path()),
+        applied_at,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("apply failed for {:?}: {error:?}", manifest.target()));
+    let general = LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .run(
+            &fixture.db,
+            &LintQuery::new(Some(LintProfile::General), None),
+            Some(fixture.page_root.path()),
+            true,
+        )
+        .await
+        .unwrap();
+    crate::repair::record_repair_verification(
+        &fixture.db,
+        &fixture.store,
+        wenlan_types::repair::VerifyRepairRequest::try_new_general_only(
+            manifest.manifest_id().to_string(),
+            manifest.manifest_digest().clone(),
+            receipt.receipt_digest().clone(),
+            general,
+        )
+        .unwrap(),
+        Some(fixture.page_root.path()),
+        applied_at + 1,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("verification failed for {:?}: {error:?}", manifest.target()));
+    receipt
+}
+
 struct StaleRecoveryFixture {
     db: crate::db::MemoryDB,
     _db_dir: tempfile::TempDir,
@@ -1744,6 +1931,286 @@ async fn stale_page_projection_apply_quarantines_exact_bytes_and_verifies() {
 }
 
 #[tokio::test]
+async fn stale_page_projection_manifests_from_one_plan_apply_sequentially() {
+    let fixture = stale_projection_plan_fixture(&["page_stale_a", "page_stale_b"]).await;
+    for (index, manifest) in fixture.manifests.iter().enumerate() {
+        apply_and_verify_stale_projection_manifest(
+            &fixture,
+            manifest,
+            1_721_000_001 + 2 * i64::try_from(index).unwrap(),
+        )
+        .await;
+    }
+
+    for manifest in &fixture.manifests {
+        let (source_path, quarantine_path) = stale_projection_manifest_paths(manifest);
+        assert!(!fixture.page_root.path().join(source_path).exists());
+        assert!(fixture.page_root.path().join(quarantine_path).is_file());
+    }
+}
+
+#[tokio::test]
+async fn stale_page_projection_plan_allows_an_ordered_subset() {
+    let fixture = stale_projection_plan_fixture(&[
+        "page_stale_subset_a",
+        "page_stale_subset_b",
+        "page_stale_subset_c",
+    ])
+    .await;
+    for (sequence, index) in [0_usize, 2].into_iter().enumerate() {
+        let manifest = &fixture.manifests[index];
+        apply_and_verify_stale_projection_manifest(
+            &fixture,
+            manifest,
+            1_721_000_101 + 2 * i64::try_from(sequence).unwrap(),
+        )
+        .await;
+    }
+
+    for index in [0_usize, 2] {
+        let (source_path, quarantine_path) =
+            stale_projection_manifest_paths(&fixture.manifests[index]);
+        assert!(!fixture.page_root.path().join(source_path).exists());
+        assert!(fixture.page_root.path().join(quarantine_path).is_file());
+    }
+    let (skipped_source, skipped_quarantine) =
+        stale_projection_manifest_paths(&fixture.manifests[1]);
+    assert!(fixture.page_root.path().join(skipped_source).is_file());
+    assert!(!fixture.page_root.path().join(skipped_quarantine).exists());
+}
+
+#[tokio::test]
+async fn stale_page_projection_plan_allows_only_the_last_manifest() {
+    let fixture =
+        stale_projection_plan_fixture(&["page_stale_last_only_a", "page_stale_last_only_b"]).await;
+    let skipped = &fixture.manifests[0];
+    let selected = &fixture.manifests[1];
+
+    apply_and_verify_stale_projection_manifest(&fixture, selected, 1_721_000_151).await;
+
+    let (skipped_source, skipped_quarantine) = stale_projection_manifest_paths(skipped);
+    let (selected_source, selected_quarantine) = stale_projection_manifest_paths(selected);
+    assert!(fixture.page_root.path().join(skipped_source).is_file());
+    assert!(!fixture.page_root.path().join(skipped_quarantine).exists());
+    assert!(!fixture.page_root.path().join(selected_source).exists());
+    assert!(fixture.page_root.path().join(selected_quarantine).is_file());
+}
+
+#[tokio::test]
+async fn stale_page_projection_recovery_preserves_an_earlier_selected_repair() {
+    let fixture =
+        stale_projection_plan_fixture(&["page_stale_recovery_a", "page_stale_recovery_b"]).await;
+    let first = &fixture.manifests[0];
+    let second = &fixture.manifests[1];
+    apply_and_verify_stale_projection_manifest(&fixture, first, 1_721_000_201).await;
+    let (_, first_quarantine) = stale_projection_manifest_paths(first);
+    let first_quarantine = fixture.page_root.path().join(first_quarantine);
+    let first_quarantine_bytes = std::fs::read(&first_quarantine).unwrap();
+
+    let (second_source, second_quarantine) = stale_projection_manifest_paths(second);
+    let dynamic_rollback = crate::repair::capture_stale_page_projection_current(
+        fixture.page_root.path(),
+        stale_projection_manifest_page_id(second),
+        second_source,
+        second_quarantine,
+    )
+    .unwrap();
+    let second_manifest_dir = fixture.store.manifest_dir(second.manifest_id()).unwrap();
+    std::fs::write(second_manifest_dir.join(".apply-receipt.json.pending"), b"").unwrap();
+    persist_test_stale_projection_apply_journal(&fixture.store, second, &dynamic_rollback);
+    let crash = crate::export::knowledge::KnowledgeProjectionWrite::with_repair_lock(
+        fixture.page_root.path().to_path_buf(),
+        &fixture.db,
+        |write| {
+            let mut pinned = write.pin_stale_page_projection(
+                stale_projection_manifest_page_id(second),
+                second_source,
+                second_quarantine,
+                &dynamic_rollback,
+                second.manifest_id(),
+            )?;
+            pinned.quarantine_with_after_source_stage(|| {
+                Err(crate::error::WenlanError::VectorDb(
+                    "simulated process crash after source stage".to_string(),
+                ))
+            })
+        },
+    )
+    .unwrap_err();
+    assert!(
+        crash
+            .to_string()
+            .contains("simulated process crash after source stage"),
+        "{crash}"
+    );
+
+    crate::repair::apply_repair_with_pages(
+        &fixture.db,
+        &fixture.store,
+        exact_apply_request(second),
+        Some(fixture.page_root.path()),
+        1_721_000_203,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read(&first_quarantine).unwrap(),
+        first_quarantine_bytes
+    );
+    assert!(!fixture.page_root.path().join(second_source).exists());
+    assert!(fixture.page_root.path().join(second_quarantine).is_file());
+}
+
+#[tokio::test]
+async fn stale_page_projection_legacy_pending_without_journal_fails_closed() {
+    let fixture =
+        stale_projection_plan_fixture(&["page_stale_pre_journal_a", "page_stale_pre_journal_b"])
+            .await;
+    let first = &fixture.manifests[0];
+    let second = &fixture.manifests[1];
+    apply_and_verify_stale_projection_manifest(&fixture, first, 1_721_000_301).await;
+    let (_, first_quarantine) = stale_projection_manifest_paths(first);
+    let first_quarantine = fixture.page_root.path().join(first_quarantine);
+    let first_quarantine_bytes = std::fs::read(&first_quarantine).unwrap();
+
+    std::fs::write(
+        fixture
+            .store
+            .manifest_dir(second.manifest_id())
+            .unwrap()
+            .join(".apply-receipt.json.pending"),
+        b"",
+    )
+    .unwrap();
+
+    let error = crate::repair::apply_repair_with_pages(
+        &fixture.db,
+        &fixture.store,
+        exact_apply_request(second),
+        Some(fixture.page_root.path()),
+        1_721_000_303,
+    )
+    .await
+    .unwrap_err();
+
+    let (second_source, second_quarantine) = stale_projection_manifest_paths(second);
+    assert_eq!(
+        error.to_string(),
+        "Conflict: repair_apply_recovery_required"
+    );
+    assert_eq!(
+        std::fs::read(&first_quarantine).unwrap(),
+        first_quarantine_bytes
+    );
+    assert!(fixture.page_root.path().join(second_source).is_file());
+    assert!(!fixture.page_root.path().join(second_quarantine).exists());
+    assert!(fixture
+        .store
+        .manifest_dir(second.manifest_id())
+        .unwrap()
+        .join(".apply-receipt.json.pending")
+        .is_file());
+}
+
+#[tokio::test]
+async fn stale_page_projection_journal_without_pending_preserves_earlier_repair() {
+    let fixture = stale_projection_plan_fixture(&[
+        "page_stale_valid_pending_a",
+        "page_stale_valid_pending_b",
+    ])
+    .await;
+    let first = &fixture.manifests[0];
+    let second = &fixture.manifests[1];
+    apply_and_verify_stale_projection_manifest(&fixture, first, 1_721_000_401).await;
+    let (_, first_quarantine) = stale_projection_manifest_paths(first);
+    let first_quarantine = fixture.page_root.path().join(first_quarantine);
+    let first_quarantine_bytes = std::fs::read(&first_quarantine).unwrap();
+
+    let (second_source, second_quarantine) = stale_projection_manifest_paths(second);
+    let dynamic_rollback = crate::repair::capture_stale_page_projection_current(
+        fixture.page_root.path(),
+        stale_projection_manifest_page_id(second),
+        second_source,
+        second_quarantine,
+    )
+    .unwrap();
+    persist_test_stale_projection_apply_journal(&fixture.store, second, &dynamic_rollback);
+    let second_manifest_dir = fixture.store.manifest_dir(second.manifest_id()).unwrap();
+    assert!(second_manifest_dir
+        .join(".stale-page-projection-apply-journal-v1.json")
+        .is_file());
+    assert!(!second_manifest_dir
+        .join(".apply-receipt.json.pending")
+        .exists());
+
+    crate::repair::apply_repair_with_pages(
+        &fixture.db,
+        &fixture.store,
+        exact_apply_request(second),
+        Some(fixture.page_root.path()),
+        1_721_000_403,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read(&first_quarantine).unwrap(),
+        first_quarantine_bytes
+    );
+    assert!(!fixture.page_root.path().join(second_source).exists());
+    assert!(fixture.page_root.path().join(second_quarantine).is_file());
+}
+
+#[tokio::test]
+async fn stale_page_projection_pending_journal_is_promoted_and_recovered() {
+    let fixture = stale_projection_plan_fixture(&[
+        "page_stale_pending_journal_a",
+        "page_stale_pending_journal_b",
+    ])
+    .await;
+    let first = &fixture.manifests[0];
+    let second = &fixture.manifests[1];
+    apply_and_verify_stale_projection_manifest(&fixture, first, 1_721_000_451).await;
+    let (_, first_quarantine) = stale_projection_manifest_paths(first);
+    let first_quarantine = fixture.page_root.path().join(first_quarantine);
+    let first_quarantine_bytes = std::fs::read(&first_quarantine).unwrap();
+
+    let (second_source, second_quarantine) = stale_projection_manifest_paths(second);
+    let dynamic_rollback = crate::repair::capture_stale_page_projection_current(
+        fixture.page_root.path(),
+        stale_projection_manifest_page_id(second),
+        second_source,
+        second_quarantine,
+    )
+    .unwrap();
+    persist_test_stale_projection_apply_journal(&fixture.store, second, &dynamic_rollback);
+    let second_manifest_dir = fixture.store.manifest_dir(second.manifest_id()).unwrap();
+    let journal = second_manifest_dir.join(".stale-page-projection-apply-journal-v1.json");
+    let pending_journal =
+        second_manifest_dir.join(".stale-page-projection-apply-journal-v1.json.pending");
+    std::fs::rename(&journal, &pending_journal).unwrap();
+
+    crate::repair::apply_repair_with_pages(
+        &fixture.db,
+        &fixture.store,
+        exact_apply_request(second),
+        Some(fixture.page_root.path()),
+        1_721_000_453,
+    )
+    .await
+    .unwrap();
+
+    assert!(!pending_journal.exists());
+    assert_eq!(
+        std::fs::read(&first_quarantine).unwrap(),
+        first_quarantine_bytes
+    );
+    assert!(!fixture.page_root.path().join(second_source).exists());
+    assert!(fixture.page_root.path().join(second_quarantine).is_file());
+}
+
+#[tokio::test]
 async fn stale_page_projection_after_plan_collision_is_no_clobber_stale() {
     let (db, _dir) = test_db().await;
     let page_root = tempfile::TempDir::new().unwrap();
@@ -1803,7 +2270,10 @@ async fn stale_page_projection_after_plan_collision_is_no_clobber_stale() {
         .manifest_dir(manifest.manifest_id())
         .unwrap()
         .join(".apply-receipt.json.pending");
-    assert!(pending.is_file());
+    assert!(
+        !pending.exists(),
+        "a pre-journal collision proves zero mutation and must not retain a writer fence"
+    );
 
     std::fs::remove_file(&quarantine).unwrap();
     let receipt = crate::repair::apply_repair_with_pages(

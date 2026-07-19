@@ -1340,6 +1340,7 @@ where
     )
 }
 
+#[cfg(test)]
 pub(crate) async fn quarantine_stale_page_projection_cas<F>(
     db: &MemoryDB,
     manifest: &RepairManifest,
@@ -1350,6 +1351,29 @@ pub(crate) async fn quarantine_stale_page_projection_cas<F>(
 where
     F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
 {
+    quarantine_stale_page_projection_cas_with_apply_journal(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        |_| Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+pub(crate) async fn quarantine_stale_page_projection_cas_with_apply_journal<J, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    persist_apply_journal: J,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    J: FnOnce(&crate::repair::StoredRollbackArtifact) -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
     quarantine_stale_page_projection_cas_inner(
         db,
         manifest,
@@ -1358,6 +1382,7 @@ where
         || Ok(()),
         || Ok(()),
         || Ok(()),
+        persist_apply_journal,
         before_commit,
     )
     .await
@@ -1384,6 +1409,7 @@ where
         before_pin,
         || Ok(()),
         || Ok(()),
+        |_| Ok(()),
         before_commit,
     )
     .await
@@ -1410,6 +1436,7 @@ where
         || Ok(()),
         after_pin,
         || Ok(()),
+        |_| Ok(()),
         before_commit,
     )
     .await
@@ -1436,13 +1463,14 @@ where
         || Ok(()),
         || Ok(()),
         before_source_stage,
+        |_| Ok(()),
         before_commit,
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn quarantine_stale_page_projection_cas_inner<B, A, S, F>(
+async fn quarantine_stale_page_projection_cas_inner<B, A, S, J, F>(
     db: &MemoryDB,
     manifest: &RepairManifest,
     rollback: &crate::repair::StoredRollbackArtifact,
@@ -1450,12 +1478,14 @@ async fn quarantine_stale_page_projection_cas_inner<B, A, S, F>(
     before_pin: B,
     after_pin: A,
     before_source_stage: S,
+    persist_apply_journal: J,
     before_commit: F,
 ) -> Result<RepairWriteProof, WenlanError>
 where
     B: FnOnce() -> Result<(), WenlanError>,
     A: FnOnce() -> Result<(), WenlanError>,
     S: FnOnce() -> Result<(), WenlanError>,
+    J: FnOnce(&crate::repair::StoredRollbackArtifact) -> Result<(), WenlanError>,
     F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
 {
     let (page_id, source_path, quarantine_path) =
@@ -1546,11 +1576,12 @@ where
                 &before,
             )?;
             before_pin()?;
+            persist_apply_journal(&before)?;
             let mut pinned = write.pin_stale_page_projection(
                 page_id,
                 source_path,
                 quarantine_path,
-                rollback,
+                &before,
                 manifest.manifest_id(),
             )?;
             let result = (|| {
