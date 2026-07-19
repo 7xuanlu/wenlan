@@ -236,6 +236,38 @@ async fn replace_source_page_impl(
             "source Page {page_id} is not machine-owned"
         )));
     }
+
+    // Nothing to write: this enrichment recomputed exactly what the page
+    // already says. Mirrors the same early return on the Update path, and
+    // matters more here — a document whose analysis LLM is unreachable rebuilds
+    // a byte-identical stub body on every retry, and without this each retry
+    // would bump the version and append another identical history row.
+    //
+    // Compared against the *sanitized* body because that is the form the row
+    // holds; comparing the raw one would report a spurious change forever.
+    let sanitized = crate::export::provenance::sanitize_ingress_content(content);
+    let stored_sources: HashSet<&str> = current
+        .source_memory_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let incoming_sources: HashSet<&str> = source_memory_ids.iter().map(String::as_str).collect();
+    if current.title == title
+        && current.summary.as_deref() == summary
+        && current.content == sanitized
+        && stored_sources == incoming_sources
+    {
+        return Ok(WriteResult {
+            id: page_id.to_string(),
+            attached_to: None,
+            warnings: Vec::new(),
+            wrote: false,
+            revision_card_id: None,
+            gated: false,
+            outcome: WriteOutcome::Unchanged,
+        });
+    }
+
     let source_refs: Vec<&str> = source_memory_ids.iter().map(String::as_str).collect();
     if !db
         .replace_source_page(page_id, title, summary, content, &source_refs, agent)
@@ -3816,6 +3848,165 @@ mod tests {
         let page = db.get_page(page_id).await.unwrap().unwrap();
         assert_eq!(page.version, history[0].version);
         assert_eq!(page.content, history[0].content);
+    }
+
+    /// Seed the `creation_kind='source'` page that a re-enriched document
+    /// replaces, and return `(page_id, memory_id, body)`.
+    async fn seed_source_page(db: &MemoryDB, page_id: &'static str) -> (&'static str, String) {
+        let mem_id = "mem-source-page";
+        let body = "A source page is the machine-owned projection of one ingested document";
+        seed_memory(db, mem_id, body).await;
+        let req = CreateConceptRequest {
+            title: "Ingested Document".to_string(),
+            content: body.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![mem_id.to_string()],
+            creation_kind: Some("source".to_string()),
+            workspace: None,
+        };
+        page_write(
+            db,
+            PageWrite::Create {
+                page_id: Some(page_id),
+                req,
+                agent: "doc-enrich",
+                knowledge_path: None,
+                page_min_cluster_size: 1,
+                page_match_threshold: 0.0,
+                citations_json: None,
+            },
+        )
+        .await
+        .unwrap();
+        (mem_id, body.to_string())
+    }
+
+    /// `ReplaceSource` is a page write like any other: re-enriching a document
+    /// bumps the page version, so it must leave the same immutable `page_history`
+    /// row behind. Without this the M0-B invariant — one durable row per page
+    /// version — is simply false for every source page in the corpus.
+    ///
+    /// Mutation check: drop the history INSERT from `replace_source_page` and the
+    /// version sequence collapses to `[1]`.
+    #[tokio::test]
+    async fn replace_source_page_records_history_row_for_new_version() {
+        let (db, _dir) = test_db().await;
+        let page_id = "page_source_history";
+        let (mem_id, v1) = seed_source_page(&db, page_id).await;
+
+        let at_create = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(
+            at_create.len(),
+            1,
+            "a freshly created source page must already have its v1 history row"
+        );
+
+        let v2 = "A source page is the machine-owned projection of one ingested document, \
+                  rewritten whenever that document is enriched again";
+        let result = page_write(
+            &db,
+            PageWrite::ReplaceSource {
+                page_id,
+                title: "Ingested Document",
+                summary: Some("the second enrichment"),
+                content: v2,
+                source_memory_ids: &[mem_id.to_string()],
+                agent: "doc-enrich",
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.wrote, "replacing a source page must land");
+
+        let history = db.list_page_history(page_id, 10).await.unwrap();
+        let versions: Vec<i64> = history.iter().map(|h| h.version).collect();
+        assert_eq!(
+            versions,
+            vec![2, 1],
+            "a source-page replacement must append one history row for the version it created"
+        );
+        assert_eq!(
+            history[0].content, v2,
+            "the row holds the body at its version"
+        );
+        assert_eq!(history[1].content, v1);
+        assert_eq!(history[0].edited_by, "doc-enrich");
+
+        // The head of the history must agree with the page — the reason both are
+        // written in one transaction.
+        let page = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, history[0].version);
+        assert_eq!(page.content, history[0].content);
+    }
+
+    /// A re-enrichment that recomputes the body it already wrote must not
+    /// become a second version.
+    ///
+    /// This is not hypothetical: when the analysis LLM is unreachable,
+    /// `document_enrichment` writes a deterministic stub page and pauses for
+    /// retry, and every retry rebuilds the same stub from the same stored
+    /// chunks. Without this guard that document's page version climbs once per
+    /// retry forever — and now that a version also appends a `page_history`
+    /// row, it would grow an uncapped history of byte-identical snapshots.
+    ///
+    /// Mutation check: drop the unchanged-guard and the version reaches 3.
+    #[tokio::test]
+    async fn replace_source_page_with_identical_content_writes_no_new_version() {
+        let (db, _dir) = test_db().await;
+        let page_id = "page_source_unchanged";
+        let (mem_id, _v1) = seed_source_page(&db, page_id).await;
+        let sources = [mem_id.to_string()];
+
+        let body = "A source page is the machine-owned projection of one ingested document, \
+                    rebuilt identically on every retry while the analysis LLM stays down";
+        let replace = |content: &'static str| {
+            page_write(
+                &db,
+                PageWrite::ReplaceSource {
+                    page_id,
+                    title: "Ingested Document",
+                    summary: Some("stub"),
+                    content,
+                    source_memory_ids: &sources,
+                    agent: "doc-enrich",
+                },
+            )
+        };
+
+        let first = replace(body).await.unwrap();
+        assert!(first.wrote, "the first enrichment must land");
+        let after_first = db.get_page(page_id).await.unwrap().unwrap();
+
+        let retry = replace(body).await.unwrap();
+        assert!(
+            !retry.wrote,
+            "recomputing the same body must not be reported as a write"
+        );
+        assert_eq!(
+            retry.outcome,
+            WriteOutcome::Unchanged,
+            "a no-op retry is Unchanged, not a conflict and not a write"
+        );
+
+        let after_retry = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_retry.version, after_first.version,
+            "an identical replacement must not bump the version"
+        );
+        let versions: Vec<i64> = db
+            .list_page_history(page_id, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|h| h.version)
+            .collect();
+        assert_eq!(
+            versions,
+            vec![2, 1],
+            "no version means no history row — the retry appends nothing"
+        );
     }
 
     /// Seed a page and return `(db, tempdir, page_id, memory_id)` for the

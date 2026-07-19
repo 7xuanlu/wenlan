@@ -24504,6 +24504,41 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Append the immutable `page_history` row for the version a write just
+    /// produced, on the caller's already-open transaction.
+    ///
+    /// `SELECT ... FROM pages` reads the row the caller just updated, inside
+    /// that same transaction, so the snapshot and its version number can never
+    /// disagree with what landed — and no caller has to compute the post-bump
+    /// version itself. A history row is therefore not "written alongside" the
+    /// page: either both exist or neither does.
+    ///
+    /// This is the ONE site that appends a version row, shared by every path
+    /// that bumps `pages.version`. A path that grows its own copy of this
+    /// statement is how the invariant "one durable row per page version" drifts
+    /// back into being false for some page kinds but not others — which is
+    /// exactly what happened to source pages before this was factored out.
+    ///
+    /// A plain INSERT, not `OR IGNORE`: `UNIQUE(page_id, version)` colliding
+    /// means a row already exists for a version this write claims to have just
+    /// created, and failing the transaction is the correct answer to that.
+    async fn append_page_history(
+        conn: &libsql::Connection,
+        page_id: &str,
+        edited_by: &str,
+        created_at: i64,
+    ) -> Result<(), libsql::Error> {
+        conn.execute(
+            "INSERT INTO page_history \
+               (page_id, version, content, source_memory_ids, edited_by, created_at) \
+             SELECT id, version, content, source_memory_ids, ?2, ?3 \
+             FROM pages WHERE id = ?1",
+            libsql::params![page_id, edited_by, created_at],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Batch-resolve typed `page_evidence.source_kind` values
     /// (`memory` | `external_url` | `external_file` | `authored`) for a list
     /// of source ids, keyed by id. The ONE wiring site for every citation
@@ -24821,6 +24856,12 @@ impl MemoryDB {
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("replace_source_page evidence insert: {e}"))
                 })?;
+            // Same transaction as the version bump above: a re-enriched source
+            // page is a new version like any other, and leaves the same durable
+            // row behind.
+            Self::append_page_history(&conn, id, link_reason, now_ts)
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("replace_source_page history: {e}")))?;
             Ok::<bool, WenlanError>(true)
         }
         .await;
@@ -25626,21 +25667,7 @@ impl MemoryDB {
         }
 
         // Append the immutable history row for the version this write produced.
-        // `SELECT ... FROM pages` reads the row we just updated, inside the same
-        // transaction, so the snapshot and its version number can never disagree
-        // with what landed — and no caller has to compute the post-bump version.
-        // A history row is therefore not "written alongside" the page; either
-        // both exist or neither does.
-        if let Err(e) = conn
-            .execute(
-                "INSERT INTO page_history \
-                   (page_id, version, content, source_memory_ids, edited_by, created_at) \
-                 SELECT id, version, content, source_memory_ids, ?2, ?3 \
-                 FROM pages WHERE id = ?1",
-                libsql::params![id, link_reason, now_ts],
-            )
-            .await
-        {
+        if let Err(e) = Self::append_page_history(&conn, id, link_reason, now_ts).await {
             let _ = conn.execute("ROLLBACK", ()).await;
             return Err(WenlanError::VectorDb(format!(
                 "update_page_content history: {e}"
