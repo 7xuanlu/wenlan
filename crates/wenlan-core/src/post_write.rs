@@ -1289,10 +1289,12 @@ pub(crate) fn merge_shrink_threshold() -> Option<f64> {
 /// - `true`  — CAS: only writes when `stale_reason IS NOT NULL` (refinery callers).
 ///   Returns `Ok(WriteResult { warnings: vec![] })` without writing when not stale.
 ///
-/// Hallucination guard runs only for `edited_by ∈ {manual_edit, api}`.
-/// Daemon-internal callers (`distill`, `re_distill`, `page_growth`,
-/// `refinery_merge`) skip it — incremental updates may push aggregate cosine
-/// sim below 0.6 and would silently drop legitimate writes.
+/// Hallucination guard runs for human writers (`manual_edit`, `fs_edit`) and
+/// for any writer the gate does not recognize. `agent_refresh` and the LLM
+/// rewrite stages (`distill`, `re_distill`, `page_growth`, `refinery_merge`)
+/// skip it — incremental updates may push aggregate cosine sim below 0.6 and
+/// would silently drop legitimate writes. See `Writer::skips_hallucination_guard`,
+/// which is the single source of truth; `WRITER_TABLE` pins it per writer.
 ///
 /// `citations`: `Some((citations_json, stats_summary))` when the caller has
 /// freshly verified [N] markers against a numbered source list for this
