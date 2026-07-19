@@ -40,14 +40,17 @@ pub use memory::{
 pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION};
 pub use narrative::NarrativeResponse;
 pub use pages::{Page, PageEvidence};
-pub use requests::AcceptRefinementRequest;
+pub use requests::{
+    AcceptRefinementRequest, CreatePageDraftRequest, PageDraftVersionRequest,
+    UpdatePageDraftRequest,
+};
 pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
     ListPageRevisionsResponse, ListRefinementsResponse, MemoryDetail, MemoryRevisionEntry,
     OnDeviceModelEntry, OnDeviceModelResponse, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
-    PageWriteResponse, PendingRevision, PendingRevisionItem, ProposalAction, RefinementCardAction,
-    RefinementPayload, RefinementProposalSummary, RejectRefinementResponse, RevisionAcceptResponse,
-    RevisionDismissResponse,
+    PageDraftResponse, PageWriteResponse, PendingRevision, PendingRevisionItem, ProposalAction,
+    RefinementCardAction, RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
+    RevisionAcceptResponse, RevisionDismissResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 

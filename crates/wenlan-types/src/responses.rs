@@ -493,6 +493,12 @@ pub struct PageWriteResponse {
     pub gated: bool,
 }
 
+/// Page draft create, update, and publish response envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageDraftResponse {
+    pub page: Page,
+}
+
 // ===== Memory detail =====
 
 #[derive(Debug, Serialize, Deserialize)]
