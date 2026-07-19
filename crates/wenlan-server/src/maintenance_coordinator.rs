@@ -77,6 +77,12 @@ struct CoordinatorState {
 }
 
 impl CoordinatorState {
+    fn repair_allows_analysis(&self) -> bool {
+        self.repair_lease
+            .as_ref()
+            .is_none_or(|lease| lease.durable && lease.active_attempt.is_none())
+    }
+
     fn issue_pending_repair(&mut self) -> PendingRepairToken {
         self.next_pending_repair = self.next_pending_repair.wrapping_add(1);
         if self.next_pending_repair == 0 {
@@ -288,7 +294,7 @@ impl MaintenanceCoordinator {
                 if state.recovery_complete
                     && state.active_background == 0
                     && state.pending_repair.is_none()
-                    && state.repair_lease.is_none()
+                    && state.repair_allows_analysis()
                     && state.reserved_repair.is_none()
                 {
                     state.active_analysis = state.active_analysis.saturating_add(1);
@@ -388,7 +394,10 @@ impl MaintenanceCoordinator {
                     if lease.manifest_id != manifest_id {
                         return Err(MaintenanceFenceError::Conflict);
                     }
-                    if !lease.durable || lease.active_attempt.is_some() {
+                    if state.active_analysis != 0
+                        || !lease.durable
+                        || lease.active_attempt.is_some()
+                    {
                         return Err(MaintenanceFenceError::Busy);
                     }
                     let attempt_token = state.issue_repair_attempt();
@@ -495,7 +504,11 @@ impl MaintenanceCoordinator {
             Some(lease) if lease.manifest_id != manifest_id => {
                 return Err(MaintenanceFenceError::Conflict)
             }
-            Some(lease) if !lease.durable || lease.active_attempt.is_some() => {
+            Some(lease)
+                if state.active_analysis != 0
+                    || !lease.durable
+                    || lease.active_attempt.is_some() =>
+            {
                 return Err(MaintenanceFenceError::Busy)
             }
             None => return Err(MaintenanceFenceError::Expired),
@@ -656,6 +669,8 @@ impl RepairFenceGuard {
                 lease.active_attempt = None;
                 state.clear_pending_manifest(&self.manifest_id);
                 self.attempt_token = None;
+                drop(state);
+                self.coordinator.notify.notify_waiters();
                 Ok(())
             }
             Some(_) => Err(MaintenanceFenceError::Conflict),
@@ -925,6 +940,52 @@ mod tests {
         drop(analysis);
         drop(waiting_repair.await.unwrap().unwrap());
         drop(coordinator.try_begin_background().unwrap());
+    }
+
+    #[tokio::test]
+    async fn durable_idle_repair_allows_analysis_without_reopening_mutation() {
+        let coordinator = MaintenanceCoordinator::default();
+        coordinator.finish_recovery();
+        let repair = coordinator
+            .acquire_repair("repair_a", Duration::from_secs(1))
+            .await
+            .unwrap();
+        let mut waiting_analysis = Box::pin(coordinator.begin_analysis());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), &mut waiting_analysis)
+                .await
+                .is_err(),
+            "analysis must wait while an apply attempt is active"
+        );
+
+        repair.retain_until_verification().unwrap();
+        let analysis = tokio::time::timeout(Duration::from_secs(1), &mut waiting_analysis)
+            .await
+            .expect("retaining a durable idle repair must wake the verification lint");
+
+        assert!(coordinator.try_begin_background().is_none());
+        assert!(matches!(
+            coordinator.acquire_repair_verification("repair_a"),
+            Err(MaintenanceFenceError::Busy)
+        ));
+        assert!(matches!(
+            coordinator
+                .acquire_repair("repair_a", Duration::from_millis(5))
+                .await,
+            Err(MaintenanceFenceError::Busy)
+        ));
+
+        drop(analysis);
+        coordinator
+            .acquire_repair_verification("repair_a")
+            .unwrap()
+            .release_after_verification()
+            .unwrap();
+        drop(
+            coordinator
+                .try_begin_background()
+                .expect("verification release resumes background work"),
+        );
     }
 
     #[tokio::test]
