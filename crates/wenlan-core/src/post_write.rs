@@ -1080,33 +1080,113 @@ async fn create_page_impl(
     })
 }
 
-/// PageWrite `edited_by` values that bypass the hallucination guard. Incremental
-/// updates can push aggregate cosine sim below 0.6; the HTTP/MCP
-/// `agent_refresh` route historically accepted agent-provided refreshes without
-/// this guard, so routing it through PageWrite preserves that behavior.
-fn skip_hallucination_guard(edited_by: &str) -> bool {
-    matches!(
-        edited_by,
-        "distill" | "re_distill" | "page_growth" | "refinery_merge" | "agent_refresh"
-    )
+/// A daemon pipeline stage that rewrites page prose with an LLM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineStage<'a> {
+    Distill,
+    ReDistill,
+    PageGrowth,
+    RefineryMerge,
+    /// A writer string the gate does not recognize, carried verbatim.
+    ///
+    /// Two kinds of string land here. Legitimate ones: `edited_by` values that
+    /// reach `page_history` without passing this gate (`create` and
+    /// `migration_73` are SQL literals in db.rs; `citation_backfill` and
+    /// `revision_accept` write via the db layer). Illegitimate ones: a typo in
+    /// a caller's literal. The gate cannot tell them apart, so both get the
+    /// conservative answer — see `Writer::is_machine`.
+    Unknown(&'a str),
 }
 
-/// True iff edited_by names an LLM-rewrite path checked by the shrink-guard.
-/// Inverse-intent twin of skip_hallucination_guard -- same match arms.
-/// Do NOT merge: skip_hallucination_guard skips; is_llm_rewrite enables.
-fn is_llm_rewrite(edited_by: &str) -> bool {
-    matches!(
-        edited_by,
-        "distill" | "re_distill" | "page_growth" | "refinery_merge"
-    )
+/// Who is writing a page, as the spec's `human | agent | pipeline(stage)`.
+///
+/// This is a **lens over the persisted string, not a replacement for it**.
+/// Every page write records provenance as text in `pages.changelog` and
+/// `page_history.edited_by`, and those bytes are already in users' databases,
+/// so `as_str` round-trips the exact literal that was classified.
+///
+/// Its job is to put the write gate's three authority questions in one place
+/// with one vocabulary. They used to be three independent `matches!` lists over
+/// `&str`, which could drift apart silently and had no name for the fallthrough
+/// case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Writer<'a> {
+    /// A person edited the page directly — in the app editor, or in the vault
+    /// on disk. The only identity that may overwrite a human-owned page.
+    Human(&'a str),
+    /// An agent asked for a faithful re-synth of a page it already owns.
+    Agent(&'a str),
+    /// A daemon pipeline stage.
+    Pipeline(PipelineStage<'a>),
+}
+
+impl<'a> Writer<'a> {
+    /// Total over every `&str` — there is no failure mode, only `Unknown`.
+    pub fn classify(edited_by: &'a str) -> Self {
+        match edited_by {
+            "manual_edit" | "fs_edit" => Writer::Human(edited_by),
+            "agent_refresh" => Writer::Agent(edited_by),
+            "distill" => Writer::Pipeline(PipelineStage::Distill),
+            "re_distill" => Writer::Pipeline(PipelineStage::ReDistill),
+            "page_growth" => Writer::Pipeline(PipelineStage::PageGrowth),
+            "refinery_merge" => Writer::Pipeline(PipelineStage::RefineryMerge),
+            other => Writer::Pipeline(PipelineStage::Unknown(other)),
+        }
+    }
+
+    /// The persisted `edited_by` literal, byte-identical to what was classified.
+    pub fn as_str(&self) -> &'a str {
+        match self {
+            Writer::Human(s) | Writer::Agent(s) => s,
+            Writer::Pipeline(stage) => match stage {
+                PipelineStage::Distill => "distill",
+                PipelineStage::ReDistill => "re_distill",
+                PipelineStage::PageGrowth => "page_growth",
+                PipelineStage::RefineryMerge => "refinery_merge",
+                PipelineStage::Unknown(s) => s,
+            },
+        }
+    }
+
+    /// Everything that is not a human. **Unknown counts as machine on purpose**:
+    /// that is the fail-safe direction, because a machine write to a
+    /// human-owned page is staged as a revision card rather than overwriting
+    /// the human's prose. Trusting an unrecognized string as human would let it
+    /// clobber that prose instead.
+    fn is_machine(&self) -> bool {
+        !matches!(self, Writer::Human(_))
+    }
+
+    /// Writers that bypass the hallucination guard. Incremental updates can push
+    /// aggregate cosine sim below 0.6; the HTTP/MCP `agent_refresh` route
+    /// historically accepted agent-provided refreshes without this guard, so
+    /// routing it through PageWrite preserves that behavior.
+    ///
+    /// This is `is_llm_rewrite` plus `Agent` — the two used to be parallel
+    /// `matches!` lists whose only difference was the `agent_refresh` arm, with
+    /// a comment warning not to merge them. Here the difference is structural.
+    fn skips_hallucination_guard(&self) -> bool {
+        matches!(self, Writer::Agent(_)) || self.is_llm_rewrite()
+    }
+
+    /// A recognized LLM-rewrite stage, checked by the shrink-guard. `Unknown` is
+    /// excluded: the shrink-guard rejects a write outright, so an unrecognized
+    /// writer must not be able to opt itself into being rejected.
+    fn is_llm_rewrite(&self) -> bool {
+        matches!(
+            self,
+            Writer::Pipeline(
+                PipelineStage::Distill
+                    | PipelineStage::ReDistill
+                    | PipelineStage::PageGrowth
+                    | PipelineStage::RefineryMerge
+            )
+        )
+    }
 }
 
 pub fn page_is_human_owned(page: &crate::pages::Page) -> bool {
     page.user_edited || page.creation_kind == "authored"
-}
-
-fn is_machine_page_write(edited_by: &str) -> bool {
-    !matches!(edited_by, "manual_edit" | "fs_edit")
 }
 
 /// Stage a machine write to a human-owned page as a pending revision card
@@ -1340,7 +1420,8 @@ async fn update_page_impl(
     // authored page is legitimately born with zero sources (create_page
     // allows exactly that), so demanding one here would reject every later
     // human edit of that page — in the app and in the vault alike.
-    if req.source_memory_ids.is_empty() && is_machine_page_write(edited_by) {
+    let writer = Writer::classify(edited_by);
+    if req.source_memory_ids.is_empty() && writer.is_machine() {
         return Err(WenlanError::Validation(
             "page must cite at least one source memory".into(),
         ));
@@ -1352,7 +1433,7 @@ async fn update_page_impl(
     // memories.
 
     // ── Conditional hallucination guard ────────────────────────────────────
-    if !skip_hallucination_guard(edited_by) {
+    if !writer.skips_hallucination_guard() {
         let passed =
             crate::kg_quality::hallucination_guard(db, &req.content, &req.source_memory_ids)
                 .await?;
@@ -1463,7 +1544,7 @@ async fn update_page_impl(
             // not hold on this branch. Harmless today (resolution takes the latest
             // card) and it costs a receipt write on a path that ends in human
             // review; fix when cards get deduped, not before.
-            if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
+            if writer.is_machine() && page_is_human_owned(&current) {
                 return stage_page_revision_card(
                     db,
                     &current,
@@ -1478,8 +1559,8 @@ async fn update_page_impl(
             // OFF by default: unset/unparseable = None = zero regression.
             // Only fires for LLM-rewrite edited_by; human edits are never blocked.
             // Placed AFTER current page load (needs old body), BEFORE early-return.
-            // NOT inside the skip_hallucination_guard block: that skips page_growth/re_distill.
-            if is_llm_rewrite(edited_by) {
+            // NOT inside the skips_hallucination_guard block: that skips page_growth/re_distill.
+            if writer.is_llm_rewrite() {
                 if let Some(threshold) = merge_shrink_threshold() {
                     if !crate::retrieval::integrity::body_shrink_ok(
                         &current.content,
@@ -5503,18 +5584,125 @@ mod tests {
 
     #[test]
     fn is_llm_rewrite_distill_true() {
-        assert!(is_llm_rewrite("distill"));
-        assert!(is_llm_rewrite("re_distill"));
-        assert!(is_llm_rewrite("page_growth"));
-        assert!(is_llm_rewrite("refinery_merge"));
+        assert!(Writer::classify("distill").is_llm_rewrite());
+        assert!(Writer::classify("re_distill").is_llm_rewrite());
+        assert!(Writer::classify("page_growth").is_llm_rewrite());
+        assert!(Writer::classify("refinery_merge").is_llm_rewrite());
     }
 
     #[test]
     fn is_llm_rewrite_user_false() {
-        assert!(!is_llm_rewrite("user"));
-        assert!(!is_llm_rewrite("manual_edit"));
-        assert!(!is_llm_rewrite("fs_edit"));
-        assert!(!is_llm_rewrite("api"));
-        assert!(!is_llm_rewrite(""));
+        assert!(!Writer::classify("user").is_llm_rewrite());
+        assert!(!Writer::classify("manual_edit").is_llm_rewrite());
+        assert!(!Writer::classify("fs_edit").is_llm_rewrite());
+        assert!(!Writer::classify("api").is_llm_rewrite());
+        assert!(!Writer::classify("").is_llm_rewrite());
+    }
+
+    // ── Writer classification ───────────────────────────────────────────────
+
+    /// Every `edited_by` value this build persists, paired with the three
+    /// authority answers the write gate derives from it. This table is the
+    /// characterization pin: it is exactly what the string helpers
+    /// (`is_machine_page_write` / `skip_hallucination_guard` /
+    /// `is_llm_rewrite`) returned before `Writer` replaced them, so a drift in
+    /// any single classification fails here rather than silently changing who
+    /// wins an ownership decision inside the CAS.
+    const WRITER_TABLE: &[(&str, bool, bool, bool)] = &[
+        // edited_by            machine  skips_guard  llm_rewrite
+        ("manual_edit", false, false, false),
+        ("fs_edit", false, false, false),
+        ("distill", true, true, true),
+        ("re_distill", true, true, true),
+        ("page_growth", true, true, true),
+        ("refinery_merge", true, true, true),
+        ("agent_refresh", true, true, false),
+        // Persisted in `page_history.edited_by` / `pages.changelog` but never
+        // routed through the write gate today — these paths write via the db
+        // layer (db.rs `create`/`migration_73`, citations.rs, revision accept).
+        // Unrecognized by the classifier, and unrecognized means machine.
+        ("create", true, false, false),
+        ("revision_accept", true, false, false),
+        ("citation_backfill", true, false, false),
+        ("migration_73", true, false, false),
+    ];
+
+    #[test]
+    fn writer_table_pins_gate_classification() {
+        for &(edited_by, machine, skips_guard, llm_rewrite) in WRITER_TABLE {
+            let w = Writer::classify(edited_by);
+            assert_eq!(w.is_machine(), machine, "is_machine for {edited_by:?}");
+            assert_eq!(
+                w.skips_hallucination_guard(),
+                skips_guard,
+                "skips_hallucination_guard for {edited_by:?}"
+            );
+            assert_eq!(
+                w.is_llm_rewrite(),
+                llm_rewrite,
+                "is_llm_rewrite for {edited_by:?}"
+            );
+        }
+    }
+
+    /// The persisted-string contract: these bytes are already in users'
+    /// databases, so classification must never rewrite them.
+    #[test]
+    fn writer_round_trips_persisted_string() {
+        for &(edited_by, ..) in WRITER_TABLE {
+            assert_eq!(
+                Writer::classify(edited_by).as_str(),
+                edited_by,
+                "round-trip for {edited_by:?}"
+            );
+        }
+        // Unrecognized strings round-trip too — the type is a lens over the
+        // string, not a replacement for it.
+        for odd in ["manual_edt", "", "Distill", "totally_new_stage"] {
+            assert_eq!(
+                Writer::classify(odd).as_str(),
+                odd,
+                "round-trip for {odd:?}"
+            );
+        }
+    }
+
+    /// The bug this type exists to bound: an unrecognized writer string used to
+    /// fall through `!matches!(..)` into "machine" with no diagnostic. That
+    /// direction is preserved deliberately — machine is the fail-safe answer,
+    /// because a machine write to a human-owned page is staged as a revision
+    /// card instead of overwriting the human's prose.
+    #[test]
+    fn unknown_writer_is_machine_and_guarded() {
+        let typo = Writer::classify("manual_edt");
+        assert!(
+            typo.is_machine(),
+            "a typo'd human writer must not be trusted"
+        );
+        assert!(
+            !typo.skips_hallucination_guard(),
+            "an unknown writer must not skip the hallucination guard"
+        );
+        assert!(!typo.is_llm_rewrite());
+        assert!(matches!(typo, Writer::Pipeline(PipelineStage::Unknown(_))));
+    }
+
+    #[test]
+    fn known_writers_are_not_unknown() {
+        for &(edited_by, ..) in WRITER_TABLE {
+            let is_unknown = matches!(
+                Writer::classify(edited_by),
+                Writer::Pipeline(PipelineStage::Unknown(_))
+            );
+            // Only the four db-layer writers are outside the gate's vocabulary.
+            let expected_unknown = matches!(
+                edited_by,
+                "create" | "revision_accept" | "citation_backfill" | "migration_73"
+            );
+            assert_eq!(
+                is_unknown, expected_unknown,
+                "unknown-ness of {edited_by:?}"
+            );
+        }
     }
 }
