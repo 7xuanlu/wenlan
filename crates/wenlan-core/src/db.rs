@@ -7689,8 +7689,8 @@ impl MemoryDB {
         // `workspace TEXT,` is patched first: its text ends in the same
         // `space TEXT,` suffix the bare `space` column's own pattern
         // matches, so patching workspace first (turning it into
-        // `workspace TEXT NOT NULL,`) removes that shadow match before the
-        // `space` replacement runs.
+        // `workspace TEXT NOT NULL DEFAULT 'unfiled',`) removes that shadow
+        // match before the `space` replacement runs.
         let conn = self.conn.lock().await;
         let current_sql: Option<String> = {
             let mut rows = conn
@@ -7713,8 +7713,12 @@ impl MemoryDB {
             }
         };
         if let Some(sql) = current_sql {
-            let mut patched = sql.replacen("workspace TEXT,", "workspace TEXT NOT NULL,", 1);
-            patched = patched.replacen("space TEXT,", "space TEXT NOT NULL,", 1);
+            let mut patched = sql.replacen(
+                "workspace TEXT,",
+                "workspace TEXT NOT NULL DEFAULT 'unfiled',",
+                1,
+            );
+            patched = patched.replacen("space TEXT,", "space TEXT NOT NULL DEFAULT 'unfiled',", 1);
             if patched != sql {
                 conn.execute("PRAGMA writable_schema=ON", ())
                     .await
@@ -26033,6 +26037,20 @@ impl MemoryDB {
         workspace: Option<&str>,
         citations_json: Option<&str>,
     ) -> Result<(), WenlanError> {
+        // M1 honest columns: this is the single storage-layer wrapper every
+        // page-insert path funnels through, so it must never bind an
+        // explicit NULL space/workspace. Migration 80's column DEFAULT only
+        // covers a caller that OMITS the column (raw SQL); a Rust `None`
+        // still binds as an explicit NULL and needs its own coalesce here --
+        // matching the default+mirror pattern already applied at the HTTP
+        // layer (memory_routes.rs handle_create_page). Whether the callers
+        // that currently pass `None` (tools.rs create_page_impl,
+        // synthesis/overview.rs ensure_overview_page, ...) should keep
+        // relying on this fallback or assign a smarter scope of their own is
+        // a separate product call, tracked apart from this mechanical gate.
+        let space = space.unwrap_or("unfiled");
+        let workspace = workspace.unwrap_or(space);
+
         // Sanitize daemon-reserved Sources delimiters from client content so
         // persisted `Page.content` never carries them (symmetric with the
         // watcher's egress canonicalization). Shadows `content` so both the
@@ -58352,8 +58370,12 @@ pub(crate) mod tests {
                 .unwrap();
             rows.next().await.unwrap().unwrap().get(0).unwrap()
         };
-        let mut patched = sql.replacen("workspace TEXT NOT NULL,", "workspace TEXT,", 1);
-        patched = patched.replacen("space TEXT NOT NULL,", "space TEXT,", 1);
+        let mut patched = sql.replacen(
+            "workspace TEXT NOT NULL DEFAULT 'unfiled',",
+            "workspace TEXT,",
+            1,
+        );
+        patched = patched.replacen("space TEXT NOT NULL DEFAULT 'unfiled',", "space TEXT,", 1);
         assert_ne!(
             patched, sql,
             "expected pages.space/workspace to already be NOT NULL before relaxing"
@@ -58445,12 +58467,12 @@ pub(crate) mod tests {
         // column were never patched -- anchor on the standalone column
         // line's own indentation/newline instead.
         assert!(
-            fresh_sql.contains("\n                        space TEXT NOT NULL,"),
-            "space must be NOT NULL on its own column line: {fresh_sql}"
+            fresh_sql.contains("\n                        space TEXT NOT NULL DEFAULT 'unfiled',"),
+            "space must be NOT NULL DEFAULT 'unfiled' on its own column line: {fresh_sql}"
         );
         assert!(
-            fresh_sql.contains("workspace TEXT NOT NULL"),
-            "workspace must be NOT NULL: {fresh_sql}"
+            fresh_sql.contains("workspace TEXT NOT NULL DEFAULT 'unfiled'"),
+            "workspace must be NOT NULL DEFAULT 'unfiled': {fresh_sql}"
         );
     }
 
@@ -58658,6 +58680,112 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn insert_page_with_kind_defaults_missing_space_and_mirrors_workspace() {
+        // Proves the coalesce half of the fix: `insert_page_with_kind` is
+        // the single storage-layer wrapper every page-insert path funnels
+        // through, so it must never bind an explicit NULL space/workspace
+        // regardless of what a caller passes -- matching the default+mirror
+        // pattern already applied at the HTTP layer (memory_routes.rs
+        // handle_create_page): a missing space defaults to "unfiled", and a
+        // missing workspace mirrors the resolved space.
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_no_space",
+            "No Space",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_space_no_workspace",
+            "Space No Workspace",
+            None,
+            "body",
+            None,
+            Some("engineering"),
+            &[],
+            &now,
+            "distilled",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, space, workspace FROM pages                  WHERE id IN ('page_no_space', 'page_space_no_workspace')                  ORDER BY id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            let id: String = row.get(0).unwrap();
+            let space: String = row.get(1).unwrap();
+            let workspace: String = row.get(2).unwrap();
+            seen.push((id, space, workspace));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                (
+                    "page_no_space".to_string(),
+                    "unfiled".to_string(),
+                    "unfiled".to_string()
+                ),
+                (
+                    "page_space_no_workspace".to_string(),
+                    "engineering".to_string(),
+                    "engineering".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_80_raw_insert_omitting_scope_columns_lands_unfiled() {
+        // Proves the DEFAULT half of the fix: a raw INSERT that omits
+        // space/workspace entirely (exactly what the ~15 raw-SQL test
+        // files across lint/, db/page_map_test.rs, db/page_drafts_test.rs,
+        // and repair/title_rename_tests.rs do) must land 'unfiled' on both
+        // columns rather than tripping the NOT NULL constraint --
+        // migration_80_not_null_constraint_rejects_null_space_insert proves
+        // the companion case: an EXPLICIT NULL bind is still rejected,
+        // since a column DEFAULT only fires when the column is omitted.
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO pages (id, title, content, created_at, last_compiled, last_modified)              VALUES ('page_omitted_scope', 't', 'c', '2024-01-01T00:00:00Z',                      '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+            (),
+        )
+        .await
+        .expect("omitting space/workspace must fall back to the column DEFAULT, not error");
+
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_omitted_scope'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, "unfiled");
+        assert_eq!(workspace, "unfiled");
+    }
+
+    #[tokio::test]
     async fn migration_80_replay_after_partial_backfill_converges_without_ledger_drift() {
         let (db, _dir) = test_db().await;
         db.create_space("engineering", None, false).await.unwrap();
@@ -58800,15 +58928,17 @@ pub(crate) mod tests {
         };
         assert_eq!(
             final_sql
-                .matches("\n                        space TEXT NOT NULL,")
+                .matches("\n                        space TEXT NOT NULL DEFAULT 'unfiled',")
                 .count(),
             1,
-            "space NOT NULL must appear exactly once, not doubled by a replayed patch: {final_sql}"
+            "space NOT NULL DEFAULT 'unfiled' must appear exactly once, not doubled by a replayed patch: {final_sql}"
         );
         assert_eq!(
-            final_sql.matches("workspace TEXT NOT NULL,").count(),
+            final_sql
+                .matches("workspace TEXT NOT NULL DEFAULT 'unfiled',")
+                .count(),
             1,
-            "workspace NOT NULL must appear exactly once, not doubled by a replayed patch: {final_sql}"
+            "workspace NOT NULL DEFAULT 'unfiled' must appear exactly once, not doubled by a replayed patch: {final_sql}"
         );
         assert!(
             !final_sql.contains("NOT NULL NOT NULL"),
