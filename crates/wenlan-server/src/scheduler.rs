@@ -107,6 +107,68 @@ impl ResourceAdmission {
     }
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rb01ProfileBlockReason {
+    ResourceUnavailable,
+    ThermalUnavailable,
+    ThermalPressure,
+    CpuBusy,
+    MemoryPressure,
+    Warming,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct Rb01ProfileAdmission {
+    resources: ResourceAdmission,
+}
+
+#[cfg(test)]
+impl Rb01ProfileAdmission {
+    fn observe(
+        &mut self,
+        snapshot: Option<ResourceSnapshot>,
+        thermal_state: Option<u8>,
+        policy: ResourcePolicy,
+    ) -> Result<(), Rb01ProfileBlockReason> {
+        let Some(snapshot) = snapshot else {
+            self.resources = ResourceAdmission::default();
+            return Err(Rb01ProfileBlockReason::ResourceUnavailable);
+        };
+        let Some(thermal_state) = thermal_state else {
+            self.resources = ResourceAdmission::default();
+            return Err(Rb01ProfileBlockReason::ThermalUnavailable);
+        };
+        if thermal_state != 0 {
+            self.resources = ResourceAdmission::default();
+            return Err(Rb01ProfileBlockReason::ThermalPressure);
+        }
+
+        if let Some(reason) = policy.block_reason(snapshot) {
+            self.resources.observe(snapshot, policy);
+            return Err(match reason {
+                ResourceBlockReason::CpuBusy => Rb01ProfileBlockReason::CpuBusy,
+                ResourceBlockReason::MemoryPressure => Rb01ProfileBlockReason::MemoryPressure,
+                ResourceBlockReason::Warming | ResourceBlockReason::Unavailable => {
+                    Rb01ProfileBlockReason::ResourceUnavailable
+                }
+            });
+        }
+
+        if self.resources.observe(snapshot, policy) {
+            Ok(())
+        } else {
+            Err(Rb01ProfileBlockReason::Warming)
+        }
+    }
+}
+
+#[cfg(test)]
+fn rb01_profile_requested(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ThermalPolicy {
     minimum_cooldown: Duration,
@@ -2644,6 +2706,91 @@ mod tests {
     }
 
     #[test]
+    fn rb01_profile_admission_fails_closed_and_requires_two_healthy_samples() {
+        let policy = ResourcePolicy::conservative();
+        let idle = ResourceSnapshot {
+            cpu_usage_percent: 8.0,
+            available_memory_bytes: 8 * GIB,
+            total_memory_bytes: 16 * GIB,
+        };
+        let mut admission = Rb01ProfileAdmission::default();
+
+        assert_eq!(
+            admission.observe(None, Some(0), policy),
+            Err(Rb01ProfileBlockReason::ResourceUnavailable)
+        );
+        assert_eq!(
+            admission.observe(Some(idle), None, policy),
+            Err(Rb01ProfileBlockReason::ThermalUnavailable)
+        );
+        assert_eq!(
+            admission.observe(Some(idle), Some(1), policy),
+            Err(Rb01ProfileBlockReason::ThermalPressure)
+        );
+        assert_eq!(
+            admission.observe(
+                Some(ResourceSnapshot {
+                    cpu_usage_percent: 21.0,
+                    ..idle
+                }),
+                Some(0),
+                policy,
+            ),
+            Err(Rb01ProfileBlockReason::CpuBusy)
+        );
+        assert_eq!(
+            admission.observe(
+                Some(ResourceSnapshot {
+                    available_memory_bytes: 2 * GIB - 1,
+                    ..idle
+                }),
+                Some(0),
+                policy,
+            ),
+            Err(Rb01ProfileBlockReason::MemoryPressure)
+        );
+
+        assert_eq!(
+            admission.observe(Some(idle), Some(0), policy),
+            Err(Rb01ProfileBlockReason::Warming)
+        );
+        assert_eq!(admission.observe(Some(idle), Some(0), policy), Ok(()));
+
+        assert_eq!(
+            admission.observe(
+                Some(ResourceSnapshot {
+                    cpu_usage_percent: 80.0,
+                    ..idle
+                }),
+                Some(0),
+                policy,
+            ),
+            Err(Rb01ProfileBlockReason::CpuBusy)
+        );
+        assert_eq!(
+            admission.observe(Some(idle), Some(0), policy),
+            Err(Rb01ProfileBlockReason::Warming)
+        );
+        assert_eq!(admission.observe(Some(idle), Some(0), policy), Ok(()));
+    }
+
+    #[test]
+    fn rb01_profile_admission_requires_explicit_opt_in() {
+        assert!(!rb01_profile_requested(None));
+        assert!(!rb01_profile_requested(Some("0")));
+        assert!(!rb01_profile_requested(Some("true")));
+        assert!(rb01_profile_requested(Some("1")));
+    }
+
+    #[test]
+    fn rb01_profile_lane_includes_page_growth_no_match() {
+        assert_eq!(
+            Rb01ProfileLane::from_env("page-growth").map(Rb01ProfileLane::as_str),
+            Some("page-growth")
+        );
+    }
+
+    #[test]
     fn duration_cooldown_never_shortens_floor_and_extends_long_turns() {
         let policy = ThermalPolicy::conservative();
         assert_eq!(
@@ -3611,6 +3758,464 @@ mod tests {
         }])
         .await
         .unwrap();
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum Rb01ProfileLane {
+        Document,
+        Entity,
+        PageGrowth,
+        Reconcile,
+        Citation,
+    }
+
+    impl Rb01ProfileLane {
+        fn from_env(value: &str) -> Option<Self> {
+            match value {
+                "document" => Some(Self::Document),
+                "entity" => Some(Self::Entity),
+                "page-growth" => Some(Self::PageGrowth),
+                "reconcile" => Some(Self::Reconcile),
+                "citation" => Some(Self::Citation),
+                _ => None,
+            }
+        }
+
+        const fn job(self) -> AmbientJob {
+            match self {
+                Self::Document => AmbientJob::Document,
+                Self::Entity => AmbientJob::Entity,
+                Self::PageGrowth => AmbientJob::PageGrowth,
+                Self::Reconcile => AmbientJob::Reconcile,
+                Self::Citation => AmbientJob::Citation,
+            }
+        }
+
+        const fn as_str(self) -> &'static str {
+            match self {
+                Self::Document => "document",
+                Self::Entity => "entity",
+                Self::PageGrowth => "page-growth",
+                Self::Reconcile => "reconcile",
+                Self::Citation => "citation",
+            }
+        }
+    }
+
+    struct Rb01ProfileFixture {
+        _source_dir: Option<tempfile::TempDir>,
+        document_path: Option<String>,
+    }
+
+    fn rb01_macos_thermal_state() -> Option<u8> {
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+        let output = std::process::Command::new("/usr/bin/swift")
+            .args([
+                "-e",
+                "import Foundation; print(ProcessInfo.processInfo.thermalState.rawValue)",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        std::str::from_utf8(&output.stdout)
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    async fn rb01_sample_peak_rss(
+        pid: sysinfo::Pid,
+        baseline_bytes: u64,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) -> u64 {
+        let mut system = sysinfo::System::new();
+        let mut peak_bytes = baseline_bytes;
+        loop {
+            system.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::Some(&[pid]),
+                false,
+                sysinfo::ProcessRefreshKind::nothing().with_memory(),
+            );
+            if let Some(process) = system.process(pid) {
+                peak_bytes = peak_bytes.max(process.memory());
+            }
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                return peak_bytes;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn rb01_wait_for_profile_admission() -> Result<ResourceSnapshot, String> {
+        let policy = ResourcePolicy::conservative();
+        let mut probe = SystemResourceProbe::new(Instant::now());
+        let mut admission = Rb01ProfileAdmission::default();
+        let mut latest = None;
+
+        for sample_index in 1..=2 {
+            tokio::time::sleep(POLL_INTERVAL).await;
+            let status = probe.sample(Instant::now(), policy);
+            let thermal = rb01_macos_thermal_state();
+            match admission.observe(status.snapshot, thermal, policy) {
+                Ok(()) if sample_index == 2 => {}
+                Err(Rb01ProfileBlockReason::Warming) if sample_index == 1 => {}
+                Ok(()) => {
+                    return Err(format!(
+                        "profile preflight admitted too early at sample {sample_index}/2"
+                    ));
+                }
+                Err(reason) => {
+                    return Err(format!(
+                        "profile preflight sample {sample_index}/2 rejected: {reason:?}; \
+                         resource={:?}; thermal_state={thermal:?}",
+                        status.snapshot
+                    ));
+                }
+            }
+            latest = status.snapshot;
+        }
+
+        latest.ok_or_else(|| "profile preflight produced no resource snapshot".to_string())
+    }
+
+    async fn rb01_seed_profile_lane(
+        lane: Rb01ProfileLane,
+        db: &Arc<wenlan_core::db::MemoryDB>,
+    ) -> Rb01ProfileFixture {
+        match lane {
+            Rb01ProfileLane::Document => {
+                use sha2::{Digest, Sha256};
+
+                let source_dir = tempfile::tempdir().unwrap();
+                let path = source_dir.path().join("rb01-document.txt");
+                let mut body =
+                    String::from("Wenlan profiles one bounded document slice at a time.\n\n");
+                for index in 0..80 {
+                    body.push_str(&format!(
+                        "Paragraph {index} explains a separate scheduler invariant with enough \
+                         concrete prose to force multiple document chunks during the profile.\n\n"
+                    ));
+                }
+                std::fs::write(&path, body.as_bytes()).unwrap();
+                let content_hash = format!("{:x}", Sha256::digest(body.as_bytes()));
+                db.enqueue_document(
+                    "rb01-directory",
+                    &path.to_string_lossy(),
+                    Some(&content_hash),
+                )
+                .await
+                .unwrap();
+                Rb01ProfileFixture {
+                    document_path: Some(path.to_string_lossy().to_string()),
+                    _source_dir: Some(source_dir),
+                }
+            }
+            Rb01ProfileLane::Entity => {
+                store_test_memory(
+                    db,
+                    "rb01-entity-memory",
+                    "Project Juniper uses Wenlan to keep its scheduler decisions durable.",
+                )
+                .await;
+                Rb01ProfileFixture {
+                    _source_dir: None,
+                    document_path: None,
+                }
+            }
+            Rb01ProfileLane::PageGrowth => {
+                store_test_memory(
+                    db,
+                    "rb01-page-growth-memory",
+                    "A Page Growth no-match slice measures bounded embedding and search work.",
+                )
+                .await;
+                assert!(
+                    db.record_enrichment_step_at_version(
+                        "rb01-page-growth-memory",
+                        "entity_extract",
+                        "skipped",
+                        None,
+                        1,
+                    )
+                    .await
+                    .unwrap(),
+                    "Page Growth fixture must satisfy the versioned entity dependency"
+                );
+                Rb01ProfileFixture {
+                    _source_dir: None,
+                    document_path: None,
+                }
+            }
+            Rb01ProfileLane::Reconcile => {
+                let common = "The Wenlan daemon binds to port 7878 and stores memory locally.";
+                db.upsert_documents(vec![
+                    wenlan_types::RawDocument {
+                        source: "memory".to_string(),
+                        source_id: "rb01-doc-a".to_string(),
+                        title: "rb01-doc-a".to_string(),
+                        content: common.to_string(),
+                        last_modified: 1,
+                        confirmed: Some(true),
+                        source_agent: Some("folder".to_string()),
+                        content_hash: Some("rb01-hash-a".to_string()),
+                        ..Default::default()
+                    },
+                    wenlan_types::RawDocument {
+                        source: "memory".to_string(),
+                        source_id: "rb01-doc-b".to_string(),
+                        title: "rb01-doc-b".to_string(),
+                        content: common.to_string(),
+                        last_modified: 2,
+                        confirmed: Some(true),
+                        source_agent: Some("folder".to_string()),
+                        content_hash: Some("rb01-hash-b".to_string()),
+                        ..Default::default()
+                    },
+                    wenlan_types::RawDocument {
+                        source: "memory".to_string(),
+                        source_id: "rb01-capture".to_string(),
+                        title: "rb01-capture".to_string(),
+                        content: common.to_string(),
+                        last_modified: 3,
+                        confirmed: Some(true),
+                        source_agent: Some("claude-code".to_string()),
+                        ..Default::default()
+                    },
+                ])
+                .await
+                .unwrap();
+                Rb01ProfileFixture {
+                    _source_dir: None,
+                    document_path: None,
+                }
+            }
+            Rb01ProfileLane::Citation => {
+                store_test_memory(
+                    db,
+                    "rb01-citation-source",
+                    "The Wenlan daemon binds to port 7878 by default.",
+                )
+                .await;
+                insert_test_page(
+                    db,
+                    "Wenlan daemon port",
+                    "The Wenlan daemon binds to port 7878 by default.",
+                    &["rb01-citation-source"],
+                    "distilled",
+                )
+                .await;
+                Rb01ProfileFixture {
+                    _source_dir: None,
+                    document_path: None,
+                }
+            }
+        }
+    }
+
+    async fn rb01_lane_progressed(
+        lane: Rb01ProfileLane,
+        db: &Arc<wenlan_core::db::MemoryDB>,
+        fixture: &Rb01ProfileFixture,
+    ) -> bool {
+        match lane {
+            Rb01ProfileLane::Document => match fixture.document_path.as_deref() {
+                Some(path) => db
+                    .get_queue_entry("rb01-directory", path)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|entry| entry.last_completed_chunk >= 0 || entry.status == "done"),
+                None => false,
+            },
+            Rb01ProfileLane::Entity => db
+                .get_enrichment_steps("rb01-entity-memory")
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|step| step.step == "entity_extract"),
+            Rb01ProfileLane::PageGrowth => db
+                .get_enrichment_steps("rb01-page-growth-memory")
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|step| step.step == "page_growth"),
+            Rb01ProfileLane::Reconcile => {
+                db.get_app_metadata("reconcile_frontier_docs")
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+                    || db
+                        .get_app_metadata("reconcile_frontier_captures")
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some()
+            }
+            Rb01ProfileLane::Citation => db
+                .get_pages_missing_citations(10)
+                .await
+                .ok()
+                .is_some_and(|pages| pages.is_empty()),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "manual RB-01 target-Mac profile; cached qwen3-4b and explicit WENLAN_RB01_PROFILE=1 required"]
+    async fn rb01_profile_real_on_device_slice() {
+        assert!(
+            rb01_profile_requested(std::env::var("WENLAN_RB01_PROFILE").ok().as_deref()),
+            "refusing real-model profile without WENLAN_RB01_PROFILE=1"
+        );
+        #[cfg(not(target_os = "macos"))]
+        panic!("RB-01 real-model profile currently targets supported macOS hardware");
+        let lane_value = std::env::var("WENLAN_RB01_LANE")
+            .expect("set WENLAN_RB01_LANE=document|entity|page-growth|reconcile|citation");
+        let lane = Rb01ProfileLane::from_env(&lane_value)
+            .expect("WENLAN_RB01_LANE must be document|entity|page-growth|reconcile|citation");
+        let model = wenlan_core::on_device_models::get_model("qwen3-4b")
+            .expect("qwen3-4b remains in the on-device registry");
+        assert!(
+            wenlan_core::on_device_models::is_cached(model),
+            "refusing to download a model during RB-01; qwen3-4b is not cached"
+        );
+
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let (db, _db_dir) = new_test_db().await;
+        let fixture = rb01_seed_profile_lane(lane, &db).await;
+
+        let mut process_system = sysinfo::System::new_all();
+        let pid = sysinfo::get_current_pid().expect("current process id");
+        let rss_process_baseline = process_system
+            .process(pid)
+            .map_or(0, |process| process.memory());
+        let available_memory_pre_model = process_system.available_memory();
+        let boot_started = Instant::now();
+        let provider: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(
+            wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some("qwen3-4b"))
+                .expect("cached qwen3-4b provider must initialize"),
+        );
+        let boot_ms = boot_started.elapsed().as_millis();
+        process_system.refresh_all();
+        let rss_model_loaded = process_system
+            .process(pid)
+            .map_or(0, |process| process.memory());
+        let available_memory_model_loaded = process_system.available_memory();
+
+        let before = rb01_wait_for_profile_admission()
+            .await
+            .expect("RB-01 profile preflight must remain healthy");
+        let thermal_before =
+            rb01_macos_thermal_state().expect("macOS thermal state must be readable");
+        process_system.refresh_all();
+        let rss_before = process_system
+            .process(pid)
+            .map_or(0, |process| process.memory());
+        let peak_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let peak_task = tokio::spawn(rb01_sample_peak_rss(pid, rss_before, peak_stop.clone()));
+        tokio::task::yield_now().await;
+
+        let started = Instant::now();
+        let report = run_ambient_job_safe(
+            lane.job(),
+            &db,
+            Some(&provider),
+            None,
+            None,
+            Some(wenlan_core::refinery::EverydaySource::OnDevice),
+            &wenlan_core::prompts::PromptRegistry::default(),
+            &wenlan_core::tuning::RefineryConfig::default(),
+            &wenlan_core::tuning::DistillationConfig::default(),
+            None,
+        )
+        .await;
+        let wall_ms = started.elapsed().as_millis();
+        peak_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let rss_peak_during_slice = peak_task
+            .await
+            .expect("RB-01 peak-RSS sampler must remain alive");
+        process_system.refresh_all();
+        let rss_after = process_system
+            .process(pid)
+            .map_or(0, |process| process.memory());
+        let process_cpu_after = process_system
+            .process(pid)
+            .map_or(0.0, |process| process.cpu_usage());
+        let after = ResourceSnapshot {
+            cpu_usage_percent: process_system.global_cpu_usage(),
+            available_memory_bytes: process_system.available_memory(),
+            total_memory_bytes: process_system.total_memory(),
+        };
+        let thermal_after =
+            rb01_macos_thermal_state().expect("macOS thermal state must remain readable");
+        let durable_progress = rb01_lane_progressed(lane, &db, &fixture).await;
+
+        println!(
+            "{}",
+            serde_json::json!({
+                "event": "rb01_profile",
+                "lane": lane.as_str(),
+                "model": "qwen3-4b",
+                "backend": "on_device",
+                "boot_ms": boot_ms,
+                "selected": report.selected,
+                "llm_calls": report.llm_calls,
+                "panicked": report.panicked,
+                "wall_ms": wall_ms,
+                "report_elapsed_ms": report.elapsed.as_millis(),
+                "rss_process_baseline_bytes": rss_process_baseline,
+                "rss_model_loaded_bytes": rss_model_loaded,
+                "rss_model_delta_bytes": rss_model_loaded.saturating_sub(rss_process_baseline),
+                "rss_before_bytes": rss_before,
+                "rss_peak_during_slice_bytes": rss_peak_during_slice,
+                "rss_after_bytes": rss_after,
+                "available_memory_pre_model_bytes": available_memory_pre_model,
+                "available_memory_model_loaded_bytes": available_memory_model_loaded,
+                "system_cpu_before_percent": before.cpu_usage_percent,
+                "system_cpu_after_percent": after.cpu_usage_percent,
+                "process_cpu_after_percent": process_cpu_after,
+                "available_memory_before_bytes": before.available_memory_bytes,
+                "available_memory_after_bytes": after.available_memory_bytes,
+                "total_memory_bytes": after.total_memory_bytes,
+                "thermal_before": thermal_before,
+                "thermal_after": thermal_after,
+                "durable_progress": durable_progress,
+            })
+        );
+
+        assert!(
+            report.llm_calls <= 1,
+            "one profiled turn forwards at most one request"
+        );
+        if matches!(lane, Rb01ProfileLane::PageGrowth) {
+            assert_eq!(
+                report.llm_calls, 0,
+                "the Page Growth no-match fixture must measure CPU-only work"
+            );
+        }
+        assert!(
+            report.selected,
+            "profile fixture must select one durable item"
+        );
+        assert!(
+            durable_progress,
+            "profile fixture must leave durable lane progress"
+        );
+        assert!(!report.panicked, "profiled lane must not panic");
+        assert_eq!(
+            thermal_after, 0,
+            "thermal state left nominal during a single bounded slice"
+        );
+        std::mem::forget(provider);
     }
 
     #[tokio::test]

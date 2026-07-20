@@ -538,7 +538,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 82;
+pub const SCHEMA_VERSION: u32 = 83;
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -2366,7 +2366,8 @@ CREATE TABLE IF NOT EXISTS enrichment_origin (
     source_id TEXT PRIMARY KEY,
     memory_type_explicit INTEGER NOT NULL CHECK(memory_type_explicit IN (0, 1)),
     structured_fields_explicit INTEGER NOT NULL CHECK(structured_fields_explicit IN (0, 1)),
-    space_rejected INTEGER NOT NULL CHECK(space_rejected IN (0, 1))
+    space_rejected INTEGER NOT NULL CHECK(space_rejected IN (0, 1)),
+    service_class INTEGER NOT NULL DEFAULT 0 CHECK(service_class IN (0, 1))
 );
 
 -- Access log: per-source access events for recency/frequency tracking
@@ -7514,7 +7515,9 @@ impl MemoryDB {
                         structured_fields_explicit INTEGER NOT NULL
                             CHECK(structured_fields_explicit IN (0, 1)),
                         space_rejected INTEGER NOT NULL
-                            CHECK(space_rejected IN (0, 1))
+                            CHECK(space_rejected IN (0, 1)),
+                        service_class INTEGER NOT NULL DEFAULT 0
+                            CHECK(service_class IN (0, 1))
                     )",
                     (),
                 )
@@ -7629,6 +7632,44 @@ impl MemoryDB {
                 self.migrate_74_lint_review_owner_bindings(81).await?;
                 self.migrate_73_schema_collision_reconciliation(82).await?;
                 log::info!("[migration] Migration 82 applied: reconciled version-77 lineages");
+            }
+
+            // Migration 83: explicit service classes prevent newly stored or
+            // user-mutated memories from waiting behind historical catch-up.
+            // Rows without an origin marker remain the implicit legacy class;
+            // known bulk imports are class 1 and interactive work is class 0.
+            if version < 83 {
+                let conn = self.conn.lock().await;
+                let has_col = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('enrichment_origin')
+                             WHERE name='service_class'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("m83 service class check: {e}"))
+                        })?;
+                    rows.next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m83 service class row: {e}")))?
+                        .is_some_and(|row| row.get::<i64>(0).unwrap_or(0) > 0)
+                };
+                if !has_col {
+                    conn.execute(
+                        "ALTER TABLE enrichment_origin
+                         ADD COLUMN service_class INTEGER NOT NULL DEFAULT 0
+                         CHECK(service_class IN (0, 1))",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m83 add service class: {e}")))?;
+                }
+                conn.execute("PRAGMA user_version = 83", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m83 bump: {e}")))?;
+                log::info!("[migration] Migration 83 applied: enrichment service classes");
             }
         }
 
@@ -9432,9 +9473,10 @@ impl MemoryDB {
     }
 
     /// Chunk, embed, and atomically record the fixed enrichment origin for
-    /// imported memory documents. This keeps restart-safe background
-    /// classification eligible without opening a crash window between the
-    /// memory rows and their provenance receipt.
+    /// imported memory documents. Fresh rows enter the bulk catch-up FIFO;
+    /// conflict updates retain any prior interactive promotion. This keeps
+    /// restart-safe background classification eligible without opening a crash
+    /// window between the memory rows and their provenance receipt.
     pub async fn upsert_documents_with_enrichment_origin(
         &self,
         docs: Vec<RawDocument>,
@@ -10056,8 +10098,9 @@ impl MemoryDB {
                     conn.execute(
                         "INSERT INTO enrichment_origin
                              (source_id, memory_type_explicit,
-                              structured_fields_explicit, space_rejected)
-                         VALUES (?1, ?2, ?3, ?4)
+                              structured_fields_explicit, space_rejected,
+                              service_class)
+                         VALUES (?1, ?2, ?3, ?4, 1)
                         ON CONFLICT(source_id) DO UPDATE SET
                              memory_type_explicit=excluded.memory_type_explicit,
                              structured_fields_explicit=excluded.structured_fields_explicit,
@@ -15985,6 +16028,18 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("update_memory begin: {e}")))?;
 
         let mutation_result: Result<(), WenlanError> = async {
+            conn.execute(
+                "INSERT INTO enrichment_origin
+                     (source_id, memory_type_explicit,
+                      structured_fields_explicit, space_rejected, service_class)
+                 VALUES (?1, 1, 1, 1, 0)
+                 ON CONFLICT(source_id) DO UPDATE SET service_class=0",
+                libsql::params![source_id],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("update_memory service-class promotion: {e}"))
+            })?;
             if head.source == "memory" && new_content.is_some() {
                 Self::invalidate_memory_entity_projection_in_transaction(&conn, source_id)
                     .await
@@ -19523,6 +19578,8 @@ impl MemoryDB {
                                  ORDER BY me.entity_id LIMIT 1) \
                             ) \
                      FROM memories m \
+                     LEFT JOIN enrichment_origin eo \
+                       ON eo.source_id = m.source_id \
                      LEFT JOIN enrichment_steps es \
                        ON es.source_id = m.source_id \
                       AND es.step_name = 'entity_extract' \
@@ -19547,6 +19604,7 @@ impl MemoryDB {
                            ) \
                        ) \
                      ORDER BY CASE WHEN m.supersedes IS NOT NULL THEN 0 ELSE 1 END, \
+                              COALESCE(eo.service_class, 2) ASC, \
                               COALESCE(es.updated_at, m.last_modified) ASC, m.source_id ASC \
                      LIMIT 1",
                     libsql::params![Self::ENTITY_ENRICHMENT_MAX_ATTEMPTS as i64],
@@ -25949,12 +26007,13 @@ impl MemoryDB {
         conn.execute(
             "INSERT INTO enrichment_origin
                  (source_id, memory_type_explicit,
-                  structured_fields_explicit, space_rejected)
-             VALUES (?1, ?2, ?3, ?4)
+                  structured_fields_explicit, space_rejected, service_class)
+             VALUES (?1, ?2, ?3, ?4, 0)
              ON CONFLICT(source_id) DO UPDATE SET
                  memory_type_explicit=excluded.memory_type_explicit,
                  structured_fields_explicit=excluded.structured_fields_explicit,
-                 space_rejected=excluded.space_rejected",
+                 space_rejected=excluded.space_rejected,
+                 service_class=0",
             libsql::params![
                 source_id,
                 i64::from(origin.memory_type_explicit),
@@ -25968,7 +26027,7 @@ impl MemoryDB {
     }
 
     /// Resolve origin with a fail-protected fallback for rows created before
-    /// migration 72, when no reliable provenance was stored.
+    /// migration 80, when no reliable provenance was stored.
     pub async fn resolve_enrichment_origin(
         &self,
         source_id: &str,
@@ -26091,6 +26150,7 @@ impl MemoryDB {
                             ELSE 0
                         END
                  FROM memories m
+                 LEFT JOIN enrichment_origin eo ON eo.source_id=m.source_id
                  LEFT JOIN enrichment_steps es
                    ON es.source_id=m.source_id AND es.step_name='title_enrich'
                  WHERE m.source='memory' AND m.chunk_index=0
@@ -26123,7 +26183,9 @@ impl MemoryDB {
                        )
                    )
                  ORDER BY CASE WHEN m.supersedes IS NOT NULL THEN 0 ELSE 1 END,
-                          m.last_modified DESC, m.source_id ASC
+                          COALESCE(eo.service_class, 2) ASC,
+                          COALESCE(es.updated_at, m.last_modified) ASC,
+                          m.source_id ASC
                  LIMIT 1",
                 libsql::params![i64::from(max_attempts)],
             )
@@ -26241,6 +26303,7 @@ impl MemoryDB {
                             ELSE 0
                         END
                  FROM memories m
+                 LEFT JOIN enrichment_origin eo ON eo.source_id=m.source_id
                  LEFT JOIN enrichment_steps entity_done
                    ON entity_done.source_id=m.source_id
                   AND entity_done.step_name='entity_extract'
@@ -26271,6 +26334,7 @@ impl MemoryDB {
                        )
                    )
                  ORDER BY CASE WHEN m.supersedes IS NOT NULL THEN 0 ELSE 1 END,
+                          COALESCE(eo.service_class, 2) ASC,
                           COALESCE(growth.updated_at, m.last_modified) ASC,
                           m.source_id ASC
                  LIMIT 1",
@@ -26342,6 +26406,7 @@ impl MemoryDB {
                        )
                    )
                  ORDER BY CASE WHEN m.supersedes IS NOT NULL THEN 0 ELSE 1 END,
+                          COALESCE(eo.service_class, 2) ASC,
                           COALESCE(es.updated_at, m.last_modified) ASC,
                           m.source_id ASC
                  LIMIT 1",
@@ -26424,6 +26489,7 @@ impl MemoryDB {
                        )
                    )
                  ORDER BY CASE WHEN m.supersedes IS NOT NULL THEN 0 ELSE 1 END,
+                          COALESCE(eo.service_class, 2) ASC,
                           COALESCE(es.updated_at, m.last_modified) ASC,
                           m.source_id ASC
                  LIMIT 1",
@@ -34328,8 +34394,8 @@ impl MemoryDB {
             .execute(
                 "INSERT INTO enrichment_origin
                      (source_id, memory_type_explicit,
-                      structured_fields_explicit, space_rejected)
-                 VALUES (?1, 0, 0, 0)
+                      structured_fields_explicit, space_rejected, service_class)
+                 VALUES (?1, 0, 0, 0, 1)
                  ON CONFLICT(source_id) DO NOTHING",
                 libsql::params![source_id],
             )
@@ -34395,8 +34461,8 @@ impl MemoryDB {
                 .execute(
                     "INSERT INTO enrichment_origin
                          (source_id, memory_type_explicit,
-                          structured_fields_explicit, space_rejected)
-                     VALUES (?1, 0, 0, 0)
+                          structured_fields_explicit, space_rejected, service_class)
+                     VALUES (?1, 0, 0, 0, 1)
                      ON CONFLICT(source_id) DO NOTHING",
                     libsql::params![source_id.clone()],
                 )
@@ -63449,6 +63515,401 @@ pub(crate) mod tests {
                 space_rejected: false,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn enrichment_service_class_promotes_user_mutations_without_guessing_provenance() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "legacy-user-edit".to_string(),
+            title: "Legacy user edit".to_string(),
+            content: "The original legacy content remains protected.".to_string(),
+            last_modified: 1,
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confirmed: Some(true),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        db.update_memory(
+            "legacy-user-edit",
+            "The user supplied a current generation that should not wait behind catch-up.",
+        )
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT memory_type_explicit, structured_fields_explicit, space_rejected,
+                        service_class
+                 FROM enrichment_origin WHERE source_id='legacy-user-edit'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows
+            .next()
+            .await
+            .unwrap()
+            .expect("a current user mutation must create the known-origin service marker");
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+        assert_eq!(row.get::<i64>(1).unwrap(), 1);
+        assert_eq!(row.get::<i64>(2).unwrap(), 1);
+        assert_eq!(row.get::<i64>(3).unwrap(), 0);
+        drop(rows);
+        drop(conn);
+
+        db.store_raw_import_memory(
+            "bulk-user-edit",
+            "An imported generation starts in the catch-up service class.",
+            Some("Imported user edit"),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT service_class
+                     FROM enrichment_origin WHERE source_id='bulk-user-edit'",
+                    (),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+                1,
+                "raw imports begin in the bounded bulk catch-up FIFO"
+            );
+        }
+        db.update_memory(
+            "bulk-user-edit",
+            "A direct user edit promotes the current generation without changing provenance flags.",
+        )
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT memory_type_explicit, structured_fields_explicit, space_rejected,
+                        service_class
+                 FROM enrichment_origin WHERE source_id='bulk-user-edit'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<i64>(0).unwrap(), 0);
+        assert_eq!(row.get::<i64>(1).unwrap(), 0);
+        assert_eq!(row.get::<i64>(2).unwrap(), 0);
+        assert_eq!(
+            row.get::<i64>(3).unwrap(),
+            0,
+            "an explicit user mutation promotes bulk catch-up to the interactive FIFO"
+        );
+    }
+
+    #[tokio::test]
+    async fn enrichment_service_class_generic_import_is_bulk_without_demoting_interactive() {
+        let (db, _dir) = test_db().await;
+        let origin = EnrichmentOrigin {
+            memory_type_explicit: false,
+            structured_fields_explicit: false,
+            space_rejected: false,
+        };
+        let imported = |content: &str, last_modified: i64| RawDocument {
+            source: "memory".to_string(),
+            source_id: "generic-bulk-import".to_string(),
+            title: "Generic bulk import".to_string(),
+            content: content.to_string(),
+            last_modified,
+            source_agent: Some("claude-import".to_string()),
+            confirmed: Some(true),
+            ..Default::default()
+        };
+
+        db.upsert_documents_with_enrichment_origin(
+            vec![imported("The original generic import is catch-up work.", 1)],
+            origin,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT service_class FROM enrichment_origin
+                     WHERE source_id='generic-bulk-import'",
+                    (),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+                1,
+                "generic batch imports must not enter the interactive FIFO"
+            );
+        }
+
+        db.upsert_enrichment_origin("generic-bulk-import", origin)
+            .await
+            .unwrap();
+        db.upsert_documents_with_enrichment_origin(
+            vec![imported(
+                "Re-importing must retain a prior interactive promotion.",
+                2,
+            )],
+            origin,
+        )
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT service_class FROM enrichment_origin
+                 WHERE source_id='generic-bulk-import'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            0,
+            "a later bulk re-import must not demote prior interactive work"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_83_enrichment_service_class_upgrades_feature_schema_idempotently() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "ALTER TABLE enrichment_origin RENAME TO enrichment_origin_before_service_class;
+                 CREATE TABLE enrichment_origin (
+                     source_id TEXT PRIMARY KEY,
+                     memory_type_explicit INTEGER NOT NULL
+                         CHECK(memory_type_explicit IN (0, 1)),
+                     structured_fields_explicit INTEGER NOT NULL
+                         CHECK(structured_fields_explicit IN (0, 1)),
+                     space_rejected INTEGER NOT NULL
+                         CHECK(space_rejected IN (0, 1))
+                 );
+                 INSERT INTO enrichment_origin
+                     (source_id, memory_type_explicit,
+                      structured_fields_explicit, space_rejected)
+                 SELECT source_id, memory_type_explicit,
+                        structured_fields_explicit, space_rejected
+                 FROM enrichment_origin_before_service_class;
+                 DROP TABLE enrichment_origin_before_service_class;
+                 PRAGMA user_version = 82;",
+            )
+            .await
+            .unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("service-class migration must be restart-safe");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*)
+                 FROM pragma_table_info('enrichment_origin')
+                 WHERE name='service_class' AND dflt_value='0'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            1
+        );
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            crate::db::SCHEMA_VERSION as i64
+        );
+    }
+
+    #[tokio::test]
+    async fn enrichment_service_class_orders_interactive_then_bulk_then_legacy() {
+        let (db, _dir) = test_db().await;
+        let legacy_content =
+            "LEGACY_BACKFILL is a deliberately long automatic title candidate that must remain \
+             reachable after newly stored work advances through each fixed enrichment lane.";
+        let bulk_content =
+            "KNOWN_BULK_IMPORT is a deliberately long automatic title candidate that must remain \
+             reachable after newer known-origin work advances through each fixed lane.";
+        let fresh_content =
+            "FRESH_AUTOMATIC is a deliberately long automatic title candidate that must reach \
+             each fixed enrichment lane before bulk-import and historical catch-up.";
+        let accepted_content =
+            "ACCEPTED_REVISION is a deliberately long automatic title candidate that must reach \
+             every fixed lane before ordinary interactive work.";
+        let documents = [
+            ("legacy-backfill", legacy_content, 0),
+            ("fresh-automatic", fresh_content, 2),
+        ]
+        .into_iter()
+        .map(|(source_id, content, last_modified)| RawDocument {
+            source: "memory".to_string(),
+            source_id: source_id.to_string(),
+            title: content.to_string(),
+            content: content.to_string(),
+            last_modified,
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confirmed: Some(true),
+            ..Default::default()
+        })
+        .collect();
+        db.upsert_documents(documents).await.unwrap();
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "accepted-revision".to_string(),
+            title: accepted_content.to_string(),
+            content: accepted_content.to_string(),
+            last_modified: 3,
+            memory_type: Some("fact".to_string()),
+            source_agent: Some("test".to_string()),
+            confirmed: Some(true),
+            supersedes: Some("superseded-source".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        db.upsert_enrichment_origin(
+            "fresh-automatic",
+            EnrichmentOrigin {
+                memory_type_explicit: false,
+                structured_fields_explicit: false,
+                space_rejected: false,
+            },
+        )
+        .await
+        .unwrap();
+        db.store_raw_import_memory(
+            "known-bulk-import",
+            bulk_content,
+            Some(bulk_content),
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+        let expected_order = [
+            "accepted-revision",
+            "fresh-automatic",
+            "known-bulk-import",
+            "legacy-backfill",
+        ];
+
+        for expected in expected_order {
+            let actual = db
+                .get_classification_candidate(3)
+                .await
+                .unwrap()
+                .map(|candidate| candidate.source_id);
+            assert_eq!(
+                actual.as_deref(),
+                Some(expected),
+                "classification must serve accepted revisions, interactive work, bulk, then legacy"
+            );
+            assert!(db
+                .record_enrichment_step_at_version(expected, "classify", "ok", None, 1)
+                .await
+                .unwrap());
+        }
+
+        for expected in expected_order {
+            let actual = db
+                .get_structured_extract_candidate(3)
+                .await
+                .unwrap()
+                .map(|candidate| candidate.source_id);
+            assert_eq!(
+                actual.as_deref(),
+                Some(expected),
+                "the dependency-following structured lane must preserve service classes"
+            );
+            assert!(db
+                .record_enrichment_step_at_version(expected, "structured_extract", "ok", None, 1)
+                .await
+                .unwrap());
+        }
+
+        for expected in expected_order {
+            let actual = db
+                .get_title_enrichment_candidate(3)
+                .await
+                .unwrap()
+                .map(|candidate| candidate.source_id);
+            assert_eq!(actual.as_deref(), Some(expected));
+            assert!(db
+                .record_enrichment_step_at_version(expected, "title_enrich", "ok", None, 1)
+                .await
+                .unwrap());
+        }
+
+        let selected = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for _ in expected_order {
+            let selected_slice = selected.clone();
+            assert_eq!(
+                db.run_entity_enrichment_slice(move |input| {
+                    selected_slice.lock().unwrap().push(input);
+                    async move { Ok(Vec::new()) }
+                })
+                .await
+                .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            selected.lock().unwrap().as_slice(),
+            [
+                accepted_content.to_string(),
+                fresh_content.to_string(),
+                bulk_content.to_string(),
+                legacy_content.to_string()
+            ],
+            "entity extraction must serve interactive work before bounded catch-up"
+        );
+
+        for expected in expected_order {
+            let actual = db
+                .get_page_growth_candidate(3, true)
+                .await
+                .unwrap()
+                .map(|candidate| candidate.source_id);
+            assert_eq!(
+                actual.as_deref(),
+                Some(expected),
+                "Page growth must preserve service order after the entity dependency"
+            );
+            assert!(db
+                .record_enrichment_step_at_version(expected, "page_growth", "ok", None, 1)
+                .await
+                .unwrap());
+        }
     }
 
     #[tokio::test]
