@@ -51,6 +51,11 @@ impl WritableKnowledgeConfig {
             _tmp: tmp,
         }
     }
+
+    /// The vault the routes project into while this guard is alive.
+    fn pages_dir(&self) -> std::path::PathBuf {
+        self._tmp.path().join("pages")
+    }
 }
 
 impl Drop for WritableKnowledgeConfig {
@@ -346,6 +351,96 @@ async fn json_put(
         serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
     };
     (status, val)
+}
+
+/// A refresh that does not land must leave no projection claiming a version
+/// ahead of the DB.
+///
+/// The route writes md *before* the gate runs and rolled back only on `Err`.
+/// But a gated or no-op write returns `Ok`, so the agent's md — already stamped
+/// `version + 1` — stayed in the vault. That is not a cosmetic leak: the page
+/// watcher ingests any md whose `origin_version` is >= the DB version as an
+/// `fs_edit` (`sources/page_watcher.rs:154`), so a stranded projection is
+/// re-ingested AS A HUMAN WRITE on the next tick — laundering content the gate
+/// just refused straight back past the gate and flipping `user_edited`.
+///
+/// Driven here through the deterministic no-op path (identical content and
+/// sources => `WriteOutcome::Unchanged`, `post_write.rs:1602`). The gated race
+/// that makes this dangerous needs a human edit interleaved between the route's
+/// ownership read and the gate's CAS; that window is reachable only through
+/// post_write's `#[cfg(test)]` `PRE_WRITE_GATE`, which this crate cannot see.
+/// The route-local invariant is the same either way: no write, no projection.
+#[tokio::test]
+async fn refresh_that_does_not_write_leaves_no_projection_ahead_of_db() {
+    let _guard = data_dir_lock().lock().await;
+    let config = WritableKnowledgeConfig::new();
+    let (app, db, _dir) = test_app_with_db().await;
+    let mem_id = "mem_route_refresh_noop";
+    let source_content = "Borrow checking rejects aliasing a value while it is mutably borrowed";
+    db.upsert_documents(vec![RawDocument {
+        source: "memory".to_string(),
+        source_id: mem_id.to_string(),
+        title: "Borrow checking source".to_string(),
+        content: source_content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        source_agent: Some("test".to_string()),
+        confirmed: Some(true),
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+
+    let page_id =
+        create_distilled_page_fixture(&db, "Borrow Checking", source_content, &[mem_id]).await;
+
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    assert!(
+        !wenlan_core::post_write::page_is_human_owned(&before),
+        "precondition: the page must be machine-owned, or the route returns at its \
+         early ownership gate and never reaches the md write this test is about"
+    );
+
+    // Identical content AND identical source set — the gate reports Unchanged
+    // and writes nothing, so nothing may be left behind in the vault either.
+    let (status, body) = json_put(
+        &app,
+        &format!("/api/pages/{page_id}"),
+        serde_json::json!({
+            "content": source_content,
+            "source_memory_ids": [mem_id]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(
+        after.version, before.version,
+        "precondition: a no-op refresh must not bump the DB version"
+    );
+
+    for entry in std::fs::read_dir(config.pages_dir()).unwrap().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let stamp = text.lines().find_map(|line| {
+            line.strip_prefix("origin_version:")
+                .and_then(|v| v.trim().trim_matches('"').parse::<i64>().ok())
+        });
+        if let Some(stamp) = stamp {
+            assert!(
+                stamp <= after.version,
+                "projection {:?} claims origin_version {} but the DB is at {} — the \
+                 watcher would re-ingest this as a human edit",
+                path.file_name(),
+                stamp,
+                after.version
+            );
+        }
+    }
 }
 
 #[tokio::test]
