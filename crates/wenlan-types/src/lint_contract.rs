@@ -3,11 +3,11 @@ use super::LintGateEffect;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{fmt, num::NonZeroU64};
 
-pub const LINT_REPORT_SCHEMA_VERSION: u16 = 4;
-pub const LINT_CHECK_CATALOG_VERSION: u16 = 2;
+pub const LINT_REPORT_SCHEMA_VERSION: u16 = 5;
+pub const LINT_CHECK_CATALOG_VERSION: u16 = 3;
 pub const LINT_MAX_EVIDENCE_PER_CHECK: u16 = 100;
-pub const LINT_GENERAL_CHECK_COUNT: usize = 55;
-pub const LINT_DEEP_CHECK_COUNT: usize = 73;
+pub const LINT_GENERAL_CHECK_COUNT: usize = 56;
+pub const LINT_DEEP_CHECK_COUNT: usize = 74;
 
 pub(crate) const LINT_CANONICAL_CHECK_IDS: [&str; LINT_DEEP_CHECK_COUNT] = [
     "entities.alias_integrity",
@@ -66,6 +66,7 @@ pub(crate) const LINT_CANONICAL_CHECK_IDS: [&str; LINT_DEEP_CHECK_COUNT] = [
     "pages.semantic.evidence_links",
     "pages.semantic.faithfulness",
     "pages.semantic.provenance_adequacy",
+    "pages.source_page_integrity",
     "relations.integrity",
     "relations.vocabulary_integrity",
     "runtime.ingest_worker_liveness",
@@ -228,6 +229,30 @@ impl LintDigest {
     }
 }
 impl<'de> Deserialize<'de> for LintDigest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::from_hex(&String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct LintOpaqueDigest(String);
+impl LintOpaqueDigest {
+    pub fn from_hex(value: &str) -> Result<Self, LintContractError> {
+        if is_lower_hex(value, 64) {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(LintContractError::InvalidDigest)
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl<'de> Deserialize<'de> for LintOpaqueDigest {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,

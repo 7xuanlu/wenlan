@@ -251,6 +251,9 @@ const fn group_index(group: LintCheckGroup) -> usize {
 fn evidence_name(evidence: &LintEvidenceRef) -> String {
     match evidence {
         LintEvidenceRef::OpaqueId { opaque_id } => format!("opaque:{}", opaque_id.ordinal()),
+        LintEvidenceRef::OpaqueDigest { opaque_digest } => {
+            format!("opaque-digest:{}", opaque_digest.as_str())
+        }
         LintEvidenceRef::ReasonCode { reason_code } => {
             format!("reason:{}", reason_name(*reason_code))
         }

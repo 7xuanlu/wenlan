@@ -55,7 +55,7 @@ async fn run_lint(
             "agent_assist_requires_deep".to_string(),
         ));
     }
-    let (db, config, runtime, lint_observer, semantic_provider) = {
+    let (db, config, runtime, lint_observer, semantic_provider, maintenance) = {
         let state = state.read().await;
         let db = state.db.clone().ok_or(ServerError::DbNotInitialized)?;
         (
@@ -64,8 +64,10 @@ async fn run_lint(
             RuntimeObservationInput::capture(&state),
             Arc::clone(&state.lint_observer),
             select_semantic_provider(&state, query, request.external_egress()),
+            state.maintenance_coordinator.clone(),
         )
     };
+    let _analysis_guard = maintenance.begin_analysis().await;
     let observation = runtime.observe().await;
     let runner = LintRunner::new(config.clock(), CancellationToken::new())
         .with_observer(lint_observer)

@@ -10,6 +10,7 @@ These skills keep the daily interface short:
 /brief       load session context
 /capture     save one durable memory
 /recall      search local memory
+/lint [deep|repair] [scope]   diagnose, or resolve all findings safely
 /distill     refresh wiki pages
 /pages [q]   browse + open distilled pages (wenlan pages)
 /curate captures|revisions   power-user deep audit; daily flow is /brief
@@ -24,10 +25,11 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | Skill | Purpose |
 | --- | --- |
 | `setup` | End-to-end setup verifier (local runtime + MCP + round-trip). |
-| `help` | One-screen quick reference of the 10 verbs and the daily flow. |
+| `help` | One-screen quick reference of the daily verbs and flow. |
 | `brief` | Load working context at session start or topic shifts. |
 | `capture` | Save one durable memory: decision, lesson, gotcha, preference, fact, or correction. |
 | `recall` | Query Wenlan for focused context. |
+| `lint` | Run read-only diagnostics, or resolve all findings into ready, review, system-action, or blocked items. |
 | `distill` | Refresh wiki pages from accumulated memories. |
 | `pages` | Browse + open distilled pages by delegating to the `wenlan pages` CLI; query to open by title. |
 | `curate` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |

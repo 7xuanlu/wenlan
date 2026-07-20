@@ -30,8 +30,8 @@ impl StructuralDigest {
 pub struct SnapshotReceipt {
     analysis_digest: StructuralDigest,
     post_run_digest: StructuralDigest,
-    analysis_data_version: i64,
-    post_run_data_version: i64,
+    analysis_freshness: FreshnessSample,
+    post_run_freshness: FreshnessSample,
 }
 
 impl SnapshotReceipt {
@@ -44,24 +44,56 @@ impl SnapshotReceipt {
     }
 
     pub fn analysis_receipt_digest(self) -> StructuralDigest {
-        receipt_digest(self.analysis_digest, self.analysis_data_version)
+        receipt_digest(self.analysis_digest, self.analysis_freshness)
     }
 
     pub fn post_run_receipt_digest(self) -> StructuralDigest {
-        receipt_digest(self.post_run_digest, self.post_run_data_version)
+        receipt_digest(self.post_run_digest, self.post_run_freshness)
     }
 
     pub fn is_consistent(self) -> bool {
         self.analysis_digest == self.post_run_digest
-            && self.analysis_data_version == self.post_run_data_version
+            && self.analysis_freshness == self.post_run_freshness
     }
 }
 
-fn receipt_digest(structural: StructuralDigest, data_version: i64) -> StructuralDigest {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FreshnessSample {
+    observer_epoch: [u8; 16],
+    data_version: i64,
+}
+
+pub(crate) struct LintFreshnessClock {
+    observer_epoch: [u8; 16],
+    observer: tokio::sync::Mutex<libsql::Connection>,
+}
+
+impl LintFreshnessClock {
+    pub(crate) fn new(database: &libsql::Database) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            // SQLite data_version values are meaningful only across samples on
+            // the same connection. A per-process epoch makes reports from a
+            // replaced daemon/observer conservatively incomparable.
+            observer_epoch: *uuid::Uuid::new_v4().as_bytes(),
+            observer: tokio::sync::Mutex::new(database.connect()?),
+        })
+    }
+
+    async fn sample(&self) -> Result<FreshnessSample, SnapshotError> {
+        let observer = self.observer.lock().await;
+        Ok(FreshnessSample {
+            observer_epoch: self.observer_epoch,
+            data_version: scalar_i64(&observer, "PRAGMA data_version").await?,
+        })
+    }
+}
+
+fn receipt_digest(structural: StructuralDigest, freshness: FreshnessSample) -> StructuralDigest {
     let mut digest = Sha256::new();
-    digest.update(b"wenlan-lint-db-receipt-v2");
+    digest.update(b"wenlan-lint-db-receipt-v3");
     digest.update(structural.as_bytes());
-    digest.update(data_version.to_le_bytes());
+    digest.update(freshness.observer_epoch);
+    digest.update(freshness.data_version.to_le_bytes());
     StructuralDigest(digest.finalize().into())
 }
 
@@ -94,16 +126,25 @@ impl LintRows<'_> {
 
 pub struct LintReadSnapshot<'database> {
     database: &'database libsql::Database,
-    observer: libsql::Connection,
+    freshness: Arc<LintFreshnessClock>,
     run_observer: Arc<dyn LintRunObserver>,
     transaction: Option<libsql::Transaction>,
     analysis_digest: Option<StructuralDigest>,
-    analysis_data_version: i64,
+    analysis_freshness: FreshnessSample,
 }
 
 impl<'database> LintReadSnapshot<'database> {
+    #[cfg(test)]
     pub(crate) async fn open(database: &'database libsql::Database) -> Result<Self, SnapshotError> {
-        Self::open_unpinned(database, Arc::new(NoopLintRunObserver))
+        let freshness = Arc::new(LintFreshnessClock::new(database)?);
+        Self::open_with_freshness(database, freshness).await
+    }
+
+    pub(crate) async fn open_with_freshness(
+        database: &'database libsql::Database,
+        freshness: Arc<LintFreshnessClock>,
+    ) -> Result<Self, SnapshotError> {
+        Self::open_unpinned(database, freshness, Arc::new(NoopLintRunObserver))
             .await?
             .pin_analysis()
             .await
@@ -111,10 +152,10 @@ impl<'database> LintReadSnapshot<'database> {
 
     pub(crate) async fn open_unpinned(
         database: &'database libsql::Database,
+        freshness: Arc<LintFreshnessClock>,
         run_observer: Arc<dyn LintRunObserver>,
     ) -> Result<Self, SnapshotError> {
-        let observer = database.connect()?;
-        let analysis_data_version = scalar_i64(&observer, "PRAGMA data_version").await?;
+        let analysis_freshness = freshness.sample().await?;
         let connection = database.connect()?;
         connection.execute("PRAGMA query_only = ON", ()).await?;
         let transaction = connection
@@ -123,11 +164,11 @@ impl<'database> LintReadSnapshot<'database> {
 
         Ok(Self {
             database,
-            observer,
+            freshness,
             run_observer,
             transaction: Some(transaction),
             analysis_digest: None,
-            analysis_data_version,
+            analysis_freshness,
         })
     }
 
@@ -177,13 +218,13 @@ impl<'database> LintReadSnapshot<'database> {
         let transaction = self.transaction.take().ok_or(SnapshotError::Closed)?;
         transaction.rollback().await?;
         let post_run_digest = fresh_structural_digest(self.database, post_snapshot_pinned).await?;
-        let post_run_data_version = scalar_i64(&self.observer, "PRAGMA data_version").await?;
+        let post_run_freshness = self.freshness.sample().await?;
 
         Ok(SnapshotReceipt {
             analysis_digest,
             post_run_digest,
-            analysis_data_version: self.analysis_data_version,
-            post_run_data_version,
+            analysis_freshness: self.analysis_freshness,
+            post_run_freshness,
         })
     }
 
@@ -202,14 +243,14 @@ impl<'database> LintReadSnapshot<'database> {
 
 impl MemoryDB {
     pub async fn open_lint_snapshot(&self) -> Result<LintReadSnapshot<'_>, SnapshotError> {
-        LintReadSnapshot::open(&self._db).await
+        LintReadSnapshot::open_with_freshness(&self._db, Arc::clone(&self.lint_freshness)).await
     }
 
     pub(crate) async fn open_unpinned_lint_snapshot(
         &self,
         observer: Arc<dyn LintRunObserver>,
     ) -> Result<LintReadSnapshot<'_>, SnapshotError> {
-        LintReadSnapshot::open_unpinned(&self._db, observer).await
+        LintReadSnapshot::open_unpinned(&self._db, Arc::clone(&self.lint_freshness), observer).await
     }
 }
 
@@ -231,7 +272,7 @@ where
     Ok(digest)
 }
 
-async fn structural_digest(
+pub(crate) async fn structural_digest(
     connection: &libsql::Connection,
 ) -> Result<StructuralDigest, SnapshotError> {
     structural_digest_with_hook(connection, || std::future::ready(())).await
@@ -248,7 +289,7 @@ where
     let schema_version = scalar_i64(connection, "PRAGMA schema_version").await?;
     snapshot_pinned().await;
     let mut digest = Sha256::new();
-    digest_bytes(&mut digest, b"lint-db-structural-digest-v2")?;
+    digest_bytes(&mut digest, b"lint-db-structural-digest-v3")?;
     digest_i64(&mut digest, schema_version);
     digest_i64(
         &mut digest,
@@ -261,8 +302,6 @@ where
             (),
         )
         .await?;
-    let mut tables = Vec::new();
-
     while let Some(row) = rows.next().await? {
         let object_type = row.get::<String>(0)?;
         let name = row.get::<String>(1)?;
@@ -270,16 +309,6 @@ where
         digest_bytes(&mut digest, object_type.as_bytes())?;
         digest_bytes(&mut digest, name.as_bytes())?;
         digest_bytes(&mut digest, sql.as_bytes())?;
-        if object_type == "table" && !sql.to_ascii_lowercase().starts_with("create virtual table") {
-            tables.push(name);
-        }
-    }
-    drop(rows);
-
-    for table in tables {
-        digest_bytes(&mut digest, table.as_bytes())?;
-        let count_query = format!("SELECT COUNT(*) FROM {}", quote_identifier(&table));
-        digest_i64(&mut digest, scalar_i64(connection, &count_query).await?);
     }
 
     Ok(StructuralDigest(digest.finalize().into()))
@@ -289,10 +318,6 @@ async fn scalar_i64(connection: &libsql::Connection, sql: &str) -> Result<i64, S
     let mut rows = connection.query(sql, ()).await?;
     let row = rows.next().await?.ok_or(SnapshotError::EmptyRow)?;
     Ok(row.get::<i64>(0)?)
-}
-
-fn quote_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 fn digest_bytes(digest: &mut Sha256, value: &[u8]) -> Result<(), SnapshotError> {

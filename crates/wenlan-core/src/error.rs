@@ -51,6 +51,9 @@ pub enum WenlanError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    #[error("Page draft id already exists with a different snapshot: {0}")]
+    PageDraftIdConflict(String),
+
     #[error("Not found: {0}")]
     NotFound(String),
 

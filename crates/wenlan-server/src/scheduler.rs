@@ -145,6 +145,10 @@ pub fn adaptive_gap(timestamps: &[Instant]) -> Duration {
     gap.clamp(BURST_GAP_FLOOR, BURST_GAP_CEILING)
 }
 
+fn idle_due(idle_fired: bool, idle_since: Instant, now: Instant) -> bool {
+    !idle_fired && now.duration_since(idle_since) >= IDLE_THRESHOLD
+}
+
 /// Spawn the event-driven steep scheduler.
 ///
 /// Runs a single tokio task with a 30-second poll loop that checks four
@@ -156,6 +160,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
 
         let mut last_backstop = Instant::now();
         let mut idle_fired = false;
+        let mut idle_since = Instant::now();
         let mut last_poll_activity = Instant::now();
         // Fire enrichment sweep every 30 min when an LLM provider is available.
         const ENRICHMENT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -199,9 +204,19 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;
 
+            let coordinator = {
+                let state = shared.read().await;
+                state.maintenance_coordinator.clone()
+            };
+            let Some(maintenance_guard) = coordinator.try_begin_background() else {
+                tracing::debug!("[scheduler] maintenance fence active; skipping poll");
+                continue;
+            };
+
             // Reset idle flag if any new activity arrived since last poll
             if write_signal.has_activity_since(last_poll_activity) {
                 idle_fired = false;
+                idle_since = Instant::now();
             }
             last_poll_activity = Instant::now();
 
@@ -339,8 +354,7 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
             // emergence, re-distill, decision_logs) don't overlap with BurstEnd
             // phases (recaps, refinement_queue), so running them concurrently with
             // pending burst timestamps is safe.
-            let idle_horizon = now.checked_sub(IDLE_THRESHOLD).unwrap_or_else(Instant::now);
-            if !idle_fired && !write_signal.has_activity_since(idle_horizon) {
+            if idle_due(idle_fired, idle_since, now) {
                 tracing::info!(
                     "[scheduler] Idle — all agents quiet for {}s",
                     IDLE_THRESHOLD.as_secs()
@@ -461,7 +475,9 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 if let Some(provider) = sweep_llm {
                     let db_ref = db.clone();
                     let prompts_ref = prompts.clone();
+                    let maintenance_child = maintenance_guard.child();
                     tokio::spawn(async move {
+                        let _maintenance_child = maintenance_child;
                         let extract_fn = |content: String| {
                             let p = provider.clone();
                             let pr = prompts_ref.clone();
@@ -503,7 +519,9 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                     let prompts_ref = prompts.clone();
                     let refinery_ref = refinery_cfg.clone();
                     let distillation_ref = distillation_cfg.clone();
+                    let maintenance_child = maintenance_guard.child();
                     tokio::spawn(async move {
+                        let _maintenance_child = maintenance_child;
                         match wenlan_core::reconcile::run_reconcile_tick(
                             &db_ref,
                             &provider,
@@ -546,7 +564,9 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                 if let Some(provider) = sweep_llm {
                     let db_ref = db.clone();
                     let prompts_ref = prompts.clone();
+                    let maintenance_child = maintenance_guard.child();
                     tokio::spawn(async move {
+                        let _maintenance_child = maintenance_child;
                         if let Err(e) = wenlan_core::citations::run_citation_backfill_tick(
                             &db_ref,
                             &provider,
@@ -855,6 +875,24 @@ mod tests {
     #[test]
     fn test_adaptive_gap_single_write_returns_ceiling() {
         assert_eq!(adaptive_gap(&[Instant::now()]), BURST_GAP_CEILING);
+    }
+
+    #[test]
+    fn idle_not_due_until_full_threshold_after_restart() {
+        let started = Instant::now();
+
+        assert!(!idle_due(
+            false,
+            started,
+            started + INITIAL_DELAY + POLL_INTERVAL
+        ));
+        assert!(!idle_due(
+            false,
+            started,
+            started + IDLE_THRESHOLD - Duration::from_millis(1)
+        ));
+        assert!(idle_due(false, started, started + IDLE_THRESHOLD));
+        assert!(!idle_due(true, started, started + IDLE_THRESHOLD));
     }
 
     #[test]
@@ -1344,6 +1382,10 @@ mod tests {
             )
             .await
             .unwrap();
+            // These links are the page's already-compiled initial evidence,
+            // not a later source addition. Production Attach correctly marks
+            // additions stale, so the fixture acknowledges its initial build.
+            db.clear_page_staleness(&result.id).await.unwrap();
         }
         db.set_page_review_status(&result.id, "confirmed")
             .await

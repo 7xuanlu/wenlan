@@ -53,6 +53,7 @@ pub(super) struct RerankerObservation {
 pub struct RuntimeObservation {
     pub(super) providers: Vec<ProviderObservation>,
     pub(super) rerankers: Vec<RerankerObservation>,
+    pub(super) optional_workers_suspended: bool,
     pub(super) ingest_worker_closed: Option<bool>,
     pub(super) status_files: StatusFilesObservation,
     pub(super) working_memory: WorkingMemoryObservation,
@@ -63,6 +64,7 @@ impl RuntimeObservation {
         Self {
             providers: Vec::new(),
             rerankers: Vec::new(),
+            optional_workers_suspended: false,
             ingest_worker_closed: None,
             status_files: StatusFilesObservation::Unavailable,
             working_memory: WorkingMemoryObservation::Unavailable,
@@ -102,6 +104,11 @@ impl RuntimeObservation {
         self
     }
 
+    pub const fn with_optional_workers_suspended(mut self) -> Self {
+        self.optional_workers_suspended = true;
+        self
+    }
+
     pub const fn with_status_files(mut self, value: StatusFilesObservation) -> Self {
         self.status_files = value;
         self
@@ -118,6 +125,10 @@ impl RuntimeObservation {
 
     pub const fn status_files(&self) -> StatusFilesObservation {
         self.status_files
+    }
+
+    pub const fn optional_workers_suspended(&self) -> bool {
+        self.optional_workers_suspended
     }
 
     pub fn provider_readiness(

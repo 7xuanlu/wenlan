@@ -140,7 +140,8 @@ fn origin_data_root() -> PathBuf {
 /// Builds a launchd plist that mirrors `service-manager`'s default output for
 /// `OnFailure` restart + user-level + autostart, with the extra keys the old
 /// embedded `com.wenlan.server.plist` template carried: `StandardOutPath`,
-/// `StandardErrorPath`, and `EnvironmentVariables.RUST_LOG`.
+/// `StandardErrorPath`, `EnvironmentVariables.RUST_LOG`, and the canonical
+/// `WENLAN_DATA_DIR` ownership marker consumed by the desktop app.
 ///
 /// `LaunchdInstallConfig` in service-manager 0.11 only exposes `keep_alive`;
 /// stdout/stderr paths must come through `ServiceInstallCtx.contents` as a
@@ -152,6 +153,7 @@ fn build_launchd_plist(
     stdout_path: &Path,
     stderr_path: &Path,
     rust_log: &str,
+    data_root: &Path,
 ) -> String {
     let mut buf = String::new();
     buf.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -192,6 +194,11 @@ fn build_launchd_plist(
     buf.push_str("\t<dict>\n");
     buf.push_str("\t\t<key>RUST_LOG</key>\n");
     buf.push_str(&format!("\t\t<string>{}</string>\n", rust_log));
+    buf.push_str("\t\t<key>WENLAN_DATA_DIR</key>\n");
+    buf.push_str(&format!(
+        "\t\t<string>{}</string>\n",
+        data_root.to_string_lossy()
+    ));
     buf.push_str("\t</dict>\n");
     buf.push_str("</dict>\n</plist>\n");
     buf
@@ -259,7 +266,8 @@ pub fn install() -> Result<()> {
     let contents = {
         #[cfg(target_os = "macos")]
         {
-            let log_dir = origin_data_root().join("logs");
+            let data_root = origin_data_root();
+            let log_dir = data_root.join("logs");
             // Best-effort: launchd creates parent dirs for log files in many
             // builds, but creating ahead of time guarantees the daemon never
             // racing the dir into existence on first start.
@@ -271,6 +279,7 @@ pub fn install() -> Result<()> {
                 &stdout_path,
                 &stderr_path,
                 "info",
+                &data_root,
             ))
         }
         #[cfg(not(target_os = "macos"))]
@@ -324,6 +333,12 @@ pub fn uninstall() -> Result<()> {
     #[cfg_attr(target_os = "windows", allow(unreachable_code))]
     let label_value = label()?;
     let m = manager()?;
+    // launchd KeepAlive jobs must be removed directly. A separate `stop`
+    // schedules an immediate replacement before `uninstall` can remove the
+    // job, leaving an orphan daemon racing the next owner for port 7878.
+    // systemd uninstall does not stop the unit, so Linux keeps the explicit
+    // stop before removing its unit file.
+    #[cfg(not(target_os = "macos"))]
     let _ = m.stop(ServiceStopCtx {
         label: label_value.clone(),
     });

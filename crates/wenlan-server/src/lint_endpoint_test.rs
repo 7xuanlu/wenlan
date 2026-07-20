@@ -4,6 +4,7 @@ use axum::http::{Method, StatusCode};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::sync::Notify;
 use tower::ServiceExt;
 use wenlan_core::lint::observation::LintRunEvent;
 use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
@@ -20,6 +21,11 @@ use support::{json_request, request, Fixture};
 
 struct FakeApiProvider {
     calls: AtomicUsize,
+}
+
+struct BlockingApiProvider {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
 }
 
 #[async_trait]
@@ -49,6 +55,40 @@ impl LlmProvider for FakeApiProvider {
     }
     fn name(&self) -> &str {
         "fake-api"
+    }
+    fn backend(&self) -> LlmBackend {
+        LlmBackend::Api
+    }
+}
+
+#[async_trait]
+impl LlmProvider for BlockingApiProvider {
+    async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        let packet: serde_json::Value = serde_json::from_str(&request.user_prompt).unwrap();
+        let verdicts = packet["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|candidate| {
+                serde_json::json!({
+                    "candidate_ref": candidate["reference"],
+                    "decision": "pass",
+                    "reason_code": candidate["reason_code"],
+                    "confidence_basis_points": 9000,
+                    "counterevidence_refs": [],
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({ "verdicts": verdicts }).to_string())
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn name(&self) -> &str {
+        "blocking-api"
     }
     fn backend(&self) -> LlmBackend {
         LlmBackend::Api
@@ -130,6 +170,48 @@ async fn lint_deep_requires_explicit_external_egress_before_using_configured_api
             check.check_id() == "memories.semantic.classification"
                 && check.outcome() == LintOutcome::Pass
         }));
+}
+
+#[tokio::test]
+async fn active_lint_excludes_background_maintenance_until_the_report_finishes() {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let provider: Arc<dyn LlmProvider> = Arc::new(BlockingApiProvider {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    });
+    let fixture = Fixture::new_with_state(Vec::new(), None, move |state| {
+        state.synthesis_llm = Some(provider);
+    })
+    .await;
+    fixture.seed_semantic_candidates().await;
+
+    let app = fixture.app.clone();
+    let lint = tokio::spawn(async move {
+        app.oneshot(request(
+            Method::GET,
+            "/api/lint?profile=deep&external_egress=true",
+        ))
+        .await
+        .expect("lint response")
+    });
+    entered.notified().await;
+
+    assert!(
+        fixture
+            .maintenance_coordinator
+            .try_begin_background()
+            .is_none(),
+        "a live lint snapshot must exclude background writers"
+    );
+    release.notify_one();
+    assert_eq!(lint.await.unwrap().status(), StatusCode::OK);
+    drop(
+        fixture
+            .maintenance_coordinator
+            .try_begin_background()
+            .expect("background work resumes after lint"),
+    );
 }
 
 #[tokio::test]

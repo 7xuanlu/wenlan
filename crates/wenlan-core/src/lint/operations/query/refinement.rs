@@ -1,3 +1,4 @@
+use crate::repair::canonical_lint_review_source_ids;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
@@ -7,6 +8,7 @@ enum Action {
     DedupMerge,
     DetectContradiction,
     EntityMerge,
+    LintRepairReview,
     PageKeepOrArchive,
     PageMerge,
     RelationConflict,
@@ -22,6 +24,7 @@ impl Action {
             "dedup_merge" => Some(Self::DedupMerge),
             "detect_contradiction" => Some(Self::DetectContradiction),
             "entity_merge" => Some(Self::EntityMerge),
+            "lint_repair_review" => Some(Self::LintRepairReview),
             "page_keep_or_archive" => Some(Self::PageKeepOrArchive),
             "page_merge" => Some(Self::PageMerge),
             "relation_conflict" => Some(Self::RelationConflict),
@@ -36,6 +39,7 @@ impl Action {
             // source_ids is empty — the payload carries the value.
             Self::VocabPromote => true,
             Self::CrossSpaceDiscovery => count >= 2,
+            Self::LintRepairReview => count >= 1,
             Self::PageKeepOrArchive | Self::SuggestEntity => count == 1,
             Self::ConsolidateDuplicate
             | Self::DedupMerge
@@ -72,6 +76,10 @@ impl Action {
                 | Status::AwaitingReview
                 | Status::AutoApplied
                 | Status::Resolved => false,
+            },
+            Self::LintRepairReview => match status {
+                Status::AwaitingReview | Status::Resolved | Status::Dismissed => true,
+                Status::Pending | Status::AutoApplied => false,
             },
             Self::CrossSpaceDiscovery
             | Self::EntityMerge
@@ -114,7 +122,27 @@ pub(super) fn valid_refinement_row(action: &str, status: &str, ids: &[String]) -
     let (Some(action), Some(status)) = (Action::parse(action), Status::parse(status)) else {
         return false;
     };
-    let ids_are_valid = ids.iter().all(|id| !id.trim().is_empty())
+    let ids_are_valid = ids.iter().all(|id| !id.is_empty() && id.trim() == id)
         && ids.iter().collect::<BTreeSet<_>>().len() == ids.len();
-    ids_are_valid && action.valid_cardinality(ids.len()) && action.valid_status(status)
+    let canonical_owner_order = !matches!(action, Action::LintRepairReview)
+        || canonical_lint_review_source_ids(ids).is_ok_and(|canonical| canonical == ids);
+    ids_are_valid
+        && canonical_owner_order
+        && action.valid_cardinality(ids.len())
+        && action.valid_status(status)
+}
+
+pub(super) fn valid_refinement_payload(
+    id: &str,
+    action: &str,
+    source_ids: &[String],
+    payload: Option<&str>,
+) -> bool {
+    if action != "lint_repair_review" {
+        return true;
+    }
+    let Some(payload) = payload else {
+        return false;
+    };
+    crate::db::validate_lint_review_contract(id, source_ids, payload).is_ok()
 }
