@@ -110,6 +110,16 @@ destructive multi-statement work: `PRAGMA foreign_keys=OFF` + `BEGIN` +
    triggers (`db.rs:6070-6086`) and `search_pages` joins `vector_top_k` on
    `c.rowid` (`27928-27929`).
 
+   The pattern is proven in production, not merely present: m67's patch is what
+   admits `creation_kind='source'`, asserted at `document_enrichment.rs:832` and
+   in the CI-run `tests/folder_ingest_e2e.rs:338`. **But its replay is only
+   proven for the no-op branch** — `migration_66_idempotent` (`db.rs:45079-45105`)
+   rolls `user_version` back and re-runs, by which point `patched == sql` and the
+   block is skipped entirely (`db.rs:7093`). M1's substitution
+   (`space TEXT` → `space TEXT NOT NULL`) has the same no-op-on-second-run
+   property, so this is safe — **assert it explicitly in the replay test rather
+   than inheriting the assumption**.
+
 9. `PRAGMA user_version = 80`.
 
 **Tests for increment 1:**
@@ -154,6 +164,14 @@ is a single UPDATE, so no row is touched twice (audit §6.6). The real work:
    (`db.rs:8071-8085`), `delete_space` move-branch (`8252-8265`),
    `reassign_memories_space` (`8376-8389`). Post-fold, `space = CASE…` and
    `workspace = CASE…` name the same logical column.
+
+   > **Hazard worth a comment at each site.** A duplicate SET target does not
+   > error in this engine — it silently last-wins. SQLite's UPDATE column
+   > resolution (`sqlite3.c:155140-155146`) assigns `aXRef[j] = i; break;` with no
+   > check that the slot was already taken, and the amalgamation contains no
+   > "assigned more than once" diagnostic at all. So a future author who adds a
+   > column to one of these SET lists and duplicates an existing target gets no
+   > parse error, no warning, and silently loses the earlier assignment.
 2. **Fix the tautological WHERE** — `space=?2 OR workspace=?2` becomes
    `space=?2 OR space=?2`.
 3. **`delete_space` never rescopes pages** (`db.rs:8141-8207`). The
@@ -173,12 +191,29 @@ Nothing exists to reuse. `operation_receipts` (m79, `db.rs:7433-7440`) is API
 idempotency keyed `(caller_id, operation_id)` — a false friend, not migration
 integrity. Write this fresh:
 
-- **Pre-migration online backup.** A raw file copy is unsound under WAL. Prefer
-  `VACUUM INTO` (verify libSQL supports it on the pinned version before
-  committing to it; if not, use the backup API through the libsql crate).
+- **Pre-migration online backup — `VACUUM INTO`, with no fallback branch.** A raw
+  file copy is unsound under WAL. Commit to `VACUUM INTO` and prove it with a
+  test; do **not** write a fallback path. Grounded against pinned **libsql
+  0.9.30** (`Cargo.lock:2516`, bundled SQLite 3.45.1):
+  - `VACUUM INTO` is present in the bundled amalgamation (`sqlite3.c:156358`,
+    INTO sink at `156485`) and neither `SQLITE_OMIT_VACUUM` nor
+    `SQLITE_OMIT_ATTACH` appears in `libsql-ffi-0.9.30/build.rs:199-218`.
+  - `MemoryDB` opens local-only (`libsql::Builder::new_local`, `db.rs:2535`),
+    and libSQL's statement pre-parser is referenced only from `hrana`/`wasm`/
+    `replication` — so on this path SQL reaches SQLite unmodified.
+  - **The libsql Rust crate exposes no backup API whatsoever** — grep for
+    `backup` across its `src/` returns zero hits, and `sqlite3_backup*` is not
+    re-exported by `libsql-sys`. There is nothing to fall back *to*; the only
+    alternatives are `wal_checkpoint(TRUNCATE)` + file copy, or close-and-copy,
+    both worse.
+  - Pass the destination as a **literal**, not a bound parameter — whether
+    `VACUUM INTO ?1` binds is unverified.
 - **Integrity receipt**: `PRAGMA integrity_check` result, schema version before
   and after, row counts (via `EXISTS`/enumeration, not `COUNT(*)`), backup path
-  and digest.
+  and digest. No caller exists today, but the mechanism is proven — row-returning
+  PRAGMAs already work through this wrapper (`PRAGMA table_info` at `db.rs:2907`,
+  `3731`, `5719`). Assert the result is the single row `"ok"`: a receipt that
+  silently records an empty result is worse than no receipt.
 - **Restore drill that actually restores** — migrate, restore the backup,
   confirm the restored DB is at the *old* schema version with the *old* column
   nullability and the pre-fold `space` values. A drill that only checks the file
