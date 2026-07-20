@@ -58440,9 +58440,13 @@ pub(crate) mod tests {
             fresh_sql, upgraded_sql,
             "fresh-DB and upgraded-DB pages DDL must agree byte-for-byte"
         );
+        // "space TEXT NOT NULL" is a substring of "workspace TEXT NOT NULL",
+        // so a plain .contains() check would pass even if the bare `space`
+        // column were never patched -- anchor on the standalone column
+        // line's own indentation/newline instead.
         assert!(
-            fresh_sql.contains("space TEXT NOT NULL"),
-            "space must be NOT NULL: {fresh_sql}"
+            fresh_sql.contains("\n                        space TEXT NOT NULL,"),
+            "space must be NOT NULL on its own column line: {fresh_sql}"
         );
         assert!(
             fresh_sql.contains("workspace TEXT NOT NULL"),
