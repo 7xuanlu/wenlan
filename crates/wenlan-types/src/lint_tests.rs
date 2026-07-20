@@ -161,6 +161,43 @@ fn report_roundtrips_current_schema_for_each_applied_scope_kind() {
 }
 
 #[test]
+fn opaque_digest_evidence_roundtrips_without_ordinal_semantics() {
+    assert_eq!(LINT_REPORT_SCHEMA_VERSION, 5);
+    assert_eq!(LINT_CHECK_CATALOG_VERSION, 3);
+    let evidence = LintEvidenceRef::OpaqueDigest {
+        opaque_digest: LintOpaqueDigest::from_hex(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap(),
+    };
+    let result = LintCheckResult::try_new(LintCheckResultInput {
+        check_id: "identity.tag_integrity".to_string(),
+        outcome: LintOutcome::Finding,
+        severity: LintSeverity::Error,
+        applicability: LintApplicability::Applicable,
+        precondition: LintPrecondition::Ready,
+        coverage: coverage(1),
+        metrics: vec![LintMetric::new(
+            LintMetricCode::AffectedRecords,
+            LintMetricValue::Count { value: 1 },
+        )],
+        summary_code: LintSummaryCode::FindingDetected,
+        recommendation_code: Some(LintRecommendationCode::ReviewFinding),
+        evidence: vec![evidence.clone()],
+        duration_ms: 1,
+    })
+    .unwrap();
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(value["evidence"][0]["kind"], "opaque_digest");
+    assert_eq!(
+        serde_json::from_value::<LintCheckResult>(value)
+            .unwrap()
+            .evidence(),
+        &[evidence]
+    );
+}
+
+#[test]
 fn result_accepts_only_legal_outcome_severity_pairs() {
     let legal_pairs = [
         (LintOutcome::Pass, LintSeverity::Info),

@@ -5671,6 +5671,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "tempfile",
  "thiserror 2.0.18",
@@ -5696,7 +5697,9 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 6.0.0",
+ "fs2",
  "futures",
+ "libsql",
  "openssl-sys",
  "reqwest",
  "serde",
@@ -5721,6 +5724,8 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "sha2",
+ "syn",
 ]
 
 [[package]]

@@ -3,7 +3,9 @@ use crate::lint::context::{CancellationToken, LintClock};
 use crate::lint::runner::LintRunner;
 use crate::lint::snapshot::LintReadSnapshot;
 use crate::lint::test_support::DbSemanticFingerprint;
-use wenlan_types::lint::{LintMetricCode, LintMetricValue, LintOutcome, LintQuery};
+use wenlan_types::lint::{
+    LintEvidenceRef, LintMetricCode, LintMetricValue, LintOutcome, LintQuery,
+};
 
 const REGISTRY: &str = "identity.registry_integrity";
 const MEMORY: &str = "identity.memory_state_integrity";
@@ -67,6 +69,49 @@ async fn impossible_registry_session_cache_and_tag_rows_are_findings() {
     ] {
         assert!(!json.contains(secret), "privacy canary leaked: {secret}");
     }
+}
+
+#[tokio::test]
+async fn tag_evidence_identity_survives_earlier_row_deletion() {
+    let (db, _temp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  pending_revision,is_recap,supersede_mode,memory_type,source_agent,
+                  pinned,confirmed,stability)
+             VALUES ('tag-owner-row','valid','memory','tag-owner','valid',0,7,'text',
+                     0,0,'hide','fact','test',0,0,'new');
+             INSERT INTO document_tags(source,source_id,tag)
+             VALUES
+                 ('aaa','missing-first','invalid-first'),
+                 ('memory','tag-owner','valid-middle'),
+                 ('zzz','missing-second','invalid-second');",
+        )
+        .await
+        .unwrap();
+
+    let before = run_lint(&db, None).await;
+    let before_evidence = check(&before, TAGS).evidence().to_vec();
+    assert_eq!(before_evidence.len(), 2);
+    assert!(before_evidence
+        .iter()
+        .all(|evidence| matches!(evidence, LintEvidenceRef::OpaqueDigest { .. })));
+
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "DELETE FROM document_tags
+             WHERE source='aaa' AND source_id='missing-first' AND tag='invalid-first'",
+            (),
+        )
+        .await
+        .unwrap();
+    let after = run_lint(&db, None).await;
+    assert_eq!(check(&after, TAGS).evidence(), &before_evidence[1..]);
 }
 
 #[tokio::test]

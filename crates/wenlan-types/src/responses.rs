@@ -4,6 +4,7 @@
 use crate::entities::{Entity, EntitySearchResult};
 use crate::memory::{IndexedFileInfo, MemoryItem, MemoryStats, SearchResult};
 use crate::pages::Page;
+use crate::repair::RepairDigest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -701,6 +702,7 @@ pub enum ProposalAction {
     PageMerge,
     CrossSpaceDiscovery,
     PageKeepOrArchive,
+    LintRepairReview,
     VocabPromote,
     /// ponytail: deserialize-only catch-all. Lets a stale client decode a
     /// newer daemon's action tag instead of failing the whole list. NEVER
@@ -762,6 +764,14 @@ pub enum RefinementPayload {
         page_id: String,
         source_count: usize,
         allowed_actions: Vec<RefinementCardAction>,
+    },
+    LintRepairReview {
+        check_id: String,
+        occurrence_digest: RepairDigest,
+        owner_binding_digest: RepairDigest,
+        issue: String,
+        choices: Vec<String>,
+        suggested_research_queries: Vec<String>,
     },
     VocabPromote {
         kind: String,

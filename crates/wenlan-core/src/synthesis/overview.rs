@@ -98,8 +98,9 @@ async fn ensure_overview_page(
 /// with the current top pages' sources (`replace_page_sources` -- prunes
 /// anything no longer top-ranked, so the set tracks "the current top pages"
 /// instead of accumulating the union of every page ever top-ranked over the
-/// wiki's lifetime), then goes through the same stale-mark / `refresh_page` /
-/// clear-staleness sequence as `refinery::re_distill_stale_pages`.
+/// wiki's lifetime), then goes through the same stale-mark / `refresh_page`
+/// sequence as `refinery::re_distill_stale_pages`. The refresh write or exact
+/// unchanged-result CAS owns staleness acknowledgement atomically.
 pub async fn refresh_overview_page(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
@@ -129,7 +130,6 @@ pub async fn refresh_overview_page(
         knowledge_path,
     )
     .await?;
-    db.clear_page_staleness(&page_id).await?;
     Ok(outcome)
 }
 

@@ -506,17 +506,22 @@ async fn distill_one_cluster_with_tuning(
             return Ok(None);
         }
         if m.intersection > 0 {
-            // Partial overlap: page is stale relative to this cluster.
-            // Don't emit a new page — that would be a duplicate carrying
-            // different memories. Set stale_reason = "source_updated" so
-            // re_distill_stale_pages picks the page up on the next sweep.
-            // (increment_page_sources_updated bumps a counter nothing
-            // reads; the actual refresh trigger is the stale_reason flag.)
-            if let Err(e) = db.set_page_stale(&m.page_id, "source_updated").await {
-                log::warn!("[emergence] could not mark page {} stale: {}", m.page_id, e);
-            }
+            // Partial overlap: attach the cluster's explicit evidence before
+            // queueing refresh. PageWrite::Attach is idempotent for already
+            // linked ids and atomically marks the page source_updated for each
+            // new link, so the stale sweep reads the evidence that caused it.
+            page_write(
+                db,
+                PageWrite::Attach {
+                    page_id: &m.page_id,
+                    source_memory_ids: &cluster.source_ids,
+                    link_reason: "distill_partial_overlap",
+                    agent: "distill",
+                },
+            )
+            .await?;
             log::info!(
-                "[emergence] cluster '{}' partially overlaps page '{}' ({} new memories) — marked page stale for refresh, skipping new-page synth",
+                "[emergence] cluster '{}' partially overlaps page '{}' ({} new memories) — attached evidence and queued refresh, skipping new-page synth",
                 topic,
                 m.page_title,
                 cluster_size - m.intersection
@@ -1164,6 +1169,8 @@ pub struct RefreshOutcome {
     pub wrote: bool,
     /// The page is human-owned; a revision card was staged instead of a write.
     pub gated: bool,
+    /// Verified prose and sources were identical; only the compile watermark advanced.
+    pub acknowledged: bool,
     /// Id of the staged revision card, present iff `gated`.
     pub revision_card_id: Option<String>,
 }
@@ -1172,8 +1179,8 @@ pub struct RefreshOutcome {
 /// verify per-claim `[N]` citations against the numbered sources, and write the
 /// result atomically through the canonical PageWrite path.
 ///
-/// This is the ONE re-distill / repair op. `recompile_single_page`,
-/// `deep_distill_single`, and `re_distill_stale_pages` all delegate here so the
+/// This is the ONE re-distill / repair op. `deep_distill_single` and
+/// `re_distill_stale_pages` both delegate here so the
 /// synthesis, citation verification, atomic content+citations+changelog write,
 /// and fail-closed citation gate live in exactly one place.
 ///
@@ -1229,6 +1236,11 @@ pub(crate) async fn refresh_page_with_prompt(
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::VectorDb(format!("page {page_id} not found")))?;
+
+    // Read the monotonic compile-input token before reading the sources. Any
+    // source-set or source-content change after this point advances the token,
+    // so the final CAS rejects prose synthesized from an obsolete snapshot.
+    let source_revision = db.get_page_source_revision(page_id).await?;
 
     // Rebuild from the page's CURRENT sources: join table first, JSON column
     // fallback for legacy pages.
@@ -1325,7 +1337,7 @@ pub(crate) async fn refresh_page_with_prompt(
     // NOT NULL`, so a concurrent agent PUT that cleared staleness wins the race
     // without TOCTOU.
     let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-    let result = crate::post_write::update_page(
+    let result = crate::post_write::update_page_at_source_revision(
         db,
         page_id,
         UpdatePageRequest {
@@ -1334,6 +1346,7 @@ pub(crate) async fn refresh_page_with_prompt(
         },
         reason.edited_by(),
         true,
+        source_revision,
         knowledge_path,
         Some((citations_json, stats.summary())),
     )
@@ -1342,31 +1355,9 @@ pub(crate) async fn refresh_page_with_prompt(
     Ok(RefreshOutcome {
         wrote: result.wrote,
         gated: result.gated,
+        acknowledged: result.acknowledged,
         revision_card_id: result.revision_card_id,
     })
-}
-
-/// Recompile a single page from its source memories. Thin delegator to
-/// [`refresh_page`] (the ONE re-distill path); returns `true` when the page was
-/// rewritten in place, `false` on any no-op (no sources, empty output,
-/// fail-closed discard, human-owned gate, or lost CAS).
-pub(crate) async fn recompile_single_page(
-    db: &MemoryDB,
-    llm: &Arc<dyn LlmProvider>,
-    prompts: &PromptRegistry,
-    page: &crate::pages::Page,
-    knowledge_path: Option<&std::path::Path>,
-) -> Result<bool, WenlanError> {
-    let outcome = refresh_page(
-        db,
-        llm,
-        prompts,
-        &page.id,
-        RefreshReason::SourceChanged,
-        knowledge_path,
-    )
-    .await?;
-    Ok(outcome.wrote)
 }
 
 /// Re-distill a single page by reloading all source memories and recompiling
@@ -1783,7 +1774,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recompile_single_page_re_projects_md_when_path_passed() {
+    async fn refresh_page_re_projects_md_when_path_passed() {
         let (db, _db_dir) = crate::db::tests::test_db().await;
         let knowledge_dir = TempDir::new().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
@@ -1819,12 +1810,17 @@ mod tests {
 
         let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new("recompiled body [1]"));
         let prompts = PromptRegistry::default();
-        let page = db.get_page("page_a").await.unwrap().unwrap();
-
-        let updated = recompile_single_page(&db, &llm, &prompts, &page, Some(knowledge_dir.path()))
-            .await
-            .unwrap();
-        assert!(updated, "recompile should write");
+        let outcome = refresh_page(
+            &db,
+            &llm,
+            &prompts,
+            "page_a",
+            RefreshReason::SourceChanged,
+            Some(knowledge_dir.path()),
+        )
+        .await
+        .unwrap();
+        assert!(outcome.wrote, "refresh should write");
 
         // Verify md file was re-projected into the knowledge directory.
         let entries: Vec<_> = std::fs::read_dir(knowledge_dir.path())

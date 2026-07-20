@@ -1,7 +1,21 @@
 use super::{check, metric, run, IMPORTS, MAINTENANCE, NOW, REFINEMENTS, REJECTIONS};
 use crate::db::tests::test_db;
 use crate::lint::test_support::assert_no_privacy_canaries;
+use sha2::{Digest as _, Sha256};
 use wenlan_types::lint::{LintMetricCode, LintOutcome};
+
+fn owner_binding_digest(digest: &str, source_ids: &[String]) -> String {
+    Sha256::digest(
+        serde_json::to_vec(&serde_json::json!({
+            "occurrence_digest": digest,
+            "source_ids": source_ids,
+        }))
+        .unwrap(),
+    )
+    .iter()
+    .map(|byte| format!("{byte:02x}"))
+    .collect()
+}
 
 #[tokio::test]
 async fn terminal_imports_and_every_review_state_are_inventory_or_findings() {
@@ -107,6 +121,36 @@ async fn refinement_actions_enforce_closed_set_and_source_id_shape() {
             "[\"page\"]",
             "resolved",
         ),
+        (
+            "lint_review_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "lint_repair_review",
+            "[\"one\"]",
+            "awaiting_review",
+        ),
+        (
+            "lint_review_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "lint_repair_review",
+            "[\"one\",\"two\"]",
+            "resolved",
+        ),
+        (
+            "lint_review_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "lint_repair_review",
+            "[\"one\",\"three\",\"two\"]",
+            "dismissed",
+        ),
+        (
+            "lint_review_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "lint_repair_review",
+            "[\"one\"]",
+            "pending",
+        ),
+        (
+            "lint_review_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "lint_repair_review",
+            "[\"one\"]",
+            "auto_applied",
+        ),
         ("malformed", "page_merge", "not-json", "awaiting_review"),
         ("unknown", "invented_action", "[\"a\",\"b\"]", "pending"),
         (
@@ -135,10 +179,24 @@ async fn refinement_actions_enforce_closed_set_and_source_id_shape() {
             "awaiting_review",
         ),
     ] {
+        let payload = (action == "lint_repair_review").then(|| {
+            let digest = id.strip_prefix("lint_review_").unwrap();
+            let parsed_source_ids = serde_json::from_str::<Vec<String>>(source_ids).unwrap();
+            serde_json::json!({
+                "action": "lint_repair_review",
+                "check_id": "pages.links.orphan_labels",
+                "occurrence_digest": digest,
+                "owner_binding_digest": owner_binding_digest(digest, &parsed_source_ids),
+                "issue": "Review the ambiguous target.",
+                "choices": ["keep", "retarget", "remove"],
+                "suggested_research_queries": [],
+            })
+            .to_string()
+        });
         conn.execute(
-            "INSERT INTO refinement_queue (id,action,source_ids,status,created_at)
-             VALUES (?1,?2,?3,?4,'2023-11-14 22:13:20')",
-            libsql::params![id, action, source_ids, status],
+            "INSERT INTO refinement_queue (id,action,source_ids,payload,status,created_at)
+             VALUES (?1,?2,?3,?4,?5,'2023-11-14 22:13:20')",
+            libsql::params![id, action, source_ids, payload, status],
         )
         .await
         .unwrap();
@@ -147,9 +205,9 @@ async fn refinement_actions_enforce_closed_set_and_source_id_shape() {
 
     let report = run(&db, &[]).await;
     let result = check(&report, REFINEMENTS);
-    assert_eq!(metric(result, LintMetricCode::ObservedRecords), 9);
-    assert_eq!(metric(result, LintMetricCode::AffectedRecords), 7);
-    assert_eq!(metric(result, LintMetricCode::OperationInvalidStates), 7);
+    assert_eq!(metric(result, LintMetricCode::ObservedRecords), 14);
+    assert_eq!(metric(result, LintMetricCode::AffectedRecords), 9);
+    assert_eq!(metric(result, LintMetricCode::OperationInvalidStates), 9);
 }
 
 #[tokio::test]

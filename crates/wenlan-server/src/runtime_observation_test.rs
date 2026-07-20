@@ -46,3 +46,13 @@ async fn server_state_preserves_typed_readiness_and_unavailable_status() {
         StatusFilesObservation::Unavailable
     );
 }
+
+#[tokio::test]
+async fn server_state_marks_repair_suspended_optional_workers() {
+    let mut state = ServerState::new();
+    assert!(!from_server_state(&state).await.optional_workers_suspended());
+
+    state.optional_runtime_workers_suspended = true;
+
+    assert!(from_server_state(&state).await.optional_workers_suspended());
+}

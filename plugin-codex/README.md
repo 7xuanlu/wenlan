@@ -21,7 +21,7 @@ codex plugin add wenlan@7xuanlu-wenlan
 
 Start a new Codex thread after installing so the skills and MCP server load.
 Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`,
-`/pages <query>`, or `/handoff`.
+`/lint [deep|repair] [scope]`, `/pages <query>`, or `/handoff`.
 
 ## Development
 

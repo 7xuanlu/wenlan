@@ -8,6 +8,7 @@ use wenlan_types::lint::{LintApplicability, LintOpaqueId, LintOutcome, LintSever
 fn page(title: &str, status: &str, creation: &str, review: &str) -> PageRow {
     PageRow {
         title_key: title.to_lowercase(),
+        effective_scope: None,
         status: status.to_string(),
         creation_kind: creation.to_string(),
         review_status: review.to_string(),
@@ -83,57 +84,72 @@ fn active_duplicates_warn_but_archived_rows_remain_inventory() {
 }
 
 #[tokio::test]
-async fn workspace_scope_prevents_cross_workspace_duplicate_and_title_leak() {
+async fn cross_effective_scope_active_duplicate_titles_pass() {
     let (db, _tmp) = test_db().await;
     let conn = db._db.connect().unwrap();
-    insert_page(
+    insert_page_with_scope(
         &conn,
         "page-a",
-        "Private Shared Title",
+        "Shared Title",
         "active",
         Some("workspace-a"),
+        None,
     )
     .await;
-    insert_page(
+    insert_page_with_scope(
         &conn,
         "page-b",
-        "private shared title",
+        "shared title",
         "active",
+        None,
         Some("workspace-b"),
     )
     .await;
-    insert_page(
-        &conn,
-        "page-archived",
-        "Private Shared Title",
-        "archived",
-        Some("workspace-a"),
-    )
-    .await;
-    insert_page(&conn, "page-none", "uncategorized", "active", None).await;
     let snapshot = db.open_lint_snapshot().await.unwrap();
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
-    let selected_scope = AppliedScope::registered(
-        LintOpaqueId::from_sorted_position(0).unwrap(),
-        "workspace-a".to_string(),
-    );
-    let selected_context = LintContext::new(
+    let global_scope = AppliedScope::global();
+    let global_context = LintContext::new(
         &snapshot,
-        &selected_scope,
+        &global_scope,
         None,
         &clock,
         &gate,
         wenlan_types::lint::LintProfile::General,
     );
-    let selected = load_rows(&selected_context).await.unwrap();
-    assert_eq!(selected.len(), 2);
-    let selected_result = assess_duplicates(&selected)
+    let global = load_rows(&global_context).await.unwrap();
+    let global_result = assess_duplicates(&global)
         .result(DUPLICATE_TITLES_ID, 0)
         .unwrap();
-    assert_eq!(selected_result.outcome(), LintOutcome::Pass);
-    assert_eq!(selected_result.coverage().denominator(), 1);
+    assert_eq!(global_result.outcome(), LintOutcome::Pass);
+    assert_eq!(global_result.coverage().denominator(), 2);
+}
 
+#[tokio::test]
+async fn same_effective_scope_active_duplicate_titles_warn() {
+    let (db, _tmp) = test_db().await;
+    let conn = db._db.connect().unwrap();
+    insert_page_with_scope(
+        &conn,
+        "page-a",
+        "Shared Title",
+        "active",
+        Some("workspace-a"),
+        None,
+    )
+    .await;
+    insert_page_with_scope(
+        &conn,
+        "page-b",
+        "shared title",
+        "active",
+        None,
+        Some("workspace-a"),
+    )
+    .await;
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let clock = LintClock::fixed();
+    let gate = ExecutionGate::new(CancellationToken::new());
     let global_scope = AppliedScope::global();
     let global_context = LintContext::new(
         &snapshot,
@@ -149,9 +165,61 @@ async fn workspace_scope_prevents_cross_workspace_duplicate_and_title_leak() {
         .unwrap();
     assert_eq!(global_result.outcome(), LintOutcome::Finding);
     assert_eq!(global_result.severity(), LintSeverity::Warning);
-    let json = serde_json::to_string(&global_result).unwrap();
-    assert!(!json.contains("Private"));
-    assert!(!json.contains("private shared"));
+    assert_eq!(global_result.coverage().denominator(), 2);
+}
+
+#[tokio::test]
+async fn selected_duplicate_scope_uses_legacy_space_fallback() {
+    let (db, _tmp) = test_db().await;
+    let conn = db._db.connect().unwrap();
+    insert_page_with_scope(
+        &conn,
+        "page-current",
+        "Shared Title",
+        "active",
+        Some("workspace-a"),
+        None,
+    )
+    .await;
+    insert_page_with_scope(
+        &conn,
+        "page-legacy",
+        "shared title",
+        "active",
+        None,
+        Some("workspace-a"),
+    )
+    .await;
+    insert_page_with_scope(
+        &conn,
+        "page-uncategorized",
+        "shared title",
+        "active",
+        None,
+        None,
+    )
+    .await;
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let clock = LintClock::fixed();
+    let gate = ExecutionGate::new(CancellationToken::new());
+
+    let registered_scope = AppliedScope::registered(
+        LintOpaqueId::from_sorted_position(0).unwrap(),
+        "workspace-a".to_string(),
+    );
+    let registered_context = LintContext::new(
+        &snapshot,
+        &registered_scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
+    let registered = assess_duplicates(&load_rows(&registered_context).await.unwrap())
+        .result(DUPLICATE_TITLES_ID, 0)
+        .unwrap();
+    assert_eq!(registered.outcome(), LintOutcome::Finding);
+    assert_eq!(registered.coverage().denominator(), 2);
 
     let uncategorized_scope = AppliedScope::uncategorized();
     let uncategorized_context = LintContext::new(
@@ -162,22 +230,118 @@ async fn workspace_scope_prevents_cross_workspace_duplicate_and_title_leak() {
         &gate,
         wenlan_types::lint::LintProfile::General,
     );
-    let uncategorized = load_rows(&uncategorized_context).await.unwrap();
-    assert_eq!(uncategorized.len(), 1);
-    assert_eq!(uncategorized[0].title_key, "uncategorized");
+    let uncategorized = assess_duplicates(&load_rows(&uncategorized_context).await.unwrap())
+        .result(DUPLICATE_TITLES_ID, 0)
+        .unwrap();
+    assert_eq!(uncategorized.outcome(), LintOutcome::Pass);
+    assert_eq!(uncategorized.coverage().denominator(), 1);
+    assert!(uncategorized.evidence().is_empty());
 }
 
-async fn insert_page(
+async fn insert_page_with_scope(
     conn: &libsql::Connection,
     id: &str,
     title: &str,
     status: &str,
     workspace: Option<&str>,
+    legacy_space: Option<&str>,
 ) {
     conn.execute(
-        "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace, creation_kind, review_status) VALUES (?1, ?2, 'body', '[]', 1, ?3, 'now', 'now', 'now', ?4, 'distilled', 'confirmed')",
-        libsql::params![id, title, status, workspace],
+        "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace, space, creation_kind, review_status) VALUES (?1, ?2, 'body', '[]', 1, ?3, 'now', 'now', 'now', ?4, ?5, 'distilled', 'confirmed')",
+        libsql::params![id, title, status, workspace, legacy_space],
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn source_page_integrity_accepts_any_canonical_or_legacy_provenance_representation() {
+    let (db, _tmp) = test_db().await;
+    let conn = db._db.connect().unwrap();
+    conn.execute_batch(
+        "INSERT INTO pages
+             (id,title,content,source_memory_ids,version,status,created_at,last_compiled,
+              last_modified,creation_kind,review_status,user_edited)
+         VALUES
+             ('source_invalid','invalid','', '[]',1,'active','now','now','now',
+              'source','unconfirmed',0),
+             ('source_json','json','', '[\"mem-json\"]',1,'active','now','now','now',
+              'source','unconfirmed',0),
+             ('source_join','join','', '[]',1,'active','now','now','now',
+              'source','unconfirmed',0),
+             ('source_evidence','evidence','', '[]',1,'active','now','now','now',
+              'source','unconfirmed',0),
+             ('source_archived','archived','', '[]',1,'archived','now','now','now',
+              'source','unconfirmed',0),
+             ('distilled_active','distilled','', '[]',1,'active','now','now','now',
+              'distilled','unconfirmed',0);
+         INSERT INTO page_sources(page_id,memory_source_id,linked_at,link_reason)
+         VALUES ('source_join','mem-join',1,'legacy');
+         INSERT INTO page_evidence(page_id,source_kind,locator,linked_at,link_reason)
+         VALUES ('source_evidence','external_url',NULL,1,'canonical');",
+    )
+    .await
+    .unwrap();
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let clock = LintClock::fixed();
+    let gate = ExecutionGate::new(CancellationToken::new());
+    let scope = AppliedScope::global();
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
+
+    let result = load_and_assess_source_integrity(&context)
+        .await
+        .unwrap()
+        .result(SOURCE_INTEGRITY_ID, 0)
+        .unwrap();
+
+    assert_eq!(result.outcome(), LintOutcome::Finding);
+    assert_eq!(result.severity(), LintSeverity::Error);
+    assert_eq!(result.coverage().denominator(), 4);
+    assert_eq!(result.coverage().evaluated(), 4);
+    assert_eq!(result.evidence().len(), 1);
+}
+
+#[tokio::test]
+async fn source_page_integrity_runs_without_page_projection_or_page_root() {
+    let (db, _tmp) = test_db().await;
+    db._db
+        .connect()
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO pages
+                 (id,title,content,source_memory_ids,version,status,created_at,last_compiled,
+                  last_modified,creation_kind,review_status,user_edited)
+             VALUES
+                 ('source_invalid','invalid','', '[]',1,'active','now','now','now',
+                  'source','unconfirmed',0);",
+        )
+        .await
+        .unwrap();
+
+    let report = crate::lint::runner::LintRunner::new(LintClock::fixed(), CancellationToken::new())
+        .run(
+            &db,
+            &wenlan_types::lint::LintQuery::new(
+                Some(wenlan_types::lint::LintProfile::General),
+                None,
+            ),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let source = report
+        .checks()
+        .iter()
+        .find(|check| check.check_id() == SOURCE_INTEGRITY_ID)
+        .unwrap();
+    assert_eq!(source.outcome(), LintOutcome::Finding);
+    assert_eq!(source.coverage().denominator(), 1);
 }

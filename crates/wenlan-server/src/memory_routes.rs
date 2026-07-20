@@ -724,7 +724,7 @@ pub async fn handle_store_memory(
         let run_reflection =
             move |cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>| async move {
                 // Snapshot everything we need, then drop the guard.
-                let (db, llm, prompts, refinery, distillation, knowledge_path) = {
+                let (db, llm, prompts, refinery, distillation, knowledge_path, maintenance) = {
                     let s = state_clone.read().await;
                     let Some(db) = s.db.clone() else {
                         return;
@@ -736,8 +736,10 @@ pub async fn handle_store_memory(
                         s.tuning.refinery.clone(),
                         s.tuning.distillation.clone(),
                         Some(wenlan_core::config::load_config().knowledge_path_or_default()),
+                        s.maintenance_coordinator.clone(),
                     )
                 }; // read guard dropped here — writers may proceed
+                let _maintenance_guard = maintenance.begin_background().await;
 
                 // Canonical post-store enrichment (Phase 1 classify/extract/
                 // apply_enrichment/tags + Phase 2 post-ingest + Phase 3 dual-pool)
@@ -809,9 +811,9 @@ pub async fn handle_store_memory(
     // `record_milestone` in the DB and surfaced to the UI through the
     // /api/onboarding/* endpoints.
     {
-        let db_for_ms = {
+        let (db_for_ms, maintenance) = {
             let s = state.read().await;
-            s.db.clone()
+            (s.db.clone(), s.maintenance_coordinator.clone())
         };
         if let Some(db_for_ms) = db_for_ms {
             let emitter_for_ms: Arc<dyn wenlan_core::events::EventEmitter> =
@@ -819,6 +821,7 @@ pub async fn handle_store_memory(
             let source_for_ms = agent_for_activity.clone();
             let memory_id_for_ms = source_id.clone();
             tokio::spawn(async move {
+                let _maintenance_guard = maintenance.begin_background().await;
                 let ev =
                     wenlan_core::onboarding::MilestoneEvaluator::new(&db_for_ms, emitter_for_ms);
                 if let Err(e) = ev
@@ -1517,11 +1520,25 @@ pub async fn handle_reclassify_memory(
         .map_err(ServerError::ValidationError)?;
     let mt = parsed.to_string();
 
-    let s = state.read().await;
-    let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-    db.update_column_by_source_id("memory", &source_id, "memory_type", &mt)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    match wenlan_core::post_write::update_memory(
+        &db,
+        &source_id,
+        wenlan_core::post_write::MemoryUpdate {
+            content: None,
+            space: None,
+            confirm: false,
+            memory_type: Some(&mt),
+        },
+    )
+    .await
+    {
+        Ok(()) | Err(wenlan_core::WenlanError::NotFound(_)) => {}
+        Err(error) => return Err(ServerError::from(error)),
+    }
 
     Ok(Json(ReclassifyMemoryResponse {
         source_id,
@@ -2775,6 +2792,53 @@ mod update_memory_endpoint_tests {
     use wenlan_types::sources::RawDocument;
 
     use crate::state::ServerState;
+
+    #[tokio::test]
+    async fn reclassify_keeps_response_shape_and_uses_canonical_update() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "reclassify-canonical".to_string(),
+            title: "Reclassify".to_string(),
+            content: "This memory changes type through the canonical boundary.".to_string(),
+            memory_type: Some("fact".to_string()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memory/reclassify/reclassify-canonical")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"memory_type":"decision"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            db.get_memory_detail("reclassify-canonical")
+                .await
+                .unwrap()
+                .unwrap()
+                .memory_type
+                .as_deref(),
+            Some("decision")
+        );
+    }
 
     #[tokio::test]
     async fn invalid_memory_type_rejects_the_whole_update_before_mutation() {

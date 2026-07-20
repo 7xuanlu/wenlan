@@ -1,51 +1,57 @@
 use super::super::provenance_checks::result::Assessment;
 use crate::lint::context::{LintContext, ScopeFilter};
-use wenlan_types::lint::{LintMetric, LintMetricCode, LintMetricValue};
+use std::collections::BTreeSet;
+use wenlan_types::lint::{
+    LintMetric, LintMetricCode, LintMetricValue, LINT_MAX_EVIDENCE_PER_CHECK,
+};
 
 pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Assessment, ()> {
     let (where_sql, params) = scoped_active_source_filter(context.scope().filter());
-    let count_sql = format!(
-        "SELECT COUNT(DISTINCT pl.label_key) FROM page_links pl \
+    let sql = format!(
+        "SELECT pl.source_page_id, pl.label_key, COUNT(target.id) \
+         FROM page_links pl \
          INNER JOIN pages p ON p.id = pl.source_page_id \
-         WHERE pl.target_page_id IS NULL AND p.status = 'active'{where_sql}"
-    );
-    let mut count_rows = context
-        .snapshot()
-        .query(&count_sql, params.clone())
-        .await
-        .map_err(|_| ())?;
-    let count = count_rows
-        .next()
-        .await
-        .map_err(|_| ())?
-        .ok_or(())?
-        .get::<i64>(0)
-        .map_err(|_| ())?;
-    let count = u64::try_from(count).map_err(|_| ())?;
-
-    let sample_sql = format!(
-        "SELECT pl.label_key FROM page_links pl \
-         INNER JOIN pages p ON p.id = pl.source_page_id \
+         LEFT JOIN pages target \
+           ON LOWER(target.title) = LOWER(pl.label_key) \
+          AND target.status = 'active' \
+          AND ((COALESCE(p.workspace, p.space) IS NULL \
+                AND COALESCE(target.workspace, target.space) IS NULL) \
+               OR COALESCE(target.workspace, target.space) = COALESCE(p.workspace, p.space)) \
          WHERE pl.target_page_id IS NULL AND p.status = 'active'{where_sql} \
-         GROUP BY pl.label_key ORDER BY pl.label_key LIMIT 100"
+         GROUP BY pl.source_page_id, pl.label_key, COALESCE(p.workspace, p.space) \
+         ORDER BY pl.source_page_id, pl.label_key"
     );
     let mut rows = context
         .snapshot()
-        .query(&sample_sql, params)
+        .query(&sql, params)
         .await
         .map_err(|_| ())?;
-    let mut positions = Vec::new();
+    let mut population = 0_u64;
+    let mut warning_count = 0_u64;
+    let mut evidence_positions = Vec::new();
+    let mut distinct_labels = BTreeSet::new();
     while let Some(row) = rows.next().await.map_err(|_| ())? {
         let _: String = row.get(0).map_err(|_| ())?;
-        positions.push(positions.len());
+        let label_key: String = row.get(1).map_err(|_| ())?;
+        let target_count: i64 = row.get(2).map_err(|_| ())?;
+        let target_count = u64::try_from(target_count).map_err(|_| ())?;
+        distinct_labels.insert(label_key);
+        if target_count > 0 {
+            warning_count = warning_count.saturating_add(1);
+            if evidence_positions.len() < usize::from(LINT_MAX_EVIDENCE_PER_CHECK) {
+                evidence_positions.push(usize::try_from(population).map_err(|_| ())?);
+            }
+        }
+        population = population.saturating_add(1);
     }
-    if positions.len() != usize::try_from(count.min(100)).map_err(|_| ())? {
-        return Err(());
-    }
-    let mut assessment = Assessment::from_aggregate(count, count, 0, count == 0, positions);
+    let distinct_label_count = u64::try_from(distinct_labels.len()).map_err(|_| ())?;
+    let mut assessment =
+        Assessment::from_aggregate(population, warning_count, 0, true, evidence_positions);
     assessment.set_metrics(vec![LintMetric::new(
         LintMetricCode::PageOrphanLabels,
-        LintMetricValue::Count { value: count },
+        LintMetricValue::Count {
+            value: distinct_label_count,
+        },
     )]);
     Ok(assessment)
 }
@@ -54,10 +60,13 @@ fn scoped_active_source_filter(filter: &ScopeFilter) -> (&'static str, libsql::p
     match filter {
         ScopeFilter::Global => ("", libsql::params::Params::None),
         ScopeFilter::Registered(workspace) => (
-            " AND p.workspace = ?1",
+            " AND COALESCE(p.workspace, p.space) = ?1",
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
-        ScopeFilter::Uncategorized => (" AND p.workspace IS NULL", libsql::params::Params::None),
+        ScopeFilter::Uncategorized => (
+            " AND COALESCE(p.workspace, p.space) IS NULL",
+            libsql::params::Params::None,
+        ),
     }
 }
 

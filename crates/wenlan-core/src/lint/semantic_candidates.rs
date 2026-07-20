@@ -617,7 +617,7 @@ impl Builder {
         let record_ids = self
             .records
             .iter()
-            .map(|record| digest_id(&record.key))
+            .map(|record| super::semantic_record_key_digest(&record.key))
             .collect::<Vec<_>>();
         let mut digest = Sha256::new();
         digest.update(b"wenlan-lint-semantic-candidates-v2");
@@ -1208,13 +1208,6 @@ fn digest_optional(digest: &mut Sha256, value: Option<&str>) {
 fn digest_value(digest: &mut Sha256, value: &[u8]) {
     digest.update((value.len() as u64).to_le_bytes());
     digest.update(value);
-}
-
-fn digest_id(key: &str) -> LintDigest {
-    let digest: [u8; 32] = Sha256::digest(key.as_bytes()).into();
-    LintDigest::from_u64(u64::from_le_bytes(
-        digest[..8].try_into().expect("digest prefix"),
-    ))
 }
 
 #[cfg(test)]
