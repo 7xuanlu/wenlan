@@ -28,7 +28,10 @@ if [ "$HAS_RUST" = "yes" ]; then
         }
     else
         echo "  Checking Rust compilation..."
-        cargo check --workspace 2>&1 || {
+        # --exclude wenlan-app: the Tauri app needs GTK on Linux and sidecar
+        # placeholders; it is compile-checked by CI's macos app-check job, not
+        # in the fast pre-commit path.
+        cargo check --workspace --exclude wenlan-app 2>&1 || {
             echo "FAIL: Rust compilation errors. Fix before committing."
             exit 1
         }
