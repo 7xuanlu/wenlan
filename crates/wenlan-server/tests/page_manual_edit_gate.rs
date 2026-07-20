@@ -7,9 +7,10 @@
 
 mod common;
 
-use axum::body::Body;
+use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
+use wenlan_core::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
 
 fn post_page(id: &str, body: serde_json::Value) -> Request<Body> {
     Request::builder()
@@ -18,6 +19,19 @@ fn post_page(id: &str, body: serde_json::Value) -> Request<Body> {
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .unwrap()
+}
+
+fn get_page(id: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(format!("/api/pages/{id}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+async fn response_json(response: axum::response::Response) -> serde_json::Value {
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 /// A manual edit must leave a changelog entry and a history row — the trail a
@@ -209,4 +223,186 @@ async fn manual_edit_of_zero_source_authored_page_is_allowed() {
     assert_eq!(response.status(), StatusCode::OK);
     let after = db.get_page(&page_id).await.unwrap().unwrap();
     assert_eq!(after.content, "Things I am still thinking about.");
+}
+
+#[tokio::test]
+async fn manual_edit_round_trips_exact_source_through_post_then_get() {
+    let (app, _tmp, db) = common::test_app().await;
+    let page_id =
+        common::create_page_fixture(&db, "Exact source", "old body", None, &[], "authored").await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let exact = "\u{feff}\r\n  # Exact source  \r\n\r\nBody with terminal bytes\t \r\n\r\n";
+    assert_ne!(
+        exact.trim_end(),
+        exact,
+        "positive control: trimming must change this fixture"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(post_page(
+            &page_id,
+            serde_json::json!({
+                "content": exact,
+                "expected_version": before.version,
+                "caller_id": "wenlan-app",
+                "operation_id": "exact-source-round-trip",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app.oneshot(get_page(&page_id)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["page"]["content"].as_str(),
+        Some(exact),
+        "GET must return the exact source accepted by POST"
+    );
+}
+
+#[tokio::test]
+async fn identical_operation_replays_without_a_second_version_or_history_row() {
+    let (app, _tmp, db) = common::test_app().await;
+    let page_id =
+        common::create_page_fixture(&db, "Retry receipt", "old body", None, &[], "authored").await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_before = db.list_page_history(&page_id, 10).await.unwrap();
+    let request = serde_json::json!({
+        "content": "one exact operation",
+        "expected_version": before.version,
+        "caller_id": "wenlan-app",
+        "operation_id": "receipt-replay",
+    });
+
+    let first = app
+        .clone()
+        .oneshot(post_page(&page_id, request.clone()))
+        .await
+        .unwrap();
+    let second = app.oneshot(post_page(&page_id, request)).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_after = db.list_page_history(&page_id, 10).await.unwrap();
+    assert_eq!(after.version, before.version + 1);
+    assert_eq!(history_after.len(), history_before.len() + 1);
+    assert!(
+        db.get_operation_receipt("wenlan-app", "receipt-replay")
+            .await
+            .unwrap()
+            .is_some(),
+        "the successful mutation and its receipt must commit together"
+    );
+}
+
+#[tokio::test]
+async fn reused_operation_with_one_byte_change_conflicts_without_mutation() {
+    let (app, _tmp, db) = common::test_app().await;
+    let page_id =
+        common::create_page_fixture(&db, "Receipt conflict", "old body", None, &[], "authored")
+            .await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let first = serde_json::json!({
+        "content": "landed body",
+        "expected_version": before.version,
+        "caller_id": "wenlan-app",
+        "operation_id": "receipt-conflict",
+    });
+    let changed = serde_json::json!({
+        "content": "landed body ",
+        "expected_version": before.version,
+        "caller_id": "wenlan-app",
+        "operation_id": "receipt-conflict",
+    });
+
+    let response = app
+        .clone()
+        .oneshot(post_page(&page_id, first))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let landed = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_landed = db.list_page_history(&page_id, 10).await.unwrap();
+
+    let response = app.oneshot(post_page(&page_id, changed)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let unchanged = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_unchanged = db.list_page_history(&page_id, 10).await.unwrap();
+    assert_eq!(unchanged.content, landed.content);
+    assert_eq!(unchanged.version, landed.version);
+    assert_eq!(history_unchanged.len(), history_landed.len());
+}
+
+#[tokio::test]
+async fn canonical_page_write_rejects_every_reserved_sources_marker_shape() {
+    let cases = [
+        ("start-only", format!("before {SOURCES_BLOCK_START} after")),
+        ("end-only", format!("before {SOURCES_BLOCK_END} after")),
+        (
+            "paired",
+            format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+        ),
+        (
+            "duplicate",
+            format!(
+                "{SOURCES_BLOCK_START}\none\n{SOURCES_BLOCK_END}\n\
+                 {SOURCES_BLOCK_START}\ntwo\n{SOURCES_BLOCK_END}"
+            ),
+        ),
+        (
+            "inside-fence",
+            format!("```md\n{SOURCES_BLOCK_START}\n```\nkept prose"),
+        ),
+    ];
+
+    for (case, content) in cases {
+        let (app, _tmp, db) = common::test_app().await;
+        let page_id = common::create_page_fixture(
+            &db,
+            &format!("Reserved marker {case}"),
+            "unchanged body",
+            None,
+            &[],
+            "authored",
+        )
+        .await;
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+        let history_before = db.list_page_history(&page_id, 10).await.unwrap();
+        let operation_id = format!("reserved-marker-{case}");
+
+        let response = app
+            .oneshot(post_page(
+                &page_id,
+                serde_json::json!({
+                    "content": content,
+                    "expected_version": before.version,
+                    "caller_id": "wenlan-app",
+                    "operation_id": operation_id,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{case} must fail closed"
+        );
+
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+        let history_after = db.list_page_history(&page_id, 10).await.unwrap();
+        assert_eq!(after.content, before.content, "{case}");
+        assert_eq!(after.version, before.version, "{case}");
+        assert_eq!(history_after.len(), history_before.len(), "{case}");
+        assert!(
+            db.get_operation_receipt("wenlan-app", &operation_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "{case} must not record a receipt for a rejected write"
+        );
+    }
 }
