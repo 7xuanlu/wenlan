@@ -23,7 +23,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Counts, ()> {
         ),
         ScopeFilter::Uncategorized => (
             " AND m.space IS NULL",
-            " WHERE p.status='active' AND p.workspace IS NULL",
+            " WHERE p.status='active' AND p.workspace='unfiled'",
             libsql::params::Params::None,
         ),
     };

@@ -183,7 +183,7 @@ async fn load_citation_rows(context: &LintContext<'_, '_>) -> Result<Vec<Option<
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
         ScopeFilter::Uncategorized => (
-            "SELECT citations FROM pages WHERE workspace IS NULL ORDER BY id",
+            "SELECT citations FROM pages WHERE workspace = 'unfiled' ORDER BY id",
             libsql::params::Params::None,
         ),
     };
