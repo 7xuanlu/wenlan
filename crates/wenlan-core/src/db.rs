@@ -533,7 +533,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 79;
+pub const SCHEMA_VERSION: u32 = 80;
 
 /// A retry receipt to commit alongside a mutation.
 ///
@@ -7446,8 +7446,337 @@ impl MemoryDB {
                     .map_err(|e| WenlanError::VectorDb(format!("migration 79 bump: {e}")))?;
                 log::info!("[migration] Migration 79 applied: operation_receipts table");
             }
+
+            // Migration 80 (M1 "honest columns"): fold `pages.workspace`
+            // (authoritative page-scope axis since migration 63) into
+            // `pages.space` and stamp both columns NOT NULL. Extracted (like
+            // migrations 73/74) because the fold + ledger + batched backfill
+            // is too large for an inline block. See migrate_80_page_scope_fold.
+            if version < 80 {
+                self.migrate_80_page_scope_fold().await?;
+            }
         }
 
+        Ok(())
+    }
+
+    // Migration 80 (M1 "honest columns"). GT3: `pages.workspace` is the
+    // authoritative page-scope axis (migration 63, backfilled from the modal
+    // `space` of a page's source memories); `pages.space` is a rename of the
+    // old `domain` column (migration 50) and was never a scope column on its
+    // own. Scope migrates FROM `workspace` INTO `space`: the fold prefers
+    // `workspace`, falls back to `space` only when it names a *registered*
+    // space (not category residue -- the M1 audit found zero category
+    // residue on the reference database, so this rule is data-driven, not
+    // value-listed), and falls back to the `unfiled` sentinel space
+    // otherwise. `workspace` is kept and dual-written -- dropping it would
+    // make the fold irreversible.
+    //
+    // `registered_space_or_none` (used by every write path) silently NULLs
+    // any space with no matching `spaces` row, so backfilling
+    // `space = 'unfiled'` without first minting that row would reintroduce
+    // the exact NULLs this migration removes. Minting it and populating the
+    // fold ledger (the rollback artifact -- it freezes each page's pre-fold
+    // prior_space/prior_workspace before any row is mutated) therefore both
+    // run, and commit, before any backfill batch.
+    //
+    // The backfill UPDATE is idempotent by construction: once a row is
+    // folded, `space` equals `workspace` and both are non-NULL, so
+    // COALESCE(workspace, ...) short-circuits to the already-correct value
+    // on any re-run. That is what makes rowid-range batching with a
+    // per-batch commit safe to resume from rowid 0 after a kill --
+    // already-folded rows are cheap no-ops, not double-applies.
+    //
+    // A full table rebuild is out: migration 67 (see writable_schema comment
+    // there) already ruled against rebuilding `pages` -- `pages_fts` is
+    // contentless with 3 rowid-coupled triggers and `search_pages` joins
+    // vector_top_k on c.rowid. NOT NULL is instead stamped via the same
+    // writable_schema text-patch migration 67 uses, which validates nothing
+    // -- so the in-transaction NULL assertion is the only thing standing
+    // between a surviving NULL and a column that lies about itself.
+    async fn migrate_80_page_scope_fold(&self) -> Result<(), WenlanError> {
+        const UNFILED_SPACE_ID: &str = "00000000-0000-4000-8000-000000000001";
+        // Measured 2026-07-19 on this machine: 100k synthetic pages, combined
+        // space+workspace UPDATE = 389ms (~3.9µs/row-pair). Targeting a
+        // ~50ms/batch lock-duration budget gives ~12.8k rows; 10k leaves
+        // headroom for slower production hardware and larger real indexes.
+        const BATCH_SIZE: i64 = 10_000;
+
+        // Steps 1-2: mint `unfiled` + create and populate the fold ledger
+        // from the pre-fold values, together in one transaction, before any
+        // backfill batch runs.
+        {
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 begin setup: {e}")))?;
+            let result: Result<(), WenlanError> = async {
+                conn.execute(
+                    "INSERT OR IGNORE INTO spaces (id, name, description, suggested, created_at, updated_at) \
+                     VALUES (?1, 'unfiled', NULL, 0, unixepoch('now'), unixepoch('now'))",
+                    libsql::params![UNFILED_SPACE_ID],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 mint unfiled: {e}")))?;
+
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_space_fold_ledger (
+                        page_id TEXT PRIMARY KEY,
+                        prior_space TEXT,
+                        prior_workspace TEXT,
+                        assigned_space TEXT NOT NULL,
+                        rule TEXT NOT NULL CHECK(rule IN ('workspace','space_residue','unfiled')),
+                        migrated_at TEXT NOT NULL
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 create ledger: {e}")))?;
+
+                // assigned_space/rule mirror the backfill formula below
+                // exactly, computed here from the pre-fold `pages` columns
+                // before step 3 touches anything.
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_space_fold_ledger \
+                        (page_id, prior_space, prior_workspace, assigned_space, rule, migrated_at) \
+                     SELECT id, space, workspace, \
+                        COALESCE(workspace, CASE WHEN space IN (SELECT name FROM spaces) THEN space END, 'unfiled'), \
+                        CASE WHEN workspace IS NOT NULL THEN 'workspace' \
+                             WHEN space IN (SELECT name FROM spaces) THEN 'space_residue' \
+                             ELSE 'unfiled' END, \
+                        ?1 \
+                     FROM pages",
+                    libsql::params![chrono::Utc::now().to_rfc3339()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 populate ledger: {e}")))?;
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 commit setup: {e}")))?;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Steps 3-4: backfill in rowid-range batches, one commit per batch,
+        // so a kill mid-run resumes from rowid 0 rather than restarting a
+        // half-open transaction. Resuming re-touches already-folded rows,
+        // which is a no-op (see idempotency note on the fn doc comment), not
+        // a correctness risk.
+        let mut cursor: i64 = 0;
+        loop {
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 begin batch: {e}")))?;
+            let result: Result<Option<i64>, WenlanError> = async {
+                let hi: Option<i64> =
+                    {
+                        let mut rows = conn
+                            .query(
+                                "SELECT MAX(rowid) FROM \
+                             (SELECT rowid FROM pages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)",
+                                libsql::params![cursor, BATCH_SIZE],
+                            )
+                            .await
+                            .map_err(|e| WenlanError::VectorDb(format!("m80 batch bound: {e}")))?;
+                        match rows.next().await.map_err(|e| {
+                            WenlanError::VectorDb(format!("m80 batch bound row: {e}"))
+                        })? {
+                            Some(row) => row.get::<Option<i64>>(0).map_err(|e| {
+                                WenlanError::VectorDb(format!("m80 batch bound col: {e}"))
+                            })?,
+                            None => None,
+                        }
+                    };
+                let Some(hi) = hi else {
+                    return Ok(None);
+                };
+                conn.execute(
+                    "UPDATE pages SET space = COALESCE( \
+                        workspace, \
+                        CASE WHEN space IN (SELECT name FROM spaces) THEN space END, \
+                        'unfiled' \
+                     ) WHERE rowid > ?1 AND rowid <= ?2",
+                    libsql::params![cursor, hi],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 backfill space: {e}")))?;
+                conn.execute(
+                    "UPDATE pages SET workspace = space \
+                     WHERE workspace IS NULL AND rowid > ?1 AND rowid <= ?2",
+                    libsql::params![cursor, hi],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 backfill workspace: {e}")))?;
+                Ok(Some(hi))
+            }
+            .await;
+            match result {
+                Ok(Some(hi)) => {
+                    conn.execute("COMMIT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 commit batch: {e}")))?;
+                    cursor = hi;
+                }
+                Ok(None) => {
+                    conn.execute("COMMIT", ()).await.map_err(|e| {
+                        WenlanError::VectorDb(format!("m80 commit final batch: {e}"))
+                    })?;
+                    break;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Steps 6-7: assert every row resolved, then rebuild both scope
+        // indexes without their now-vacuous partial predicate.
+        {
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 begin assert: {e}")))?;
+            let result: Result<(), WenlanError> = async {
+                Self::assert_pages_scope_columns_backfilled(&conn).await?;
+                conn.execute("DROP INDEX IF EXISTS idx_pages_workspace", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 drop idx workspace: {e}")))?;
+                conn.execute("DROP INDEX IF EXISTS idx_pages_space", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 drop idx space: {e}")))?;
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pages_workspace ON pages(workspace)",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 create idx workspace: {e}")))?;
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pages_space ON pages(space)",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 create idx space: {e}")))?;
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 commit assert: {e}")))?;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Step 8: stamp NOT NULL via the migration-67 writable_schema
+        // pattern rather than rebuilding `pages`. Bare autocommit
+        // statements, matching migration 67 exactly (writable_schema is not
+        // exercised inside an explicit transaction there either).
+        // `workspace TEXT,` is patched first: its text ends in the same
+        // `space TEXT,` suffix the bare `space` column's own pattern
+        // matches, so patching workspace first (turning it into
+        // `workspace TEXT NOT NULL,`) removes that shadow match before the
+        // `space` replacement runs.
+        let conn = self.conn.lock().await;
+        let current_sql: Option<String> = {
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 read pages sql: {e}")))?;
+            match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 pages sql row: {e}")))?
+            {
+                Some(row) => Some(
+                    row.get::<String>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 pages sql col: {e}")))?,
+                ),
+                None => None,
+            }
+        };
+        if let Some(sql) = current_sql {
+            let mut patched = sql.replacen("workspace TEXT,", "workspace TEXT NOT NULL,", 1);
+            patched = patched.replacen("space TEXT,", "space TEXT NOT NULL,", 1);
+            if patched != sql {
+                conn.execute("PRAGMA writable_schema=ON", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 writable on: {e}")))?;
+                conn.execute(
+                    "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+                    libsql::params![patched],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 patch schema: {e}")))?;
+                conn.execute("PRAGMA writable_schema=RESET", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 writable reset: {e}")))?;
+            }
+        }
+
+        // Step 9.
+        conn.execute("PRAGMA user_version = 80", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m80 bump: {e}")))?;
+        log::info!(
+            "[migration] Migration 80 applied: pages.space/workspace scope fold + NOT NULL (M1 honest columns)"
+        );
+        Ok(())
+    }
+
+    /// Extracted so it is directly testable: the `writable_schema` NOT NULL
+    /// patch (step 8) validates nothing on its own, so this EXISTS check is
+    /// the only thing standing between a surviving NULL and a column that
+    /// lies about itself. `SELECT COUNT(*) FROM pages` returns 0 on this
+    /// codebase (the libSQL vector-index COUNT bug) -- EXISTS is immune.
+    async fn assert_pages_scope_columns_backfilled(
+        conn: &libsql::Connection,
+    ) -> Result<(), WenlanError> {
+        let unresolved: bool = {
+            let mut rows = conn
+                .query(
+                    "SELECT EXISTS(SELECT 1 FROM pages WHERE space IS NULL OR workspace IS NULL)",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 assert query: {e}")))?;
+            match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 assert row: {e}")))?
+            {
+                Some(row) => {
+                    row.get::<i64>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 assert col: {e}")))?
+                        != 0
+                }
+                None => false,
+            }
+        };
+        if unresolved {
+            return Err(WenlanError::VectorDb(
+                "m80: pages.space or pages.workspace still NULL after backfill -- refusing to \
+                 stamp NOT NULL over a lie"
+                    .to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -58006,5 +58335,449 @@ pub(crate) mod tests {
         let stale = root.path().join("stale");
         create_repair_open_probe(&stale, SCHEMA_VERSION - 1).await;
         assert!(MemoryDB::open_for_repair(&stale).await.is_err());
+    }
+
+    /// Test-only inverse of migration 80's writable_schema NOT NULL patch --
+    /// restores pages.space/workspace to nullable so a test can seed
+    /// pre-fold data, mirroring the reverse-rename technique
+    /// test_migration_50_renames_domain_to_space already uses for `domain`.
+    async fn relax_pages_scope_columns_to_nullable(conn: &libsql::Connection) {
+        let sql: String = {
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        let mut patched = sql.replacen("workspace TEXT NOT NULL,", "workspace TEXT,", 1);
+        patched = patched.replacen("space TEXT NOT NULL,", "space TEXT,", 1);
+        assert_ne!(
+            patched, sql,
+            "expected pages.space/workspace to already be NOT NULL before relaxing"
+        );
+        conn.execute("PRAGMA writable_schema=ON", ()).await.unwrap();
+        conn.execute(
+            "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+            libsql::params![patched],
+        )
+        .await
+        .unwrap();
+        conn.execute("PRAGMA writable_schema=RESET", ())
+            .await
+            .unwrap();
+    }
+
+    /// Minimal raw page insert for migration-80 tests: supplies every NOT
+    /// NULL column without a DEFAULT (id, title, content, created_at,
+    /// last_compiled, last_modified) and leaves space/workspace to the
+    /// caller. Caller must have relaxed the schema to nullable first if
+    /// either argument is None.
+    async fn insert_raw_page_for_m80_test(
+        conn: &libsql::Connection,
+        id: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO pages \
+                (id, title, content, created_at, last_compiled, last_modified, space, workspace) \
+             VALUES (?1, ?2, 'content', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', \
+                     '2024-01-01T00:00:00Z', ?3, ?4)",
+            libsql::params![id, format!("title {id}"), space, workspace],
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_80_fresh_and_upgraded_schema_agree() {
+        // Fresh: nothing seeded, migration 80 runs over an empty pages table.
+        let (fresh_db, _fresh_dir) = test_db().await;
+        let fresh_sql: String = {
+            let conn = fresh_db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+
+        // Upgraded: real pre-fold data (a collision-shaped row and a
+        // both-NULL row), relaxed back to nullable, migration 80 re-fires
+        // over populated rows.
+        let (upgraded_db, _upgraded_dir) = test_db().await;
+        {
+            let conn = upgraded_db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_a", Some("wenlan"), Some("origin-website"))
+                .await;
+            insert_raw_page_for_m80_test(&conn, "page_b", None, None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        upgraded_db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 80 re-fires over populated rows");
+        let upgraded_sql: String = {
+            let conn = upgraded_db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+
+        assert_eq!(
+            fresh_sql, upgraded_sql,
+            "fresh-DB and upgraded-DB pages DDL must agree byte-for-byte"
+        );
+        assert!(
+            fresh_sql.contains("space TEXT NOT NULL"),
+            "space must be NOT NULL: {fresh_sql}"
+        );
+        assert!(
+            fresh_sql.contains("workspace TEXT NOT NULL"),
+            "workspace must be NOT NULL: {fresh_sql}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_80_backfill_precedence_workspace_wins_over_differing_space() {
+        let (db, _dir) = test_db().await;
+        db.create_space("wenlan", None, false).await.unwrap();
+        db.create_space("origin-website", None, false)
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(
+                &conn,
+                "page_collision",
+                Some("wenlan"),
+                Some("origin-website"),
+            )
+            .await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_collision'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, "origin-website", "workspace must win the collision");
+        assert_eq!(workspace, "origin-website");
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT prior_space, prior_workspace, assigned_space, rule \
+                 FROM page_space_fold_ledger WHERE page_id = 'page_collision'",
+                (),
+            )
+            .await
+            .unwrap();
+        let ledger_row = ledger_rows.next().await.unwrap().unwrap();
+        let prior_space: String = ledger_row.get(0).unwrap();
+        let prior_workspace: String = ledger_row.get(1).unwrap();
+        let assigned_space: String = ledger_row.get(2).unwrap();
+        let rule: String = ledger_row.get(3).unwrap();
+        assert_eq!(prior_space, "wenlan");
+        assert_eq!(prior_workspace, "origin-website");
+        assert_eq!(assigned_space, "origin-website");
+        assert_eq!(rule, "workspace");
+    }
+
+    #[tokio::test]
+    async fn migration_80_backfill_precedence_space_residue_when_workspace_null() {
+        let (db, _dir) = test_db().await;
+        db.create_space("engineering", None, false).await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_residue", Some("engineering"), None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_residue'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, "engineering");
+        assert_eq!(workspace, "engineering");
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT rule FROM page_space_fold_ledger WHERE page_id = 'page_residue'",
+                (),
+            )
+            .await
+            .unwrap();
+        let rule: String = ledger_rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(rule, "space_residue");
+    }
+
+    #[tokio::test]
+    async fn migration_80_backfill_precedence_unfiled_when_both_null() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_unfiled", None, None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_unfiled'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, "unfiled");
+        assert_eq!(workspace, "unfiled");
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT rule FROM page_space_fold_ledger WHERE page_id = 'page_unfiled'",
+                (),
+            )
+            .await
+            .unwrap();
+        let rule: String = ledger_rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(rule, "unfiled");
+    }
+
+    #[tokio::test]
+    async fn migration_80_unregistered_space_routes_to_unfiled_with_ledger_record() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_bogus", Some("not-a-real-space"), None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_bogus'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(
+            space, "unfiled",
+            "an unregistered space value is residue, not scope"
+        );
+        assert_eq!(workspace, "unfiled");
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT prior_space, rule FROM page_space_fold_ledger WHERE page_id = 'page_bogus'",
+                (),
+            )
+            .await
+            .unwrap();
+        let ledger_row = ledger_rows.next().await.unwrap().unwrap();
+        let prior_space: String = ledger_row.get(0).unwrap();
+        let rule: String = ledger_row.get(1).unwrap();
+        assert_eq!(prior_space, "not-a-real-space");
+        assert_eq!(rule, "unfiled");
+    }
+
+    #[tokio::test]
+    async fn migration_80_registered_space_or_none_returns_some_for_unfiled() {
+        let (db, _dir) = test_db().await;
+        let result = db.registered_space_or_none(Some("unfiled")).await.unwrap();
+        assert_eq!(result, Some("unfiled".to_string()));
+    }
+
+    #[tokio::test]
+    async fn migration_80_not_null_constraint_rejects_null_space_insert() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let result = conn
+            .execute(
+                "INSERT INTO pages \
+                    (id, title, content, created_at, last_compiled, last_modified, space, workspace) \
+                 VALUES ('page_null_test', 't', 'c', '2024-01-01T00:00:00Z', \
+                         '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 'wenlan')",
+                (),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "inserting a NULL space must be rejected once migration 80 has run"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_80_replay_after_partial_backfill_converges_without_ledger_drift() {
+        let (db, _dir) = test_db().await;
+        db.create_space("engineering", None, false).await.unwrap();
+
+        // First (real) fold of this row.
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_replay", Some("engineering"), None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let (first_prior_space, first_prior_workspace, first_assigned, first_rule): (
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        ) = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT prior_space, prior_workspace, assigned_space, rule \
+                     FROM page_space_fold_ledger WHERE page_id = 'page_replay'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            (
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+                row.get(3).unwrap(),
+            )
+        };
+        assert_eq!(first_assigned, "engineering");
+        assert_eq!(first_rule, "space_residue");
+
+        // Simulate a crash where the ledger committed but this row's own
+        // backfill UPDATE never landed: poke it back to its exact pre-fold
+        // values (from the ledger's own prior_* columns) without touching
+        // the ledger itself, then replay the migration.
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            conn.execute(
+                "UPDATE pages SET space = ?1, workspace = ?2 WHERE id = 'page_replay'",
+                libsql::params![first_prior_space.clone(), first_prior_workspace.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("replay after a simulated partial backfill must converge");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_replay'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(
+            space, "engineering",
+            "resumed backfill must reach the same value"
+        );
+        assert_eq!(workspace, "engineering");
+
+        // No duplicate ledger row, and prior_* must not have drifted to
+        // reflect the manually-poked NULL state.
+        let mut ledger_rows = conn
+            .query(
+                "SELECT prior_space, prior_workspace, assigned_space, rule \
+                 FROM page_space_fold_ledger WHERE page_id = 'page_replay'",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut seen = 0;
+        let mut last: Option<(Option<String>, Option<String>, String, String)> = None;
+        while let Some(row) = ledger_rows.next().await.unwrap() {
+            seen += 1;
+            last = Some((
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+                row.get(3).unwrap(),
+            ));
+        }
+        assert_eq!(seen, 1, "no duplicate ledger rows after replay");
+        let (prior_space, prior_workspace, assigned_space, rule) = last.unwrap();
+        assert_eq!(
+            prior_space, first_prior_space,
+            "ledger prior_space must not drift on replay"
+        );
+        assert_eq!(
+            prior_workspace, first_prior_workspace,
+            "ledger prior_workspace must not drift on replay"
+        );
+        assert_eq!(assigned_space, first_assigned);
+        assert_eq!(rule, first_rule);
+    }
+
+    #[tokio::test]
+    async fn migration_80_assertion_detects_unresolved_scope_columns() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        relax_pages_scope_columns_to_nullable(&conn).await;
+        insert_raw_page_for_m80_test(&conn, "page_unresolved", None, None).await;
+
+        let result = MemoryDB::assert_pages_scope_columns_backfilled(&conn).await;
+        let err = result.expect_err("assertion must detect the NULL survivor");
+        assert!(
+            err.to_string().contains("m80"),
+            "error should identify migration 80: {err}"
+        );
     }
 }
