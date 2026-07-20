@@ -8235,6 +8235,7 @@ impl MemoryDB {
                         (SELECT COUNT(*) FROM entities e WHERE e.space = s.name) as ent_count,
                         s.sort_order, s.starred
                  FROM spaces s
+                 WHERE s.name != 'unfiled'
                  ORDER BY s.starred DESC, s.sort_order, s.name",
                 (),
             )
@@ -28514,7 +28515,14 @@ impl MemoryDB {
                 .get::<String>(3)
                 .map_err(|e| WenlanError::VectorDb(format!("page content: {e}")))?,
             entity_id: row.get::<Option<String>>(4).unwrap_or(None),
-            space: row.get::<Option<String>>(5).unwrap_or(None),
+            // M1: NULL scopes are normalized to the 'unfiled' storage sentinel so
+            // the scope columns stay NOT NULL (spec §7). Translate it back to None
+            // on the wire so a pre-M1 uncategorized page surfaces identically
+            // (no wire-contract change). Registered scopes pass through verbatim.
+            space: row
+                .get::<Option<String>>(5)
+                .unwrap_or(None)
+                .filter(|s| s != "unfiled"),
             source_memory_ids,
             version: row.get::<i64>(7).unwrap_or(1),
             status: row
@@ -28546,7 +28554,11 @@ impl MemoryDB {
             review_status: row
                 .get::<String>(17)
                 .unwrap_or_else(|_| "confirmed".to_string()),
-            workspace: row.get::<Option<String>>(18).unwrap_or(None),
+            // M1: 'unfiled' sentinel hidden on the wire (see `space` above).
+            workspace: row
+                .get::<Option<String>>(18)
+                .unwrap_or(None)
+                .filter(|s| s != "unfiled"),
             citations,
         })
     }
@@ -29857,17 +29869,23 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Set `pages.workspace` for a given page. Used by the P3 backfill step and
-    /// integration tests that seed workspace-scoped pages outside of `insert_page_with_kind`.
+    /// Set a page's scope. Named `set_page_workspace` for its P3-backfill-era
+    /// callers, but under M1 (one honest column, spec §1/§7) a page carries a
+    /// single scope mirrored across BOTH columns: this writes `space` and
+    /// `workspace` to the same value, and normalizes `None` to the 'unfiled'
+    /// sentinel so neither column can go NULL. The sentinel is translated back
+    /// to None on the wire by `row_to_page`, so a `None` write here still
+    /// surfaces as an uncategorized page (pre-M1 contract preserved).
     pub async fn set_page_workspace(
         &self,
         page_id: &str,
         workspace: Option<&str>,
     ) -> Result<(), WenlanError> {
+        let resolved = workspace.unwrap_or("unfiled");
         let conn = self.conn.lock().await;
         conn.execute(
-            "UPDATE pages SET workspace = ?1 WHERE id = ?2",
-            libsql::params![workspace, page_id],
+            "UPDATE pages SET workspace = ?1, space = ?1 WHERE id = ?2",
+            libsql::params![resolved, page_id],
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("set_page_workspace: {e}")))?;
@@ -41521,6 +41539,98 @@ pub(crate) mod tests {
         assert_eq!(spaces.len(), 1);
         assert_eq!(spaces[0].name, "work");
         assert_eq!(spaces[0].memory_count, 0);
+    }
+
+    /// M1 honest columns: `set_page_workspace` mirrors the scope onto BOTH
+    /// columns and normalizes `None` to the 'unfiled' sentinel (never NULL);
+    /// `row_to_page` hides that sentinel on the wire so an uncategorized page
+    /// surfaces as it did pre-M1. Load-bearing for the read-collapse (which now
+    /// reads `space` alone) and the NOT NULL rebuild.
+    #[tokio::test]
+    async fn set_page_workspace_mirrors_scope_and_wire_hides_unfiled_sentinel() {
+        let (db, _dir) = test_db().await;
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "p-scoped",
+            "Scoped",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "p-unfiled",
+            "Unfiled",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Some(x) mirrors x onto both columns; None mirrors the sentinel onto both.
+        db.set_page_workspace("p-scoped", Some("career"))
+            .await
+            .unwrap();
+        db.set_page_workspace("p-unfiled", None).await.unwrap();
+
+        // Storage: both columns carry the resolved scope, neither is NULL.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT space, workspace FROM pages WHERE id = ?1",
+                    libsql::params!["p-scoped"],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), "career");
+            assert_eq!(row.get::<String>(1).unwrap(), "career");
+            let mut rows = conn
+                .query(
+                    "SELECT space, workspace FROM pages WHERE id = ?1",
+                    libsql::params!["p-unfiled"],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), "unfiled");
+            assert_eq!(row.get::<String>(1).unwrap(), "unfiled");
+        }
+
+        // Wire: registered scope passes through; the sentinel is hidden (None).
+        let scoped = db.get_page("p-scoped").await.unwrap().unwrap();
+        assert_eq!(scoped.space.as_deref(), Some("career"));
+        assert_eq!(scoped.workspace.as_deref(), Some("career"));
+        let unfiled = db.get_page("p-unfiled").await.unwrap().unwrap();
+        assert_eq!(
+            unfiled.space, None,
+            "unfiled sentinel must not leak onto the wire (space)"
+        );
+        assert_eq!(
+            unfiled.workspace, None,
+            "unfiled sentinel must not leak onto the wire (workspace)"
+        );
     }
 
     #[tokio::test]
