@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/7xuanlu/wenlan/compare/v0.14.0...v0.14.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* preserve exact canonical page source ([c111ff1](https://github.com/7xuanlu/wenlan/commit/c111ff15333423551b062493b4f3ae44618f031b))
+
 ## [0.14.0](https://github.com/7xuanlu/wenlan/compare/v0.13.2...v0.14.0) (2026-07-20)
 
 
