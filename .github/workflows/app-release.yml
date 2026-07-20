@@ -25,12 +25,9 @@ name: Release
 # workflow_dispatch run first.
 
 on:
-  push:
-    tags:
-      - 'v*'
-  # Manual dispatch: builds off a branch/SHA (no tag required) and defaults
-  # to a draft release so a dry run never goes public. Real releases still
-  # come from pushing a v* tag, which always publishes live.
+  # ponytail: dispatch-only after the monorepo merge — the unified v* tag is
+  # owned by wenlan/release.yml. Release unification (Milestone B) grafts this
+  # job's .dmg build into release.yml; until then this stays a manual dry-run.
   workflow_dispatch:
     inputs:
       ref:
