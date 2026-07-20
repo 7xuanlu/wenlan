@@ -394,13 +394,18 @@ async fn selected_page_visibility_requires_matching_workspace() {
 }
 
 #[tokio::test]
-async fn search_pages_route_helpers_bind_workspace_independently_from_category() {
+async fn search_pages_route_helpers_bind_by_scope() {
     let (db, _tmp) = test_db().await;
     let now = chrono::Utc::now().to_rfc3339();
-    for (id, category, workspace) in [
-        ("work-page-route", "decision", Some("work")),
-        ("personal-page-route", "recap", Some("personal")),
-        ("null-page-route", "decision", None),
+    // Single-axis (spec §1): a page's scope is one honest column. `workspace`
+    // wins when present; otherwise `space` is the scope. An uncategorized page
+    // has NEITHER set (both resolve to 'unfiled'). The former "category
+    // independent of workspace" premise is exactly what M1 deletes -- so
+    // null-page-route seeds no scope at all rather than a leftover category.
+    for (id, space, workspace) in [
+        ("work-page-route", None, Some("work")),
+        ("personal-page-route", None, Some("personal")),
+        ("null-page-route", None, None),
     ] {
         db.insert_page_with_kind(
             id,
@@ -408,7 +413,7 @@ async fn search_pages_route_helpers_bind_workspace_independently_from_category()
             None,
             "page route scope canary",
             None,
-            Some(category),
+            space,
             &[],
             &now,
             "authored",

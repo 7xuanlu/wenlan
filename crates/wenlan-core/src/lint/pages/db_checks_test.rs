@@ -93,7 +93,6 @@ async fn cross_effective_scope_active_duplicate_titles_pass() {
         "Shared Title",
         "active",
         Some("workspace-a"),
-        None,
     )
     .await;
     insert_page_with_scope(
@@ -101,7 +100,6 @@ async fn cross_effective_scope_active_duplicate_titles_pass() {
         "page-b",
         "shared title",
         "active",
-        None,
         Some("workspace-b"),
     )
     .await;
@@ -135,7 +133,6 @@ async fn same_effective_scope_active_duplicate_titles_warn() {
         "Shared Title",
         "active",
         Some("workspace-a"),
-        None,
     )
     .await;
     insert_page_with_scope(
@@ -143,7 +140,6 @@ async fn same_effective_scope_active_duplicate_titles_warn() {
         "page-b",
         "shared title",
         "active",
-        None,
         Some("workspace-a"),
     )
     .await;
@@ -169,7 +165,11 @@ async fn same_effective_scope_active_duplicate_titles_warn() {
 }
 
 #[tokio::test]
-async fn selected_duplicate_scope_uses_legacy_space_fallback() {
+// M1 honest columns retired the workspace/space fallback this test used
+// to probe (renamed from selected_duplicate_scope_uses_legacy_space_fallback);
+// the surviving assertion is that Registered/Uncategorized scope filters
+// still partition correctly now that both pages carry `space` directly.
+async fn selected_duplicate_scope_filters_registered_and_uncategorized() {
     let (db, _tmp) = test_db().await;
     let conn = db._db.connect().unwrap();
     insert_page_with_scope(
@@ -178,27 +178,17 @@ async fn selected_duplicate_scope_uses_legacy_space_fallback() {
         "Shared Title",
         "active",
         Some("workspace-a"),
-        None,
     )
     .await;
     insert_page_with_scope(
         &conn,
-        "page-legacy",
+        "page-other",
         "shared title",
         "active",
-        None,
         Some("workspace-a"),
     )
     .await;
-    insert_page_with_scope(
-        &conn,
-        "page-uncategorized",
-        "shared title",
-        "active",
-        None,
-        None,
-    )
-    .await;
+    insert_page_with_scope(&conn, "page-uncategorized", "shared title", "active", None).await;
     let snapshot = db.open_lint_snapshot().await.unwrap();
     let clock = LintClock::fixed();
     let gate = ExecutionGate::new(CancellationToken::new());
@@ -238,17 +228,21 @@ async fn selected_duplicate_scope_uses_legacy_space_fallback() {
     assert!(uncategorized.evidence().is_empty());
 }
 
+// M1 honest columns: `workspace` and `space` are NOT NULL and always
+// mirrored (migration 80), so this seeds one logical scope into both --
+// `None` means unfiled/uncategorized, matching the migration's own
+// sentinel rather than binding a literal NULL a NOT NULL column rejects.
 async fn insert_page_with_scope(
     conn: &libsql::Connection,
     id: &str,
     title: &str,
     status: &str,
-    workspace: Option<&str>,
-    legacy_space: Option<&str>,
+    scope: Option<&str>,
 ) {
+    let scope = scope.unwrap_or("unfiled");
     conn.execute(
         "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace, space, creation_kind, review_status) VALUES (?1, ?2, 'body', '[]', 1, ?3, 'now', 'now', 'now', ?4, ?5, 'distilled', 'confirmed')",
-        libsql::params![id, title, status, workspace, legacy_space],
+        libsql::params![id, title, status, scope, scope],
     )
     .await
     .unwrap();

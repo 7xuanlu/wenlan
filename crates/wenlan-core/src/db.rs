@@ -9084,7 +9084,7 @@ impl MemoryDB {
                      OR (dt.source = 'page' AND EXISTS (
                             SELECT 1 FROM pages p
                              WHERE p.id = dt.source_id
-                               AND p.workspace IS NULL
+                               AND p.workspace = 'unfiled'
                         ))
                   ORDER BY dt.source, dt.source_id, dt.tag"
                     .to_string(),
@@ -24680,7 +24680,7 @@ impl MemoryDB {
                         ReadScope::Uncategorized => (
                             "SELECT id, title FROM pages
                           WHERE status = 'active' AND source_memory_ids LIKE ?1
-                            AND workspace IS NULL
+                            AND workspace = 'unfiled'
                           LIMIT 5",
                             vec![libsql::Value::Text(pattern)],
                         ),
@@ -26038,18 +26038,29 @@ impl MemoryDB {
         citations_json: Option<&str>,
     ) -> Result<(), WenlanError> {
         // M1 honest columns: this is the single storage-layer wrapper every
-        // page-insert path funnels through, so it must never bind an
-        // explicit NULL space/workspace. Migration 80's column DEFAULT only
-        // covers a caller that OMITS the column (raw SQL); a Rust `None`
-        // still binds as an explicit NULL and needs its own coalesce here --
-        // matching the default+mirror pattern already applied at the HTTP
-        // layer (memory_routes.rs handle_create_page). Whether the callers
-        // that currently pass `None` (tools.rs create_page_impl,
-        // synthesis/overview.rs ensure_overview_page, ...) should keep
-        // relying on this fallback or assign a smarter scope of their own is
-        // a separate product call, tracked apart from this mechanical gate.
-        let space = space.unwrap_or("unfiled");
-        let workspace = workspace.unwrap_or(space);
+        // page-insert path funnels through, so both scope columns leave here
+        // carrying the same non-NULL value -- the mirror invariant the M1
+        // read-collapse depends on (a read that filters `space` alone is only
+        // correct because `workspace` == `space` for every row this writes).
+        // Per spec line 518, `workspace` is the authoritative scope input
+        // (migration 63) and wins unconditionally when present; otherwise the
+        // caller-named `space` is trusted verbatim, defaulting to 'unfiled'.
+        //
+        // This primitive does NOT registration-gate `space`, because it is not
+        // the trust boundary: untrusted external scope input is validated one
+        // layer up at the daemon's `handle_create_page` (`registered_request_space`).
+        // Migration 80's own backfill DOES gate `space` on registration -- but
+        // there it is classifying legacy residue of unknown provenance (category
+        // vs. scope), a different problem from a live caller naming a scope.
+        // Gating here instead collapsed every unregistered test space to
+        // 'unfiled', silently breaking scope-isolation assertions (Option A
+        // ruling; the prior gate was the bug, not the 14 tests).
+        let resolved_space = match workspace {
+            Some(ws) => ws.to_string(),
+            None => space.unwrap_or("unfiled").to_string(),
+        };
+        let space: &str = &resolved_space;
+        let workspace: &str = &resolved_space;
 
         // Sanitize daemon-reserved Sources delimiters from client content so
         // persisted `Page.content` never carries them (symmetric with the
@@ -26495,7 +26506,7 @@ impl MemoryDB {
         let (sql, params): (String, Vec<libsql::Value>) = match space {
             Some("uncategorized") => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
-                 FROM pages WHERE status = ?1 AND space IS NULL ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                 FROM pages WHERE status = ?1 AND space = 'unfiled' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
                     libsql::Value::Integer(limit as i64),
@@ -27324,8 +27335,9 @@ impl MemoryDB {
 
     /// Scoped successor to `find_matching_page` for cluster-dedup (P2).
     /// Entity-first, then embedding cosine, but constrained:
-    ///  - `workspace` (when Some): only pages whose `workspace` matches are eligible,
-    ///    falling back to `space` for legacy pages that predate the workspace column.
+    ///  - `workspace` (when Some): only pages whose `space` column matches are
+    ///    eligible (M1 honest columns, migration 80: `workspace` and `space`
+    ///    are mirrored duplicates, so reading either is equivalent).
     ///    `None` = no workspace constraint.
     ///  - only `review_status='confirmed'` pages are dedup targets.
     ///  - when `allow_user_edited=false`, human-owned pages (`user_edited=1` or
@@ -27349,7 +27361,7 @@ impl MemoryDB {
                      FROM pages
                      WHERE entity_id = ?1 AND status = 'active'
                        AND COALESCE(review_status, 'confirmed') = 'confirmed'
-                       AND (?2 IS NULL OR COALESCE(workspace, space) = ?2)
+                       AND (?2 IS NULL OR space = ?2)
                        AND (?3 != 0 OR (COALESCE(user_edited, 0) = 0 AND COALESCE(creation_kind, 'distilled') <> 'authored'))
                      ORDER BY id ASC LIMIT 1",
                     libsql::params![eid, workspace, allow_human_owned],
@@ -27379,7 +27391,7 @@ impl MemoryDB {
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
                    AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
-                   AND (?2 IS NULL OR COALESCE(c.workspace, c.space) = ?2)
+                   AND (?2 IS NULL OR c.space = ?2)
                    AND (?3 != 0 OR (COALESCE(c.user_edited, 0) = 0 AND COALESCE(c.creation_kind, 'distilled') <> 'authored'))
                  ORDER BY dist ASC LIMIT 1",
                 libsql::params![emb_sql, workspace, allow_human_owned],
@@ -27873,8 +27885,8 @@ impl MemoryDB {
     }
 
     /// Return active page titles ranked by embedding similarity to `query`,
-    /// optionally constrained to the same workspace. Falls back to `space`
-    /// for legacy pages created before the dedicated workspace column.
+    /// optionally constrained to the same space (M1 honest columns:
+    /// `workspace` and `space` are mirrored duplicates, so this reads `space`).
     pub async fn list_relevant_active_page_titles(
         &self,
         query: &str,
@@ -27894,7 +27906,7 @@ impl MemoryDB {
                 "SELECT title FROM pages \
                  WHERE status = 'active' \
                    AND embedding IS NOT NULL \
-                   AND COALESCE(workspace, space) = ?2 \
+                   AND space = ?2 \
                  ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
                  LIMIT ?3"
                     .to_string(),
@@ -27985,8 +27997,7 @@ impl MemoryDB {
             .query(
                 "SELECT id FROM pages
                  WHERE LOWER(title) = LOWER(?1) AND status = 'active'
-                   AND ((?2 IS NULL AND COALESCE(workspace, space) IS NULL)
-                        OR COALESCE(workspace, space) = ?2)
+                   AND space = COALESCE(?2, 'unfiled')
                  ORDER BY id ASC LIMIT 2",
                 libsql::params![trimmed, scope],
             )
@@ -28176,14 +28187,14 @@ impl MemoryDB {
     /// Snapshots the orphan rows
     /// under a brief lock, then drops the connection before the per-label
     /// lookups so other writers aren't starved while the resolver scans.
-    /// Resolution is per source Page and scope; existing non-NULL targets are
+    /// Resolution is per source Page and space; existing non-NULL targets are
     /// explicit inventory and are never rewritten here.
     pub async fn resolve_orphan_page_links(&self) -> Result<usize, WenlanError> {
         let orphan_rows: Vec<(String, String, Option<String>)> = {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT pl.source_page_id, pl.label_key, COALESCE(p.workspace, p.space)
+                    "SELECT pl.source_page_id, pl.label_key, p.space
                      FROM page_links pl
                      INNER JOIN pages p ON p.id = pl.source_page_id
                      WHERE pl.target_page_id IS NULL AND p.status = 'active'
@@ -29908,7 +29919,7 @@ impl MemoryDB {
             bind.push(libsql::Value::Text(eid.to_string()));
         }
         if let Some(d) = domain_filter {
-            sql.push_str(" AND COALESCE(workspace, space) = ?");
+            sql.push_str(" AND space = ?");
             bind.push(libsql::Value::Text(d.to_string()));
         }
         sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
@@ -29939,7 +29950,7 @@ impl MemoryDB {
                  FROM pages
                  WHERE status = 'archived'
                    AND entity_id IS NULL
-                   AND space IS NULL
+                   AND space = 'unfiled'
                    AND COALESCE(user_edited, 0) = 0
                    AND json_array_length(source_memory_ids) > 50
                  ORDER BY created_at DESC",
@@ -41573,9 +41584,9 @@ pub(crate) mod tests {
             "page_workspace_work",
             "Workspace Work",
             None,
-            "newer page using pages.workspace as the space axis",
+            "newer page scoped by pages.workspace (single-axis: space mirrors workspace)",
             None,
-            Some("recap"),
+            None,
             &[],
             &now,
             "authored",
@@ -41598,8 +41609,8 @@ pub(crate) mod tests {
         let scoped = db.get_page("page_workspace_work").await.unwrap().unwrap();
         assert_eq!(
             scoped.space.as_deref(),
-            Some("recap"),
-            "rename must not overwrite page category values that differ from the old space"
+            Some("career"),
+            "rename mirrors the scope onto pages.space -- one honest column, no independent category (spec §1)"
         );
         assert_eq!(
             scoped.workspace.as_deref(),
@@ -41708,9 +41719,9 @@ pub(crate) mod tests {
             "page_delete_move_workspace",
             "Delete Move Workspace",
             None,
-            "newer page using pages.workspace as the space axis",
+            "newer page scoped by pages.workspace (single-axis: space mirrors workspace)",
             None,
-            Some("recap"),
+            None,
             &[],
             &now,
             "authored",
@@ -41746,8 +41757,8 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(
             scoped.space.as_deref(),
-            Some("recap"),
-            "delete-space move must not overwrite page category values that differ from the old space"
+            Some("new"),
+            "delete-space move mirrors the scope onto pages.space -- one honest column, no independent category (spec §1)"
         );
         assert_eq!(
             scoped.workspace.as_deref(),
@@ -51659,9 +51670,9 @@ pub(crate) mod tests {
             "page_workspace_src",
             "Workspace Src",
             None,
-            "newer page using pages.workspace as the space axis",
+            "newer page scoped by pages.workspace (single-axis: space mirrors workspace)",
             None,
-            Some("recap"),
+            None,
             &["mem_page_move_1"],
             &now,
             "authored",
@@ -51684,8 +51695,8 @@ pub(crate) mod tests {
         let scoped = db.get_page("page_workspace_src").await.unwrap().unwrap();
         assert_eq!(
             scoped.space.as_deref(),
-            Some("recap"),
-            "space move must not overwrite page category values that differ from the old space"
+            Some("dest"),
+            "space move mirrors the scope onto pages.space -- one honest column, no independent category (spec §1)"
         );
         assert_eq!(
             scoped.workspace.as_deref(),

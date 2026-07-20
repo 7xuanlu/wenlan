@@ -97,13 +97,10 @@ async fn load_and_assess_source_integrity(context: &LintContext<'_, '_>) -> Resu
     let (scope_clause, params) = match context.scope().filter() {
         ScopeFilter::Global => ("", libsql::params::Params::None),
         ScopeFilter::Registered(workspace) => (
-            " AND COALESCE(p.workspace,p.space)=?1",
+            " AND p.space=?1",
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
-        ScopeFilter::Uncategorized => (
-            " AND COALESCE(p.workspace,p.space) IS NULL",
-            libsql::params::Params::None,
-        ),
+        ScopeFilter::Uncategorized => (" AND p.space='unfiled'", libsql::params::Params::None),
     };
     let sql = format!(
         "SELECT p.source_memory_ids,
@@ -233,15 +230,15 @@ fn assess_review(rows: &[PageRow]) -> Assessment {
 async fn load_rows(context: &LintContext<'_, '_>) -> Result<Vec<PageRow>, ()> {
     let (sql, params) = match context.scope().filter() {
         ScopeFilter::Global => (
-            "SELECT LOWER(title), COALESCE(workspace, space), status, creation_kind, review_status FROM pages ORDER BY id",
+            "SELECT LOWER(title), space, status, creation_kind, review_status FROM pages ORDER BY id",
             libsql::params::Params::None,
         ),
         ScopeFilter::Registered(workspace) => (
-            "SELECT LOWER(title), COALESCE(workspace, space), status, creation_kind, review_status FROM pages WHERE COALESCE(workspace, space) = ?1 ORDER BY id",
+            "SELECT LOWER(title), space, status, creation_kind, review_status FROM pages WHERE space = ?1 ORDER BY id",
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
         ScopeFilter::Uncategorized => (
-            "SELECT LOWER(title), COALESCE(workspace, space), status, creation_kind, review_status FROM pages WHERE COALESCE(workspace, space) IS NULL ORDER BY id",
+            "SELECT LOWER(title), space, status, creation_kind, review_status FROM pages WHERE space = 'unfiled' ORDER BY id",
             libsql::params::Params::None,
         ),
     };
