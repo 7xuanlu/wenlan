@@ -15,7 +15,10 @@ pub mod memory;
 pub mod memory_type;
 pub mod narrative;
 pub mod onboarding;
+pub mod page_map;
 pub mod pages;
+pub mod repair;
+pub mod repair_plan;
 pub mod requests;
 pub mod responses;
 pub mod sources;
@@ -39,14 +42,19 @@ pub use memory::{
 pub use memory_type::{MEMORY_TYPE_CAPTURE_DESCRIPTION, MEMORY_TYPE_FILTER_DESCRIPTION};
 pub use narrative::NarrativeResponse;
 pub use pages::{Page, PageEvidence};
-pub use requests::AcceptRefinementRequest;
+pub use repair::*;
+pub use repair_plan::*;
+pub use requests::{
+    AcceptRefinementRequest, CreatePageDraftRequest, PageDraftVersionRequest,
+    UpdatePageDraftRequest,
+};
 pub use responses::{
     ContradictionDismissResponse, ExportStats, ListMemoryRevisionsResponse,
     ListPageRevisionsResponse, ListRefinementsResponse, MemoryDetail, MemoryRevisionEntry,
     OnDeviceModelEntry, OnDeviceModelResponse, OrphanLink, OrphanLinksResponse, PageChangelogEntry,
-    PageWriteResponse, PendingRevision, PendingRevisionItem, ProposalAction, RefinementCardAction,
-    RefinementPayload, RefinementProposalSummary, RejectRefinementResponse, RevisionAcceptResponse,
-    RevisionDismissResponse,
+    PageDraftResponse, PageWriteResponse, PendingRevision, PendingRevisionItem, ProposalAction,
+    RefinementCardAction, RefinementPayload, RefinementProposalSummary, RejectRefinementResponse,
+    RevisionAcceptResponse, RevisionDismissResponse,
 };
 pub use sources::{MemoryType, RawDocument, SourceType, StabilityTier, SyncStatus};
 
@@ -91,6 +99,14 @@ pub struct PageSourceWithMemory {
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
+
+#[cfg(test)]
+#[path = "repair_tests.rs"]
+mod repair_tests;
+
+#[cfg(test)]
+#[path = "repair_plan_tests.rs"]
+mod repair_plan_tests;
 
 #[cfg(test)]
 mod tests {

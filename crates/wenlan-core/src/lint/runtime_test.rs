@@ -6,7 +6,10 @@ use super::{
 use crate::db::tests::test_db;
 use crate::lint::context::{CancellationToken, LintClock};
 use crate::lint::runner::LintRunner;
-use wenlan_types::lint::{LintMetricCode, LintMetricValue, LintOutcome, LintQuery};
+use wenlan_types::lint::{
+    LintApplicability, LintMetricCode, LintMetricValue, LintOutcome, LintPrecondition, LintQuery,
+    LintSummaryCode,
+};
 
 const SCHEMA: &str = "runtime.schema_contract";
 const INDEXES: &str = "runtime.search_index_contract";
@@ -111,6 +114,67 @@ async fn provider_off_and_worker_observations_are_non_mutating_inventory() {
     .await;
     assert_eq!(check(&report, PROVIDERS).outcome(), LintOutcome::Finding);
     assert_eq!(check(&report, WORKER).outcome(), LintOutcome::Finding);
+}
+
+#[tokio::test]
+async fn repair_recovery_suspends_optional_workers_without_inventing_provider_failure() {
+    let (db, _temp) = test_db().await;
+    let requested = RuntimeConfigSnapshot::disabled()
+        .with_provider_request(ProviderClass::OnDevice, "model-a")
+        .with_reranker_request(RerankerPath::Light, "reranker-a");
+    let suspended = RuntimeObservation::open(1).with_optional_workers_suspended();
+
+    let report = run(&db, RuntimeRunConfig::for_test(requested, suspended, None)).await;
+    let provider_inventory = check(&report, PROVIDERS);
+
+    assert_eq!(provider_inventory.outcome(), LintOutcome::Pass);
+    assert_eq!(
+        provider_inventory.applicability(),
+        LintApplicability::ExpectedEmpty
+    );
+    assert_eq!(
+        provider_inventory.precondition(),
+        LintPrecondition::ConfiguredOff
+    );
+    assert_eq!(
+        provider_inventory.summary_code(),
+        LintSummaryCode::ExpectedEmpty
+    );
+    assert_eq!(metric(provider_inventory), 0);
+    assert_eq!(
+        metric_value(provider_inventory, LintMetricCode::ObservedRecords),
+        0
+    );
+}
+
+#[tokio::test]
+async fn repair_recovery_reports_an_optional_worker_that_is_still_running() {
+    let (db, _temp) = test_db().await;
+    let requested =
+        RuntimeConfigSnapshot::disabled().with_provider_request(ProviderClass::OnDevice, "model-a");
+    let suspended = RuntimeObservation::open(1)
+        .with_optional_workers_suspended()
+        .with_provider(ProviderClass::OnDevice, "model-a", RuntimeReadiness::Ready);
+
+    let report = run(&db, RuntimeRunConfig::for_test(requested, suspended, None)).await;
+
+    assert_eq!(check(&report, PROVIDERS).outcome(), LintOutcome::Finding);
+    assert_eq!(metric(check(&report, PROVIDERS)), 1);
+}
+
+#[tokio::test]
+async fn repair_recovery_reports_an_optional_worker_that_failed_to_start() {
+    let (db, _temp) = test_db().await;
+    let requested =
+        RuntimeConfigSnapshot::disabled().with_provider_request(ProviderClass::OnDevice, "model-a");
+    let suspended = RuntimeObservation::open(1)
+        .with_optional_workers_suspended()
+        .with_provider(ProviderClass::OnDevice, "model-a", RuntimeReadiness::Failed);
+
+    let report = run(&db, RuntimeRunConfig::for_test(requested, suspended, None)).await;
+
+    assert_eq!(check(&report, PROVIDERS).outcome(), LintOutcome::Finding);
+    assert_eq!(metric(check(&report, PROVIDERS)), 1);
 }
 
 #[tokio::test]

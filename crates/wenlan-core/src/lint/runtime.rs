@@ -3,7 +3,7 @@ mod config_capture;
 mod observation;
 mod query;
 mod result;
-mod schema;
+pub(crate) mod schema;
 
 use crate::lint::catalog::LintCheckGroup;
 use crate::lint::context::{LintContext, PopulationBasis};

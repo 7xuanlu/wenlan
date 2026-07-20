@@ -331,18 +331,21 @@ fn doc_path_references_resolve() {
 /// Infra/transport/path flags exempt from the documentation requirement.
 /// Extend deliberately, each with a one-line reason.
 const FLAG_ALLOWLIST: &[&str] = &[
-    "WENLAN_PORT",            // transport
-    "WENLAN_HOST",            // transport
-    "WENLAN_BIND_ADDR",       // transport
-    "WENLAN_DATA_DIR",        // path
-    "WENLAN_PORT_FILE",       // path
-    "WENLAN_LISTENING_ON",    // runtime status
-    "WENLAN_GIT_SHA",         // build stamp
-    "WENLAN_MCP_CACHE_DIR",   // path
-    "WENLAN_MIGRATIONS_HASH", // build stamp
-    "WENLAN_TEST_LINT_EPOCH", // process-only lint test clock
-    "WENLAN_BATCH_LOG",       // debug logging
-    "WENLAN_CHATGPT_ZIP",     // import path
+    "WENLAN_PORT",                    // transport
+    "WENLAN_HOST",                    // transport
+    "WENLAN_BIND_ADDR",               // transport
+    "WENLAN_DATA_DIR",                // path
+    "WENLAN_PORT_FILE",               // path
+    "WENLAN_LISTENING_ON",            // runtime status
+    "WENLAN_GIT_SHA",                 // build stamp
+    "WENLAN_MCP_CACHE_DIR",           // path
+    "WENLAN_MIGRATIONS_HASH",         // build stamp
+    "WENLAN_TEST_LINT_EPOCH",         // process-only lint test clock
+    "WENLAN_DATA_LOCK_CHILD_ROOT",    // test-only child-process lock root
+    "WENLAN_DATA_LOCK_CHILD_READY",   // test-only child-process ready signal
+    "WENLAN_DATA_LOCK_CHILD_RELEASE", // test-only child-process release signal
+    "WENLAN_BATCH_LOG",               // debug logging
+    "WENLAN_CHATGPT_ZIP",             // import path
 ];
 
 /// BASELINE: behavioral flags undocumented when this contract was introduced

@@ -33,6 +33,7 @@ enum RegisteredMethod {
     Post,
     Put,
     Delete,
+    Patch,
 }
 
 impl RegisteredMethod {
@@ -40,7 +41,7 @@ impl RegisteredMethod {
         match self {
             Self::Get => Some(Method::Get),
             Self::Post => Some(Method::Post),
-            Self::Put | Self::Delete => None,
+            Self::Put | Self::Delete | Self::Patch => None,
         }
     }
 }
@@ -65,6 +66,7 @@ top_level_method!(get, Get);
 top_level_method!(post, Post);
 top_level_method!(put, Put);
 top_level_method!(delete, Delete);
+top_level_method!(patch, Patch);
 
 impl<S> TrackedMethodRouter<S>
 where
@@ -147,6 +149,19 @@ where
         assert_eq!(self.reads, expected, "sensitive route registration drift");
         FinalizedRouter { inner: self.inner }
     }
+
+    pub(crate) fn finish_restricted(self) -> FinalizedRouter<S> {
+        let expected = routes::sensitive_read_routes()
+            .map(|row| ((row.method, row.path), 1usize))
+            .collect::<BTreeMap<_, _>>();
+        assert!(
+            self.reads
+                .iter()
+                .all(|(route, count)| expected.get(route) == Some(count)),
+            "restricted router registered an unknown or duplicate sensitive read route"
+        );
+        FinalizedRouter { inner: self.inner }
+    }
 }
 
 impl<S> FinalizedRouter<S>
@@ -173,7 +188,7 @@ where
 
 #[rustfmt::skip]
 const NON_SENSITIVE_PATHS: &[&str] = &[
-    "/api/health", "/api/status", "/api/ping", "/api/lint", "/api/llm/test", "/api/shutdown", "/api/debug/pipeline",
+    "/api/health", "/api/status", "/api/ping", "/api/lint", "/api/repairs/plan", "/api/repairs/plan/entries", "/api/repairs/prepare", "/api/repairs/apply", "/api/repairs/verify", "/api/llm/test", "/api/shutdown", "/api/debug/pipeline",
     "/api/steep", "/api/distill", "/api/distill/{page_id}",
     "/api/ingest/text", "/api/ingest/webpage", "/api/ingest/memory", "/api/documents/{source}/{source_id}",
     "/api/import/memories", "/api/import/chat-export", "/api/memory/store", "/api/memory/confirm/{source_id}",
@@ -191,6 +206,9 @@ const NON_SENSITIVE_PATHS: &[&str] = &[
     "/api/memory/{id}/correct", "/api/profile/narrative/regenerate", "/api/memory/{id}/pin", "/api/memory/{id}/unpin",
     "/api/snapshots/{id}/delete", "/api/memory/{id}/update-page", "/api/knowledge/path",
     "/api/onboarding/milestones/{id}/acknowledge", "/api/onboarding/reset", "/ws/updates",
+    "/api/pages/{id}/map/layout", "/api/pages/{id}/map/nodes", "/api/pages/{id}/map/edges",
+    "/api/pages/{id}/map/nodes/{node_id}", "/api/pages/{id}/map/edges/{edge_id}",
+    "/api/pages/{id}/map/improve",
 ];
 
 const NON_SENSITIVE_MIXED_ROUTES: &[(RegisteredMethod, &str)] = &[
@@ -204,6 +222,7 @@ const NON_SENSITIVE_MIXED_ROUTES: &[(RegisteredMethod, &str)] = &[
     (RegisteredMethod::Put, "/api/pages/{id}"),
     (RegisteredMethod::Delete, "/api/pages/{id}"),
     (RegisteredMethod::Post, "/api/sources"),
+    (RegisteredMethod::Delete, "/api/pages/{id}/map"),
 ];
 
 #[cfg(test)]

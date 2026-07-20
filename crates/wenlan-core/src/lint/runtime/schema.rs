@@ -1,4 +1,5 @@
 use crate::lint::context::LintContext;
+use crate::lint::snapshot::LintReadSnapshot;
 use std::collections::BTreeMap;
 
 const TABLES: &[&str] = &[
@@ -43,10 +44,10 @@ const SEARCH_OBJECTS: &[&str] = &[
     "summary_nodes_fts_update",
 ];
 
-pub(super) struct SchemaSnapshot {
+pub(crate) struct SchemaSnapshot {
     user_version: u64,
-    missing_tables: u64,
-    invalid_search_objects: u64,
+    missing_tables: Vec<String>,
+    invalid_search_objects: Vec<String>,
 }
 
 impl SchemaSnapshot {
@@ -55,7 +56,8 @@ impl SchemaSnapshot {
     }
 
     pub(super) fn schema_affected(&self) -> u64 {
-        self.missing_tables + u64::from(self.user_version != u64::from(crate::db::SCHEMA_VERSION))
+        u64::try_from(self.missing_tables.len()).unwrap_or(u64::MAX)
+            + u64::from(self.user_version != u64::from(crate::db::SCHEMA_VERSION))
     }
 
     pub(super) fn search_population(&self) -> u64 {
@@ -63,17 +65,35 @@ impl SchemaSnapshot {
     }
 
     pub(super) fn search_affected(&self) -> u64 {
-        self.invalid_search_objects
+        u64::try_from(self.invalid_search_objects.len()).unwrap_or(u64::MAX)
+    }
+
+    pub(crate) const fn user_version(&self) -> u64 {
+        self.user_version
+    }
+
+    pub(crate) fn missing_tables(&self) -> &[String] {
+        &self.missing_tables
+    }
+
+    pub(crate) fn invalid_search_objects(&self) -> &[String] {
+        &self.invalid_search_objects
     }
 }
 
 pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<SchemaSnapshot, ()> {
-    let user_version = scalar(context, "PRAGMA user_version").await?;
-    let objects = objects(context).await?;
-    let missing_tables = count_invalid(TABLES, |name| {
+    load_from_snapshot(context.snapshot()).await
+}
+
+pub(crate) async fn load_from_snapshot(
+    snapshot: &LintReadSnapshot<'_>,
+) -> Result<SchemaSnapshot, ()> {
+    let user_version = scalar(snapshot, "PRAGMA user_version").await?;
+    let objects = objects(snapshot).await?;
+    let missing_tables = invalid_names(TABLES, |name| {
         objects.get(*name).is_some_and(|(kind, _)| kind == "table")
     });
-    let invalid_search_objects = count_invalid(SEARCH_OBJECTS, |name| {
+    let invalid_search_objects = invalid_names(SEARCH_OBJECTS, |name| {
         objects
             .get(*name)
             .is_some_and(|(kind, sql)| valid_search_object(name, kind, sql))
@@ -85,9 +105,10 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<SchemaSnapshot
     })
 }
 
-async fn objects(context: &LintContext<'_, '_>) -> Result<BTreeMap<String, (String, String)>, ()> {
-    let mut rows = context
-        .snapshot()
+async fn objects(
+    snapshot: &LintReadSnapshot<'_>,
+) -> Result<BTreeMap<String, (String, String)>, ()> {
+    let mut rows = snapshot
         .query(
             "SELECT name,type,COALESCE(sql,'') FROM sqlite_schema ORDER BY name",
             libsql::params::Params::None,
@@ -192,13 +213,16 @@ fn normalize(sql: &str) -> String {
         .collect()
 }
 
-fn count_invalid(names: &[&str], valid: impl Fn(&&str) -> bool) -> u64 {
-    u64::try_from(names.iter().filter(|name| !valid(name)).count()).unwrap_or(u64::MAX)
+fn invalid_names(names: &[&str], valid: impl Fn(&&str) -> bool) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| !valid(name))
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
-async fn scalar(context: &LintContext<'_, '_>, sql: &str) -> Result<u64, ()> {
-    let mut rows = context
-        .snapshot()
+async fn scalar(snapshot: &LintReadSnapshot<'_>, sql: &str) -> Result<u64, ()> {
+    let mut rows = snapshot
         .query(sql, libsql::params::Params::None)
         .await
         .map_err(|_| ())?;

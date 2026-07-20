@@ -266,10 +266,15 @@ pub async fn handle_context(
     // ~15 sequential awaits (load_memories_by_type, search_*, log_accesses,
     // etc.) would block every writer to ServerState — e.g. store_memory's
     // deferred async work — for the full duration. See CLAUDE.md locking rules.
-    let (db_arc, access_tracker, reranker_light) = {
+    let (db_arc, access_tracker, reranker_light, maintenance) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
-        (db, s.access_tracker.clone(), s.reranker_light.clone())
+        (
+            db,
+            s.access_tracker.clone(),
+            s.reranker_light.clone(),
+            s.maintenance_coordinator.clone(),
+        )
     }; // guard dropped here
     let scope = crate::read_scope::effective_read_scope(
         &db_arc,
@@ -609,6 +614,7 @@ pub async fn handle_context(
         let emitter_for_ms: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
         tokio::spawn(async move {
+            let _maintenance_guard = maintenance.begin_background().await;
             let ev = wenlan_core::onboarding::MilestoneEvaluator::new(&db_for_ms, emitter_for_ms);
             if let Err(e) = ev
                 .check_after_context_call(

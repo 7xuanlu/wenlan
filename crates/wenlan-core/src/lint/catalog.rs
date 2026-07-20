@@ -193,6 +193,7 @@ const CATALOG: &[LintCatalogEntry] = &[
         ScopeAxis::PagesWorkspace,
         LintGateEffect::Advisory,
     ),
+    page_entry("pages.source_page_integrity", ScopePolicy::ScopedRows),
     entity_entry("relations.integrity", ScopePolicy::ScopedRows),
     deep_entry(
         "relations.vocabulary_integrity",

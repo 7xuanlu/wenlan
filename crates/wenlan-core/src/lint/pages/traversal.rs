@@ -2,12 +2,13 @@ use super::frontmatter::{read_frontmatter, Frontmatter};
 use super::fs::{EntryKind, EntryScope, PageEntry, PageFsError, PageScanControl};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, Metadata, OpenOptions};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::Path;
 
-pub(super) fn open_root(root: &Path) -> Result<Dir, PageFsError> {
+pub(crate) fn open_root(root: &Path) -> Result<Dir, PageFsError> {
     let parent = root.parent().ok_or(PageFsError::RootNotDirectory)?;
     let basename = root.file_name().ok_or(PageFsError::RootNotDirectory)?;
     let ambient_parent = Dir::open_ambient_dir(parent, cap_std::ambient_authority())
@@ -91,6 +92,9 @@ fn visit_entry(
     } else {
         format!("{prefix}/{component}")
     };
+    if is_projection_control_path(&path) {
+        return Ok(());
+    }
     let metadata = directory
         .symlink_metadata(Path::new(name))
         .map_err(|_| PageFsError::ReadMetadata)?;
@@ -118,6 +122,11 @@ fn visit_entry(
                 .open_with(Path::new(name), &read_nofollow())
                 .map_err(|_| PageFsError::ReadEntry)?;
             let opened = file.metadata().map_err(|_| PageFsError::ReadMetadata)?;
+            if is_projection_stage_owner_candidate(&path)
+                && valid_projection_stage_owner(&path, &opened, &mut file, traversal.control)?
+            {
+                return Ok(());
+            }
             let scope = scope_for(&path, EntryKind::File);
             if path == ".wenlan/state.json" {
                 let mut bytes = Vec::new();
@@ -145,33 +154,39 @@ fn visit_entry(
                     *traversal.manifest_bytes = Some(bytes);
                 }
             }
-            let (frontmatter, body_digest) = if scope == EntryScope::PageMarkdown
-                && traversal.include_body_digests
-            {
-                if opened.len() > super::fs::DEEP_PAGE_BODY_MAX_BYTES
-                    || opened.len() > *traversal.body_bytes_remaining
-                {
-                    return Err(PageFsError::BodyBudgetExceeded);
-                }
-                *traversal.body_bytes_remaining =
-                    (*traversal.body_bytes_remaining).saturating_sub(opened.len());
-                let mut bytes = Vec::new();
-                read_to_end_controlled(&mut file, &mut bytes, traversal.control)?;
-                let frontmatter = super::frontmatter::parse_frontmatter(bytes.as_slice())?;
-                let content = std::str::from_utf8(&bytes).map_err(|_| PageFsError::ReadPrefix)?;
-                let (_, body) = crate::sources::obsidian::extract_frontmatter(content);
-                let canonical = crate::export::provenance::canonicalize_page_body(body);
-                (
-                    frontmatter,
-                    Some(Sha256::digest(canonical.as_bytes()).into()),
-                )
-            } else if scope == EntryScope::PageMarkdown {
-                let frontmatter = read_frontmatter(file)?;
-                traversal.control.check()?;
-                (frontmatter, None)
-            } else {
-                (Frontmatter::unparsed(), None)
-            };
+            let (frontmatter, body_digest) =
+                if scope == EntryScope::PageMarkdown && traversal.include_body_digests {
+                    if opened.len() > super::fs::DEEP_PAGE_BODY_MAX_BYTES
+                        || opened.len() > *traversal.body_bytes_remaining
+                    {
+                        return Err(PageFsError::BodyBudgetExceeded);
+                    }
+                    *traversal.body_bytes_remaining =
+                        (*traversal.body_bytes_remaining).saturating_sub(opened.len());
+                    let mut bytes = Vec::new();
+                    read_to_end_controlled(&mut file, &mut bytes, traversal.control)?;
+                    let frontmatter = super::frontmatter::parse_frontmatter(bytes.as_slice())?;
+                    let body_digest = match std::str::from_utf8(&bytes) {
+                        Ok(content) => {
+                            let (_, body) = crate::sources::obsidian::extract_frontmatter(content);
+                            let canonical = crate::export::provenance::canonicalize_page_body(body);
+                            Sha256::digest(canonical.as_bytes()).into()
+                        }
+                        Err(_) => {
+                            let mut digest = Sha256::new();
+                            digest.update(b"wenlan-page-non-utf8-body-v1");
+                            digest.update(&bytes);
+                            digest.finalize().into()
+                        }
+                    };
+                    (frontmatter, Some(body_digest))
+                } else if scope == EntryScope::PageMarkdown {
+                    let frontmatter = read_frontmatter(file)?;
+                    traversal.control.check()?;
+                    (frontmatter, None)
+                } else {
+                    (Frontmatter::unparsed(), None)
+                };
             traversal.entries.push(page_entry(
                 &path,
                 EntryKind::File,
@@ -188,6 +203,80 @@ fn visit_entry(
             Ok(())
         }
     }
+}
+
+fn is_projection_control_path(path: &str) -> bool {
+    path == ".wenlan/.projection.lock"
+        || path
+            .strip_prefix(".wenlan/.projection-state-")
+            .is_some_and(|suffix| suffix.ends_with(".tmp"))
+}
+
+fn is_projection_stage_owner_candidate(path: &str) -> bool {
+    projection_stage_owner_hash(path).is_some()
+}
+
+fn projection_stage_owner_hash(path: &str) -> Option<&str> {
+    path.strip_prefix(".wenlan/.projection-unlink-")
+        .and_then(|suffix| suffix.strip_suffix("/owner.json"))
+        .filter(|owner| {
+            owner.len() == 64
+                && owner
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectionStageOwnerMarker {
+    format_version: u32,
+    manifest_id: String,
+    page_id: String,
+    source_path: String,
+    source_digest: String,
+}
+
+fn valid_projection_stage_owner(
+    path: &str,
+    metadata: &Metadata,
+    file: &mut cap_std::fs::File,
+    control: &PageScanControl,
+) -> Result<bool, PageFsError> {
+    const OWNER_MAX_BYTES: u64 = 16 * 1024;
+
+    let Some(expected_stage_hash) = projection_stage_owner_hash(path) else {
+        return Ok(false);
+    };
+    if metadata.len() > OWNER_MAX_BYTES {
+        return Ok(false);
+    }
+    let mut bytes = Vec::new();
+    read_to_end_controlled(
+        &mut file.take(OWNER_MAX_BYTES.saturating_add(1)),
+        &mut bytes,
+        control,
+    )?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > OWNER_MAX_BYTES {
+        return Ok(false);
+    }
+    let Ok(owner) = serde_json::from_slice::<ProjectionStageOwnerMarker>(&bytes) else {
+        return Ok(false);
+    };
+    let source_path_is_canonical = super::fs::normalize_target_path(&owner.source_path)
+        .is_ok_and(|normalized| normalized.as_str() == owner.source_path);
+    let source_digest_is_canonical = owner.source_digest.len() == 64
+        && owner
+            .source_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+    let actual_stage_hash = hex::encode(Sha256::digest(owner.manifest_id.as_bytes()));
+    Ok(owner.format_version == 1
+        && !owner.manifest_id.is_empty()
+        && !owner.page_id.is_empty()
+        && source_path_is_canonical
+        && source_digest_is_canonical
+        && actual_stage_hash == expected_stage_hash)
 }
 
 fn read_to_end_controlled(

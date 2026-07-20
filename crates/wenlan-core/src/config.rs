@@ -87,6 +87,15 @@ pub struct Config {
     /// Absent disables model-backed background work for this job class.
     #[serde(default)]
     pub synthesis_source: Option<String>,
+    /// Gates ONLY the proactive Page-Map suggestion phase in the refinery
+    /// scheduler (`Phase::PageMaps`). The explicit `POST /api/pages/{id}/map/improve`
+    /// route is NEVER gated by this flag. Default true (via serde on a missing
+    /// field); note `Config::default()` yields `false` — same quirk as
+    /// `private_browsing_detection`, since a derived `Default` ignores the serde
+    /// attribute. Fresh installs read config through `load_config`, which returns
+    /// `Config::default()` only when no file exists.
+    #[serde(default = "default_true")]
+    pub page_map_auto_suggest: bool,
 }
 
 /// Generate a source ID slug from a directory path (last component, lowercased, sanitized).
@@ -388,6 +397,32 @@ mod tests {
 
         let old: Config = serde_json::from_str(r#"{"anthropic_api_key": "sk-test"}"#).unwrap();
         assert_eq!(old.reranker_mode, None);
+    }
+
+    #[test]
+    fn page_map_auto_suggest_defaults_true_on_missing_field() {
+        // A config file without the field deserializes to true (serde default).
+        let config: Config = serde_json::from_str(r#"{"clipboard_enabled": true}"#).unwrap();
+        assert!(config.page_map_auto_suggest);
+    }
+
+    #[test]
+    fn page_map_auto_suggest_roundtrip_false() {
+        let config = Config {
+            page_map_auto_suggest: false,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+        assert!(!restored.page_map_auto_suggest);
+    }
+
+    #[test]
+    fn page_map_auto_suggest_tolerates_unknown_fields() {
+        // Unknown/adjacent fields don't disturb the flag's serde default.
+        let json = r#"{"page_map_auto_suggest": false, "some_future_field": 42}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(!config.page_map_auto_suggest);
     }
 
     // --- New sources/knowledge_path tests ---

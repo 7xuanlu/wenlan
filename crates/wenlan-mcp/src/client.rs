@@ -5,6 +5,7 @@ use serde::{de::DeserializeOwned, Serialize};
 
 const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:7878";
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES: usize = 64 * 1024;
 
 /// Single source of truth for the space-lock header name.
 /// Mirrors the daemon's `X-Wenlan-Space` constant (daemon dual-reads the legacy x-origin-space).
@@ -84,24 +85,33 @@ impl WenlanClient {
         serde_json::from_slice::<R>(bytes).map_err(|_| WenlanError::Deserialize)
     }
 
-    /// Read response body, checking status first.
+    /// Read a bounded response body. Non-success bodies are parsed only for a
+    /// stable machine-code reason; arbitrary daemon text is never propagated.
     async fn read_body(mut resp: reqwest::Response) -> Result<Vec<u8>, WenlanError> {
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            return Err(WenlanError::Api { status });
-        }
+        let status = resp.status();
+        let limit = if status.is_success() {
+            MAX_RESPONSE_BYTES
+        } else {
+            MAX_ERROR_RESPONSE_BYTES
+        };
         if resp
             .content_length()
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+            .is_some_and(|length| length > limit as u64)
         {
             return Err(WenlanError::ResponseTooLarge);
         }
         let mut body = Vec::new();
         while let Some(chunk) = resp.chunk().await.map_err(|_| WenlanError::Deserialize)? {
-            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            if body.len().saturating_add(chunk.len()) > limit {
                 return Err(WenlanError::ResponseTooLarge);
             }
             body.extend_from_slice(&chunk);
+        }
+        if !status.is_success() {
+            return Err(WenlanError::Api {
+                status: status.as_u16(),
+                reason: parse_api_error_reason(&body),
+            });
         }
         Ok(body)
     }
@@ -283,7 +293,7 @@ pub enum WenlanError {
     Unreachable(String),
 
     #[error("Wenlan API error (HTTP {status})")]
-    Api { status: u16 },
+    Api { status: u16, reason: Option<String> },
 
     #[error("Failed to parse Wenlan response")]
     Deserialize,
@@ -292,9 +302,88 @@ pub enum WenlanError {
     ResponseTooLarge,
 }
 
+fn parse_api_error_reason(bytes: &[u8]) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct ApiErrorBody {
+        error: Option<String>,
+        reason: Option<String>,
+    }
+
+    let body: ApiErrorBody = serde_json::from_slice(bytes).ok()?;
+    let reason = body.error.or(body.reason)?;
+    let code = reason
+        .split_once(':')
+        .map_or(reason.as_str(), |(code, _)| code);
+    let safe = matches!(
+        code,
+        "repair_background_writer_busy"
+            | "repair_write_fence_conflict"
+            | "repair_write_fence_expired"
+            | "repair_handoff_manifest_mismatch"
+            | "repair_verification_manifest_mismatch"
+            | "repair_non_target_state_changed"
+            | "repair_verification_state_changed"
+            | "repair_verification_reports_stale"
+            | "repair_plan_entry_too_large"
+            | "repair_source_reports_stale"
+            | "noise_pattern"
+            | "too_short"
+            | "not_novel"
+            | "credential_leak"
+            | "embedding_unavailable"
+            | "duplicate"
+            | "unknown"
+    );
+    safe.then(|| code.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_error_reason_keeps_machine_code_without_private_detail() {
+        for code in [
+            "repair_background_writer_busy",
+            "repair_write_fence_conflict",
+            "repair_write_fence_expired",
+            "repair_handoff_manifest_mismatch",
+            "repair_verification_manifest_mismatch",
+            "repair_non_target_state_changed",
+            "repair_verification_state_changed",
+            "repair_verification_reports_stale",
+            "repair_plan_entry_too_large",
+            "repair_source_reports_stale",
+        ] {
+            let body = format!(r#"{{"error":"{code}","detail":"PRIVATE_SENTINEL"}}"#);
+            let reason = parse_api_error_reason(body.as_bytes()).expect("typed reason survives");
+            assert_eq!(reason, code);
+            assert!(!reason.contains("PRIVATE_SENTINEL"));
+        }
+
+        let quality_gate = br#"{
+            "status": "rejected",
+            "reason": "duplicate",
+            "detail": "PRIVATE_SENTINEL"
+        }"#;
+        assert_eq!(
+            parse_api_error_reason(quality_gate).as_deref(),
+            Some("duplicate")
+        );
+        assert_eq!(
+            parse_api_error_reason(br#"{"error":"private_project_codename"}"#),
+            None,
+            "unknown machine-looking strings must not cross the MCP boundary"
+        );
+        assert_eq!(
+            parse_api_error_reason(
+                br#"{"error":"repair_verification_reports_stale: PRIVATE_SENTINEL"}"#
+            )
+            .as_deref(),
+            Some("repair_verification_reports_stale"),
+            "known reason prefixes survive without leaking daemon detail"
+        );
+    }
 
     #[test]
     fn test_discover_url_prefers_cli_flag() {
@@ -312,7 +401,7 @@ mod tests {
     #[test]
     fn space_header_attached_when_locked() {
         // Share ENV_LOCK with lock_state::tests to prevent env var races.
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "career");
         crate::lock_state::init_from_env();
 
@@ -333,7 +422,7 @@ mod tests {
     #[test]
     fn space_header_absent_when_unlocked() {
         // Share ENV_LOCK with lock_state::tests to prevent env var races.
-        let _guard = crate::lock_state::ENV_LOCK.lock().unwrap();
+        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         crate::lock_state::init_from_env();
 

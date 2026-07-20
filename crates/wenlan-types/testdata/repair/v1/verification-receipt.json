@@ -1,0 +1,32 @@
+{
+  "receipt_schema_version": 1,
+  "manifest_id": "repair_550e8400-e29b-41d4-a716-446655440000",
+  "manifest_digest": "6d79617ffac084a9668025d2a870aa569b5381ea62513c4fa57d9f1a1620bf34",
+  "apply_receipt_digest": "2c0107e820d5b6425effe0177d4a676835fe2b2bd11f7f69ee437d04ea085169",
+  "verified_at": 1721000002,
+  "general_snapshots": {
+    "db": {
+      "mode": "transactional_read_only",
+      "analysis_digest": "0000000000000007",
+      "post_run_digest": "0000000000000007"
+    },
+    "pages": {
+      "mode": "best_effort",
+      "before_scan_digest": "0000000000000008",
+      "after_scan_digest": "0000000000000008"
+    }
+  },
+  "deep_snapshots": {
+    "db": {
+      "mode": "transactional_read_only",
+      "analysis_digest": "0000000000000009",
+      "post_run_digest": "0000000000000009"
+    },
+    "pages": {
+      "mode": "best_effort",
+      "before_scan_digest": "000000000000000a",
+      "after_scan_digest": "000000000000000a"
+    }
+  },
+  "receipt_digest": "3377e9eb4aa9d1a1e1441e3df0aa6fed6446e64a1423f8525e6653d6acb05f2d"
+}

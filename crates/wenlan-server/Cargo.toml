@@ -35,6 +35,7 @@ uuid = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 futures = { workspace = true }
 sysinfo = { workspace = true }
+fs2 = { workspace = true }
 sha2 = "0.10"
 # Pulls openssl-sys with the vendored feature (declared at workspace level).
 # wenlan-server doesn't call openssl_sys directly, but the dep needs to land
@@ -44,6 +45,7 @@ openssl-sys = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+libsql = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true }
 zip = { workspace = true }

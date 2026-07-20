@@ -188,6 +188,7 @@ pub async fn run_page_growth_slice(
             llm_calls: 0,
         });
     };
+    let expected_source_revision = db.get_page_source_revision(&page.id).await?;
 
     let clean_current = crate::citations::strip_markers(&page.content);
     let evidence = db.get_page_evidence(&page.id).await.unwrap_or_default();
@@ -235,6 +236,14 @@ pub async fn run_page_growth_slice(
             selected: true,
             matched: true,
             committed,
+            llm_calls: 0,
+        });
+    }
+    if db.get_page_source_revision(&page.id).await? != expected_source_revision {
+        return Ok(PageGrowthSliceReport {
+            selected: true,
+            matched: true,
+            committed: false,
             llm_calls: 0,
         });
     }
@@ -313,6 +322,7 @@ pub async fn run_page_growth_slice(
             source_memory_ids: source_ids,
         },
         page.version,
+        expected_source_revision,
         &input.source_id,
         input.version,
         knowledge_path,
@@ -1932,6 +1942,96 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn page_growth_slice_rejects_linked_source_changed_during_inference() {
+        let (db, _dir) = test_db().await;
+        let db = Arc::new(db);
+        let entity_id = db
+            .create_entity("Linked Source CAS", "Topic", Some("work"))
+            .await
+            .unwrap();
+        insert_growth_page(
+            &db,
+            "linked-source-cas-page",
+            &entity_id,
+            "work",
+            "page before linked source race",
+        )
+        .await;
+        seed_page_growth_memory(
+            &db,
+            "linked-source-existing",
+            "existing linked evidence before race",
+            Some(&entity_id),
+            Some("work"),
+        )
+        .await;
+        db.link_page_source(
+            "linked-source-cas-page",
+            "linked-source-existing",
+            "test_existing_source",
+        )
+        .await
+        .unwrap();
+        seed_page_growth_memory(
+            &db,
+            "linked-source-trigger",
+            "new evidence that triggers page growth",
+            Some(&entity_id),
+            Some("work"),
+        )
+        .await;
+        let page_version_before = db
+            .get_page("linked-source-cas-page")
+            .await
+            .unwrap()
+            .unwrap()
+            .version;
+        let source_revision_before = db
+            .get_page_source_revision("linked-source-cas-page")
+            .await
+            .unwrap();
+        let llm: Arc<dyn LlmProvider> = Arc::new(MutatingGrowthProvider {
+            db: db.clone(),
+            response: "stale generated page.[1][2]".to_string(),
+            mutation: GrowthMutation::Memory {
+                source_id: "linked-source-existing".to_string(),
+            },
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+
+        let report = run_page_growth_slice(&db, &llm, &PromptRegistry::default(), 2.0, None)
+            .await
+            .unwrap();
+
+        assert!(report.selected);
+        assert!(report.matched);
+        assert!(!report.committed);
+        assert_eq!(report.llm_calls, 1);
+        let page = db
+            .get_page("linked-source-cas-page")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(page.content, "page before linked source race");
+        assert_eq!(
+            page.version, page_version_before,
+            "linked source invalidation must not need a Page content-version bump"
+        );
+        assert_eq!(
+            db.get_page_source_revision("linked-source-cas-page")
+                .await
+                .unwrap(),
+            source_revision_before + 1
+        );
+        assert!(db
+            .get_enrichment_steps("linked-source-trigger")
+            .await
+            .unwrap()
+            .iter()
+            .all(|step| step.step != "page_growth"));
     }
 
     #[tokio::test]

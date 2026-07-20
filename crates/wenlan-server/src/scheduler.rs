@@ -1015,6 +1015,11 @@ fn select_due_automatic_trigger(
     (maintenance != MaintenanceAdmission::None).then_some(AutomaticTrigger::Maintenance)
 }
 
+#[cfg(test)]
+fn idle_due(idle_fired: bool, idle_since: Instant, now: Instant) -> bool {
+    !idle_fired && now.duration_since(idle_since) >= IDLE_THRESHOLD
+}
+
 /// Spawn the event-driven steep scheduler.
 ///
 /// Runs a single tokio task with a 30-second poll loop. All work is awaited
@@ -1081,6 +1086,15 @@ pub fn spawn_scheduler(
             if crate::lifecycle::sleep_or_shutdown(&mut shutdown, POLL_INTERVAL).await {
                 break;
             }
+
+            let coordinator = {
+                let state = shared.read().await;
+                state.maintenance_coordinator.clone()
+            };
+            let Some(_maintenance_guard) = coordinator.try_begin_background() else {
+                tracing::debug!("[scheduler] maintenance fence active; skipping poll");
+                continue;
+            };
 
             // Reset idle flag if any new activity arrived since last poll
             if write_signal.has_activity_since(last_poll_activity) {
@@ -2926,6 +2940,24 @@ mod tests {
     }
 
     #[test]
+    fn idle_not_due_until_full_threshold_after_restart() {
+        let started = Instant::now();
+
+        assert!(!idle_due(
+            false,
+            started,
+            started + INITIAL_DELAY + POLL_INTERVAL
+        ));
+        assert!(!idle_due(
+            false,
+            started,
+            started + IDLE_THRESHOLD - Duration::from_millis(1)
+        ));
+        assert!(idle_due(false, started, started + IDLE_THRESHOLD));
+        assert!(!idle_due(true, started, started + IDLE_THRESHOLD));
+    }
+
+    #[test]
     fn test_adaptive_gap_fast_writer() {
         // Writes every 30s → median 30s → 2*30s = 60s → clamped to floor (5 min)
         let base = Instant::now();
@@ -3996,6 +4028,10 @@ mod tests {
             )
             .await
             .unwrap();
+            // These links are the page's already-compiled initial evidence,
+            // not a later source addition. Production Attach correctly marks
+            // additions stale, so the fixture acknowledges its initial build.
+            db.clear_page_staleness(&result.id).await.unwrap();
         }
         db.set_page_review_status(&result.id, "confirmed")
             .await

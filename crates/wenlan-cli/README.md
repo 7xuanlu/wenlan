@@ -6,21 +6,37 @@ License: Apache-2.0.
 
 ## Install
 
-Recommended user setup:
+Recommended user setup on macOS Apple Silicon:
 
 ```bash
 npx -y wenlan setup
 ```
 
-The setup package supports macOS (arm64, x64), Linux (x64, arm64), and Windows (x64). It downloads the platform-matching release archive, installs `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, starts the background runtime, and verifies status.
+The setup package downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`, configures local memory, starts the background runtime, and verifies status. It currently supports macOS Apple Silicon.
 
-For local development:
+Linux x64/ARM64 has an automated shell path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
+export PATH="$HOME/.wenlan/bin:$PATH"
+wenlan setup --basic
+wenlan background on
+wenlan status
+```
+
+Windows x64 users can unpack `wenlan-windows-x64.zip` from [Releases](https://github.com/7xuanlu/wenlan/releases/latest) into a directory on `PATH`. Keep the bundled `onnxruntime.dll` beside the three `.exe` files, then run the same three `wenlan` commands.
+
+### macOS Intel
+
+There is currently no supported complete-runtime install for macOS Intel. The pinned ONNX Runtime dependency does not publish an x86_64 macOS binary, so a custom build requires compiling ONNX Runtime separately and providing it through `ORT_LIB_LOCATION`. A plain `cargo build` is not a working installation path.
+
+For CLI-only local development:
 
 ```bash
 cargo install --path crates/wenlan-cli
 ```
 
-Or build from the workspace:
+Or build only the CLI from the workspace:
 
 ```bash
 cargo build -p wenlan --release

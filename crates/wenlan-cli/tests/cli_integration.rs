@@ -712,6 +712,35 @@ fn background_on_over_running_daemon_stops_first_isolated() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn background_off_boots_out_keepalive_job_without_stop_restart_race() {
+    let runtime = IsolatedRuntime::new();
+    let log = runtime.data.path().join("launchctl.log");
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["background", "on"])
+        .assert()
+        .success();
+
+    let _ = fs::remove_file(&log);
+    cli_with_isolated_runtime(&runtime)
+        .env("WENLAN_TEST_LAUNCHCTL_LOG", &log)
+        .args(["background", "off"])
+        .assert()
+        .success();
+
+    let calls = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        calls.lines().any(|line| line.starts_with("bootout ")),
+        "background off must boot out the KeepAlive job while preserving its plist; launchctl calls were:\n{calls}"
+    );
+    assert!(
+        !calls.lines().any(|line| line.starts_with("stop ")),
+        "stopping a KeepAlive job before removal can spawn an orphan replacement; launchctl calls were:\n{calls}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn setup_background_status_roundtrip_isolated() {
     let runtime = IsolatedRuntime::new();
 
@@ -766,6 +795,17 @@ fn setup_background_status_roundtrip_isolated() {
     assert!(
         plist.contains("<key>RUST_LOG</key>"),
         "RUST_LOG not propagated through launchd plist: {plist}"
+    );
+    assert!(
+        plist.contains("<key>WENLAN_DATA_DIR</key>"),
+        "WENLAN_DATA_DIR ownership marker missing from launchd plist: {plist}"
+    );
+    assert!(
+        plist.contains(&format!(
+            "<string>{}</string>",
+            runtime.data.path().display()
+        )),
+        "selected data root not propagated through launchd plist: {plist}"
     );
 
     cli_with_isolated_runtime(&runtime)
