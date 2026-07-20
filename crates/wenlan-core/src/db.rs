@@ -58718,26 +58718,104 @@ pub(crate) mod tests {
             .await
             .expect("replay after a simulated partial backfill must converge");
 
-        let conn = db.conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT space, workspace FROM pages WHERE id = 'page_replay'",
-                (),
-            )
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        let space: String = row.get(0).unwrap();
-        let workspace: String = row.get(1).unwrap();
-        assert_eq!(
-            space, "engineering",
-            "resumed backfill must reach the same value"
-        );
-        assert_eq!(workspace, "engineering");
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT space, workspace FROM pages WHERE id = 'page_replay'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let space: String = row.get(0).unwrap();
+            let workspace: String = row.get(1).unwrap();
+            assert_eq!(
+                space, "engineering",
+                "resumed backfill must reach the same value"
+            );
+            assert_eq!(workspace, "engineering");
 
-        // No duplicate ledger row, and prior_* must not have drifted to
-        // reflect the manually-poked NULL state.
-        let mut ledger_rows = conn
+            // No duplicate ledger row, and prior_* must not have drifted to
+            // reflect the manually-poked NULL state.
+            let mut ledger_rows = conn
+                .query(
+                    "SELECT prior_space, prior_workspace, assigned_space, rule \
+                     FROM page_space_fold_ledger WHERE page_id = 'page_replay'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut seen = 0;
+            let mut last: Option<(Option<String>, Option<String>, String, String)> = None;
+            while let Some(row) = ledger_rows.next().await.unwrap() {
+                seen += 1;
+                last = Some((
+                    row.get(0).unwrap(),
+                    row.get(1).unwrap(),
+                    row.get(2).unwrap(),
+                    row.get(3).unwrap(),
+                ));
+            }
+            assert_eq!(seen, 1, "no duplicate ledger rows after replay");
+            let (prior_space, prior_workspace, assigned_space, rule) = last.unwrap();
+            assert_eq!(
+                prior_space, first_prior_space,
+                "ledger prior_space must not drift on replay"
+            );
+            assert_eq!(
+                prior_workspace, first_prior_workspace,
+                "ledger prior_workspace must not drift on replay"
+            );
+            assert_eq!(assigned_space, first_assigned);
+            assert_eq!(rule, first_rule);
+        }
+
+        // Third run: replay again, this time from an already-NOT-NULL,
+        // already-folded state -- no relax, no poke. Step 8's
+        // writable_schema patch is only proven idempotent for the case
+        // where migration_66_idempotent rolls user_version back and
+        // re-runs against an unrelated table's already-applied patch
+        // (db.rs migrate_66, `patched == sql` skips the block entirely).
+        // This exercises that exact skip branch for M1's own substitution
+        // rather than inheriting the assumption from migration 66.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("replay against an already-NOT-NULL table must be a no-op, not an error");
+
+        let conn = db.conn.lock().await;
+        let final_sql: String = {
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(
+            final_sql
+                .matches("\n                        space TEXT NOT NULL,")
+                .count(),
+            1,
+            "space NOT NULL must appear exactly once, not doubled by a replayed patch: {final_sql}"
+        );
+        assert_eq!(
+            final_sql.matches("workspace TEXT NOT NULL,").count(),
+            1,
+            "workspace NOT NULL must appear exactly once, not doubled by a replayed patch: {final_sql}"
+        );
+        assert!(
+            !final_sql.contains("NOT NULL NOT NULL"),
+            "no doubled NOT NULL from a replayed patch: {final_sql}"
+        );
+
+        let mut ledger_rows_2 = conn
             .query(
                 "SELECT prior_space, prior_workspace, assigned_space, rule \
                  FROM page_space_fold_ledger WHERE page_id = 'page_replay'",
@@ -58745,29 +58823,29 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-        let mut seen = 0;
-        let mut last: Option<(Option<String>, Option<String>, String, String)> = None;
-        while let Some(row) = ledger_rows.next().await.unwrap() {
-            seen += 1;
-            last = Some((
+        let mut seen_2 = 0;
+        let mut last_2: Option<(Option<String>, Option<String>, String, String)> = None;
+        while let Some(row) = ledger_rows_2.next().await.unwrap() {
+            seen_2 += 1;
+            last_2 = Some((
                 row.get(0).unwrap(),
                 row.get(1).unwrap(),
                 row.get(2).unwrap(),
                 row.get(3).unwrap(),
             ));
         }
-        assert_eq!(seen, 1, "no duplicate ledger rows after replay");
-        let (prior_space, prior_workspace, assigned_space, rule) = last.unwrap();
+        assert_eq!(seen_2, 1, "no duplicate ledger rows after the no-op replay");
+        let (prior_space_2, prior_workspace_2, assigned_space_2, rule_2) = last_2.unwrap();
         assert_eq!(
-            prior_space, first_prior_space,
-            "ledger prior_space must not drift on replay"
+            prior_space_2, first_prior_space,
+            "ledger prior_space must not drift on the no-op replay"
         );
         assert_eq!(
-            prior_workspace, first_prior_workspace,
-            "ledger prior_workspace must not drift on replay"
+            prior_workspace_2, first_prior_workspace,
+            "ledger prior_workspace must not drift on the no-op replay"
         );
-        assert_eq!(assigned_space, first_assigned);
-        assert_eq!(rule, first_rule);
+        assert_eq!(assigned_space_2, first_assigned);
+        assert_eq!(rule_2, first_rule);
     }
 
     #[tokio::test]
