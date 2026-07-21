@@ -57704,6 +57704,10 @@ pub(crate) mod tests {
         // Roll user_version back so migration 63 re-runs over the seeded rows.
         {
             let conn = db.conn.lock().await;
+            // M1: migration 80 made the scope columns NOT NULL. Relax them first so
+            // the rollback can null out `workspace`; the migration 80 re-run below
+            // rebuilds the NOT NULL constraint after migration 63 backfills.
+            relax_pages_scope_columns_to_nullable(&conn).await;
             conn.execute("UPDATE pages SET workspace = NULL", ())
                 .await
                 .unwrap();

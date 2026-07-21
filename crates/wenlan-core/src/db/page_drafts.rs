@@ -277,6 +277,15 @@ impl MemoryDB {
             super::page_drafts_test::transaction_test_hooks::after_space_validation(id).await;
         }
 
+        // M1: the pages scope columns are NOT NULL. Resolve the draft's scope via
+        // the Option A ladder (workspace wins, else space, else the 'unfiled'
+        // sentinel) and mirror it onto BOTH columns so the read-collapse reads a
+        // single honest scope. The create-request ledger below keeps the raw
+        // (possibly-None) values so replaying the original request still matches.
+        let page_scope = normalized_workspace
+            .as_deref()
+            .or(normalized_space.as_deref())
+            .unwrap_or("unfiled");
         tx.execute(
             "INSERT INTO pages (
                     id, title, summary, content, entity_id, space, source_memory_ids,
@@ -287,16 +296,9 @@ impl MemoryDB {
                     ?1, ?2, NULL, ?3, NULL, ?4, '[]',
                     1, 'draft', NULL, ?5, ?5,
                     ?5, 0, NULL, 1,
-                    '[]', 'authored', 'unconfirmed', ?6, '[]'
+                    '[]', 'authored', 'unconfirmed', ?4, '[]'
                  )",
-            libsql::params![
-                id,
-                title,
-                content,
-                normalized_space.as_deref(),
-                now,
-                normalized_workspace.as_deref()
-            ],
+            libsql::params![id, title, content, page_scope, now],
         )
         .await
         .map_err(|error| WenlanError::VectorDb(format!("create Page draft: {error}")))?;
@@ -423,21 +425,22 @@ impl MemoryDB {
         if validate_space {
             super::page_drafts_test::transaction_test_hooks::after_space_validation(id).await;
         }
+        // M1: mirror the resolved scope onto both NOT NULL columns via the Option A
+        // ladder (workspace wins, else space, else the 'unfiled' sentinel), so an
+        // uncategorized draft update writes 'unfiled' instead of a NULL that the
+        // NOT NULL constraint rejects. The idempotency/replay comparison above
+        // reads translated (sentinel-hidden) values, so it is unaffected.
+        let page_scope = normalized_workspace
+            .as_deref()
+            .or(normalized_space.as_deref())
+            .unwrap_or("unfiled");
         let affected = tx
             .execute(
                 "UPDATE pages
-                     SET title=?1, content=?2, space=?3, workspace=?4,
-                         version=version+1, last_modified=?5
-                     WHERE id=?6 AND status='draft' AND version=?7",
-                libsql::params![
-                    title,
-                    content,
-                    normalized_space,
-                    normalized_workspace,
-                    now,
-                    id,
-                    expected_version
-                ],
+                     SET title=?1, content=?2, space=?3, workspace=?3,
+                         version=version+1, last_modified=?4
+                     WHERE id=?5 AND status='draft' AND version=?6",
+                libsql::params![title, content, page_scope, now, id, expected_version],
             )
             .await
             .map_err(|error| WenlanError::VectorDb(format!("update Page draft row: {error}")))?;
