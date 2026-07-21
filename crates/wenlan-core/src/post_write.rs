@@ -635,14 +635,12 @@ where
     let result = async {
         let mut target_rows = conn
             .query(
-                "SELECT title,version,status,COALESCE(workspace,space)
+                "SELECT title,version,status,space
                    FROM pages WHERE id=?1 LIMIT 2",
                 libsql::params![page_id.as_str()],
             )
             .await
-            .map_err(|error| {
-                WenlanError::VectorDb(format!("repair page title target: {error}"))
-            })?;
+            .map_err(|error| WenlanError::VectorDb(format!("repair page title target: {error}")))?;
         let target = target_rows
             .next()
             .await
@@ -662,10 +660,13 @@ where
         let current_scope = target.get::<Option<String>>(3).map_err(|error| {
             WenlanError::VectorDb(format!("repair page title current scope: {error}"))
         })?;
-        if target_rows.next().await.map_err(|error| {
-            WenlanError::VectorDb(format!("repair page title duplicate target: {error}"))
-        })?
-        .is_some()
+        if target_rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair page title duplicate target: {error}"))
+            })?
+            .is_some()
             || current_title != *before_title
             || current_version != manifest.expected_state().version().unwrap_or_default()
             || current_status != "active"
@@ -705,9 +706,9 @@ where
         let stored_database_guard = crate::repair::effect_guard_receipt(0);
         let before_scan = projection.scan_page_root_controlled(
             true,
-            &crate::lint::pages::fs::PageScanControl::with_timeout(
-                std::time::Duration::from_secs(30),
-            ),
+            &crate::lint::pages::fs::PageScanControl::with_timeout(std::time::Duration::from_secs(
+                30,
+            )),
         )?;
         let non_target_before = crate::repair::rename_page_title_non_target_receipt(
             &stored_database_guard,
@@ -720,13 +721,11 @@ where
                 "UPDATE pages
                     SET title=?1,version=version+1,embedding=vector32(?2)
                   WHERE id=?3 AND status='active' AND version=?4 AND title=?5
-                    AND ((?6 IS NULL AND COALESCE(workspace,space) IS NULL)
-                         OR COALESCE(workspace,space)=?6)
+                    AND space=COALESCE(?6,'00000000-0000-4000-8000-000000000001')
                     AND NOT EXISTS(
                         SELECT 1 FROM pages collision
                          WHERE collision.status='active' AND collision.id<>?3
-                           AND ((?6 IS NULL AND COALESCE(collision.workspace,collision.space) IS NULL)
-                                OR COALESCE(collision.workspace,collision.space)=?6)
+                           AND collision.space=COALESCE(?6,'00000000-0000-4000-8000-000000000001')
                            AND lower(collision.title)=lower(?1))",
                 libsql::params![
                     after_title.as_str(),
@@ -738,9 +737,7 @@ where
                 ],
             )
             .await
-            .map_err(|error| {
-                WenlanError::VectorDb(format!("repair page title update: {error}"))
-            })?;
+            .map_err(|error| WenlanError::VectorDb(format!("repair page title update: {error}")))?;
         if affected != 1 {
             return Err(WenlanError::Conflict("repair_target_stale".to_string()));
         }
@@ -779,9 +776,9 @@ where
         }
         let after_scan = projection.scan_page_root_controlled(
             true,
-            &crate::lint::pages::fs::PageScanControl::with_timeout(
-                std::time::Duration::from_secs(30),
-            ),
+            &crate::lint::pages::fs::PageScanControl::with_timeout(std::time::Duration::from_secs(
+                30,
+            )),
         )?;
         let non_target_after = crate::repair::rename_page_title_non_target_receipt(
             &stored_database_guard,
@@ -1080,8 +1077,7 @@ where
                     .query(
                         "SELECT id FROM pages
                          WHERE LOWER(title)=LOWER(?1) AND status='active'
-                           AND ((?2 IS NULL AND COALESCE(workspace,space) IS NULL)
-                                OR COALESCE(workspace,space)=?2)
+                           AND space=COALESCE(?2,'00000000-0000-4000-8000-000000000001')
                          ORDER BY id LIMIT 2",
                         libsql::params![label_key.clone(), scope.space()],
                     )
@@ -1159,8 +1155,7 @@ where
                        AND json_valid(source_memory_ids)
                        AND json_type(source_memory_ids)='array'
                        AND json_array_length(source_memory_ids)=0
-                       AND ((?3 IS NULL AND COALESCE(workspace,space) IS NULL)
-                            OR COALESCE(workspace,space)=?3)
+                       AND space=COALESCE(?3,'00000000-0000-4000-8000-000000000001')
                        AND NOT EXISTS(
                             SELECT 1 FROM page_sources ps WHERE ps.page_id=pages.id)
                        AND NOT EXISTS(
@@ -4971,7 +4966,7 @@ mod tests {
         .await
         .unwrap();
         // Same content, but scoped to a DIFFERENT workspace ("personal") — the
-        // scoped matcher's `COALESCE(workspace, space) = ?` filter must exclude
+        // scoped matcher's `space = ?` filter (M1 honest columns) must exclude
         // the "work" page, so this mints a new page rather than attaching.
         let req = CreateConceptRequest {
             title: "Rust Workspace Operations".to_string(),

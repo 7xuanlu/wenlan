@@ -21,11 +21,16 @@ mod manifest;
 #[path = "link_checks_test/orphans.rs"]
 mod orphans;
 
+// M1 honest columns: `workspace` and `space` are NOT NULL and always
+// mirrored (migration 80), so this writes one scope value into both --
+// `None` seeds the reserved sentinel id rather than a NULL a NOT NULL
+// column now rejects.
 async fn insert_page(conn: &libsql::Connection, id: &str, workspace: Option<&str>, status: &str) {
+    let scope = workspace.unwrap_or(crate::db::UNFILED_SPACE_ID);
     conn.execute(
-        "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace, creation_kind, review_status) \
-         VALUES (?1, ?1, 'body', '[]', 1, ?3, 'now', 'now', 'now', ?2, 'distilled', 'confirmed')",
-        libsql::params![id, workspace, status],
+        "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace, space, creation_kind, review_status) \
+         VALUES (?1, ?1, 'body', '[]', 1, ?4, 'now', 'now', 'now', ?2, ?3, 'distilled', 'confirmed')",
+        libsql::params![id, scope, scope, status],
     )
     .await
     .unwrap();

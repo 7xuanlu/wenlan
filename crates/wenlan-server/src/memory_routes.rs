@@ -2080,20 +2080,17 @@ pub async fn handle_create_page(
     };
 
     // Apply X-Origin-Space header as fallback only when body omits `space`.
-    // Clone before consuming so workspace fallback can use the same value.
     if req.space.is_none() {
         req.space = header_space.clone();
     }
-    // HTTP/MCP `space` remains the legacy scope input. Persist it only when it
-    // names a registered space, and mirror it to `workspace` for P3 scoping when
-    // no explicit workspace was supplied.
+    // HTTP/MCP `space` is the legacy scope input; `workspace` is the
+    // authoritative P3 axis (spec line 518). Validate each independently
+    // against registered spaces, dropping garbage/category values with a
+    // warning -- reconciling the two into the honest `pages.space`/
+    // `pages.workspace` columns (workspace wins when present) is
+    // insert_page_with_kind's job now, not this handler's.
     req.space = registered_request_space(&db, &req.space, "create_page space").await?;
-    if req.workspace.is_none() {
-        req.workspace = req.space.clone();
-    } else {
-        req.workspace =
-            registered_request_space(&db, &req.workspace, "create_page workspace").await?;
-    }
+    req.workspace = registered_request_space(&db, &req.workspace, "create_page workspace").await?;
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
     let result = wenlan_core::post_write::create_page_with_tuning(
         &db,

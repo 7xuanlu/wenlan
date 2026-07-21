@@ -104,12 +104,9 @@ async fn resolve_duplicate_page_titles(
            JOIN pages collision
              ON collision.status='active'
             AND LOWER(collision.title)=LOWER(p.title)
-            AND ((COALESCE(p.workspace,p.space) IS NULL
-                  AND COALESCE(collision.workspace,collision.space) IS NULL)
-                 OR COALESCE(collision.workspace,collision.space)
-                    =COALESCE(p.workspace,p.space))
+            AND collision.space=p.space
           WHERE p.status='active'{scope_clause}
-          GROUP BY p.id,p.title,COALESCE(p.workspace,p.space)
+          GROUP BY p.id,p.title,p.space
          HAVING COUNT(collision.id)>1
           ORDER BY p.id"
     );
@@ -306,12 +303,10 @@ async fn renamed_page_title_still_actionable(
                   JOIN pages collision
                     ON collision.status='active'
                    AND collision.id<>target.id
-                   AND ((?2 IS NULL AND COALESCE(collision.workspace,collision.space) IS NULL)
-                        OR COALESCE(collision.workspace,collision.space)=?2)
+                   AND collision.space=COALESCE(?2,'00000000-0000-4000-8000-000000000001')
                    AND lower(collision.title)=lower(target.title)
                  WHERE target.id=?1 AND target.status='active'
-                   AND ((?2 IS NULL AND COALESCE(target.workspace,target.space) IS NULL)
-                        OR COALESCE(target.workspace,target.space)=?2))",
+                   AND target.space=COALESCE(?2,'00000000-0000-4000-8000-000000000001'))",
             libsql::params::Params::Positional(vec![
                 libsql::Value::Text(page_id.clone()),
                 target_scope
@@ -419,7 +414,7 @@ async fn resolve_source_pages(
 ) -> Result<Vec<DeterministicResolution>, WenlanError> {
     let (scope_clause, params) = page_scope_clause(scope);
     let sql = format!(
-        "SELECT p.id,p.version,COALESCE(p.workspace,p.space),p.source_memory_ids,
+        "SELECT p.id,p.version,p.space,p.source_memory_ids,
                 p.review_status,COALESCE(p.user_edited,0),p.content,
                 EXISTS(SELECT 1 FROM page_sources ps WHERE ps.page_id=p.id),
                 EXISTS(SELECT 1 FROM page_evidence pe WHERE pe.page_id=p.id)
@@ -588,15 +583,15 @@ async fn resolve_page_projections(
     .map_err(|error| WenlanError::Validation(format!("repair projection scan: {error}")))?;
     let (sql, params) = match scope {
         RepairLintScope::Global => (
-            "SELECT id,status,version,COALESCE(workspace,space) FROM pages ORDER BY id",
+            "SELECT id,status,version,space FROM pages ORDER BY id",
             libsql::params::Params::None,
         ),
         RepairLintScope::Registered { space } => (
-            "SELECT id,status,version,COALESCE(workspace,space) FROM pages WHERE workspace=?1 ORDER BY id",
+            "SELECT id,status,version,space FROM pages WHERE space=?1 ORDER BY id",
             libsql::params::Params::Positional(vec![libsql::Value::Text(space.clone())]),
         ),
         RepairLintScope::Uncategorized => (
-            "SELECT id,status,version,COALESCE(workspace,space) FROM pages WHERE workspace IS NULL ORDER BY id",
+            "SELECT id,status,version,space FROM pages WHERE space='00000000-0000-4000-8000-000000000001' ORDER BY id",
             libsql::params::Params::None,
         ),
     };
@@ -1108,11 +1103,11 @@ fn page_scope_clause(scope: &RepairLintScope) -> (&'static str, libsql::params::
     match scope {
         RepairLintScope::Global => ("", libsql::params::Params::None),
         RepairLintScope::Registered { space } => (
-            " AND COALESCE(p.workspace,p.space)=?1",
+            " AND p.space=?1",
             libsql::params::Params::Positional(vec![libsql::Value::Text(space.clone())]),
         ),
         RepairLintScope::Uncategorized => (
-            " AND COALESCE(p.workspace,p.space) IS NULL",
+            " AND p.space='00000000-0000-4000-8000-000000000001'",
             libsql::params::Params::None,
         ),
     }
@@ -1124,18 +1119,16 @@ async fn resolve_orphan_links(
 ) -> Result<Vec<DeterministicResolution>, WenlanError> {
     let (scope_clause, params) = page_scope_clause(scope);
     let sql = format!(
-        "SELECT pl.source_page_id,pl.label_key,COALESCE(p.workspace,p.space),
+        "SELECT pl.source_page_id,pl.label_key,p.space,
                 COUNT(target.id),MIN(target.id)
            FROM page_links pl
            JOIN pages p ON p.id=pl.source_page_id
            LEFT JOIN pages target
              ON LOWER(target.title)=LOWER(pl.label_key)
             AND target.status='active'
-            AND ((COALESCE(p.workspace,p.space) IS NULL
-                  AND COALESCE(target.workspace,target.space) IS NULL)
-                 OR COALESCE(target.workspace,target.space)=COALESCE(p.workspace,p.space))
+            AND target.space=p.space
           WHERE pl.target_page_id IS NULL AND p.status='active'{scope_clause}
-          GROUP BY pl.source_page_id,pl.label_key,COALESCE(p.workspace,p.space)
+          GROUP BY pl.source_page_id,pl.label_key,p.space
           ORDER BY pl.source_page_id,pl.label_key"
     );
     let mut rows = snapshot
