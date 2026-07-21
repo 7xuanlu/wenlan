@@ -1828,6 +1828,7 @@ async fn replace_source_page_impl(
             "source Page replacement requires title, content, and source ids".into(),
         ));
     }
+    let content = crate::export::provenance::validate_canonical_page_content(content)?;
     let current = db
         .get_page(page_id)
         .await?
@@ -1844,9 +1845,8 @@ async fn replace_source_page_impl(
     // a byte-identical stub body on every retry, and without this each retry
     // would bump the version and append another identical history row.
     //
-    // Compared against the *sanitized* body because that is the form the row
-    // holds; comparing the raw one would report a spurious change forever.
-    let sanitized = crate::export::provenance::sanitize_ingress_content(content);
+    // Canonical storage is exact source, so compare the validated incoming
+    // representation directly with the stored representation.
     let stored_sources: HashSet<&str> = current
         .source_memory_ids
         .iter()
@@ -1855,7 +1855,7 @@ async fn replace_source_page_impl(
     let incoming_sources: HashSet<&str> = source_memory_ids.iter().map(String::as_str).collect();
     if current.title == title
         && current.summary.as_deref() == summary
-        && current.content == sanitized
+        && current.content == content
         && stored_sources == incoming_sources
     {
         return Ok(WriteResult {
@@ -2478,6 +2478,7 @@ async fn create_page_impl(
             "page content must not be empty".into(),
         ));
     }
+    crate::export::provenance::validate_canonical_page_content(&req.content)?;
     let creation_kind = req.creation_kind.as_deref().unwrap_or("distilled");
     if creation_kind == "distilled" && req.source_memory_ids.is_empty() {
         return Err(WenlanError::Validation(
@@ -2638,7 +2639,7 @@ async fn create_page_impl(
                 );
             }
         }
-        return Err(WenlanError::VectorDb(e.to_string()));
+        return Err(e);
     }
     drop(projection);
 
@@ -2816,6 +2817,8 @@ pub async fn stage_page_revision_card(
     source_memory_ids: &[String],
     edited_by: &str,
 ) -> Result<WriteResult, WenlanError> {
+    crate::export::provenance::validate_canonical_page_content(content)?;
+
     let revision_card_id = format!(
         "mem_{}",
         uuid::Uuid::new_v4()
@@ -3089,11 +3092,6 @@ async fn update_page_impl(
         }
     }
 
-    let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
-    let projection = knowledge_path.map(|path| {
-        crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
-    });
-
     // ── Retry identity ──────────────────────────────────────────────────────
     // A caller that sends both ids gets exactly-once semantics. The same pair
     // with the same request replays the recorded response without writing
@@ -3124,6 +3122,16 @@ async fn update_page_impl(
             });
         }
     }
+
+    // Preserve receipt replay/collision precedence, then reject daemon-owned
+    // projection delimiters before ownership gating, revision-card staging, or
+    // any canonical page/projection mutation.
+    crate::export::provenance::validate_canonical_page_content(&req.content)?;
+
+    let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
+    let projection = knowledge_path.map(|path| {
+        crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
+    });
 
     // ── Load, decide ownership, and write under one version CAS ─────────────
     // The ownership decision is made from a loaded row, and the write CASes on
@@ -4488,6 +4496,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_page_rejects_reserved_delimiter_before_projection_or_db_mutation() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+
+        let (db, _dir) = test_db().await;
+        let knowledge = tempfile::tempdir().unwrap();
+        let req = CreateConceptRequest {
+            title: "Rejected authored page".to_string(),
+            content: format!("before {SOURCES_BLOCK_START} after"),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: Vec::new(),
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let error = create_page(&db, req, "test", Some(knowledge.path()))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        assert!(db.list_pages("active", 10, 0).await.unwrap().is_empty());
+        assert!(
+            std::fs::read_dir(knowledge.path())
+                .unwrap()
+                .next()
+                .is_none(),
+            "validation must happen before projection creates any artifact"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_page_rejects_reserved_delimiter_before_distilled_dedup_attachment() {
+        use crate::export::provenance::SOURCES_BLOCK_END;
+
+        let (db, _dir) = test_db().await;
+        let existing_source = "mem-reserved-dedup-existing";
+        let candidate_source = "mem-reserved-dedup-candidate";
+        let grounded = "Rust workspace members share package metadata and one dependency lockfile";
+        seed_memory(&db, existing_source, grounded).await;
+        seed_memory(&db, candidate_source, grounded).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_reserved_dedup_existing",
+            "Rust Workspace",
+            None,
+            grounded,
+            None,
+            Some("work"),
+            &[existing_source],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let before = db
+            .get_page("page_reserved_dedup_existing")
+            .await
+            .unwrap()
+            .unwrap();
+        let evidence_before = db
+            .get_page_evidence("page_reserved_dedup_existing")
+            .await
+            .unwrap();
+        let history_before = db
+            .list_page_history("page_reserved_dedup_existing", 10)
+            .await
+            .unwrap();
+        let req = CreateConceptRequest {
+            title: "Rust Workspace".to_string(),
+            content: format!("{grounded}\n\n{SOURCES_BLOCK_END}"),
+            summary: None,
+            entity_id: None,
+            space: Some("work".to_string()),
+            source_memory_ids: vec![candidate_source.to_string()],
+            creation_kind: Some("distilled".to_string()),
+            workspace: Some("work".to_string()),
+        };
+
+        let error = create_page_with_tuning(&db, req, "test", None, 1, -1.0)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        let after = db
+            .get_page("page_reserved_dedup_existing")
+            .await
+            .unwrap()
+            .unwrap();
+        let evidence_after = db
+            .get_page_evidence("page_reserved_dedup_existing")
+            .await
+            .unwrap();
+        let history_after = db
+            .list_page_history("page_reserved_dedup_existing", 10)
+            .await
+            .unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.source_memory_ids, before.source_memory_ids);
+        assert_eq!(after.stale_reason, before.stale_reason);
+        assert_eq!(evidence_after.len(), evidence_before.len());
+        assert_eq!(history_after.len(), history_before.len());
+    }
+
+    #[tokio::test]
     async fn create_page_borns_distilled_unconfirmed() {
         let (db, _dir) = test_db().await;
         let docs = [
@@ -5684,6 +5799,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn page_write_update_rejects_reserved_delimiter_before_revision_staging() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-pagewrite-reserved-staging";
+        let source_content = "Rust ownership keeps memory safety rules explicit in systems code";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_pagewrite_reserved_staging";
+        db.insert_page_with_kind(
+            page_id,
+            "Rust Ownership",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+        let history_before = db.list_page_history(page_id, 10).await.unwrap();
+        assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+
+        let error = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: format!("{source_content}\n\n{SOURCES_BLOCK_START}"),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(before.version),
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                expected_source_revision: None,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        let history_after = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.source_memory_ids, before.source_memory_ids);
+        assert_eq!(history_after, history_before);
+        assert!(
+            db.list_pending_revisions(10).await.unwrap().is_empty(),
+            "rejected source must not survive as a pending revision card"
+        );
+    }
+
+    #[tokio::test]
     async fn gated_refresh_does_not_clear_a_newer_source_revision() {
         let (db, _dir) = test_db().await;
         for (source_id, content) in [
@@ -6009,8 +6189,12 @@ mod tests {
             "a freshly created source page must already have its v1 history row"
         );
 
-        let v2 = "A source page is the machine-owned projection of one ingested document, \
-                  rewritten whenever that document is enriched again";
+        let v2 = "\u{feff}\r\n  A source page keeps exact source  \r\n\r\n";
+        assert_ne!(
+            v2.trim_end(),
+            v2,
+            "positive control: trimming must change this fixture"
+        );
         let result = page_write(
             &db,
             PageWrite::ReplaceSource {
@@ -6065,8 +6249,7 @@ mod tests {
         let (mem_id, _v1) = seed_source_page(&db, page_id).await;
         let sources = [mem_id.to_string()];
 
-        let body = "A source page is the machine-owned projection of one ingested document, \
-                    rebuilt identically on every retry while the analysis LLM stays down";
+        let body = "\u{feff}\r\n  A source page retry stays byte-identical  \t\r\n\r\n";
         let replace = |content: &'static str| {
             page_write(
                 &db,
@@ -6113,6 +6296,68 @@ mod tests {
             vec![2, 1],
             "no version means no history row — the retry appends nothing"
         );
+    }
+
+    #[tokio::test]
+    async fn replace_source_page_rejects_reserved_delimiters_without_mutation() {
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+
+        let (db, _dir) = test_db().await;
+        let page_id = "page_source_reserved";
+        let (mem_id, _v1) = seed_source_page(&db, page_id).await;
+        let sources = [mem_id.to_string()];
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+        let history_before = db.list_page_history(page_id, 10).await.unwrap();
+        let source_ids_before: HashSet<_> = db
+            .get_page_sources(page_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+        let cases = [
+            format!("before {SOURCES_BLOCK_START} after"),
+            format!("before {SOURCES_BLOCK_END} after"),
+            format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+            format!(
+                "{SOURCES_BLOCK_START}\none\n{SOURCES_BLOCK_END}\n\
+                 {SOURCES_BLOCK_START}\ntwo\n{SOURCES_BLOCK_END}"
+            ),
+            format!("```md\n{SOURCES_BLOCK_START}\n```\nkept prose"),
+        ];
+
+        for content in cases {
+            let error = page_write(
+                &db,
+                PageWrite::ReplaceSource {
+                    page_id,
+                    title: "Changed title",
+                    summary: Some("Changed summary"),
+                    content: &content,
+                    source_memory_ids: &sources,
+                    agent: "doc-enrich",
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, WenlanError::Validation(_)));
+
+            let after = db.get_page(page_id).await.unwrap().unwrap();
+            let history_after = db.list_page_history(page_id, 10).await.unwrap();
+            let source_ids_after: HashSet<_> = db
+                .get_page_sources(page_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect();
+            assert_eq!(after.title, before.title);
+            assert_eq!(after.summary, before.summary);
+            assert_eq!(after.content, before.content);
+            assert_eq!(after.version, before.version);
+            assert_eq!(history_after.len(), history_before.len());
+            assert_eq!(source_ids_after, source_ids_before);
+        }
     }
 
     /// Seed a page and return `(db, tempdir, page_id, memory_id)` for the
@@ -6204,6 +6449,8 @@ mod tests {
     /// their new text was saved when it never was, so refuse instead.
     #[tokio::test]
     async fn page_write_same_operation_id_with_different_body_is_a_conflict() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+
         let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_conflict").await;
 
         update_page(
@@ -6222,15 +6469,15 @@ mod tests {
         .await
         .unwrap();
         let after_first = db.get_page(page_id).await.unwrap().unwrap();
+        let changed_body = format!(
+            "A retried write must not become a second version of the page — \
+             different text\n\n{SOURCES_BLOCK_START}"
+        );
 
         let err = update_page(
             &db,
             page_id,
-            retry_req(
-                "A retried write must not become a second version of the page — different text",
-                mem_id,
-                "op-1",
-            ),
+            retry_req(&changed_body, mem_id, "op-1"),
             "re_distill",
             false,
             None,
@@ -6240,7 +6487,7 @@ mod tests {
         .expect_err("reusing an operation id for a different write must be refused");
         assert!(
             matches!(err, WenlanError::Conflict(_)),
-            "expected a conflict, got {err:?}"
+            "receipt collision must win before canonical-content validation; got {err:?}"
         );
 
         let unchanged = db.get_page(page_id).await.unwrap().unwrap();

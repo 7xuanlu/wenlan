@@ -20,8 +20,8 @@ fn ensure_meaningful_snapshot(title: &str, content: &str) -> Result<(), WenlanEr
 }
 
 fn ensure_meaningful_draft_snapshot(title: &str, content: &str) -> Result<(), WenlanError> {
-    let canonical_content = crate::export::provenance::sanitize_ingress_content(content);
-    ensure_meaningful_snapshot(title, &canonical_content)
+    let content = crate::export::provenance::validate_canonical_page_content(content)?;
+    ensure_meaningful_snapshot(title, content)
 }
 
 fn ensure_client_page_draft_id(id: &str) -> Result<(), WenlanError> {

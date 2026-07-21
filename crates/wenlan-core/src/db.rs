@@ -26109,12 +26109,10 @@ impl MemoryDB {
         let space: &str = &resolved_space;
         let workspace: &str = &resolved_space;
 
-        // Sanitize daemon-reserved Sources delimiters from client content so
-        // persisted `Page.content` never carries them (symmetric with the
-        // watcher's egress canonicalization). Shadows `content` so both the
-        // INSERT and the wikilink refresh below see the sanitized value.
-        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
-        let content: &str = &sanitized_content;
+        // Canonical storage is exact source. Projection-owned delimiters are
+        // rejected rather than rewritten, and every consumer below sees the
+        // same caller-supplied representation.
+        let content = crate::export::provenance::validate_canonical_page_content(content)?;
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
 
@@ -26240,10 +26238,10 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<bool, WenlanError> {
-        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
+        let content = crate::export::provenance::validate_canonical_page_content(content)?;
         let source_ids_json = serde_json::to_string(source_memory_ids)
             .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
-        let embed_text = crate::pages::page_embedding_text(title, summary, &sanitized_content);
+        let embed_text = crate::pages::page_embedding_text(title, summary, content);
         let embedding_sql = match self.generate_embeddings(&[embed_text]) {
             Ok(mut vectors) if !vectors.is_empty() => {
                 vectors.pop().map(|embedding| Self::vec_to_sql(&embedding))
@@ -26277,7 +26275,7 @@ impl MemoryDB {
                         libsql::params![
                             title,
                             summary,
-                            sanitized_content.as_str(),
+                            content,
                             source_ids_json.as_str(),
                             now.as_str(),
                             embedding,
@@ -26297,7 +26295,7 @@ impl MemoryDB {
                         libsql::params![
                             title,
                             summary,
-                            sanitized_content.as_str(),
+                            content,
                             source_ids_json.as_str(),
                             now.as_str(),
                             id
@@ -26366,7 +26364,7 @@ impl MemoryDB {
             )));
         }
         drop(conn);
-        if let Err(error) = self.refresh_page_wikilinks(id, &sanitized_content).await {
+        if let Err(error) = self.refresh_page_wikilinks(id, content).await {
             log::warn!("[page-links] source Page refresh failed for {id}: {error}");
         }
         Ok(true)
@@ -26880,14 +26878,10 @@ impl MemoryDB {
             ));
         }
         let citations_bind: &str = citations_json.unwrap_or("[]");
-        // Sanitize daemon-reserved Sources delimiters from client content so
-        // persisted `Page.content` never carries them (symmetric with the
-        // watcher's egress canonicalization). Shadows `content` so both the
-        // UPDATE and the wikilink refresh below see the sanitized value. The
-        // watcher's apply path already passes a canonicalized body, so this is
-        // an idempotent no-op there.
-        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
-        let content: &str = &sanitized_content;
+        // Canonical storage is exact source. The watcher already decodes its
+        // projection before this boundary; all other callers must supply
+        // delimiter-free source, which is stored without transformation.
+        let content = crate::export::provenance::validate_canonical_page_content(content)?;
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -44470,18 +44464,20 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn insert_page_strips_daemon_sources_delimiters_from_client_content() {
-        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+    async fn insert_page_preserves_delimiter_free_content_exactly() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        let content = format!(
-            "## Overview\nReal prose.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_99]]\n{SOURCES_BLOCK_END}\n"
+        let content = "\u{feff}\r\n  ## Overview  \r\nReal prose.\t \r\n\r\n";
+        assert_ne!(
+            content.trim_end(),
+            content,
+            "positive control: trimming must change this fixture"
         );
         db.insert_page(
             "page_ingress",
             "Ingress",
             None,
-            &content,
+            content,
             None,
             None,
             &[],
@@ -44490,52 +44486,92 @@ pub(crate) mod tests {
         .await
         .unwrap();
         let stored = db.get_page("page_ingress").await.unwrap().unwrap();
-        assert!(!stored.content.contains(SOURCES_BLOCK_START));
-        assert!(!stored.content.contains(SOURCES_BLOCK_END));
-        assert!(!stored.content.contains("## Sources"));
-        assert!(!stored.content.contains("[[mem_99]]"));
-        assert!(stored.content.contains("Real prose."));
+        assert_eq!(stored.content, content);
+        let history = db.list_page_history("page_ingress", 10).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, content);
     }
 
     #[tokio::test]
-    async fn update_page_content_strips_daemon_sources_delimiters_from_client_content() {
-        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+    async fn update_page_content_preserves_delimiter_free_content_exactly() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
         db.insert_page("page_upd", "Upd", None, "seed", None, None, &[], &now)
             .await
             .unwrap();
-        let content = format!(
-            "Updated prose.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_7]]\n{SOURCES_BLOCK_END}\n"
-        );
-        db.update_page_content("page_upd", &content, &[], "manual_edit")
+        let content = "\r\n  Updated prose.\t \r\n\r\n";
+        db.update_page_content("page_upd", content, &[], "manual_edit")
             .await
             .unwrap();
         let stored = db.get_page("page_upd").await.unwrap().unwrap();
-        assert!(!stored.content.contains(SOURCES_BLOCK_START));
-        assert!(!stored.content.contains(SOURCES_BLOCK_END));
-        assert!(!stored.content.contains("## Sources"));
-        assert!(!stored.content.contains("[[mem_7]]"));
-        assert!(stored.content.contains("Updated prose."));
+        assert_eq!(stored.content, content);
+        let history = db.list_page_history("page_upd", 10).await.unwrap();
+        assert_eq!(history[0].content, content);
     }
 
     #[tokio::test]
-    async fn insert_page_stray_start_delimiter_does_not_truncate_prose() {
-        // Data-loss regression: a lone START token (no matching END) must not
-        // cause the prose after it to be dropped. Both halves must survive and
-        // the delimiter token must be removed.
+    async fn insert_page_rejects_reserved_sources_delimiter_without_mutation() {
         use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        let content = format!("prose A {SOURCES_BLOCK_START} prose B");
-        db.insert_page("page_stray", "Stray", None, &content, None, None, &[], &now)
+        let content =
+            format!("prose A {SOURCES_BLOCK_START} daemon block {SOURCES_BLOCK_END} prose B");
+        let error = db
+            .insert_page(
+                "page_rejected",
+                "Rejected",
+                None,
+                &content,
+                None,
+                None,
+                &[],
+                &now,
+            )
             .await
-            .unwrap();
-        let stored = db.get_page("page_stray").await.unwrap().unwrap();
-        assert!(stored.content.contains("prose A"));
-        assert!(stored.content.contains("prose B"));
-        assert!(!stored.content.contains(SOURCES_BLOCK_START));
-        assert!(!stored.content.contains(SOURCES_BLOCK_END));
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        assert!(db.get_page("page_rejected").await.unwrap().is_none());
+        assert!(db
+            .list_page_history("page_rejected", 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_page_content_rejects_reserved_sources_delimiter_without_mutation() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_rejected_upd",
+            "Upd",
+            None,
+            "seed",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        let before = db.get_page("page_rejected_upd").await.unwrap().unwrap();
+        let history_before = db.list_page_history("page_rejected_upd", 10).await.unwrap();
+        let error = db
+            .update_page_content(
+                "page_rejected_upd",
+                &format!("prose A {SOURCES_BLOCK_START} prose B"),
+                &[],
+                "manual_edit",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        let after = db.get_page("page_rejected_upd").await.unwrap().unwrap();
+        let history_after = db.list_page_history("page_rejected_upd", 10).await.unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(history_after.len(), history_before.len());
     }
 
     // ---- page_links / wikilink graph ----
@@ -47366,6 +47402,7 @@ pub(crate) mod tests {
     async fn replace_source_page_advances_source_revision_with_exact_provenance() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
+        let replacement = "\u{feff}\r\n  Updated body  \r\n\r\n";
         db.insert_page_with_kind(
             "page-source-replace",
             "Source page",
@@ -47388,7 +47425,7 @@ pub(crate) mod tests {
                 "page-source-replace",
                 "Source page",
                 Some("Updated summary"),
-                "Updated body",
+                replacement,
                 &["source-new-a", "source-new-b"],
                 "source_refresh",
             )
@@ -47403,6 +47440,7 @@ pub(crate) mod tests {
             1
         );
         let page = db.get_page("page-source-replace").await.unwrap().unwrap();
+        assert_eq!(page.content, replacement);
         assert_eq!(
             page.source_memory_ids,
             vec!["source-new-a".to_string(), "source-new-b".to_string()]
@@ -47418,6 +47456,79 @@ pub(crate) mod tests {
             sources,
             HashSet::from(["source-new-a".to_string(), "source-new-b".to_string()])
         );
+        let history = db
+            .list_page_history("page-source-replace", 10)
+            .await
+            .unwrap();
+        assert_eq!(history[0].content, replacement);
+    }
+
+    #[tokio::test]
+    async fn replace_source_page_rejects_reserved_delimiter_without_mutation() {
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page-source-rejected",
+            "Source page",
+            None,
+            "Original body",
+            None,
+            None,
+            &["source-old"],
+            &now,
+            "source",
+            "confirmed",
+            None,
+            Some("[]"),
+        )
+        .await
+        .unwrap();
+        let before = db.get_page("page-source-rejected").await.unwrap().unwrap();
+        let history_before = db
+            .list_page_history("page-source-rejected", 10)
+            .await
+            .unwrap();
+        let sources_before: HashSet<_> = db
+            .get_page_sources("page-source-rejected")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+
+        let error = db
+            .replace_source_page(
+                "page-source-rejected",
+                "Changed title",
+                Some("Changed summary"),
+                &format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+                &["source-new"],
+                "source_refresh",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+
+        let after = db.get_page("page-source-rejected").await.unwrap().unwrap();
+        let history_after = db
+            .list_page_history("page-source-rejected", 10)
+            .await
+            .unwrap();
+        let sources_after: HashSet<_> = db
+            .get_page_sources("page-source-rejected")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.summary, before.summary);
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(history_after.len(), history_before.len());
+        assert_eq!(sources_after, sources_before);
     }
 
     #[tokio::test]

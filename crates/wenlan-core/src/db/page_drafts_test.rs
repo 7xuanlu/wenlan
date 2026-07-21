@@ -346,8 +346,12 @@ async fn simultaneous_same_id_creates_are_idempotent_or_conflict_by_snapshot() {
 #[tokio::test]
 async fn create_preserves_bytes_null_embedding_and_has_no_derived_rows() {
     let (db, _tmp) = test_db().await;
-    let content =
-        "Before\n<!-- origin:sources:start -->\nowned\n<!-- origin:sources:end -->\nAfter  \n";
+    let content = "\u{feff}\r\n  Before  \r\nAfter\t \r\n\r\n";
+    assert_ne!(
+        content.trim_end(),
+        content,
+        "positive control: trimming must change this fixture"
+    );
     let page = db
         .create_page_draft("  Draft  ", content, None, None)
         .await
@@ -374,6 +378,65 @@ async fn create_preserves_bytes_null_embedding_and_has_no_derived_rows() {
             }
         );
         assert_eq!(scalar_i64(&db, &sql, &page.id).await, 0);
+    }
+}
+
+#[tokio::test]
+async fn create_and_update_reject_reserved_delimiters_without_mutation() {
+    use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+
+    let (db, _tmp) = test_db().await;
+    let cases = [
+        format!("before {SOURCES_BLOCK_START} after"),
+        format!("before {SOURCES_BLOCK_END} after"),
+        format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+        format!(
+            "{SOURCES_BLOCK_START}\none\n{SOURCES_BLOCK_END}\n\
+             {SOURCES_BLOCK_START}\ntwo\n{SOURCES_BLOCK_END}"
+        ),
+        format!("```md\n{SOURCES_BLOCK_START}\n```\nkept prose"),
+    ];
+
+    let rejected_id = "page_00000000-0000-4000-8000-000000000099";
+    for content in &cases {
+        assert!(matches!(
+            db.create_page_draft_with_id(rejected_id, "Draft", content, None, None)
+                .await,
+            Err(WenlanError::Validation(_))
+        ));
+        assert!(db.get_page(rejected_id).await.unwrap().is_none());
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT COUNT(*) FROM page_draft_create_requests WHERE page_id=?1",
+                rejected_id,
+            )
+            .await,
+            0
+        );
+    }
+
+    let draft = db
+        .create_page_draft("Original title", "Original body  \n", None, None)
+        .await
+        .unwrap();
+    for content in &cases {
+        assert!(matches!(
+            db.update_page_draft(
+                &draft.id,
+                draft.version,
+                "Changed title",
+                content,
+                None,
+                None,
+            )
+            .await,
+            Err(WenlanError::Validation(_))
+        ));
+        let after = db.get_page(&draft.id).await.unwrap().unwrap();
+        assert_eq!(after.title, draft.title);
+        assert_eq!(after.content, draft.content);
+        assert_eq!(after.version, draft.version);
     }
 }
 
