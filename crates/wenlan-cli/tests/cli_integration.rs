@@ -569,6 +569,9 @@ fn setup_subcommands_have_help() {
         &["keys", "status", "--help"][..],
         &["keys", "set", "--help"][..],
         &["keys", "clear", "--help"][..],
+        &["enrichment", "status", "--help"][..],
+        &["enrichment", "configure", "--help"][..],
+        &["enrichment", "disable", "--help"][..],
     ] {
         cli().args(args).assert().success();
     }
@@ -751,7 +754,9 @@ fn setup_background_status_roundtrip_isolated() {
         .stdout(predicate::str::contains(
             "Wenlan is set up for local memory",
         ))
-        .stdout(predicate::str::contains("Distill cycles stay off"));
+        .stdout(predicate::str::contains(
+            "Model-backed background enrichment is off",
+        ));
 
     let config = fs::read_to_string(runtime.config_path()).expect("config written");
     assert!(config.contains(r#""setup_completed": true"#));

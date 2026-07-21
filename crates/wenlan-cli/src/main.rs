@@ -80,6 +80,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::setup::KeyCommand,
     },
+    /// Configure, inspect, or disable model-backed background enrichment.
+    Enrichment {
+        #[command(subcommand)]
+        command: commands::setup::EnrichmentCommand,
+    },
     /// Connect Wenlan to a supported agent or editor.
     Connect(commands::mcp::ConnectArgs),
     /// Search memories by query (vector + FTS hybrid).
@@ -191,6 +196,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
         Commands::Models { command } => commands::setup::run_model(command).await?,
         Commands::Keys { command } => commands::setup::run_key(command).await?,
+        Commands::Enrichment { command } => commands::setup::run_enrichment(command).await?,
         Commands::Connect(args) => commands::mcp::run_connect(args, cli.quiet)?,
         Commands::Search { query, limit } => {
             commands::search::run(&client, format, cli.quiet, query, limit).await?

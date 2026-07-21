@@ -83,6 +83,23 @@ wenlan background off
 wenlan restart
 ```
 
+### `wenlan enrichment <status|configure|disable>`
+
+Models and provider keys are capability only; they do not authorize automatic
+model calls. Inspect the two job groups, confirm exact hard-pinned sources, or
+turn model-backed background work off while keeping providers installed:
+
+```bash
+wenlan enrichment status
+wenlan enrichment configure --everyday on-device --synthesis on-device
+wenlan enrichment disable
+```
+
+`configure` shows what each job does and discloses cloud cost/data transfer or
+on-device CPU/GPU/RAM use before confirmation. An unavailable hard pin pauses;
+Wenlan never substitutes another provider. Deterministic storage, indexing, and
+sync continue when enrichment is off.
+
 ### `wenlan doctor`
 
 Diagnose runtime reachability, background mode, model setup, and API key setup.
