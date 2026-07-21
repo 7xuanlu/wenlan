@@ -535,6 +535,16 @@ pub const EMBEDDING_DIM: usize = 768;
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
 pub const SCHEMA_VERSION: u32 = 80;
 
+/// Reserved id AND name of the uncategorized-page sentinel space (M1 honest
+/// columns). Uncategorized pages store this value in `pages.space`/`workspace`
+/// (both NOT NULL) instead of NULL; `row_to_page` folds it back to `None` on
+/// the wire. It is minted by migration 80 as a spaces row whose `id` AND `name`
+/// are both this UUID string — the name is the UUID (not the word "unfiled") so
+/// a user's own space literally named "unfiled" can never collide with the
+/// sentinel on the name-unique constraint. `create_space`/`update_space` reject
+/// this exact string as a user-supplied name, keeping the reservation closed.
+pub(crate) const UNFILED_SPACE_ID: &str = "00000000-0000-4000-8000-000000000001";
+
 /// A retry receipt to commit alongside a mutation.
 ///
 /// Borrowed rather than owned so a caller can hand one to the write without
@@ -7495,16 +7505,18 @@ impl MemoryDB {
     // -- so the in-transaction NULL assertion is the only thing standing
     // between a surviving NULL and a column that lies about itself.
     async fn migrate_80_page_scope_fold(&self) -> Result<(), WenlanError> {
-        const UNFILED_SPACE_ID: &str = "00000000-0000-4000-8000-000000000001";
         // Measured 2026-07-19 on this machine: 100k synthetic pages, combined
         // space+workspace UPDATE = 389ms (~3.9µs/row-pair). Targeting a
         // ~50ms/batch lock-duration budget gives ~12.8k rows; 10k leaves
         // headroom for slower production hardware and larger real indexes.
         const BATCH_SIZE: i64 = 10_000;
 
-        // Steps 1-2: mint `unfiled` + create and populate the fold ledger
-        // from the pre-fold values, together in one transaction, before any
-        // backfill batch runs.
+        // Steps 1-2: mint the uncategorized sentinel space + create and
+        // populate the fold ledger from the pre-fold values, together in one
+        // transaction, before any backfill batch runs. The sentinel row's
+        // `name` is the reserved UUID (`?1`), NOT the word "unfiled", so a
+        // user's own space literally named "unfiled" never collides with it on
+        // the name-unique constraint.
         {
             let conn = self.conn.lock().await;
             conn.execute("BEGIN", ())
@@ -7513,7 +7525,7 @@ impl MemoryDB {
             let result: Result<(), WenlanError> = async {
                 conn.execute(
                     "INSERT OR IGNORE INTO spaces (id, name, description, suggested, created_at, updated_at) \
-                     VALUES (?1, 'unfiled', NULL, 0, unixepoch('now'), unixepoch('now'))",
+                     VALUES (?1, ?1, NULL, 0, unixepoch('now'), unixepoch('now'))",
                     libsql::params![UNFILED_SPACE_ID],
                 )
                 .await
@@ -7539,13 +7551,13 @@ impl MemoryDB {
                     "INSERT OR IGNORE INTO page_space_fold_ledger \
                         (page_id, prior_space, prior_workspace, assigned_space, rule, migrated_at) \
                      SELECT id, space, workspace, \
-                        COALESCE(workspace, CASE WHEN space IN (SELECT name FROM spaces) THEN space END, 'unfiled'), \
+                        COALESCE(workspace, CASE WHEN space IN (SELECT name FROM spaces) THEN space END, ?2), \
                         CASE WHEN workspace IS NOT NULL THEN 'workspace' \
                              WHEN space IN (SELECT name FROM spaces) THEN 'space_residue' \
                              ELSE 'unfiled' END, \
                         ?1 \
                      FROM pages",
-                    libsql::params![chrono::Utc::now().to_rfc3339()],
+                    libsql::params![chrono::Utc::now().to_rfc3339(), UNFILED_SPACE_ID],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("m80 populate ledger: {e}")))?;
@@ -7566,11 +7578,15 @@ impl MemoryDB {
         }
 
         // Steps 3-4: backfill in rowid-range batches, one commit per batch,
-        // so a kill mid-run resumes from rowid 0 rather than restarting a
-        // half-open transaction. Resuming re-touches already-folded rows,
-        // which is a no-op (see idempotency note on the fn doc comment), not
-        // a correctness risk.
-        let mut cursor: i64 = 0;
+        // so a kill mid-run resumes from the lowest rowid rather than
+        // restarting a half-open transaction. Resuming re-touches
+        // already-folded rows, which is a no-op (see idempotency note on the
+        // fn doc comment), not a correctness risk. The cursor starts at
+        // i64::MIN, not 0, so rows at a non-positive rowid (a rowid can be
+        // negative or 0 when set explicitly) are backfilled too -- otherwise
+        // such a row keeps its pre-fold value and the mirror-equality
+        // assertion below would (correctly) refuse to stamp NOT NULL over it.
+        let mut cursor: i64 = i64::MIN;
         loop {
             let conn = self.conn.lock().await;
             conn.execute("BEGIN", ())
@@ -7603,9 +7619,9 @@ impl MemoryDB {
                     "UPDATE pages SET space = COALESCE( \
                         workspace, \
                         CASE WHEN space IN (SELECT name FROM spaces) THEN space END, \
-                        'unfiled' \
+                        ?3 \
                      ) WHERE rowid > ?1 AND rowid <= ?2",
-                    libsql::params![cursor, hi],
+                    libsql::params![cursor, hi, UNFILED_SPACE_ID],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("m80 backfill space: {e}")))?;
@@ -7689,8 +7705,10 @@ impl MemoryDB {
         // `workspace TEXT,` is patched first: its text ends in the same
         // `space TEXT,` suffix the bare `space` column's own pattern
         // matches, so patching workspace first (turning it into
-        // `workspace TEXT NOT NULL DEFAULT 'unfiled',`) removes that shadow
-        // match before the `space` replacement runs.
+        // `workspace TEXT NOT NULL DEFAULT '<UNFILED_SPACE_ID>',`) removes that
+        // shadow match before the `space` replacement runs. The DEFAULT is the
+        // reserved sentinel id, so a bare INSERT that omits scope lands the
+        // sentinel (folded to None on the wire), never NULL or a colliding name.
         let conn = self.conn.lock().await;
         let current_sql: Option<String> = {
             let mut rows = conn
@@ -7715,10 +7733,14 @@ impl MemoryDB {
         if let Some(sql) = current_sql {
             let mut patched = sql.replacen(
                 "workspace TEXT,",
-                "workspace TEXT NOT NULL DEFAULT 'unfiled',",
+                &format!("workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
                 1,
             );
-            patched = patched.replacen("space TEXT,", "space TEXT NOT NULL DEFAULT 'unfiled',", 1);
+            patched = patched.replacen(
+                "space TEXT,",
+                &format!("space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
+                1,
+            );
             if patched != sql {
                 conn.execute("PRAGMA writable_schema=ON", ())
                     .await
@@ -7748,7 +7770,12 @@ impl MemoryDB {
     /// Extracted so it is directly testable: the `writable_schema` NOT NULL
     /// patch (step 8) validates nothing on its own, so this EXISTS check is
     /// the only thing standing between a surviving NULL and a column that
-    /// lies about itself. `SELECT COUNT(*) FROM pages` returns 0 on this
+    /// lies about itself. It also asserts the M1 mirror invariant
+    /// (`space == workspace` on every row): the backfill mirrors one resolved
+    /// scope onto both columns, so a surviving divergence means a row escaped
+    /// the fold (e.g. a non-positive rowid the batch cursor missed) and the
+    /// read-collapse -- which reads `space` alone -- would silently disagree
+    /// with `workspace`. `SELECT COUNT(*) FROM pages` returns 0 on this
     /// codebase (the libSQL vector-index COUNT bug) -- EXISTS is immune.
     async fn assert_pages_scope_columns_backfilled(
         conn: &libsql::Connection,
@@ -7756,7 +7783,8 @@ impl MemoryDB {
         let unresolved: bool = {
             let mut rows = conn
                 .query(
-                    "SELECT EXISTS(SELECT 1 FROM pages WHERE space IS NULL OR workspace IS NULL)",
+                    "SELECT EXISTS(SELECT 1 FROM pages \
+                     WHERE space IS NULL OR workspace IS NULL OR space <> workspace)",
                     (),
                 )
                 .await
@@ -7776,8 +7804,8 @@ impl MemoryDB {
         };
         if unresolved {
             return Err(WenlanError::VectorDb(
-                "m80: pages.space or pages.workspace still NULL after backfill -- refusing to \
-                 stamp NOT NULL over a lie"
+                "m80: a pages row still has NULL or divergent space/workspace after backfill -- \
+                 refusing to stamp NOT NULL over a lie or break the mirror invariant"
                     .to_string(),
             ));
         }
@@ -8235,9 +8263,9 @@ impl MemoryDB {
                         (SELECT COUNT(*) FROM entities e WHERE e.space = s.name) as ent_count,
                         s.sort_order, s.starred
                  FROM spaces s
-                 WHERE s.name != 'unfiled'
+                 WHERE s.id != ?1
                  ORDER BY s.starred DESC, s.sort_order, s.name",
-                (),
+                libsql::params![UNFILED_SPACE_ID],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_spaces: {}", e)))?;
@@ -8321,6 +8349,15 @@ impl MemoryDB {
         description: Option<&str>,
         suggested: bool,
     ) -> Result<Space, WenlanError> {
+        // The reserved sentinel id is not a legal user space name -- allowing it
+        // would let a user re-open the exact collision M1 closed (a real space
+        // whose name equals the stored uncategorized token). The word "unfiled"
+        // stays fully legal; only this UUID string is reserved.
+        if name.trim() == UNFILED_SPACE_ID {
+            return Err(WenlanError::Validation(format!(
+                "space name {UNFILED_SPACE_ID:?} is reserved for the uncategorized sentinel"
+            )));
+        }
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp() as f64;
@@ -8368,6 +8405,14 @@ impl MemoryDB {
         new_name: &str,
         description: Option<&str>,
     ) -> Result<Space, WenlanError> {
+        // Renaming a space TO the reserved sentinel id would re-open the M1
+        // collision (see `create_space`); reject it. The word "unfiled" stays a
+        // legal rename target.
+        if new_name.trim() == UNFILED_SPACE_ID {
+            return Err(WenlanError::Validation(format!(
+                "space name {UNFILED_SPACE_ID:?} is reserved for the uncategorized sentinel"
+            )));
+        }
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().timestamp() as f64;
         let page_now = chrono::Utc::now().to_rfc3339();
@@ -9085,7 +9130,7 @@ impl MemoryDB {
                      OR (dt.source = 'page' AND EXISTS (
                             SELECT 1 FROM pages p
                              WHERE p.id = dt.source_id
-                               AND p.workspace = 'unfiled'
+                               AND p.workspace = '00000000-0000-4000-8000-000000000001'
                         ))
                   ORDER BY dt.source, dt.source_id, dt.tag"
                     .to_string(),
@@ -24681,7 +24726,7 @@ impl MemoryDB {
                         ReadScope::Uncategorized => (
                             "SELECT id, title FROM pages
                           WHERE status = 'active' AND source_memory_ids LIKE ?1
-                            AND workspace = 'unfiled'
+                            AND workspace = '00000000-0000-4000-8000-000000000001'
                           LIMIT 5",
                             vec![libsql::Value::Text(pattern)],
                         ),
@@ -26045,7 +26090,8 @@ impl MemoryDB {
         // correct because `workspace` == `space` for every row this writes).
         // Per spec line 518, `workspace` is the authoritative scope input
         // (migration 63) and wins unconditionally when present; otherwise the
-        // caller-named `space` is trusted verbatim, defaulting to 'unfiled'.
+        // caller-named `space` is trusted verbatim, defaulting to the reserved
+        // sentinel id (`UNFILED_SPACE_ID`).
         //
         // This primitive does NOT registration-gate `space`, because it is not
         // the trust boundary: untrusted external scope input is validated one
@@ -26058,7 +26104,7 @@ impl MemoryDB {
         // ruling; the prior gate was the bug, not the 14 tests).
         let resolved_space = match workspace {
             Some(ws) => ws.to_string(),
-            None => space.unwrap_or("unfiled").to_string(),
+            None => space.unwrap_or(UNFILED_SPACE_ID).to_string(),
         };
         let space: &str = &resolved_space;
         let workspace: &str = &resolved_space;
@@ -26507,7 +26553,7 @@ impl MemoryDB {
         let (sql, params): (String, Vec<libsql::Value>) = match space {
             Some("uncategorized") => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
-                 FROM pages WHERE status = ?1 AND space = 'unfiled' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                 FROM pages WHERE status = ?1 AND space = '00000000-0000-4000-8000-000000000001' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
                     libsql::Value::Integer(limit as i64),
@@ -27998,7 +28044,7 @@ impl MemoryDB {
             .query(
                 "SELECT id FROM pages
                  WHERE LOWER(title) = LOWER(?1) AND status = 'active'
-                   AND space = COALESCE(?2, 'unfiled')
+                   AND space = COALESCE(?2, '00000000-0000-4000-8000-000000000001')
                  ORDER BY id ASC LIMIT 2",
                 libsql::params![trimmed, scope],
             )
@@ -28515,14 +28561,15 @@ impl MemoryDB {
                 .get::<String>(3)
                 .map_err(|e| WenlanError::VectorDb(format!("page content: {e}")))?,
             entity_id: row.get::<Option<String>>(4).unwrap_or(None),
-            // M1: NULL scopes are normalized to the 'unfiled' storage sentinel so
+            // M1: NULL scopes are normalized to the reserved sentinel id so
             // the scope columns stay NOT NULL (spec §7). Translate it back to None
             // on the wire so a pre-M1 uncategorized page surfaces identically
-            // (no wire-contract change). Registered scopes pass through verbatim.
+            // (no wire-contract change). Registered scopes -- including a user's
+            // own space literally named "unfiled" -- pass through verbatim.
             space: row
                 .get::<Option<String>>(5)
                 .unwrap_or(None)
-                .filter(|s| s != "unfiled"),
+                .filter(|s| s != UNFILED_SPACE_ID),
             source_memory_ids,
             version: row.get::<i64>(7).unwrap_or(1),
             status: row
@@ -28554,11 +28601,11 @@ impl MemoryDB {
             review_status: row
                 .get::<String>(17)
                 .unwrap_or_else(|_| "confirmed".to_string()),
-            // M1: 'unfiled' sentinel hidden on the wire (see `space` above).
+            // M1: reserved sentinel id hidden on the wire (see `space` above).
             workspace: row
                 .get::<Option<String>>(18)
                 .unwrap_or(None)
-                .filter(|s| s != "unfiled"),
+                .filter(|s| s != UNFILED_SPACE_ID),
             citations,
         })
     }
@@ -29872,16 +29919,16 @@ impl MemoryDB {
     /// Set a page's scope. Named `set_page_workspace` for its P3-backfill-era
     /// callers, but under M1 (one honest column, spec §1/§7) a page carries a
     /// single scope mirrored across BOTH columns: this writes `space` and
-    /// `workspace` to the same value, and normalizes `None` to the 'unfiled'
-    /// sentinel so neither column can go NULL. The sentinel is translated back
-    /// to None on the wire by `row_to_page`, so a `None` write here still
+    /// `workspace` to the same value, and normalizes `None` to the reserved
+    /// sentinel id so neither column can go NULL. The sentinel is translated
+    /// back to None on the wire by `row_to_page`, so a `None` write here still
     /// surfaces as an uncategorized page (pre-M1 contract preserved).
     pub async fn set_page_workspace(
         &self,
         page_id: &str,
         workspace: Option<&str>,
     ) -> Result<(), WenlanError> {
-        let resolved = workspace.unwrap_or("unfiled");
+        let resolved = workspace.unwrap_or(UNFILED_SPACE_ID);
         let conn = self.conn.lock().await;
         conn.execute(
             "UPDATE pages SET workspace = ?1, space = ?1 WHERE id = ?2",
@@ -29968,7 +30015,7 @@ impl MemoryDB {
                  FROM pages
                  WHERE status = 'archived'
                    AND entity_id IS NULL
-                   AND space = 'unfiled'
+                   AND space = '00000000-0000-4000-8000-000000000001'
                    AND COALESCE(user_edited, 0) = 0
                    AND json_array_length(source_memory_ids) > 50
                  ORDER BY created_at DESC",
@@ -41614,8 +41661,8 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
             let row = rows.next().await.unwrap().unwrap();
-            assert_eq!(row.get::<String>(0).unwrap(), "unfiled");
-            assert_eq!(row.get::<String>(1).unwrap(), "unfiled");
+            assert_eq!(row.get::<String>(0).unwrap(), UNFILED_SPACE_ID);
+            assert_eq!(row.get::<String>(1).unwrap(), UNFILED_SPACE_ID);
         }
 
         // Wire: registered scope passes through; the sentinel is hidden (None).
@@ -58496,11 +58543,15 @@ pub(crate) mod tests {
             rows.next().await.unwrap().unwrap().get(0).unwrap()
         };
         let mut patched = sql.replacen(
-            "workspace TEXT NOT NULL DEFAULT 'unfiled',",
+            &format!("workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
             "workspace TEXT,",
             1,
         );
-        patched = patched.replacen("space TEXT NOT NULL DEFAULT 'unfiled',", "space TEXT,", 1);
+        patched = patched.replacen(
+            &format!("space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
+            "space TEXT,",
+            1,
+        );
         assert_ne!(
             patched, sql,
             "expected pages.space/workspace to already be NOT NULL before relaxing"
@@ -58592,12 +58643,16 @@ pub(crate) mod tests {
         // column were never patched -- anchor on the standalone column
         // line's own indentation/newline instead.
         assert!(
-            fresh_sql.contains("\n                        space TEXT NOT NULL DEFAULT 'unfiled',"),
-            "space must be NOT NULL DEFAULT 'unfiled' on its own column line: {fresh_sql}"
+            fresh_sql.contains(&format!(
+                "\n                        space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"
+            )),
+            "space must be NOT NULL DEFAULT the sentinel id on its own column line: {fresh_sql}"
         );
         assert!(
-            fresh_sql.contains("workspace TEXT NOT NULL DEFAULT 'unfiled'"),
-            "workspace must be NOT NULL DEFAULT 'unfiled': {fresh_sql}"
+            fresh_sql.contains(&format!(
+                "workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}'"
+            )),
+            "workspace must be NOT NULL DEFAULT the sentinel id: {fresh_sql}"
         );
     }
 
@@ -58720,8 +58775,8 @@ pub(crate) mod tests {
         let row = rows.next().await.unwrap().unwrap();
         let space: String = row.get(0).unwrap();
         let workspace: String = row.get(1).unwrap();
-        assert_eq!(space, "unfiled");
-        assert_eq!(workspace, "unfiled");
+        assert_eq!(space, UNFILED_SPACE_ID);
+        assert_eq!(workspace, UNFILED_SPACE_ID);
 
         let mut ledger_rows = conn
             .query(
@@ -58759,10 +58814,10 @@ pub(crate) mod tests {
         let space: String = row.get(0).unwrap();
         let workspace: String = row.get(1).unwrap();
         assert_eq!(
-            space, "unfiled",
+            space, UNFILED_SPACE_ID,
             "an unregistered space value is residue, not scope"
         );
-        assert_eq!(workspace, "unfiled");
+        assert_eq!(workspace, UNFILED_SPACE_ID);
 
         let mut ledger_rows = conn
             .query(
@@ -58779,10 +58834,90 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn migration_80_registered_space_or_none_returns_some_for_unfiled() {
+    async fn migration_80_registered_space_or_none_resolves_reserved_sentinel_id() {
         let (db, _dir) = test_db().await;
-        let result = db.registered_space_or_none(Some("unfiled")).await.unwrap();
-        assert_eq!(result, Some("unfiled".to_string()));
+        // The sentinel is minted as a real spaces row keyed by the reserved id,
+        // so it resolves by that id.
+        let sentinel = db
+            .registered_space_or_none(Some(UNFILED_SPACE_ID))
+            .await
+            .unwrap();
+        assert_eq!(sentinel, Some(UNFILED_SPACE_ID.to_string()));
+        // But the bare word "unfiled" is NOT auto-registered -- Option B mints
+        // the sentinel under the UUID name, never the word -- so a fresh DB has
+        // no space named "unfiled", leaving that name free for the user (this is
+        // the collision M1's sentinel-by-id fix closes).
+        let word = db.registered_space_or_none(Some("unfiled")).await.unwrap();
+        assert_eq!(word, None);
+    }
+
+    /// End-to-end guard for the M1 sentinel-by-id fix (Option B): a user DB that
+    /// ALREADY has a real space literally named "unfiled" (with a page in it)
+    /// must survive migration 80 with nothing hidden or reclassified. The
+    /// sentinel is keyed by the reserved UUID, so the user's "unfiled" space (a
+    /// different id) is never mistaken for it. Under the pre-fix sentinel-by-name
+    /// design this scenario could not even be constructed (the mint already
+    /// occupied the name-unique "unfiled" row), which is exactly the collision
+    /// that silently hid the user's real space and folded their pages to None.
+    #[tokio::test]
+    async fn migration_80_preexisting_user_unfiled_space_survives_fold() {
+        let (db, _dir) = test_db().await;
+        // The user's own space, literally named "unfiled" -- legal, because the
+        // reserved token is the UUID string, not the word.
+        let user_space = db.create_space("unfiled", None, false).await.unwrap();
+        assert_ne!(
+            user_space.id, UNFILED_SPACE_ID,
+            "a user space gets a random id, never the reserved sentinel id"
+        );
+
+        // Seed a page in the user's "unfiled" space and a truly-uncategorized
+        // page, then re-fire migration 80 over them (the same rollback harness
+        // the other migration_80 tests use). Pre-M1 scope lived in the
+        // authoritative `workspace` column (migration 63).
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "user_unfiled_page", None, Some("unfiled")).await;
+            insert_raw_page_for_m80_test(&conn, "truly_uncategorized_page", None, None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 80 must fold cleanly with a pre-existing user 'unfiled' space");
+
+        // (1) The user's "unfiled" space still lists -- it is NOT the sentinel,
+        // so `list_spaces` (which excludes only the reserved id) keeps it.
+        let spaces = db.list_spaces().await.unwrap();
+        assert!(
+            spaces
+                .iter()
+                .any(|s| s.name == "unfiled" && s.id == user_space.id),
+            "the user's own 'unfiled' space must still be listed after the fold: {spaces:?}"
+        );
+
+        // (2) The user's page keeps its scope: "unfiled" is a registered space
+        // name, so the fold treats it as residue (kept), and `row_to_page` does
+        // NOT hide it -- only the reserved sentinel id is hidden on the wire.
+        let user_page = db.get_page("user_unfiled_page").await.unwrap().unwrap();
+        assert_eq!(
+            user_page.space.as_deref(),
+            Some("unfiled"),
+            "a page in the user's real 'unfiled' space must keep that scope on the wire"
+        );
+        assert_eq!(user_page.workspace.as_deref(), Some("unfiled"));
+
+        // (3) The truly-uncategorized page folds to the reserved sentinel in
+        // storage and back to None on the wire (pre-M1 contract preserved).
+        let uncategorized = db
+            .get_page("truly_uncategorized_page")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            uncategorized.space, None,
+            "a genuinely uncategorized page still surfaces as None"
+        );
+        assert_eq!(uncategorized.workspace, None);
     }
 
     #[tokio::test]
@@ -58865,8 +59000,8 @@ pub(crate) mod tests {
             vec![
                 (
                     "page_no_space".to_string(),
-                    "unfiled".to_string(),
-                    "unfiled".to_string()
+                    UNFILED_SPACE_ID.to_string(),
+                    UNFILED_SPACE_ID.to_string()
                 ),
                 (
                     "page_space_no_workspace".to_string(),
@@ -58906,8 +59041,8 @@ pub(crate) mod tests {
         let row = rows.next().await.unwrap().unwrap();
         let space: String = row.get(0).unwrap();
         let workspace: String = row.get(1).unwrap();
-        assert_eq!(space, "unfiled");
-        assert_eq!(workspace, "unfiled");
+        assert_eq!(space, UNFILED_SPACE_ID);
+        assert_eq!(workspace, UNFILED_SPACE_ID);
     }
 
     #[tokio::test]
@@ -59053,17 +59188,19 @@ pub(crate) mod tests {
         };
         assert_eq!(
             final_sql
-                .matches("\n                        space TEXT NOT NULL DEFAULT 'unfiled',")
+                .matches(&format!(
+                    "\n                        space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"
+                ))
                 .count(),
             1,
-            "space NOT NULL DEFAULT 'unfiled' must appear exactly once, not doubled by a replayed patch: {final_sql}"
+            "space NOT NULL DEFAULT the sentinel id must appear exactly once, not doubled by a replayed patch: {final_sql}"
         );
         assert_eq!(
             final_sql
-                .matches("workspace TEXT NOT NULL DEFAULT 'unfiled',")
+                .matches(&format!("workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"))
                 .count(),
             1,
-            "workspace NOT NULL DEFAULT 'unfiled' must appear exactly once, not doubled by a replayed patch: {final_sql}"
+            "workspace NOT NULL DEFAULT the sentinel id must appear exactly once, not doubled by a replayed patch: {final_sql}"
         );
         assert!(
             !final_sql.contains("NOT NULL NOT NULL"),

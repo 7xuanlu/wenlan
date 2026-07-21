@@ -536,7 +536,7 @@ async fn uncategorized_scope_load_pages_finds_unfiled_workspace_and_excludes_reg
     let (db, _db_dir) = test_db().await;
     let conn = db.conn.lock().await;
     conn.execute(
-        "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace) VALUES          ('page-unfiled', 'unfiled', 'body', '[]', 1, 'active', '1', '1', '1', 'unfiled'),          ('page-CANARY-alpha', 'alpha', 'body', '[]', 1, 'active', '1', '1', '1', 'alpha')",
+        "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace) VALUES          ('page-unfiled', 'unfiled', 'body', '[]', 1, 'active', '1', '1', '1', '00000000-0000-4000-8000-000000000001'),          ('page-CANARY-alpha', 'alpha', 'body', '[]', 1, 'active', '1', '1', '1', 'alpha')",
         (),
     )
     .await

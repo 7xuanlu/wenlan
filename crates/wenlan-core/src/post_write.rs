@@ -721,11 +721,11 @@ where
                 "UPDATE pages
                     SET title=?1,version=version+1,embedding=vector32(?2)
                   WHERE id=?3 AND status='active' AND version=?4 AND title=?5
-                    AND space=COALESCE(?6,'unfiled')
+                    AND space=COALESCE(?6,'00000000-0000-4000-8000-000000000001')
                     AND NOT EXISTS(
                         SELECT 1 FROM pages collision
                          WHERE collision.status='active' AND collision.id<>?3
-                           AND collision.space=COALESCE(?6,'unfiled')
+                           AND collision.space=COALESCE(?6,'00000000-0000-4000-8000-000000000001')
                            AND lower(collision.title)=lower(?1))",
                 libsql::params![
                     after_title.as_str(),
@@ -1077,7 +1077,7 @@ where
                     .query(
                         "SELECT id FROM pages
                          WHERE LOWER(title)=LOWER(?1) AND status='active'
-                           AND space=COALESCE(?2,'unfiled')
+                           AND space=COALESCE(?2,'00000000-0000-4000-8000-000000000001')
                          ORDER BY id LIMIT 2",
                         libsql::params![label_key.clone(), scope.space()],
                     )
@@ -1155,7 +1155,7 @@ where
                        AND json_valid(source_memory_ids)
                        AND json_type(source_memory_ids)='array'
                        AND json_array_length(source_memory_ids)=0
-                       AND space=COALESCE(?3,'unfiled')
+                       AND space=COALESCE(?3,'00000000-0000-4000-8000-000000000001')
                        AND NOT EXISTS(
                             SELECT 1 FROM page_sources ps WHERE ps.page_id=pages.id)
                        AND NOT EXISTS(

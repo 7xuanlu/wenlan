@@ -239,7 +239,7 @@ async fn insert_page_with_scope(
     status: &str,
     scope: Option<&str>,
 ) {
-    let scope = scope.unwrap_or("unfiled");
+    let scope = scope.unwrap_or(crate::db::UNFILED_SPACE_ID);
     conn.execute(
         "INSERT INTO pages (id, title, content, source_memory_ids, version, status, created_at, last_compiled, last_modified, workspace, space, creation_kind, review_status) VALUES (?1, ?2, 'body', '[]', 1, ?3, 'now', 'now', 'now', ?4, ?5, 'distilled', 'confirmed')",
         libsql::params![id, title, status, scope, scope],

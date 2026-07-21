@@ -155,10 +155,10 @@ async fn insert_memory(db: &crate::db::MemoryDB, id: &str, space: Option<&str>) 
 
 async fn insert_page(db: &crate::db::MemoryDB, id: &str, workspace: Option<&str>) {
     // M1 honest columns: pages.workspace is NOT NULL since migration 80, so a
-    // caller who wants "no workspace" must bind the 'unfiled' sentinel --
+    // caller who wants "no workspace" must bind the reserved sentinel id --
     // binding an explicit NULL always violates the column constraint here,
     // unlike memories.space (still nullable) two lines below.
-    let workspace = workspace.unwrap_or("unfiled");
+    let workspace = workspace.unwrap_or(crate::db::UNFILED_SPACE_ID);
     let conn = db.conn.lock().await;
     conn.execute(
         "INSERT INTO pages (id, title, content, source_memory_ids, version, status,

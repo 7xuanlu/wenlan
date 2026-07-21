@@ -61,7 +61,10 @@ fn scoped_active_source_filter(filter: &ScopeFilter) -> (&'static str, libsql::p
             " AND p.space = ?1",
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
-        ScopeFilter::Uncategorized => (" AND p.space = 'unfiled'", libsql::params::Params::None),
+        ScopeFilter::Uncategorized => (
+            " AND p.space = '00000000-0000-4000-8000-000000000001'",
+            libsql::params::Params::None,
+        ),
     }
 }
 

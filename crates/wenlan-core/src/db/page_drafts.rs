@@ -278,14 +278,14 @@ impl MemoryDB {
         }
 
         // M1: the pages scope columns are NOT NULL. Resolve the draft's scope via
-        // the Option A ladder (workspace wins, else space, else the 'unfiled'
-        // sentinel) and mirror it onto BOTH columns so the read-collapse reads a
-        // single honest scope. The create-request ledger below keeps the raw
+        // the Option A ladder (workspace wins, else space, else the reserved
+        // sentinel id) and mirror it onto BOTH columns so the read-collapse reads
+        // a single honest scope. The create-request ledger below keeps the raw
         // (possibly-None) values so replaying the original request still matches.
         let page_scope = normalized_workspace
             .as_deref()
             .or(normalized_space.as_deref())
-            .unwrap_or("unfiled");
+            .unwrap_or(super::UNFILED_SPACE_ID);
         tx.execute(
             "INSERT INTO pages (
                     id, title, summary, content, entity_id, space, source_memory_ids,
@@ -400,18 +400,20 @@ impl MemoryDB {
         ensure_draft(&current)?;
         // M1 read-collapse: the write below mirrors ONE resolved scope onto both
         // NOT NULL columns via the Option A ladder (workspace wins, else space,
-        // else the 'unfiled' sentinel), and `row_to_page` translates that
+        // else the reserved sentinel id), and `row_to_page` translates that
         // sentinel back to None. An exact retry must therefore compare against
         // that SAME resolved wire scope, not the raw (possibly-divergent)
         // requested columns -- otherwise a divergent-but-idempotent replay
         // (e.g. Some("work"), None, which stores space=workspace="work") misses
         // the fast-path and falls through to a spurious VersionConflict. Both
         // callers agree here: on the registered path requested_space ==
-        // requested_workspace, so the ladder is a no-op.
+        // requested_workspace, so the ladder is a no-op. The filter drops the
+        // sentinel id (not the word "unfiled", which is a legal user scope) so a
+        // caller passing it aligns with the wire-hidden `current.space` (None).
         let requested_scope = requested_workspace
             .as_deref()
             .or(requested_space.as_deref())
-            .filter(|s| *s != "unfiled");
+            .filter(|s| *s != super::UNFILED_SPACE_ID);
         if expected_version.checked_add(1) == Some(current.version)
             && current.title == title
             && current.content == content
@@ -439,14 +441,14 @@ impl MemoryDB {
             super::page_drafts_test::transaction_test_hooks::after_space_validation(id).await;
         }
         // M1: mirror the resolved scope onto both NOT NULL columns via the Option A
-        // ladder (workspace wins, else space, else the 'unfiled' sentinel), so an
-        // uncategorized draft update writes 'unfiled' instead of a NULL that the
-        // NOT NULL constraint rejects. The idempotency/replay comparison above
+        // ladder (workspace wins, else space, else the reserved sentinel id), so
+        // an uncategorized draft update writes the sentinel instead of a NULL that
+        // the NOT NULL constraint rejects. The idempotency/replay comparison above
         // reads translated (sentinel-hidden) values, so it is unaffected.
         let page_scope = normalized_workspace
             .as_deref()
             .or(normalized_space.as_deref())
-            .unwrap_or("unfiled");
+            .unwrap_or(super::UNFILED_SPACE_ID);
         let affected = tx
             .execute(
                 "UPDATE pages

@@ -4169,12 +4169,12 @@ async fn validate_rename_page_title_collision_on_snapshot(
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND space=COALESCE(?4,'unfiled')
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?2)),
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND space=COALESCE(?4,'unfiled')
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?3))",
             libsql::params::Params::Positional(vec![
                 libsql::Value::Text(page_id.to_string()),
@@ -4213,12 +4213,12 @@ pub(crate) async fn validate_rename_page_title_collision_on_connection(
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND space=COALESCE(?4,'unfiled')
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?2)),
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND space=COALESCE(?4,'unfiled')
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?3))",
             libsql::params![
                 page_id,

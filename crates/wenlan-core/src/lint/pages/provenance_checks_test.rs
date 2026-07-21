@@ -444,7 +444,13 @@ async fn uncategorized_scope_finds_unfiled_page_and_excludes_registered() {
     let conn = db._db.connect().unwrap();
     insert_memory(&conn, "mem-unfiled", "mem-unfiled", "memory", None).await;
     insert_memory(&conn, "mem-alpha", "mem-alpha", "memory", None).await;
-    insert_page(&conn, "page-unfiled", "unfiled", Some("[]")).await;
+    insert_page(
+        &conn,
+        "page-unfiled",
+        crate::db::UNFILED_SPACE_ID,
+        Some("[]"),
+    )
+    .await;
     insert_page(&conn, "page-CANARY-alpha", "alpha", Some("[]")).await;
     for (page, locator) in [
         ("page-unfiled", "mem-unfiled"),

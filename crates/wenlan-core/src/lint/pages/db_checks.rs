@@ -100,7 +100,10 @@ async fn load_and_assess_source_integrity(context: &LintContext<'_, '_>) -> Resu
             " AND p.space=?1",
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
-        ScopeFilter::Uncategorized => (" AND p.space='unfiled'", libsql::params::Params::None),
+        ScopeFilter::Uncategorized => (
+            " AND p.space='00000000-0000-4000-8000-000000000001'",
+            libsql::params::Params::None,
+        ),
     };
     let sql = format!(
         "SELECT p.source_memory_ids,
@@ -238,7 +241,7 @@ async fn load_rows(context: &LintContext<'_, '_>) -> Result<Vec<PageRow>, ()> {
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
         ScopeFilter::Uncategorized => (
-            "SELECT LOWER(title), space, status, creation_kind, review_status FROM pages WHERE space = 'unfiled' ORDER BY id",
+            "SELECT LOWER(title), space, status, creation_kind, review_status FROM pages WHERE space = '00000000-0000-4000-8000-000000000001' ORDER BY id",
             libsql::params::Params::None,
         ),
     };

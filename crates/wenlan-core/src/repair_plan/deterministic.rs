@@ -303,10 +303,10 @@ async fn renamed_page_title_still_actionable(
                   JOIN pages collision
                     ON collision.status='active'
                    AND collision.id<>target.id
-                   AND collision.space=COALESCE(?2,'unfiled')
+                   AND collision.space=COALESCE(?2,'00000000-0000-4000-8000-000000000001')
                    AND lower(collision.title)=lower(target.title)
                  WHERE target.id=?1 AND target.status='active'
-                   AND target.space=COALESCE(?2,'unfiled'))",
+                   AND target.space=COALESCE(?2,'00000000-0000-4000-8000-000000000001'))",
             libsql::params::Params::Positional(vec![
                 libsql::Value::Text(page_id.clone()),
                 target_scope
@@ -591,7 +591,7 @@ async fn resolve_page_projections(
             libsql::params::Params::Positional(vec![libsql::Value::Text(space.clone())]),
         ),
         RepairLintScope::Uncategorized => (
-            "SELECT id,status,version,space FROM pages WHERE space='unfiled' ORDER BY id",
+            "SELECT id,status,version,space FROM pages WHERE space='00000000-0000-4000-8000-000000000001' ORDER BY id",
             libsql::params::Params::None,
         ),
     };
@@ -1106,7 +1106,10 @@ fn page_scope_clause(scope: &RepairLintScope) -> (&'static str, libsql::params::
             " AND p.space=?1",
             libsql::params::Params::Positional(vec![libsql::Value::Text(space.clone())]),
         ),
-        RepairLintScope::Uncategorized => (" AND p.space='unfiled'", libsql::params::Params::None),
+        RepairLintScope::Uncategorized => (
+            " AND p.space='00000000-0000-4000-8000-000000000001'",
+            libsql::params::Params::None,
+        ),
     }
 }
 
