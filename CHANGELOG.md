@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.14.0](https://github.com/7xuanlu/wenlan/compare/v0.13.2...v0.14.0) (2026-07-20)
+
+
+### Features
+
+* M0 — route every Page write through one gate ([#369](https://github.com/7xuanlu/wenlan/issues/369)) ([7f70d2d](https://github.com/7xuanlu/wenlan/commit/7f70d2d0ba248d7fdd1df082da8b7c6e8a0e9353))
+* per-job source pins for everyday/synthesis routing (no vendor privilege) + resolved-routing endpoint ([#357](https://github.com/7xuanlu/wenlan/issues/357)) ([d945347](https://github.com/7xuanlu/wenlan/commit/d945347f14b61eb9ae4e0a22c35cfe1455e3fd62))
+* Tier 1 vocabulary auto-heal (deterministic folds auto-applied, semantic values queued for review) ([#362](https://github.com/7xuanlu/wenlan/issues/362)) ([88fc7df](https://github.com/7xuanlu/wenlan/commit/88fc7df1a242a1f2dbc33b6e76c2af4c39a1748a))
+
+
+### Bug Fixes
+
+* add core Page draft lifecycle ([#368](https://github.com/7xuanlu/wenlan/issues/368)) ([a989408](https://github.com/7xuanlu/wenlan/commit/a9894083a3f2e139f4318920a8cd1412f70b1015))
+* complete approval-gated lint repair workflow ([#370](https://github.com/7xuanlu/wenlan/issues/370)) ([0c273c5](https://github.com/7xuanlu/wenlan/commit/0c273c52e7a215dae6184d5fb0df153cad5214b6))
+* define Page draft wire contract ([#366](https://github.com/7xuanlu/wenlan/issues/366)) ([c4da0c8](https://github.com/7xuanlu/wenlan/commit/c4da0c8fa066803b71ab01f115e17d43c08626a7))
+* dev-build version self-identification + plugin/daemon drift root-fixes ([#359](https://github.com/7xuanlu/wenlan/issues/359)) ([a10cf2a](https://github.com/7xuanlu/wenlan/commit/a10cf2a2f309058124cbec43f76aa480194c79af))
+* drop the release-time marketplace notification ([#353](https://github.com/7xuanlu/wenlan/issues/353)) ([7d0fd95](https://github.com/7xuanlu/wenlan/commit/7d0fd959f3028f4ec053bac5a84f772139e54752))
+* enforce read scope contracts ([#356](https://github.com/7xuanlu/wenlan/issues/356)) ([7b74c85](https://github.com/7xuanlu/wenlan/commit/7b74c85802ced0362b16ee1576efa8fb29fff823))
+* isolate Page drafts from legacy mutators ([#367](https://github.com/7xuanlu/wenlan/issues/367)) ([0f7b8fe](https://github.com/7xuanlu/wenlan/commit/0f7b8fec7ea9e6dd7dca06f72d1c090e758b1e47))
+* Page Map v1 daemon — schema, accessors, routes, improve pass ([#364](https://github.com/7xuanlu/wenlan/issues/364)) ([44bd6e8](https://github.com/7xuanlu/wenlan/commit/44bd6e8ded8517624260d5d3cdd52cad253097ea))
+
 ## [0.13.2](https://github.com/7xuanlu/wenlan/compare/v0.13.1...v0.13.2) (2026-07-14)
 
 

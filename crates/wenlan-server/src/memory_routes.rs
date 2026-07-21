@@ -3476,6 +3476,16 @@ pub async fn handle_list_orphan_links(
     }))
 }
 
+/// POST /api/memory/{id}/update-page
+///
+/// Manual edit from the app. Goes through the one page-write gate, so a hand
+/// edit is treated like every other write: version CAS, changelog entry, and
+/// history row. This route does not re-project Markdown; the comment below
+/// documents that separate synchronization boundary.
+///
+/// `expected_version` is optional. Sending it makes the edit a precondition
+/// (refused outright if the page moved); omitting it guards on the version the
+/// server itself loaded, so the write still cannot clobber an interleaved one.
 pub async fn handle_update_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -3485,20 +3495,58 @@ pub async fn handle_update_page(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    // Preserve existing source_memory_ids — the HTTP request only carries
-    // the new content body. Passing &[] here would wipe the page's
-    // source list, causing silent data loss.
-    let existing_sources: Vec<String> = db
-        .get_page(&id)
+    // Preserve the route's 404 shape, but do not copy sources from this
+    // advisory read. PageWrite derives them again from the exact generation
+    // its CAS updates, so a source attached in between cannot be deleted.
+    db.get_page(&id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
-        .map(|c| c.source_memory_ids)
-        .unwrap_or_default();
-    let existing_refs: Vec<&str> = existing_sources.iter().map(String::as_str).collect();
-    db.update_page_content(&id, &req.content, &existing_refs, "manual_edit")
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
+        .ok_or_else(|| ServerError::NotFound(format!("page {id} not found")))?;
+
+    // knowledge_path=None: this route does not re-project the md, so an
+    // in-app edit leaves the vault copy stale until the next re-distill (the
+    // watcher sees the daemon ahead and skips rather than reverting, so the
+    // DB stays authoritative and nothing is lost). Projecting here needs the
+    // knowledge path to come from ServerState — reading global config inside
+    // a handler would point tests at the user's real vault. Tracked separately.
+    let result = wenlan_core::post_write::update_page_preserving_sources(
+        &db,
+        &id,
+        wenlan_types::requests::UpdatePageRequest {
+            content: req.content,
+            source_memory_ids: vec![],
+            expected_version: req.expected_version,
+            caller_id: req.caller_id,
+            operation_id: req.operation_id,
+        },
+        "manual_edit",
+        None,
+    )
+    .await?;
+
+    // A refused write is a conflict, not a success — reporting ok:true would
+    // tell the editor its text was saved when the page still holds somebody
+    // else's. But "nothing changed" is not a conflict, and this route sends the
+    // page's own sources back, so saving a page without editing it lands on the
+    // no-change path. Branching on `wrote` alone answered that routine save with
+    // "somebody else edited this," which is both wrong and unactionable.
+    use wenlan_core::post_write::WriteOutcome;
+    match result.outcome {
+        WriteOutcome::Wrote | WriteOutcome::Unchanged => {
+            Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
+        }
+        WriteOutcome::Refused => Err(ServerError::Conflict(format!(
+            "page {id} changed while this edit was open; reload and reapply"
+        ))),
+        WriteOutcome::Contended => Err(ServerError::Conflict(format!(
+            "page {id} is being written too fast to edit safely; try again"
+        ))),
+        // Unreachable: gating is for machine writers, and this route is
+        // `manual_edit`. Answered honestly rather than folded into a catch-all.
+        WriteOutcome::Gated => Err(ServerError::Conflict(format!(
+            "edit to page {id} was staged for review instead of applied"
+        ))),
+    }
 }
 
 /// PUT /api/pages/{id}
@@ -3506,7 +3554,7 @@ pub async fn handle_update_page(
 /// Agent-side refresh of a page from its current sources. Replaces content,
 /// source list, optional summary; clears `stale_reason` so the refinery's
 /// re-distill skips on its next tick (CAS pattern — see refinery
-/// `re_distill_stale_pages`). Distinct from POST `/api/pages/{id}`
+/// `re_distill_stale_pages`). Distinct from POST `/api/memory/{id}/update-page`
 /// (manual edit, flips `user_edited`, preserves sources).
 ///
 /// Atomicity mirrors `handle_create_page`: write md first, persist DB index
@@ -3556,6 +3604,7 @@ pub async fn handle_refresh_page(
             &req.content,
             &req.source_memory_ids,
             "agent_refresh",
+            None,
         )
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
@@ -3631,53 +3680,88 @@ pub async fn handle_refresh_page(
         .write_page(&refreshed_page)
         .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
 
-    let db_result: Result<(), wenlan_core::error::WenlanError> = async {
-        wenlan_core::post_write::update_page(
-            &db,
-            &id,
-            wenlan_types::requests::UpdatePageRequest {
-                content: req.content.clone(),
-                source_memory_ids: req.source_memory_ids.clone(),
-            },
-            "agent_refresh",
-            false,
-            None,
-            None,
-        )
-        .await?;
-        if let Some(opt) = &summary_update {
-            db.update_page_summary(&id, opt.as_deref()).await?;
-        }
-        db.clear_page_staleness(&id).await?;
-        Ok(())
-    }
-    .await;
-
-    if let Err(e) = db_result {
-        // Roll back md to the snapshotted content so the two stores stay
-        // consistent. If the file existed before and we have its bytes,
-        // rewrite them; otherwise drop the projection.
-        let rollback = match (existing_state_file, existing_md_content) {
-            (Some(filename), Some(prev)) => {
-                std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
+    use wenlan_core::post_write::WriteOutcome;
+    let db_result: Result<wenlan_core::post_write::WriteResult, wenlan_core::error::WenlanError> =
+        async {
+            let result = wenlan_core::post_write::update_page(
+                &db,
+                &id,
+                wenlan_types::requests::UpdatePageRequest {
+                    content: req.content.clone(),
+                    source_memory_ids: req.source_memory_ids.clone(),
+                    expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
+                },
+                "agent_refresh",
+                false,
+                None,
+                None,
+            )
+            .await?;
+            // Carry the rest of the refresh only when the DB agrees with what the
+            // agent asked for. A Gated/Refused/Contended outcome means a human owns
+            // this prose right now — rewriting its summary or clearing its staleness
+            // would apply half of a refresh the gate just declined.
+            if matches!(
+                result.outcome,
+                WriteOutcome::Wrote | WriteOutcome::Unchanged
+            ) {
+                if let Some(opt) = &summary_update {
+                    db.update_page_summary(&id, opt.as_deref()).await?;
+                }
+                db.clear_page_staleness(&id).await?;
             }
-            _ => projection.remove_page(&id).map_err(|err| err.to_string()),
-        };
-        if let Err(rb) = rollback {
+            Ok(result)
+        }
+        .await;
+
+    // Roll back md to the snapshotted content so the two stores stay consistent.
+    // If the file existed before and we have its bytes, rewrite them; otherwise
+    // drop the projection.
+    let roll_back_md = || match (&existing_state_file, &existing_md_content) {
+        (Some(filename), Some(prev)) => {
+            std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
+        }
+        _ => projection.remove_page(&id).map_err(|err| err.to_string()),
+    };
+
+    let result = match db_result {
+        Ok(result) => result,
+        Err(e) => {
+            if let Err(rb) = roll_back_md() {
+                tracing::warn!(
+                    "[page] PUT failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                    id,
+                    e,
+                    rb
+                );
+            }
+            return Err(ServerError::IngestFailed(e.to_string()));
+        }
+    };
+
+    // The md was written before the gate ran, stamped `version + 1`. If the write
+    // did not land, that stamp is a lie the page watcher will act on: it ingests
+    // any md whose `origin_version` is >= the DB version as an `fs_edit`
+    // (sources/page_watcher.rs), which would re-apply this agent content AS A
+    // HUMAN WRITE and flip `user_edited` — laundering it straight past the gate
+    // that just refused it. Restore the vault to what the DB actually holds.
+    if result.outcome != WriteOutcome::Wrote {
+        if let Err(rb) = roll_back_md() {
             tracing::warn!(
-                "[page] PUT failed and md rollback also failed for {}: db_err={}, rollback_err={}",
+                "[page] PUT did not write ({:?}) and md rollback failed for {}: {}",
+                result.outcome,
                 id,
-                e,
                 rb
             );
         }
-        return Err(ServerError::IngestFailed(e.to_string()));
     }
 
     Ok(Json(wenlan_types::responses::PageWriteResponse {
         ok: true,
-        revision_card_id: None,
-        gated: false,
+        revision_card_id: result.revision_card_id,
+        gated: result.gated,
     }))
 }
 

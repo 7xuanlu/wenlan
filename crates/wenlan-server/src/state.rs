@@ -82,6 +82,10 @@ pub struct ServerState {
     /// Set whenever `llm` is populated with an `OnDeviceProvider`. `None` when
     /// the daemon has no on-device model loaded.
     pub loaded_on_device_model: Option<String>,
+    /// Sticky reservation spanning the two-sample admission window and the
+    /// blocking startup model load. The scheduler observes it so no automatic
+    /// heavy turn can race the load after both sampled the same quiet window.
+    pub startup_model_load_reserved: Arc<std::sync::atomic::AtomicBool>,
     /// API-based LLM provider for routine tasks (Anthropic Haiku by default).
     pub api_llm: Option<Arc<dyn LlmProvider>>,
     /// API-based LLM provider for synthesis tasks (Anthropic Sonnet by default).
@@ -149,6 +153,7 @@ impl Default for ServerState {
             db: None,
             llm: None,
             loaded_on_device_model: None,
+            startup_model_load_reserved: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             api_llm: None,
             synthesis_llm: None,
             external_llm: None,

@@ -553,6 +553,7 @@ async fn run_citation_backfill_with_page_limit(
                         &changelog,
                         Some(&json),
                         page.version,
+                        None,
                     )
                     .await?;
                 if committed {

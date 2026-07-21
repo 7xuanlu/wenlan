@@ -51,6 +51,7 @@ pub struct TitleEnrichmentSliceReport {
 pub struct PageGrowthSliceReport {
     pub selected: bool,
     pub matched: bool,
+    pub terminal_no_match: bool,
     pub committed: bool,
     pub llm_calls: usize,
 }
@@ -184,6 +185,7 @@ pub async fn run_page_growth_slice(
         return Ok(PageGrowthSliceReport {
             selected: true,
             matched: false,
+            terminal_no_match: true,
             committed,
             llm_calls: 0,
         });
@@ -235,6 +237,7 @@ pub async fn run_page_growth_slice(
         return Ok(PageGrowthSliceReport {
             selected: true,
             matched: true,
+            terminal_no_match: false,
             committed,
             llm_calls: 0,
         });
@@ -243,6 +246,7 @@ pub async fn run_page_growth_slice(
         return Ok(PageGrowthSliceReport {
             selected: true,
             matched: true,
+            terminal_no_match: false,
             committed: false,
             llm_calls: 0,
         });
@@ -275,6 +279,7 @@ pub async fn run_page_growth_slice(
             return Ok(PageGrowthSliceReport {
                 selected: true,
                 matched: true,
+                terminal_no_match: false,
                 committed,
                 llm_calls: 1,
             });
@@ -288,6 +293,7 @@ pub async fn run_page_growth_slice(
         return Ok(PageGrowthSliceReport {
             selected: true,
             matched: true,
+            terminal_no_match: false,
             committed,
             llm_calls: 1,
         });
@@ -303,6 +309,7 @@ pub async fn run_page_growth_slice(
             return Ok(PageGrowthSliceReport {
                 selected: true,
                 matched: true,
+                terminal_no_match: false,
                 committed,
                 llm_calls: 1,
             });
@@ -320,6 +327,9 @@ pub async fn run_page_growth_slice(
         UpdatePageRequest {
             content: updated_body,
             source_memory_ids: source_ids,
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         },
         page.version,
         expected_source_revision,
@@ -354,6 +364,7 @@ pub async fn run_page_growth_slice(
     Ok(PageGrowthSliceReport {
         selected: true,
         matched: true,
+        terminal_no_match: false,
         committed: write.wrote,
         llm_calls: 1,
     })
@@ -905,6 +916,9 @@ pub(crate) async fn grow_page(
         UpdatePageRequest {
             content: updated_body,
             source_memory_ids: source_ids,
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         },
         "page_growth",
         false,
@@ -1719,6 +1733,7 @@ mod tests {
                             "[]",
                             None,
                             page.version,
+                            None,
                         )
                         .await
                         .unwrap());
@@ -1868,6 +1883,10 @@ mod tests {
         assert!(first.selected);
         assert!(!first.matched);
         assert!(first.committed);
+        assert!(
+            first.terminal_no_match,
+            "the scheduler needs an explicit signal before exempting this measured outcome"
+        );
         assert_eq!(first.llm_calls, 0);
         assert!(
             !second.selected,

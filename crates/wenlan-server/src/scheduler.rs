@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Event-driven steep scheduler.
 //!
-//! Owns all steep scheduling: BurstEnd (per-agent adaptive gap), Idle (global
-//! 10-min quiet), Daily (first-wake-after-24h), and Backstop (6-hour safety net).
+//! Owns all steep scheduling: BurstEnd (per-agent adaptive gap), Idle (automatic
+//! recap batching after 10 minutes without Wenlan writes), Daily
+//! (first-wake-after-24h), and Backstop (6-hour safety net).
 //! Replaces the former steep loop in main.rs.
 
 use std::collections::{HashMap, VecDeque};
@@ -17,8 +18,9 @@ const BURST_GAP_CEILING: Duration = Duration::from_secs(1800);
 const BURST_GAP_FLOOR: Duration = Duration::from_secs(300);
 /// Minimum writes to qualify as a recap-worthy burst.
 const MIN_BURST_WRITES: usize = 3;
-/// Global idle threshold — all agents quiet for this long triggers Idle steep.
-const IDLE_THRESHOLD: Duration = Duration::from_secs(600);
+/// Wenlan-write batching threshold for the automatic Idle recap trigger.
+/// This is not an OS foreground-idle signal or an ambient-enrichment gate.
+const AUTOMATIC_BATCH_IDLE_THRESHOLD: Duration = Duration::from_secs(600);
 /// Backstop interval — safety net fires all phases.
 const BACKSTOP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// Daily interval — first quiet turn after 24 hours.
@@ -31,10 +33,10 @@ const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const ENRICHMENT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const RECONCILE_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const CITATION_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
-/// Conservative hotfix envelope: reuse the existing ten-minute quiet horizon
-/// between ambient LLM requests until supported-Mac profiling freezes a
-/// measured duty-cycle policy.
-const AMBIENT_COOLDOWN: Duration = IDLE_THRESHOLD;
+/// Target-Mac evidence keeps short ambient turns below a 5% duty cycle while
+/// avoiding the fivefold convergence penalty of the provisional ten-minute
+/// hotfix. Automatic recap batching still uses its separate ten-minute window.
+const AMBIENT_MIN_RECOVERY: Duration = Duration::from_secs(120);
 const GIB: u64 = 1024 * 1024 * 1024;
 const AUTOMATIC_STEEP_PHASE_CURSOR_PREFIX: &str = "automatic_steep_phase_cursor_v1";
 const AUTOMATIC_MAINTENANCE_STAGE_CURSOR_KEY: &str = "automatic_maintenance_stage_cursor_v1";
@@ -59,6 +61,7 @@ struct ResourcePolicy {
     max_cpu_usage_percent: f32,
     min_available_memory_bytes: u64,
     min_available_memory_percent: u64,
+    additional_memory_headroom_bytes: u64,
     idle_samples_required: u8,
 }
 
@@ -68,24 +71,33 @@ impl ResourcePolicy {
             max_cpu_usage_percent: 20.0,
             min_available_memory_bytes: 2 * GIB,
             min_available_memory_percent: 15,
+            additional_memory_headroom_bytes: 0,
             idle_samples_required: 2,
         }
+    }
+
+    const fn with_additional_memory_headroom(mut self, bytes: u64) -> Self {
+        self.additional_memory_headroom_bytes = bytes;
+        self
     }
 
     fn block_reason(self, snapshot: ResourceSnapshot) -> Option<ResourceBlockReason> {
         if !snapshot.cpu_usage_percent.is_finite() || snapshot.total_memory_bytes == 0 {
             return Some(ResourceBlockReason::Unavailable);
         }
-        if snapshot.cpu_usage_percent > self.max_cpu_usage_percent {
-            return Some(ResourceBlockReason::CpuBusy);
-        }
         let ratio_floor = snapshot
             .total_memory_bytes
             .saturating_mul(self.min_available_memory_percent)
             / 100;
-        let memory_floor = self.min_available_memory_bytes.max(ratio_floor);
+        let memory_floor = self
+            .min_available_memory_bytes
+            .max(ratio_floor)
+            .saturating_add(self.additional_memory_headroom_bytes);
         if snapshot.available_memory_bytes < memory_floor {
             return Some(ResourceBlockReason::MemoryPressure);
+        }
+        if snapshot.cpu_usage_percent > self.max_cpu_usage_percent {
+            return Some(ResourceBlockReason::CpuBusy);
         }
         None
     }
@@ -116,6 +128,17 @@ enum Rb01ProfileBlockReason {
     CpuBusy,
     MemoryPressure,
     Warming,
+}
+
+#[cfg(test)]
+const RB01_PROFILE_ADMISSION_MAX_SAMPLES: usize = 4;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rb01ProfileSampleAction {
+    Retry,
+    Admit,
+    Fail(Rb01ProfileBlockReason),
 }
 
 #[cfg(test)]
@@ -165,6 +188,26 @@ impl Rb01ProfileAdmission {
 }
 
 #[cfg(test)]
+fn rb01_profile_sample_action(
+    admission: &mut Rb01ProfileAdmission,
+    snapshot: Option<ResourceSnapshot>,
+    thermal_state: Option<u8>,
+    policy: ResourcePolicy,
+    sample_index: usize,
+    max_samples: usize,
+) -> Rb01ProfileSampleAction {
+    match admission.observe(snapshot, thermal_state, policy) {
+        Ok(()) => Rb01ProfileSampleAction::Admit,
+        Err(Rb01ProfileBlockReason::CpuBusy | Rb01ProfileBlockReason::Warming)
+            if sample_index < max_samples =>
+        {
+            Rb01ProfileSampleAction::Retry
+        }
+        Err(reason) => Rb01ProfileSampleAction::Fail(reason),
+    }
+}
+
+#[cfg(test)]
 fn rb01_profile_requested(value: Option<&str>) -> bool {
     value == Some("1")
 }
@@ -178,7 +221,7 @@ struct ThermalPolicy {
 impl ThermalPolicy {
     const fn conservative() -> Self {
         Self {
-            minimum_cooldown: AMBIENT_COOLDOWN,
+            minimum_cooldown: AMBIENT_MIN_RECOVERY,
             // Work / (work + recovery) <= 5% when this multiplier dominates.
             recovery_multiplier: 19,
         }
@@ -242,6 +285,63 @@ impl SystemResourceProbe {
                 .or_else(|| (!admitted).then_some(ResourceBlockReason::Warming)),
         }
     }
+}
+
+fn observe_deferred_resource_reason(
+    previous: &mut Option<ResourceBlockReason>,
+    admitted: bool,
+    block_reason: Option<ResourceBlockReason>,
+) -> Option<ResourceBlockReason> {
+    let current = (!admitted).then_some(block_reason).flatten();
+    let changed = current.is_some() && current != *previous;
+    *previous = current;
+    if changed {
+        current
+    } else {
+        None
+    }
+}
+
+/// Wait until a selected on-device model can be loaded without consuming the
+/// scheduler's foreground reserve. The model working set is additive to the
+/// normal 2 GiB / 15% floor, and the same two consecutive 30-second CPU samples
+/// are required before `spawn_blocking` may touch the model.
+pub async fn wait_for_startup_model_admission(
+    model_working_set_bytes: u64,
+    shutdown: &mut tokio::sync::watch::Receiver<bool>,
+) -> bool {
+    let policy =
+        ResourcePolicy::conservative().with_additional_memory_headroom(model_working_set_bytes);
+    let mut probe = SystemResourceProbe::new(Instant::now());
+    loop {
+        if crate::lifecycle::sleep_or_shutdown(shutdown, POLL_INTERVAL).await {
+            return false;
+        }
+        let status = probe.sample(Instant::now(), policy);
+        if status.admitted {
+            tracing::info!(
+                "[on-device] startup load admitted after two quiet samples; reserved_working_set_mb={}",
+                model_working_set_bytes / (1024 * 1024)
+            );
+            return true;
+        }
+        tracing::debug!(
+            "[on-device] startup load deferred reason={:?} cpu_percent={:?} available_memory_mb={:?} reserved_working_set_mb={}",
+            status.block_reason,
+            status.snapshot.map(|snapshot| snapshot.cpu_usage_percent),
+            status
+                .snapshot
+                .map(|snapshot| snapshot.available_memory_bytes / (1024 * 1024)),
+            model_working_set_bytes / (1024 * 1024),
+        );
+    }
+}
+
+fn background_heavy_resource_admitted(
+    resource_admitted: bool,
+    startup_model_load_reserved: bool,
+) -> bool {
+    resource_admitted && !startup_model_load_reserved
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,33 +515,28 @@ impl AmbientSchedule {
 fn ambient_turn_allowed(
     system_resources_idle: bool,
     now: Instant,
-    last_activity: Instant,
     next_allowed_at: Instant,
 ) -> bool {
-    system_resources_idle
-        && now.saturating_duration_since(last_activity) >= IDLE_THRESHOLD
-        && now >= next_allowed_at
+    system_resources_idle && now >= next_allowed_at
 }
 
 fn automatic_heavy_turn_allowed(
     system_resources_idle: bool,
     ambient_turn_owed: bool,
     now: Instant,
-    last_activity: Instant,
     next_allowed_at: Instant,
 ) -> bool {
-    !ambient_turn_owed
-        && ambient_turn_allowed(system_resources_idle, now, last_activity, next_allowed_at)
+    !ambient_turn_owed && ambient_turn_allowed(system_resources_idle, now, next_allowed_at)
 }
 
-fn refresh_last_user_activity(write_signal: &WriteSignal, last_user_activity: &mut Instant) {
+fn refresh_last_write_activity(write_signal: &WriteSignal, last_write_activity: &mut Instant) {
     if let Some(latest) = write_signal
         .snapshot()
         .values()
         .flat_map(|timestamps| timestamps.iter().copied())
         .max()
     {
-        *last_user_activity = (*last_user_activity).max(latest);
+        *last_write_activity = (*last_write_activity).max(latest);
     }
 }
 
@@ -449,12 +544,21 @@ fn should_backoff_ambient_lane(selected: bool, llm_calls: usize) -> bool {
     !selected && llm_calls == 0
 }
 
-fn ambient_work_consumes_thermal_turn(job: AmbientJob, selected: bool, llm_calls: usize) -> bool {
+fn ambient_work_consumes_thermal_turn(
+    job: AmbientJob,
+    selected: bool,
+    llm_calls: usize,
+    page_growth_terminal_no_match_committed: bool,
+) -> bool {
     llm_calls > 0
-        || (matches!(
-            job,
-            AmbientJob::Document | AmbientJob::PageGrowth | AmbientJob::Reconcile
-        ) && selected)
+        || (selected
+            && (matches!(job, AmbientJob::Document | AmbientJob::Reconcile)
+                || (matches!(job, AmbientJob::PageGrowth)
+                    && !page_growth_terminal_no_match_committed)))
+}
+
+fn automatic_work_consumes_thermal_turn(selected: bool, llm_calls: usize, panicked: bool) -> bool {
+    selected || llm_calls > 0 || panicked
 }
 
 /// Ambient-only provider facade that fails closed after forwarding one LLM
@@ -595,7 +699,7 @@ impl WriteSignal {
     }
 
     /// Record a write event for an agent. The store route calls this after the
-    /// durable write so ambient work observes the full quiet horizon.
+    /// durable write so automatic recap batching observes the latest write.
     pub fn record(&self, agent: &str) {
         let mut map = self.inner.lock().unwrap();
         map.entry(agent.to_string())
@@ -718,38 +822,46 @@ impl AutomaticTrigger {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct AutomaticPhaseOutcome {
+    selected: bool,
     progressed: bool,
     more: bool,
     retryable: bool,
     paused: bool,
+    panicked: bool,
 }
 
 impl From<&wenlan_core::refinery::SteepPhaseSliceReport> for AutomaticPhaseOutcome {
     fn from(report: &wenlan_core::refinery::SteepPhaseSliceReport) -> Self {
         Self {
+            selected: report.selected,
             progressed: report.progressed,
             more: report.more,
             retryable: report.retryable,
             paused: report.paused,
+            panicked: false,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct AutomaticMaintenanceOutcome {
+    selected: bool,
     progressed: bool,
     more: bool,
     retryable: bool,
     paused: bool,
+    panicked: bool,
 }
 
 impl From<&wenlan_core::maintenance::MaintenanceSliceReport> for AutomaticMaintenanceOutcome {
     fn from(report: &wenlan_core::maintenance::MaintenanceSliceReport) -> Self {
         Self {
+            selected: report.selected,
             progressed: report.progressed,
             more: report.more,
             retryable: report.retryable,
             paused: report.paused,
+            panicked: false,
         }
     }
 }
@@ -1018,7 +1130,7 @@ fn select_due_automatic_trigger(
     now: Instant,
     snapshot: &HashMap<String, Vec<Instant>>,
     maintenance: MaintenanceAdmission,
-    last_user_activity: Instant,
+    last_write_activity: Instant,
     idle_fired: bool,
     last_daily: Instant,
     last_backstop: Instant,
@@ -1059,7 +1171,7 @@ fn select_due_automatic_trigger(
         }
     }
     if !idle_fired
-        && now.saturating_duration_since(last_user_activity) >= IDLE_THRESHOLD
+        && now.saturating_duration_since(last_write_activity) >= AUTOMATIC_BATCH_IDLE_THRESHOLD
         && automatic_kind_has_work(wenlan_core::refinery::TriggerKind::Idle)
     {
         return Some(AutomaticTrigger::Idle);
@@ -1079,7 +1191,7 @@ fn select_due_automatic_trigger(
 
 #[cfg(test)]
 fn idle_due(idle_fired: bool, idle_since: Instant, now: Instant) -> bool {
-    !idle_fired && now.duration_since(idle_since) >= IDLE_THRESHOLD
+    !idle_fired && now.duration_since(idle_since) >= AUTOMATIC_BATCH_IDLE_THRESHOLD
 }
 
 /// Spawn the event-driven steep scheduler.
@@ -1108,7 +1220,7 @@ pub fn spawn_scheduler(
         let mut idle_fired = false;
         let mut last_poll_activity = Instant::now();
         let ambient_started_at = Instant::now();
-        let mut last_user_activity = write_signal
+        let mut last_write_activity = write_signal
             .snapshot()
             .values()
             .flat_map(|timestamps| timestamps.iter().copied())
@@ -1121,6 +1233,7 @@ pub fn spawn_scheduler(
         let mut steep_batch: Option<AutomaticSteepBatch> = None;
         let mut maintenance_round: Option<AutomaticMaintenanceRound> = None;
         let mut ambient_turn_owed = false;
+        let mut last_deferred_resource_reason = None;
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -1167,7 +1280,7 @@ pub fn spawn_scheduler(
                     .flat_map(|timestamps| timestamps.iter().copied())
                     .max()
                 {
-                    last_user_activity = last_user_activity.max(latest);
+                    last_write_activity = last_write_activity.max(latest);
                 }
             }
             last_poll_activity = Instant::now();
@@ -1186,6 +1299,8 @@ pub fn spawn_scheduler(
                         s.tuning.refinery.clone(),
                         s.tuning.confidence.clone(),
                         s.tuning.distillation.clone(),
+                        s.startup_model_load_reserved
+                            .load(std::sync::atomic::Ordering::Acquire),
                     )
                 })
             };
@@ -1200,6 +1315,7 @@ pub fn spawn_scheduler(
                 refinery_cfg,
                 confidence_cfg,
                 distillation_cfg,
+                startup_model_load_reserved,
             )) = snapshot
             else {
                 tracing::debug!("[scheduler] db not initialized, skipping poll");
@@ -1251,7 +1367,7 @@ pub fn spawn_scheduler(
             // SAME sync routine the HTTP handler runs over each registered
             // Directory source (mtime+hash diff, deletion propagation — no LLM),
             // Changed files are queued here; the ambient controller claims at
-            // most one bounded document slice after the quiet/cooldown gates.
+            // most one bounded document slice after resource/cooldown admission.
             sync_directory_sources(&db).await;
             if crate::lifecycle::shutdown_requested(&shutdown) {
                 break;
@@ -1262,33 +1378,43 @@ pub fn spawn_scheduler(
             let now = Instant::now();
             let resource_status = resource_probe.sample(now, resource_policy);
 
-            // All automatic heavy work shares the same admission gate as the
-            // ambient lanes. A due trigger stays due while the user is active
-            // or while the machine is busy, memory-constrained, or the
-            // conservative cooldown is in force.
-            refresh_last_user_activity(&write_signal, &mut last_user_activity);
-            if !resource_status.admitted
-                && now.saturating_duration_since(last_user_activity) >= IDLE_THRESHOLD
-            {
-                tracing::debug!(
-                    "[scheduler] heavy work deferred reason={:?} cpu_percent={:?} available_memory_mb={:?}",
-                    resource_status.block_reason,
-                    resource_status
-                        .snapshot
-                        .map(|snapshot| snapshot.cpu_usage_percent),
-                    resource_status
-                        .snapshot
-                        .map(|snapshot| snapshot.available_memory_bytes / (1024 * 1024)),
-                );
+            // All automatic heavy work shares the same resource and cooldown
+            // gate as the ambient lanes. The Idle recap trigger additionally
+            // keeps its Wenlan-write batching window in trigger selection.
+            refresh_last_write_activity(&write_signal, &mut last_write_activity);
+            let changed_deferred_reason = observe_deferred_resource_reason(
+                &mut last_deferred_resource_reason,
+                resource_status.admitted,
+                resource_status.block_reason,
+            );
+            if !resource_status.admitted {
+                let log_deferred = |reason: ResourceBlockReason| {
+                    format!(
+                        "[scheduler] heavy work deferred reason={reason:?} cpu_percent={:?} available_memory_mb={:?}",
+                        resource_status
+                            .snapshot
+                            .map(|snapshot| snapshot.cpu_usage_percent),
+                        resource_status.snapshot.map(|snapshot| {
+                            snapshot.available_memory_bytes / (1024 * 1024)
+                        }),
+                    )
+                };
+                if let Some(reason) = changed_deferred_reason {
+                    tracing::info!("{}", log_deferred(reason));
+                } else if let Some(reason) = resource_status.block_reason {
+                    tracing::debug!("{}", log_deferred(reason));
+                }
             }
             drain_expired_unactionable_bursts(&write_signal, now);
             let snap = write_signal.snapshot();
 
             let selected_automatic = automatic_heavy_turn_allowed(
-                resource_status.admitted,
+                background_heavy_resource_admitted(
+                    resource_status.admitted,
+                    startup_model_load_reserved,
+                ),
                 ambient_turn_owed,
                 now,
-                last_user_activity,
                 ambient_schedule.next_allowed_at,
             )
             .then(|| {
@@ -1303,7 +1429,7 @@ pub fn spawn_scheduler(
                                 maintenance_pending,
                                 maintenance_stage_ran_since_steep,
                             ),
-                            last_user_activity,
+                            last_write_activity,
                             idle_fired,
                             last_daily,
                             last_backstop,
@@ -1343,7 +1469,7 @@ pub fn spawn_scheduler(
                     break;
                 }
 
-                match trigger {
+                let (automatic_selected, automatic_panicked) = match trigger {
                     AutomaticTrigger::Maintenance => {
                         if maintenance_round.is_none() {
                             let cursor = load_automatic_maintenance_cursor(&db).await;
@@ -1381,6 +1507,7 @@ pub fn spawn_scheduler(
                         } else {
                             maintenance_stage_ran_since_steep = true;
                         }
+                        (outcome.selected, outcome.panicked)
                     }
                     trigger => {
                         maintenance_stage_ran_since_steep = false;
@@ -1477,22 +1604,32 @@ pub fn spawn_scheduler(
                                 ),
                             }
                         }
+                        (outcome.selected, outcome.panicked)
                     }
-                }
+                };
                 automatic_work_ran = true;
                 // A multi-phase steep or maintenance round must yield one
                 // admitted slot to the ambient round-robin before continuing.
                 ambient_turn_owed = true;
                 let completion = Instant::now();
-                ambient_schedule.note_thermal_work_completion(
-                    completion,
-                    completion.saturating_duration_since(now),
-                    thermal_policy,
-                );
+                let llm_calls = shared_calls.load(std::sync::atomic::Ordering::SeqCst);
+                if automatic_work_consumes_thermal_turn(
+                    automatic_selected,
+                    llm_calls,
+                    automatic_panicked,
+                ) {
+                    ambient_schedule.note_thermal_work_completion(
+                        completion,
+                        completion.saturating_duration_since(now),
+                        thermal_policy,
+                    );
+                }
                 tracing::info!(
-                    "[scheduler] automatic trigger={} llm_calls={} elapsed_ms={} next_eligible_ms={}",
+                    "[scheduler] automatic trigger={} selected={} llm_calls={} panicked={} elapsed_ms={} next_eligible_ms={}",
                     label,
-                    shared_calls.load(std::sync::atomic::Ordering::SeqCst),
+                    automatic_selected,
+                    llm_calls,
+                    automatic_panicked,
                     completion.saturating_duration_since(now).as_millis(),
                     ambient_schedule
                         .next_allowed_at
@@ -1518,13 +1655,15 @@ pub fn spawn_scheduler(
 
             // --- 5. Ambient enrichment: one due job, one durable slice, one
             //        LLM request maximum. Never detached. ---
-            refresh_last_user_activity(&write_signal, &mut last_user_activity);
+            refresh_last_write_activity(&write_signal, &mut last_write_activity);
             let ambient_now = Instant::now();
             if !automatic_work_ran
                 && ambient_turn_allowed(
-                    resource_status.admitted,
+                    background_heavy_resource_admitted(
+                        resource_status.admitted,
+                        startup_model_load_reserved,
+                    ),
                     ambient_now,
-                    last_user_activity,
                     ambient_schedule.next_allowed_at,
                 )
             {
@@ -1543,6 +1682,16 @@ pub fn spawn_scheduler(
                     if crate::lifecycle::shutdown_requested(&shutdown) {
                         break;
                     }
+                    tracing::info!(
+                        "[scheduler] ambient turn started job={:?} cpu_percent={:?} available_memory_mb={:?}",
+                        job,
+                        resource_status
+                            .snapshot
+                            .map(|snapshot| snapshot.cpu_usage_percent),
+                        resource_status
+                            .snapshot
+                            .map(|snapshot| snapshot.available_memory_bytes / (1024 * 1024)),
+                    );
                     let report = run_ambient_job_safe(
                         job,
                         &db,
@@ -1570,6 +1719,7 @@ pub fn spawn_scheduler(
                             report.job,
                             report.selected,
                             report.llm_calls,
+                            report.page_growth_terminal_no_match_committed,
                         )
                     {
                         ambient_schedule.note_thermal_work_completion(
@@ -1635,6 +1785,7 @@ async fn sync_directory_sources(db: &Arc<wenlan_core::db::MemoryDB>) {
 struct AmbientTurnReport {
     job: AmbientJob,
     selected: bool,
+    page_growth_terminal_no_match_committed: bool,
     llm_calls: usize,
     panicked: bool,
     elapsed: Duration,
@@ -1711,6 +1862,7 @@ async fn run_ambient_job_safe(
             AmbientTurnReport {
                 job,
                 selected: true,
+                page_growth_terminal_no_match_committed: false,
                 llm_calls: 0,
                 panicked: true,
                 elapsed: started.elapsed(),
@@ -1739,6 +1891,7 @@ async fn run_ambient_job(
         .as_ref()
         .map(|provider| provider.clone() as Arc<dyn wenlan_core::llm_provider::LlmProvider>);
 
+    let mut page_growth_terminal_no_match_committed = false;
     let selected = match job {
         AmbientJob::Document => {
             run_document_enrichment_slice_tick(db, provider.as_ref(), prompts).await > 0
@@ -1748,6 +1901,7 @@ async fn run_ambient_job(
                 return AmbientTurnReport {
                     job,
                     selected: false,
+                    page_growth_terminal_no_match_committed: false,
                     llm_calls: 0,
                     panicked: false,
                     elapsed: started.elapsed(),
@@ -1768,6 +1922,7 @@ async fn run_ambient_job(
                 return AmbientTurnReport {
                     job,
                     selected: false,
+                    page_growth_terminal_no_match_committed: false,
                     llm_calls: 0,
                     panicked: false,
                     elapsed: started.elapsed(),
@@ -1786,6 +1941,7 @@ async fn run_ambient_job(
                 return AmbientTurnReport {
                     job,
                     selected: false,
+                    page_growth_terminal_no_match_committed: false,
                     llm_calls: 0,
                     panicked: false,
                     elapsed: started.elapsed(),
@@ -1820,6 +1976,7 @@ async fn run_ambient_job(
                 return AmbientTurnReport {
                     job,
                     selected: false,
+                    page_growth_terminal_no_match_committed: false,
                     llm_calls: 0,
                     panicked: false,
                     elapsed: started.elapsed(),
@@ -1838,6 +1995,7 @@ async fn run_ambient_job(
                 return AmbientTurnReport {
                     job,
                     selected: false,
+                    page_growth_terminal_no_match_committed: false,
                     llm_calls: 0,
                     panicked: false,
                     elapsed: started.elapsed(),
@@ -1852,7 +2010,11 @@ async fn run_ambient_job(
             )
             .await
             {
-                Ok(report) => report.selected,
+                Ok(report) => {
+                    page_growth_terminal_no_match_committed =
+                        report.terminal_no_match && report.committed;
+                    report.selected
+                }
                 Err(error) => {
                     tracing::warn!("[scheduler] page growth slice error: {error}");
                     false
@@ -1864,6 +2026,7 @@ async fn run_ambient_job(
                 return AmbientTurnReport {
                     job,
                     selected: false,
+                    page_growth_terminal_no_match_committed: false,
                     llm_calls: 0,
                     panicked: false,
                     elapsed: started.elapsed(),
@@ -1890,6 +2053,7 @@ async fn run_ambient_job(
                 return AmbientTurnReport {
                     job,
                     selected: false,
+                    page_growth_terminal_no_match_committed: false,
                     llm_calls: 0,
                     panicked: false,
                     elapsed: started.elapsed(),
@@ -1908,6 +2072,7 @@ async fn run_ambient_job(
     AmbientTurnReport {
         job,
         selected,
+        page_growth_terminal_no_match_committed,
         llm_calls: observed
             .as_ref()
             .map_or(0, |provider| provider.call_count()),
@@ -2029,6 +2194,7 @@ async fn fire_maintenance_stage_safe(
                 "[scheduler] {label} maintenance stage={stage} PANICKED — scheduler continues: {message}"
             );
             AutomaticMaintenanceOutcome {
+                panicked: true,
                 retryable: true,
                 ..AutomaticMaintenanceOutcome::default()
             }
@@ -2094,6 +2260,7 @@ async fn fire_steep_phase_safe(
                 "[scheduler] {label} phase={phase} PANICKED — scheduler continues: {message}"
             );
             AutomaticPhaseOutcome {
+                panicked: true,
                 retryable: true,
                 ..AutomaticPhaseOutcome::default()
             }
@@ -2333,12 +2500,14 @@ mod tests {
                 more: true,
                 retryable: true,
                 paused: false,
+                ..AutomaticPhaseOutcome::default()
             },
             AutomaticPhaseOutcome {
                 progressed: true,
                 more: true,
                 retryable: false,
                 paused: true,
+                ..AutomaticPhaseOutcome::default()
             },
         ] {
             let mut batch = AutomaticSteepBatch::new(
@@ -2391,6 +2560,7 @@ mod tests {
                 more: true,
                 paused: true,
                 retryable: false,
+                ..AutomaticMaintenanceOutcome::default()
             },
         );
         assert_eq!(
@@ -2412,6 +2582,7 @@ mod tests {
                 more: true,
                 retryable: false,
                 paused: false,
+                ..AutomaticMaintenanceOutcome::default()
             },
         );
 
@@ -2589,16 +2760,30 @@ mod tests {
     }
 
     #[test]
-    fn page_growth_cpu_match_attempt_consumes_thermal_turn() {
+    fn only_committed_page_growth_terminal_no_match_skips_the_thermal_turn() {
+        assert!(!ambient_work_consumes_thermal_turn(
+            AmbientJob::PageGrowth,
+            true,
+            0,
+            true,
+        ));
         assert!(ambient_work_consumes_thermal_turn(
             AmbientJob::PageGrowth,
             true,
             0,
+            false,
+        ));
+        assert!(ambient_work_consumes_thermal_turn(
+            AmbientJob::PageGrowth,
+            true,
+            1,
+            true,
         ));
         assert!(!ambient_work_consumes_thermal_turn(
             AmbientJob::PageGrowth,
             false,
             0,
+            false,
         ));
     }
 
@@ -2607,53 +2792,52 @@ mod tests {
         let writes = WriteSignal::new();
         let base = Instant::now();
         let fresh = base + Duration::from_secs(5);
-        let mut last_user_activity = base;
+        let mut last_write_activity = base;
         writes.record_at("claude", fresh);
 
-        refresh_last_user_activity(&writes, &mut last_user_activity);
+        refresh_last_write_activity(&writes, &mut last_write_activity);
 
-        assert_eq!(last_user_activity, fresh);
+        assert_eq!(last_write_activity, fresh);
     }
 
     #[test]
-    fn ambient_turn_requires_quiet_window_and_cooldown() {
+    fn ambient_turn_uses_resources_and_cooldown_not_global_write_recency() {
         let now = Instant::now();
+        assert!(
+            ambient_turn_allowed(true, now, now - Duration::from_secs(1),),
+            "an unrelated recent write must not hold all ambient backlog"
+        );
         assert!(!ambient_turn_allowed(
             true,
             now,
-            now - IDLE_THRESHOLD + Duration::from_secs(1),
-            now - Duration::from_secs(1),
-        ));
-        assert!(!ambient_turn_allowed(
-            true,
-            now,
-            now - IDLE_THRESHOLD,
             now + Duration::from_secs(1),
         ));
-        assert!(ambient_turn_allowed(true, now, now - IDLE_THRESHOLD, now,));
+        assert!(ambient_turn_allowed(true, now, now,));
         assert!(
-            !ambient_turn_allowed(false, now, now - IDLE_THRESHOLD, now),
-            "Wenlan quiet time cannot admit work while the whole machine is busy"
+            !ambient_turn_allowed(false, now, now),
+            "ambient work cannot start while the whole machine is busy"
+        );
+    }
+
+    #[test]
+    fn automatic_heavy_turn_uses_resources_and_cooldown_not_global_write_recency() {
+        let now = Instant::now();
+        assert!(
+            automatic_heavy_turn_allowed(true, false, now, now,),
+            "trigger-specific batching belongs in trigger selection, not global admission"
         );
     }
 
     #[test]
     fn pending_automatic_round_yields_one_admission_to_ambient_lane() {
         let now = Instant::now();
-        let quiet_since = now - IDLE_THRESHOLD;
-        assert!(automatic_heavy_turn_allowed(
-            true,
-            false,
-            now,
-            quiet_since,
-            now
-        ));
+        assert!(automatic_heavy_turn_allowed(true, false, now, now));
         assert!(
-            !automatic_heavy_turn_allowed(true, true, now, quiet_since, now),
+            !automatic_heavy_turn_allowed(true, true, now, now),
             "an unfinished steep/maintenance round must not monopolize every admitted turn"
         );
         assert!(
-            !automatic_heavy_turn_allowed(false, false, now, quiet_since, now),
+            !automatic_heavy_turn_allowed(false, false, now, now),
             "automatic heavy work must defer to foreground system pressure"
         );
     }
@@ -2682,6 +2866,224 @@ mod tests {
             }),
             Some(ResourceBlockReason::MemoryPressure)
         );
+    }
+
+    #[test]
+    fn deferred_resource_reason_only_escalates_on_transition() {
+        let mut last_reason = None;
+
+        assert_eq!(
+            observe_deferred_resource_reason(
+                &mut last_reason,
+                false,
+                Some(ResourceBlockReason::CpuBusy),
+            ),
+            Some(ResourceBlockReason::CpuBusy),
+        );
+        assert_eq!(
+            observe_deferred_resource_reason(
+                &mut last_reason,
+                false,
+                Some(ResourceBlockReason::CpuBusy),
+            ),
+            None,
+            "an unchanged blocker must remain debug-only",
+        );
+        assert_eq!(
+            observe_deferred_resource_reason(
+                &mut last_reason,
+                false,
+                Some(ResourceBlockReason::MemoryPressure),
+            ),
+            Some(ResourceBlockReason::MemoryPressure),
+        );
+        assert_eq!(
+            observe_deferred_resource_reason(&mut last_reason, true, None),
+            None,
+        );
+        assert_eq!(last_reason, None, "admission resets the transition state");
+        assert_eq!(
+            observe_deferred_resource_reason(
+                &mut last_reason,
+                false,
+                Some(ResourceBlockReason::CpuBusy),
+            ),
+            Some(ResourceBlockReason::CpuBusy),
+            "a new blocked episode must remain visible at info level",
+        );
+        assert_eq!(last_reason, Some(ResourceBlockReason::CpuBusy));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_resource_probe_does_not_collapse_available_memory_to_zero() {
+        let started = Instant::now();
+        let mut probe = SystemResourceProbe::new(started);
+        let status = probe.sample(
+            started + sysinfo::MINIMUM_CPU_UPDATE_INTERVAL,
+            ResourcePolicy::conservative(),
+        );
+        let snapshot = status
+            .snapshot
+            .expect("the first eligible refresh must return a resource snapshot");
+
+        assert_ne!(snapshot.total_memory_bytes, 0);
+        assert_ne!(
+            snapshot.available_memory_bytes, 0,
+            "a supported macOS probe must not collapse reclaimable RAM to zero"
+        );
+    }
+
+    /// Daemon-off target-Mac premise check for the one persistent live soak.
+    /// Uses the production probe and cadence without loading either model.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "five-minute target-Mac resource baseline; opt in through WENLAN_RB01_BASELINE=1"]
+    fn rb01_daemon_off_resource_baseline_can_open_gate() {
+        assert_eq!(
+            std::env::var("WENLAN_RB01_BASELINE").as_deref(),
+            Ok("1"),
+            "explicit baseline opt-in is required",
+        );
+
+        const SAMPLE_COUNT: usize = 10;
+        let policy = ResourcePolicy::conservative();
+        let started = Instant::now();
+        let mut probe = SystemResourceProbe::new(started);
+        let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+
+        for sample_number in 1..=SAMPLE_COUNT {
+            let due = started + POLL_INTERVAL * sample_number as u32;
+            std::thread::sleep(due.saturating_duration_since(Instant::now()));
+            let status = probe.sample(Instant::now(), policy);
+            samples.push(serde_json::json!({
+                "sample": sample_number,
+                "admitted": status.admitted,
+                "block_reason": status.block_reason.map(|reason| format!("{reason:?}")),
+                "cpu_percent": status.snapshot.map(|snapshot| snapshot.cpu_usage_percent),
+                "available_memory_mb": status.snapshot.map(|snapshot| {
+                    snapshot.available_memory_bytes / (1024 * 1024)
+                })
+            }));
+        }
+
+        let cpu_over_limit_count = samples
+            .iter()
+            .filter(|sample| {
+                sample["cpu_percent"]
+                    .as_f64()
+                    .is_some_and(|cpu| cpu > f64::from(policy.max_cpu_usage_percent))
+            })
+            .count();
+        let memory_pressure_count = samples
+            .iter()
+            .filter(|sample| sample["block_reason"] == "MemoryPressure")
+            .count();
+        let first_admitted_sample = samples
+            .iter()
+            .find(|sample| sample["admitted"] == true)
+            .and_then(|sample| sample["sample"].as_u64());
+
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "rb01_daemon_off_baseline": {
+                    "sample_interval_secs": POLL_INTERVAL.as_secs(),
+                    "sample_count": SAMPLE_COUNT,
+                    "cpu_limit_percent": policy.max_cpu_usage_percent,
+                    "cpu_over_limit_count": cpu_over_limit_count,
+                    "memory_pressure_count": memory_pressure_count,
+                    "first_admitted_sample": first_admitted_sample,
+                    "samples": samples
+                }
+            }))
+            .expect("serialize daemon-off resource baseline")
+        );
+
+        assert!(
+            cpu_over_limit_count * 2 < SAMPLE_COUNT,
+            "the daemon-off host exceeded the production CPU gate in at least half of samples; do not run the persistent soak",
+        );
+        assert!(
+            first_admitted_sample.is_some(),
+            "the exact production resource gate never opened while the daemon was off; use the recorded binding reason before changing policy",
+        );
+    }
+
+    #[test]
+    fn scheduler_pins_exact_sysinfo_with_macos_memory_accounting_fix() {
+        let manifest = include_str!("../../../Cargo.toml");
+        assert!(
+            manifest
+                .lines()
+                .any(|line| line.trim() == "sysinfo = \"=0.38.3\""),
+            "the scheduler must retain the reviewed exact sysinfo 0.38.3 pin"
+        );
+
+        let lock = include_str!("../../../Cargo.lock");
+        let packages: Vec<_> = lock
+            .split("[[package]]")
+            .filter(|package| package.contains("\nname = \"sysinfo\"\n"))
+            .collect();
+        assert_eq!(
+            packages.len(),
+            1,
+            "Cargo.lock must resolve exactly one sysinfo package"
+        );
+        let package = packages[0];
+        let version = package
+            .lines()
+            .find_map(|line| line.strip_prefix("version = \""))
+            .and_then(|version| version.strip_suffix('"'))
+            .expect("sysinfo package must carry a version");
+        let mut parts = version
+            .split('.')
+            .map(|part| part.parse::<u32>().expect("numeric sysinfo version"));
+        let version = (
+            parts.next().expect("sysinfo major version"),
+            parts.next().expect("sysinfo minor version"),
+            parts.next().expect("sysinfo patch version"),
+        );
+
+        assert_eq!(
+            version,
+            (0, 38, 3),
+            "Cargo.lock must retain the reviewed sysinfo 0.38.3 version"
+        );
+    }
+
+    #[test]
+    fn startup_model_admission_reserves_the_model_above_the_normal_floor() {
+        let policy = ResourcePolicy::conservative().with_additional_memory_headroom(3 * GIB);
+        let total = 16 * GIB;
+        let ratio_floor = total * 15 / 100;
+        let required = 3 * GIB + (2 * GIB).max(ratio_floor);
+
+        assert_eq!(
+            policy.block_reason(ResourceSnapshot {
+                cpu_usage_percent: 8.0,
+                available_memory_bytes: required - 1,
+                total_memory_bytes: total,
+            }),
+            Some(ResourceBlockReason::MemoryPressure),
+            "startup must not load a model into the ordinary scheduler reserve"
+        );
+        assert_eq!(
+            policy.block_reason(ResourceSnapshot {
+                cpu_usage_percent: 8.0,
+                available_memory_bytes: required,
+                total_memory_bytes: total,
+            }),
+            None,
+            "the exact model working set plus normal reserve is admissible"
+        );
+    }
+
+    #[test]
+    fn startup_model_reservation_blocks_automatic_heavy_work() {
+        assert!(background_heavy_resource_admitted(true, false));
+        assert!(!background_heavy_resource_admitted(true, true));
+        assert!(!background_heavy_resource_admitted(false, false));
     }
 
     #[test]
@@ -2775,6 +3177,79 @@ mod tests {
     }
 
     #[test]
+    fn rb01_profile_wait_retries_model_load_cpu_spike_then_requires_quiet_samples() {
+        let policy = ResourcePolicy::conservative();
+        let idle = ResourceSnapshot {
+            cpu_usage_percent: 8.0,
+            available_memory_bytes: 8 * GIB,
+            total_memory_bytes: 16 * GIB,
+        };
+        let busy = ResourceSnapshot {
+            cpu_usage_percent: 34.0,
+            ..idle
+        };
+        let mut admission = Rb01ProfileAdmission::default();
+
+        assert_eq!(
+            rb01_profile_sample_action(&mut admission, Some(busy), Some(0), policy, 1, 4,),
+            Rb01ProfileSampleAction::Retry,
+            "model-load CPU must settle before the profile is rejected"
+        );
+        assert_eq!(
+            rb01_profile_sample_action(&mut admission, Some(idle), Some(0), policy, 2, 4,),
+            Rb01ProfileSampleAction::Retry,
+            "one quiet sample is not enough after the load spike"
+        );
+        assert_eq!(
+            rb01_profile_sample_action(&mut admission, Some(idle), Some(0), policy, 3, 4,),
+            Rb01ProfileSampleAction::Admit
+        );
+
+        let mut admission = Rb01ProfileAdmission::default();
+        assert_eq!(
+            rb01_profile_sample_action(
+                &mut admission,
+                Some(ResourceSnapshot {
+                    available_memory_bytes: 2 * GIB - 1,
+                    ..idle
+                }),
+                Some(0),
+                policy,
+                1,
+                4,
+            ),
+            Rb01ProfileSampleAction::Fail(Rb01ProfileBlockReason::MemoryPressure),
+            "model residency must not wait through memory pressure"
+        );
+        assert_eq!(
+            rb01_profile_sample_action(
+                &mut admission,
+                Some(ResourceSnapshot {
+                    cpu_usage_percent: 34.0,
+                    available_memory_bytes: 2 * GIB - 1,
+                    ..idle
+                }),
+                Some(0),
+                policy,
+                1,
+                4,
+            ),
+            Rb01ProfileSampleAction::Fail(Rb01ProfileBlockReason::MemoryPressure),
+            "memory pressure must win over a simultaneous retryable CPU spike"
+        );
+        assert_eq!(
+            rb01_profile_sample_action(&mut admission, Some(idle), Some(1), policy, 1, 4,),
+            Rb01ProfileSampleAction::Fail(Rb01ProfileBlockReason::ThermalPressure),
+            "thermal pressure must remain immediately fatal"
+        );
+        assert_eq!(
+            rb01_profile_sample_action(&mut admission, Some(busy), Some(0), policy, 4, 4,),
+            Rb01ProfileSampleAction::Fail(Rb01ProfileBlockReason::CpuBusy),
+            "CPU retry must remain bounded"
+        );
+    }
+
+    #[test]
     fn rb01_profile_admission_requires_explicit_opt_in() {
         assert!(!rb01_profile_requested(None));
         assert!(!rb01_profile_requested(Some("0")));
@@ -2791,15 +3266,15 @@ mod tests {
     }
 
     #[test]
-    fn duration_cooldown_never_shortens_floor_and_extends_long_turns() {
+    fn measured_recovery_floor_is_two_minutes_and_long_turns_extend_it() {
         let policy = ThermalPolicy::conservative();
         assert_eq!(
             policy.cooldown_after(Duration::from_secs(1)),
-            AMBIENT_COOLDOWN
+            Duration::from_secs(120)
         );
         assert!(
-            policy.cooldown_after(Duration::from_secs(60)) > AMBIENT_COOLDOWN,
-            "a long request must earn a longer recovery window than the hotfix floor"
+            policy.cooldown_after(Duration::from_secs(60)) > Duration::from_secs(120),
+            "a long request must earn a longer recovery window than the measured floor"
         );
     }
 
@@ -2828,7 +3303,7 @@ mod tests {
             now,
             &snapshot,
             MaintenanceAdmission::None,
-            now - IDLE_THRESHOLD,
+            now - AUTOMATIC_BATCH_IDLE_THRESHOLD,
             false,
             now - DAILY_INTERVAL - Duration::from_secs(1),
             now - BACKSTOP_INTERVAL - Duration::from_secs(1),
@@ -2859,7 +3334,7 @@ mod tests {
                 now,
                 &snapshot,
                 MaintenanceAdmission::None,
-                now - IDLE_THRESHOLD,
+                now - AUTOMATIC_BATCH_IDLE_THRESHOLD,
                 false,
                 now - DAILY_INTERVAL - Duration::from_secs(1),
                 now - BACKSTOP_INTERVAL - Duration::from_secs(1),
@@ -2871,7 +3346,7 @@ mod tests {
                 now,
                 &snapshot,
                 MaintenanceAdmission::None,
-                now - IDLE_THRESHOLD,
+                now - AUTOMATIC_BATCH_IDLE_THRESHOLD,
                 true,
                 now - DAILY_INTERVAL - Duration::from_secs(1),
                 now - BACKSTOP_INTERVAL - Duration::from_secs(1),
@@ -2898,7 +3373,7 @@ mod tests {
                 now,
                 &snapshot,
                 MaintenanceAdmission::Ready,
-                now - IDLE_THRESHOLD,
+                now - AUTOMATIC_BATCH_IDLE_THRESHOLD,
                 false,
                 now - DAILY_INTERVAL - Duration::from_secs(1),
                 now - BACKSTOP_INTERVAL - Duration::from_secs(1),
@@ -2911,7 +3386,7 @@ mod tests {
                 now,
                 &snapshot,
                 MaintenanceAdmission::YieldToDueSteep,
-                now - IDLE_THRESHOLD,
+                now - AUTOMATIC_BATCH_IDLE_THRESHOLD,
                 false,
                 now - DAILY_INTERVAL - Duration::from_secs(1),
                 now - BACKSTOP_INTERVAL - Duration::from_secs(1),
@@ -2925,7 +3400,7 @@ mod tests {
                 now,
                 &no_bursts,
                 MaintenanceAdmission::YieldToDueSteep,
-                now - IDLE_THRESHOLD,
+                now - AUTOMATIC_BATCH_IDLE_THRESHOLD,
                 true,
                 now - DAILY_INTERVAL - Duration::from_secs(1),
                 now - BACKSTOP_INTERVAL - Duration::from_secs(1),
@@ -2937,7 +3412,7 @@ mod tests {
                 now,
                 &no_bursts,
                 MaintenanceAdmission::YieldToDueSteep,
-                now - IDLE_THRESHOLD,
+                now - AUTOMATIC_BATCH_IDLE_THRESHOLD,
                 true,
                 now,
                 now - BACKSTOP_INTERVAL - Duration::from_secs(1),
@@ -2979,7 +3454,22 @@ mod tests {
             Duration::from_secs(1),
             ThermalPolicy::conservative(),
         );
-        assert_eq!(schedule.next_allowed_at, now + AMBIENT_COOLDOWN);
+        assert_eq!(schedule.next_allowed_at, now + Duration::from_secs(120));
+    }
+
+    #[test]
+    fn empty_automatic_scan_does_not_consume_a_thermal_turn() {
+        assert!(
+            !automatic_work_consumes_thermal_turn(false, 0, false),
+            "an empty bounded sweep must not delay the first useful ambient item by ten minutes"
+        );
+    }
+
+    #[test]
+    fn selected_inference_or_panic_consumes_an_automatic_thermal_turn() {
+        assert!(automatic_work_consumes_thermal_turn(true, 0, false));
+        assert!(automatic_work_consumes_thermal_turn(false, 1, false));
+        assert!(automatic_work_consumes_thermal_turn(false, 0, true));
     }
 
     #[tokio::test]
@@ -3098,10 +3588,18 @@ mod tests {
         assert!(!idle_due(
             false,
             started,
-            started + IDLE_THRESHOLD - Duration::from_millis(1)
+            started + AUTOMATIC_BATCH_IDLE_THRESHOLD - Duration::from_millis(1)
         ));
-        assert!(idle_due(false, started, started + IDLE_THRESHOLD));
-        assert!(!idle_due(true, started, started + IDLE_THRESHOLD));
+        assert!(idle_due(
+            false,
+            started,
+            started + AUTOMATIC_BATCH_IDLE_THRESHOLD
+        ));
+        assert!(!idle_due(
+            true,
+            started,
+            started + AUTOMATIC_BATCH_IDLE_THRESHOLD
+        ));
     }
 
     #[test]
@@ -3855,32 +4353,37 @@ mod tests {
         let policy = ResourcePolicy::conservative();
         let mut probe = SystemResourceProbe::new(Instant::now());
         let mut admission = Rb01ProfileAdmission::default();
-        let mut latest = None;
 
-        for sample_index in 1..=2 {
+        for sample_index in 1..=RB01_PROFILE_ADMISSION_MAX_SAMPLES {
             tokio::time::sleep(POLL_INTERVAL).await;
             let status = probe.sample(Instant::now(), policy);
             let thermal = rb01_macos_thermal_state();
-            match admission.observe(status.snapshot, thermal, policy) {
-                Ok(()) if sample_index == 2 => {}
-                Err(Rb01ProfileBlockReason::Warming) if sample_index == 1 => {}
-                Ok(()) => {
-                    return Err(format!(
-                        "profile preflight admitted too early at sample {sample_index}/2"
-                    ));
+            match rb01_profile_sample_action(
+                &mut admission,
+                status.snapshot,
+                thermal,
+                policy,
+                sample_index,
+                RB01_PROFILE_ADMISSION_MAX_SAMPLES,
+            ) {
+                Rb01ProfileSampleAction::Retry => {}
+                Rb01ProfileSampleAction::Admit => {
+                    return status.snapshot.ok_or_else(|| {
+                        "profile preflight admitted without a resource snapshot".to_string()
+                    });
                 }
-                Err(reason) => {
+                Rb01ProfileSampleAction::Fail(reason) => {
                     return Err(format!(
-                        "profile preflight sample {sample_index}/2 rejected: {reason:?}; \
+                        "profile preflight sample {sample_index}/{RB01_PROFILE_ADMISSION_MAX_SAMPLES} \
+                         rejected: {reason:?}; \
                          resource={:?}; thermal_state={thermal:?}",
                         status.snapshot
                     ));
                 }
             }
-            latest = status.snapshot;
         }
 
-        latest.ok_or_else(|| "profile preflight produced no resource snapshot".to_string())
+        Err("profile preflight exhausted its bounded admission samples".to_string())
     }
 
     async fn rb01_seed_profile_lane(
@@ -4429,6 +4932,16 @@ mod tests {
 
         assert!(report.selected);
         assert_eq!(report.llm_calls, 0);
+        assert!(
+            report.page_growth_terminal_no_match_committed,
+            "only a committed terminal no-match may skip the thermal cooldown"
+        );
+        assert!(!ambient_work_consumes_thermal_turn(
+            report.job,
+            report.selected,
+            report.llm_calls,
+            report.page_growth_terminal_no_match_committed,
+        ));
         let growth = db
             .get_enrichment_steps("ambient-growth-no-match")
             .await
@@ -4579,13 +5092,14 @@ mod tests {
             report.job,
             report.selected,
             report.llm_calls,
+            report.page_growth_terminal_no_match_committed,
         ));
         schedule.note_thermal_work_completion(
             now,
             Duration::from_secs(1),
             ThermalPolicy::conservative(),
         );
-        assert_eq!(schedule.next_allowed_at, now + AMBIENT_COOLDOWN);
+        assert_eq!(schedule.next_allowed_at, now + Duration::from_secs(120));
     }
 
     async fn insert_test_page(

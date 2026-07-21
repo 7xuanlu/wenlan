@@ -538,7 +538,68 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 83;
+pub const SCHEMA_VERSION: u32 = 85;
+
+/// A retry receipt to commit alongside a mutation.
+///
+/// Borrowed rather than owned so a caller can hand one to the write without
+/// cloning the response it already built.
+#[derive(Debug, Clone, Copy)]
+pub struct OperationReceipt<'a> {
+    pub caller_id: &'a str,
+    pub operation_id: &'a str,
+    /// Digest of the request that produced `response`. A later call with the
+    /// same `(caller_id, operation_id)` but a different digest is a different
+    /// operation wearing a used id — a conflict, not a retry.
+    pub request_digest: &'a str,
+    /// Serialized response to hand back verbatim on a replay.
+    pub response: &'a str,
+}
+
+/// A retry receipt as stored, returned when a caller replays an operation id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredReceipt {
+    pub request_digest: String,
+    pub response: String,
+    pub created_at: i64,
+}
+
+/// Test-only fault injection: abort a page write after the row, the history
+/// row, and the receipt are all staged, but before COMMIT. That window is the
+/// only place the "a receipt cannot outlive a rolled-back write" claim is
+/// observable — a refused CAS returns long before the receipt is written, so
+/// no ordinary test can tell an in-transaction receipt from an after-COMMIT
+/// one. One-shot, and keyed to a page id so an armed fault cannot be consumed
+/// by whatever else the test binary is writing in parallel.
+#[cfg(test)]
+pub(crate) static FAIL_BEFORE_COMMIT: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn take_fail_before_commit(page_id: &str) -> bool {
+    let mut armed = FAIL_BEFORE_COMMIT.lock().unwrap();
+    if armed.as_deref() == Some(page_id) {
+        *armed = None;
+        return true;
+    }
+    false
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn take_fail_before_commit(_page_id: &str) -> bool {
+    false
+}
+
+/// One recorded version of a page, as stored in `page_history`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageHistoryEntry {
+    pub version: i64,
+    pub content: String,
+    pub source_memory_ids: Vec<String>,
+    pub edited_by: String,
+    pub created_at: i64,
+}
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -3022,6 +3083,22 @@ impl MemoryDB {
             0
         };
         drop(rows);
+
+        // A database migrated by a NEWER daemon is not ours to write to. Every
+        // migration below is gated `if version < N`, so a newer user_version
+        // silently skips all of them and we would go on writing against a
+        // schema we cannot see — ignoring columns and constraints added after
+        // us. This is not hypothetical: an older installed build can still be
+        // running and reopening the same file every few seconds.
+        //
+        // Refusing to open is the recoverable failure; writing is not.
+        if version > i64::from(SCHEMA_VERSION) {
+            return Err(WenlanError::VectorDb(format!(
+                "database schema is version {version}, newer than this build supports \
+                 ({SCHEMA_VERSION}); a newer Wenlan has already migrated it. Upgrade \
+                 Wenlan (or quit the older copy) rather than letting this one write to it."
+            )));
+        }
 
         if version < 1 {
             // Migration 1: reserved (initial schema — no-op since CREATE TABLE IF NOT EXISTS handles it)
@@ -7555,12 +7632,69 @@ impl MemoryDB {
             }
 
             // Migration 82 reconciles databases that already claimed version
-            // 77 on either pre-merge lineage. Re-applying every missing
-            // substrate is deliberate and idempotent: main-lineage databases
-            // gain ambient enrichment schema, while ambient-lineage databases
-            // gain Page Map, Page Draft, Page compile CAS, and repair bindings.
+            // 77 on either pre-merge lineage, plus released main databases that
+            // claimed versions 78/79 for Page history and operation receipts.
+            // Re-applying every missing substrate is deliberate and idempotent:
+            // main-lineage databases gain ambient enrichment schema, while
+            // ambient-lineage databases gain Page Map, Page Draft, Page compile
+            // CAS, and repair bindings.
             if version < 82 {
                 let conn = self.conn.lock().await;
+                let has_input_version = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('enrichment_steps')
+                             WHERE name='input_version'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m82 input check: {e}")))?;
+                    rows.next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m82 input row: {e}")))?
+                        .is_some_and(|row| row.get::<i64>(0).unwrap_or(0) > 0)
+                };
+                if !has_input_version {
+                    conn.execute(
+                        "ALTER TABLE enrichment_steps ADD COLUMN input_version INTEGER",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m82 repair input_version: {e}")))?;
+                }
+
+                let has_source_memory_id = {
+                    let mut rows = conn
+                        .query(
+                            "SELECT COUNT(*) FROM pragma_table_info('observations')
+                             WHERE name='source_memory_id'",
+                            (),
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m82 source check: {e}")))?;
+                    rows.next()
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m82 source row: {e}")))?
+                        .is_some_and(|row| row.get::<i64>(0).unwrap_or(0) > 0)
+                };
+                if !has_source_memory_id {
+                    conn.execute(
+                        "ALTER TABLE observations ADD COLUMN source_memory_id TEXT",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("m82 repair source_memory_id: {e}"))
+                    })?;
+                }
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_observations_source_memory
+                     ON observations(source_memory_id)
+                     WHERE source_memory_id IS NOT NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m82 repair source index: {e}")))?;
                 conn.execute_batch(
                     "CREATE TABLE IF NOT EXISTS page_maps (
                         page_id      TEXT PRIMARY KEY REFERENCES pages(id),
@@ -7670,6 +7804,91 @@ impl MemoryDB {
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m83 bump: {e}")))?;
                 log::info!("[migration] Migration 83 applied: enrichment service classes");
+            }
+
+            // Migration 84: page_history. One immutable row per page version,
+            // written in the same transaction as the page write itself, so a
+            // version can never exist without the snapshot that produced it.
+            // This is what makes page evolution inspectable and a version
+            // recoverable; the `changelog` column on `pages` stays as the
+            // FIFO-capped summary the app already reads.
+            //
+            // UNIQUE(page_id, version) is the real guard: it makes a double
+            // append for one version an error rather than a silent duplicate.
+            //
+            // ponytail: full content per version, no delta compression and no
+            // retention cap. Storage is bounded by edit volume, and a page body
+            // is small; add compaction when a real corpus says it matters.
+            if version < 84 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        page_id TEXT NOT NULL,
+                        version INTEGER NOT NULL,
+                        content TEXT NOT NULL,
+                        source_memory_ids TEXT NOT NULL DEFAULT '[]',
+                        edited_by TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        UNIQUE(page_id, version)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_page_history_page
+                        ON page_history(page_id, version DESC);",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 84 DDL: {e}")))?;
+                // Seed the current state of every existing page as its first
+                // history row, so a page that predates this table still has a
+                // recoverable version rather than an empty timeline.
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_history \
+                       (page_id, version, content, source_memory_ids, edited_by, created_at) \
+                     SELECT id, version, content, source_memory_ids, 'migration_84', ?1 \
+                     FROM pages",
+                    libsql::params![chrono::Utc::now().timestamp()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 84 seed: {e}")))?;
+                conn.execute("PRAGMA user_version = 84", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 84 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 84 applied: page_history table seeded from current pages"
+                );
+            }
+
+            // Migration 85: operation_receipts. A durable record of "this
+            // caller already ran this operation, and here is what it got",
+            // committed in the same transaction as the mutation it describes.
+            // That is the whole point: a receipt can never claim an effect
+            // that rolled back, and an effect can never land twice under one
+            // operation id.
+            //
+            // PRIMARY KEY(caller_id, operation_id) is the enforcement. The
+            // digest distinguishes an honest retry (same request, replay the
+            // stored response) from an id collision (different request, refuse).
+            //
+            // ponytail: no expiry sweep. Receipts are small and the table only
+            // grows with distinct mutating operations; add retention when a
+            // real corpus says it matters.
+            if version < 85 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS operation_receipts (
+                        caller_id TEXT NOT NULL,
+                        operation_id TEXT NOT NULL,
+                        request_digest TEXT NOT NULL,
+                        response TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        PRIMARY KEY (caller_id, operation_id)
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 85 DDL: {e}")))?;
+                conn.execute("PRAGMA user_version = 85", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 85 bump: {e}")))?;
+                log::info!("[migration] Migration 85 applied: operation_receipts table");
             }
         }
 
@@ -9468,8 +9687,34 @@ impl MemoryDB {
         let episode_enabled = has_memory_docs && episode_channel_enabled();
         let fact_enabled =
             has_memory_docs && crate::retrieval::fact_channel::fact_channel_enabled();
-        self.upsert_documents_with_derived_channels(docs, episode_enabled, fact_enabled, None)
+        self.upsert_documents_with_derived_channels(docs, episode_enabled, fact_enabled, None, None)
             .await
+    }
+
+    /// Chunk, embed, and upsert documents while committing a retry receipt in
+    /// the same transaction. Used by PageWrite revision cards so a lost
+    /// response cannot leave a durable card without the identity needed to
+    /// replay it.
+    pub async fn upsert_documents_with_operation_receipt(
+        &self,
+        docs: Vec<RawDocument>,
+        receipt: OperationReceipt<'_>,
+    ) -> Result<usize, WenlanError> {
+        if docs.is_empty() {
+            return Ok(0);
+        }
+        let has_memory_docs = docs.iter().any(|doc| doc.source == "memory");
+        let episode_enabled = has_memory_docs && episode_channel_enabled();
+        let fact_enabled =
+            has_memory_docs && crate::retrieval::fact_channel::fact_channel_enabled();
+        self.upsert_documents_with_derived_channels(
+            docs,
+            episode_enabled,
+            fact_enabled,
+            None,
+            Some(receipt),
+        )
+        .await
     }
 
     /// Chunk, embed, and atomically record the fixed enrichment origin for
@@ -9494,6 +9739,7 @@ impl MemoryDB {
             episode_enabled,
             fact_enabled,
             Some(origin),
+            None,
         )
         .await
     }
@@ -9511,6 +9757,7 @@ impl MemoryDB {
             has_memory_docs && episode_enabled,
             has_memory_docs && fact_enabled,
             None,
+            None,
         )
         .await
     }
@@ -9521,6 +9768,7 @@ impl MemoryDB {
         episode_enabled: bool,
         fact_enabled: bool,
         enrichment_origin: Option<EnrichmentOrigin>,
+        operation_receipt: Option<OperationReceipt<'_>>,
     ) -> Result<usize, WenlanError> {
         if docs.is_empty() {
             return Ok(0);
@@ -10150,6 +10398,28 @@ impl MemoryDB {
                         .ok(); // Best effort
                     }
                 }
+            }
+
+            if let Some(receipt) = operation_receipt {
+                conn.execute(
+                    "INSERT INTO operation_receipts \
+                       (caller_id, operation_id, request_digest, response, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    libsql::params![
+                        receipt.caller_id,
+                        receipt.operation_id,
+                        receipt.request_digest,
+                        receipt.response,
+                        chrono::Utc::now().timestamp()
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::Conflict(format!(
+                        "operation id '{}' for '{}' was already used: {e}",
+                        receipt.operation_id, receipt.caller_id
+                    ))
+                })?;
             }
 
             Ok(())
@@ -26410,7 +26680,7 @@ impl MemoryDB {
                           COALESCE(es.updated_at, m.last_modified) ASC,
                           m.source_id ASC
                  LIMIT 1",
-                libsql::params![i64::from(max_attempts)],
+                [i64::from(max_attempts)],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("classification candidate: {e}")))?;
@@ -26493,7 +26763,7 @@ impl MemoryDB {
                           COALESCE(es.updated_at, m.last_modified) ASC,
                           m.source_id ASC
                  LIMIT 1",
-                libsql::params![i64::from(max_attempts)],
+                [i64::from(max_attempts)],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("structured candidate: {e}")))?;
@@ -28674,6 +28944,41 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Append the immutable `page_history` row for the version a write just
+    /// produced, on the caller's already-open transaction.
+    ///
+    /// `SELECT ... FROM pages` reads the row the caller just updated, inside
+    /// that same transaction, so the snapshot and its version number can never
+    /// disagree with what landed — and no caller has to compute the post-bump
+    /// version itself. A history row is therefore not "written alongside" the
+    /// page: either both exist or neither does.
+    ///
+    /// This is the ONE site that appends a version row, shared by every path
+    /// that bumps `pages.version`. A path that grows its own copy of this
+    /// statement is how the invariant "one durable row per page version" drifts
+    /// back into being false for some page kinds but not others — which is
+    /// exactly what happened to source pages before this was factored out.
+    ///
+    /// A plain INSERT, not `OR IGNORE`: `UNIQUE(page_id, version)` colliding
+    /// means a row already exists for a version this write claims to have just
+    /// created, and failing the transaction is the correct answer to that.
+    async fn append_page_history(
+        conn: &libsql::Connection,
+        page_id: &str,
+        edited_by: &str,
+        created_at: i64,
+    ) -> Result<(), libsql::Error> {
+        conn.execute(
+            "INSERT INTO page_history \
+               (page_id, version, content, source_memory_ids, edited_by, created_at) \
+             SELECT id, version, content, source_memory_ids, ?2, ?3 \
+             FROM pages WHERE id = ?1",
+            libsql::params![page_id, edited_by, created_at],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Batch-resolve typed `page_evidence.source_kind` values
     /// (`memory` | `external_url` | `external_file` | `authored`) for a list
     /// of source ids, keyed by id. The ONE wiring site for every citation
@@ -28946,6 +29251,23 @@ impl MemoryDB {
             )));
         }
 
+        // A page's first version is history too — without this row a freshly
+        // created page has an empty timeline until someone happens to edit it.
+        // Same transaction as the INSERT, same reasoning as the update path.
+        if let Err(e) = conn
+            .execute(
+                "INSERT OR IGNORE INTO page_history \
+                   (page_id, version, content, source_memory_ids, edited_by, created_at) \
+                 SELECT id, version, content, source_memory_ids, 'create', ?2 \
+                 FROM pages WHERE id = ?1",
+                libsql::params![id, linked_at],
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!("insert_page history: {e}")));
+        }
+
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("insert_page commit: {e}")))?;
@@ -29181,6 +29503,12 @@ impl MemoryDB {
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("replace_source_page evidence insert: {e}"))
                 })?;
+            // Same transaction as the version bump above: a re-enriched source
+            // page is a new version like any other, and leaves the same durable
+            // row behind.
+            Self::append_page_history(&conn, id, link_reason, now_ts)
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("replace_source_page history: {e}")))?;
             Ok::<bool, WenlanError>(true)
         }
         .await;
@@ -29432,6 +29760,103 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Every recorded version of a page, newest first. The version a page is
+    /// currently at is always the first entry — `page_history` is written in the
+    /// same transaction as the page itself, so it cannot lag behind.
+    pub async fn list_page_history(
+        &self,
+        page_id: &str,
+        limit: i64,
+    ) -> Result<Vec<PageHistoryEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT version, content, source_memory_ids, edited_by, created_at \
+                 FROM page_history WHERE page_id = ?1 \
+                 ORDER BY version DESC LIMIT ?2",
+                libsql::params![page_id, limit],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_page_history: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_page_history row: {e}")))?
+        {
+            let source_ids_json: String = row.get(2).unwrap_or_else(|_| "[]".to_string());
+            out.push(PageHistoryEntry {
+                version: row.get(0).unwrap_or(0),
+                content: row.get(1).unwrap_or_default(),
+                source_memory_ids: serde_json::from_str(&source_ids_json).unwrap_or_default(),
+                edited_by: row.get(3).unwrap_or_default(),
+                created_at: row.get(4).unwrap_or(0),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Look up a stored retry receipt. `None` means this caller has not run
+    /// this operation — or ran it and rolled back, which is the same thing.
+    pub async fn get_operation_receipt(
+        &self,
+        caller_id: &str,
+        operation_id: &str,
+    ) -> Result<Option<StoredReceipt>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT request_digest, response, created_at FROM operation_receipts \
+                 WHERE caller_id = ?1 AND operation_id = ?2",
+                libsql::params![caller_id, operation_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_operation_receipt: {e}")))?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_operation_receipt row: {e}")))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(StoredReceipt {
+            request_digest: row.get(0).unwrap_or_default(),
+            response: row.get(1).unwrap_or_default(),
+            created_at: row.get(2).unwrap_or(0),
+        }))
+    }
+
+    /// Record the terminal response for an operation that made no domain
+    /// mutation. Mutating Page writes and revision cards use their own
+    /// transaction-coupled receipt paths; this seam is deliberately for
+    /// successful no-op outcomes only.
+    pub async fn record_operation_receipt(
+        &self,
+        receipt: OperationReceipt<'_>,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO operation_receipts \
+               (caller_id, operation_id, request_digest, response, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            libsql::params![
+                receipt.caller_id,
+                receipt.operation_id,
+                receipt.request_digest,
+                receipt.response,
+                chrono::Utc::now().timestamp()
+            ],
+        )
+        .await
+        .map_err(|e| {
+            WenlanError::Conflict(format!(
+                "operation id '{}' for '{}' was already used: {e}",
+                receipt.operation_id, receipt.caller_id
+            ))
+        })?;
+        Ok(())
+    }
+
     /// Update a page's content + source memory ids in a single atomic UPDATE
     /// (content, version bump, timestamps, user_edited flag). Reconciles the
     /// `page_sources` join table to match the new source set: rows no longer
@@ -29450,6 +29875,7 @@ impl MemoryDB {
             source_memory_ids,
             link_reason,
             false,
+            None,
             None,
             None,
             None,
@@ -29488,6 +29914,7 @@ impl MemoryDB {
             None,
             None,
             None,
+            None,
             false,
         )
         .await
@@ -29504,7 +29931,11 @@ impl MemoryDB {
         changelog: &str,
         citations_json: Option<&str>,
         expected_source_revision: i64,
+        receipt: Option<OperationReceipt<'_>>,
     ) -> Result<bool, WenlanError> {
+        // `expected_version` stays None here on purpose: the inner fn refuses a
+        // write that carries both CAS modes, and this entry point's guard is the
+        // source revision.
         self.try_update_page_content(
             id,
             content,
@@ -29516,6 +29947,7 @@ impl MemoryDB {
             None,
             Some(expected_source_revision),
             None,
+            receipt,
             None,
             false,
         )
@@ -29531,6 +29963,11 @@ impl MemoryDB {
     /// atomically with the content; `None` resets `citations` to SQL `NULL` so
     /// the new body is eligible for bounded annotation. A stale claim-map must
     /// never survive a content change.
+    ///
+    /// `expected_version`: `Some(v)` folds an optimistic-concurrency guard into
+    /// the same UPDATE, so the row the caller made its ownership decision from is
+    /// provably the row being written. A mismatch affects zero rows and returns
+    /// `false` rather than clobbering whatever landed in between.
     #[allow(clippy::too_many_arguments)]
     pub async fn try_update_page_content_with_changelog(
         &self,
@@ -29541,6 +29978,8 @@ impl MemoryDB {
         require_stale: bool,
         changelog: &str,
         citations_json: Option<&str>,
+        expected_version: Option<i64>,
+        receipt: Option<OperationReceipt<'_>>,
     ) -> Result<bool, WenlanError> {
         self.try_update_page_content(
             id,
@@ -29550,17 +29989,19 @@ impl MemoryDB {
             require_stale,
             Some(changelog),
             citations_json,
+            expected_version,
             None,
             None,
-            None,
+            receipt,
             None,
             false,
         )
         .await
     }
 
-    /// Version-CAS variant for accepting staged page-write cards. Returns `false`
-    /// when the current page version no longer matches `expected_version`.
+    /// Version-CAS variant for non-stale Page writes. Returns `false` when the
+    /// current page version no longer matches `expected_version`; an optional
+    /// retry receipt commits in the same transaction as the matched write.
     #[allow(clippy::too_many_arguments)]
     pub async fn try_update_page_content_with_changelog_at_version(
         &self,
@@ -29571,6 +30012,7 @@ impl MemoryDB {
         changelog: &str,
         citations_json: Option<&str>,
         expected_version: i64,
+        receipt: Option<OperationReceipt<'_>>,
     ) -> Result<bool, WenlanError> {
         self.try_update_page_content(
             id,
@@ -29583,6 +30025,7 @@ impl MemoryDB {
             Some(expected_version),
             None,
             None,
+            receipt,
             None,
             false,
         )
@@ -29623,6 +30066,7 @@ impl MemoryDB {
             Some(expected_page_version),
             Some(expected_source_revision),
             None,
+            None,
             Some((source_id, expected_memory_version)),
             true,
         )
@@ -29653,6 +30097,7 @@ impl MemoryDB {
             None,
             Some(revision_source_id),
             None,
+            None,
             false,
         )
         .await
@@ -29679,6 +30124,7 @@ impl MemoryDB {
         expected_version: Option<i64>,
         expected_source_revision: Option<i64>,
         consume_revision_id: Option<&str>,
+        receipt: Option<OperationReceipt<'_>>,
         page_growth_guard: Option<(&str, i64)>,
         machine_owned_only: bool,
     ) -> Result<bool, WenlanError> {
@@ -30237,6 +30683,54 @@ impl MemoryDB {
                     "accept_page_revision_card consume: {error}"
                 )));
             }
+        }
+
+        // Append the immutable history row for the version this write produced.
+        if let Err(e) = Self::append_page_history(&conn, id, link_reason, now_ts).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "update_page_content history: {e}"
+            )));
+        }
+
+        // Record the retry receipt in the same transaction as the write it
+        // describes. Committed together or not at all — a receipt that
+        // outlived a rolled-back write would tell the next retry "already
+        // done" about a change that never landed.
+        //
+        // A plain INSERT (not OR IGNORE): the PRIMARY KEY collision is the
+        // signal that another attempt with this id got there first, and
+        // rolling back is the correct answer — the caller re-reads the
+        // receipt and replays what actually landed.
+        if let Some(r) = receipt {
+            if let Err(e) = conn
+                .execute(
+                    "INSERT INTO operation_receipts \
+                       (caller_id, operation_id, request_digest, response, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    libsql::params![
+                        r.caller_id,
+                        r.operation_id,
+                        r.request_digest,
+                        r.response,
+                        now_ts
+                    ],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::Conflict(format!(
+                    "operation {}/{} already recorded: {e}",
+                    r.caller_id, r.operation_id
+                )));
+            }
+        }
+
+        if take_fail_before_commit(id) {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(
+                "injected failure before commit".into(),
+            ));
         }
 
         conn.execute("COMMIT", ())
@@ -30834,6 +31328,15 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_page orphan links: {e}")))?;
+            // Page ids can be deterministic and later reused. History belongs
+            // to this Page generation, so retaining it would make a recreated
+            // version 1 expose the deleted Page's snapshots.
+            conn.execute(
+                "DELETE FROM page_history WHERE page_id = ?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_page history: {e}")))?;
             conn.execute("DELETE FROM pages WHERE id = ?1", libsql::params![id])
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("delete_page row: {e}")))?;
@@ -33072,6 +33575,80 @@ impl MemoryDB {
         }
         .map_err(|e| WenlanError::VectorDb(format!("acknowledge_page_compile: {e}")))?;
         Ok(affected == 1)
+    }
+
+    /// Acknowledge an unchanged compile and commit its retry receipt in the
+    /// same transaction. This closes the lost-response window where the stale
+    /// marker was cleared but the caller could not replay the acknowledged
+    /// result.
+    pub async fn acknowledge_page_compile_with_receipt(
+        &self,
+        page_id: &str,
+        expected_version: i64,
+        expected_source_revision: Option<i64>,
+        receipt: OperationReceipt<'_>,
+    ) -> Result<bool, WenlanError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("acknowledge_page_compile begin: {e}")))?;
+        let result = async {
+            let affected = if let Some(revision) = expected_source_revision {
+                conn.execute(
+                    "UPDATE pages
+                     SET last_compiled = ?1, stale_reason = NULL, sources_updated_count = 0
+                     WHERE id = ?2 AND version = ?3 AND stale_reason IS NOT NULL
+                       AND COALESCE(source_revision, 0) = ?4",
+                    libsql::params![now, page_id, expected_version, revision],
+                )
+                .await
+            } else {
+                conn.execute(
+                    "UPDATE pages
+                     SET last_compiled = ?1, stale_reason = NULL, sources_updated_count = 0
+                     WHERE id = ?2 AND version = ?3 AND stale_reason IS NOT NULL",
+                    libsql::params![now, page_id, expected_version],
+                )
+                .await
+            }
+            .map_err(|e| WenlanError::VectorDb(format!("acknowledge_page_compile: {e}")))?;
+            if affected == 0 {
+                return Ok(false);
+            }
+            conn.execute(
+                "INSERT INTO operation_receipts \
+                   (caller_id, operation_id, request_digest, response, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                libsql::params![
+                    receipt.caller_id,
+                    receipt.operation_id,
+                    receipt.request_digest,
+                    receipt.response,
+                    chrono::Utc::now().timestamp()
+                ],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::Conflict(format!(
+                    "operation id '{}' for '{}' was already used: {e}",
+                    receipt.operation_id, receipt.caller_id
+                ))
+            })?;
+            Ok(true)
+        }
+        .await;
+        let acknowledged = match result {
+            Ok(acknowledged) => acknowledged,
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        };
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("acknowledge_page_compile commit: {e}")))?;
+        Ok(acknowledged)
     }
 
     /// Clear a human-owned page's queued stale item after its review card was
@@ -57084,6 +57661,8 @@ pub(crate) mod tests {
             false,
             "User-edited content",
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -57112,6 +57691,8 @@ pub(crate) mod tests {
             "fs_edit",
             false,
             "user-edited",
+            None,
+            None,
             None,
         )
         .await
@@ -63751,6 +64332,162 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn migration_85_repairs_released_main_79_ambient_schema_collision() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "INSERT INTO page_history
+                    (page_id, version, content, source_memory_ids, edited_by, created_at)
+                 VALUES ('lineage-page', 7, 'history-bytes', '[\"lineage-memory\"]',
+                         'lineage-writer', 123456);
+                 INSERT INTO operation_receipts
+                    (caller_id, operation_id, request_digest, response, created_at)
+                 VALUES ('lineage-caller', 'lineage-operation', 'digest-bytes',
+                         '{\"ok\":true,\"marker\":\"response-bytes\"}', 234567);
+                 DROP INDEX IF EXISTS idx_observations_source_memory;
+                 ALTER TABLE enrichment_steps DROP COLUMN input_version;
+                 ALTER TABLE observations DROP COLUMN source_memory_id;
+                 DROP TABLE enrichment_origin;
+                 DROP INDEX IF EXISTS idx_pages_stale_scan;
+                 PRAGMA user_version = 79;",
+            )
+            .await
+            .unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("released main schema 79 must gain the complete ambient schema");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT
+                    (SELECT COUNT(*) FROM pragma_table_info('enrichment_steps')
+                      WHERE name='input_version'),
+                    (SELECT COUNT(*) FROM pragma_table_info('observations')
+                      WHERE name='source_memory_id'),
+                    (SELECT COUNT(*) FROM sqlite_master
+                      WHERE type='index' AND name='idx_observations_source_memory'),
+                    (SELECT COUNT(*) FROM pragma_table_info('enrichment_origin')
+                      WHERE name='service_class'),
+                    (SELECT COUNT(*) FROM sqlite_master
+                      WHERE type='index' AND name='idx_pages_stale_scan'),
+                    (SELECT COUNT(*) FROM sqlite_master
+                      WHERE type='table'
+                        AND name IN ('page_history', 'operation_receipts'))",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<i64>(0).unwrap(), 1, "m78 column must be repaired");
+        assert_eq!(row.get::<i64>(1).unwrap(), 1, "m79 column must be repaired");
+        assert_eq!(row.get::<i64>(2).unwrap(), 1, "m79 index must be repaired");
+        assert_eq!(row.get::<i64>(3).unwrap(), 1, "m83 column must be present");
+        assert_eq!(row.get::<i64>(4).unwrap(), 1, "m81 index must be present");
+        assert_eq!(
+            row.get::<i64>(5).unwrap(),
+            2,
+            "released main Page history and retry receipts must survive"
+        );
+        drop(rows);
+        let mut history_rows = conn
+            .query(
+                "SELECT version, content, source_memory_ids, edited_by, created_at
+                 FROM page_history WHERE page_id='lineage-page'",
+                (),
+            )
+            .await
+            .unwrap();
+        let history = history_rows.next().await.unwrap().unwrap();
+        assert_eq!(history.get::<i64>(0).unwrap(), 7);
+        assert_eq!(history.get::<String>(1).unwrap(), "history-bytes");
+        assert_eq!(history.get::<String>(2).unwrap(), "[\"lineage-memory\"]");
+        assert_eq!(history.get::<String>(3).unwrap(), "lineage-writer");
+        assert_eq!(history.get::<i64>(4).unwrap(), 123456);
+        drop(history_rows);
+        let mut receipt_rows = conn
+            .query(
+                "SELECT request_digest, response, created_at
+                 FROM operation_receipts
+                 WHERE caller_id='lineage-caller'
+                   AND operation_id='lineage-operation'",
+                (),
+            )
+            .await
+            .unwrap();
+        let receipt = receipt_rows.next().await.unwrap().unwrap();
+        assert_eq!(receipt.get::<String>(0).unwrap(), "digest-bytes");
+        assert_eq!(
+            receipt.get::<String>(1).unwrap(),
+            "{\"ok\":true,\"marker\":\"response-bytes\"}"
+        );
+        assert_eq!(receipt.get::<i64>(2).unwrap(), 234567);
+        drop(receipt_rows);
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            i64::from(SCHEMA_VERSION)
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_85_upgrades_feature_83_with_main_page_write_schema() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "DROP TABLE operation_receipts;
+                 DROP TABLE page_history;
+                 PRAGMA user_version = 83;",
+            )
+            .await
+            .unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("feature schema 83 must gain main's Page-write schema");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE (type='table'
+                         AND name IN ('page_history', 'operation_receipts'))
+                     OR (type='index' AND name='idx_page_history_page')",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            3,
+            "feature lineage must gain both main tables and the history index"
+        );
+        drop(rows);
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            i64::from(SCHEMA_VERSION)
+        );
+    }
+
+    #[tokio::test]
     async fn enrichment_service_class_orders_interactive_then_bulk_then_legacy() {
         let (db, _dir) = test_db().await;
         let legacy_content =
@@ -64124,6 +64861,87 @@ pub(crate) mod tests {
             .unwrap();
         let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(present, 1, "child_vectors survives idempotent re-run");
+    }
+
+    /// A database a NEWER daemon already migrated must not be opened. Every
+    /// migration is gated `if version < N`, so a newer `user_version` skips all
+    /// of them silently — without this check an older build would go on writing
+    /// against columns and constraints it cannot see. Refusing is recoverable;
+    /// writing is not.
+    #[tokio::test]
+    async fn opening_a_newer_schema_database_is_refused() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                &format!("PRAGMA user_version = {}", crate::db::SCHEMA_VERSION + 1),
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let err = db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect_err("a newer schema must be refused, not silently accepted");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("newer than this build supports"),
+            "the error must say why it refused, not just fail; got: {msg}"
+        );
+    }
+
+    /// A fresh install and an upgraded install must end up with the same
+    /// schema. They share one incremental chain, so this holds by construction
+    /// today — the test is here to catch the day someone adds a fresh-path DDL
+    /// shortcut and the two paths quietly diverge.
+    ///
+    /// Exercises the real upgrade for M0's migrations: drop what 73 and 74
+    /// added, rewind the version, and re-migrate.
+    #[tokio::test]
+    async fn fresh_and_upgraded_schemas_agree() {
+        async fn schema_of(db: &MemoryDB) -> Vec<(String, String)> {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT name, COALESCE(sql, '') FROM sqlite_master \
+                     WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut out = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                out.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+            }
+            out
+        }
+
+        let (fresh, _fresh_dir) = test_db().await;
+        let (upgraded, _up_dir) = test_db().await;
+
+        // Rewind `upgraded` to a genuine pre-M0 database.
+        {
+            let conn = upgraded.conn.lock().await;
+            conn.execute("DROP TABLE IF EXISTS operation_receipts", ())
+                .await
+                .unwrap();
+            conn.execute("DROP TABLE IF EXISTS page_history", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 72", ()).await.unwrap();
+        }
+        upgraded
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migrating a pre-M0 database must succeed");
+
+        assert_eq!(
+            schema_of(&fresh).await,
+            schema_of(&upgraded).await,
+            "a fresh install and an upgraded one must have identical schemas"
+        );
     }
 
     #[tokio::test]
@@ -65916,6 +66734,8 @@ pub(crate) mod tests {
                 false,
                 "[]",
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -66607,7 +67427,8 @@ pub(crate) mod tests {
                 .get::<i64>(0)
                 .unwrap(),
             i64::from(SCHEMA_VERSION),
-            "the post-merge reconciliation owns a new terminal schema version"
+            "the post-merge reconciliation must migrate a v76 database all the way \
+             to the current terminal schema version"
         );
     }
 

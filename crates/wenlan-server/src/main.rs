@@ -220,6 +220,18 @@ fn optional_runtime_workers_allowed(startup_repair_claimed: bool) -> bool {
     !startup_repair_claimed
 }
 
+fn on_device_model_working_set_bytes(model: &wenlan_core::on_device_models::OnDeviceModel) -> u64 {
+    (model.ram_required_gb * 1024.0 * 1024.0 * 1024.0).ceil() as u64
+}
+
+struct StartupModelLoadReservation(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for StartupModelLoadReservation {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 fn existing_daemon_may_satisfy_startup(startup_repair_claimed: bool) -> bool {
     !startup_repair_claimed
 }
@@ -229,10 +241,51 @@ mod bind_addr_tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
 
+    #[cfg(unix)]
+    unsafe extern "C" {
+        fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+        fn _exit(status: std::ffi::c_int) -> !;
+    }
+
     static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn env_lock() -> &'static Mutex<()> {
         TEST_ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[cfg(unix)]
+    extern "C" fn fail_if_c_exit_handlers_run() {
+        // SAFETY: This callback runs only in the dedicated child below. `_exit`
+        // terminates that child immediately and cannot return into the handler.
+        unsafe { _exit(71) }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_exit_skips_c_exit_handlers() {
+        const CHILD_ENV: &str = "WENLAN_TEST_DAEMON_EXIT_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            // SAFETY: The callback has the required C ABI, no captured state,
+            // and remains valid for the lifetime of this dedicated child.
+            assert_eq!(unsafe { atexit(fail_if_c_exit_handlers_run) }, 0);
+            exit_daemon(0);
+        }
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "bind_addr_tests::daemon_exit_skips_c_exit_handlers",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .status()
+            .unwrap();
+
+        assert_eq!(
+            status.code(),
+            Some(0),
+            "daemon exit ran a C exit handler instead of terminating directly: {status}"
+        );
     }
 
     #[test]
@@ -366,6 +419,15 @@ mod bind_addr_tests {
     fn startup_repair_claim_disables_optional_runtime_workers() {
         assert!(!optional_runtime_workers_allowed(true));
         assert!(optional_runtime_workers_allowed(false));
+    }
+
+    #[test]
+    fn startup_model_working_set_uses_the_registry_ram_requirement() {
+        let model = wenlan_core::on_device_models::get_model("qwen3-4b").unwrap();
+        assert_eq!(
+            on_device_model_working_set_bytes(model),
+            3 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -507,10 +569,27 @@ use tokio::sync::RwLock;
 
 const SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1_500);
 
+#[cfg(unix)]
+unsafe extern "C" {
+    #[link_name = "_exit"]
+    fn unix_process_exit(status: std::ffi::c_int) -> !;
+}
+
 fn exit_daemon(code: i32) -> ! {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
-    std::process::exit(code);
+    #[cfg(unix)]
+    {
+        // SAFETY: The daemon-owned HTTP and scheduler tasks have already
+        // drained. `_exit` terminates the process without running C `atexit`
+        // handlers, which could otherwise tear down Metal globals while a
+        // deliberately detached blocking inference worker still owns them.
+        unsafe { unix_process_exit(code) }
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::exit(code)
+    }
 }
 
 #[cfg(unix)]
@@ -1079,6 +1158,62 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
         }
     }
 
+    // Startup reconcile: repair the markdown projection from the DB.
+    //
+    // `write_page` renames a temp file over the target without an fsync — that
+    // buys readers atomicity, not crash durability. So a crash can leave a
+    // page's file missing, holding the previous version's bytes, or
+    // zero-length, plus `.tmp` orphans from a write that died mid-rename.
+    // This is the pass that makes "the md is a repairable projection" true.
+    //
+    // Runs synchronously, before `axum::serve`, for the same reason the
+    // backfill above does: no HTTP write and no scheduler tick can race the
+    // repair, so the pass needs no locking. The listener is already bound
+    // (see the bind-first block up top), so a slow pass on a large corpus
+    // delays serving, never the port handoff.
+    //
+    // ponytail: same 10k page ceiling as the backfill, and one pass reads
+    // every projected file. If a corpus ever outgrows that, page the scan or
+    // move it behind the listener — do NOT background it naively, since a
+    // concurrent page write would race the repair.
+    {
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+        if knowledge_path.exists() {
+            match db_arc.list_pages("active", 10_000, 0).await {
+                Ok(pages) => {
+                    let projection = wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(
+                        knowledge_path.clone(),
+                        &db_arc,
+                    );
+                    match projection.reconcile(&pages) {
+                        Ok(stats)
+                            if stats.rewritten > 0
+                                || stats.temp_files_removed > 0
+                                || stats.errors > 0 =>
+                        {
+                            tracing::info!(
+                                "[reconcile] projection repaired: {} checked, {} rewritten, \
+                                 {} temp leftover(s) swept, {} failed",
+                                stats.checked,
+                                stats.rewritten,
+                                stats.temp_files_removed,
+                                stats.errors
+                            );
+                        }
+                        Ok(stats) => {
+                            tracing::debug!(
+                                "[reconcile] {} page(s) checked, all clean",
+                                stats.checked
+                            );
+                        }
+                        Err(e) => tracing::warn!("[reconcile] pass failed: {e}"),
+                    }
+                }
+                Err(e) => tracing::warn!("[reconcile] list_pages failed: {e}"),
+            }
+        }
+    }
+
     // Load intelligence config
     server_state.prompts = wenlan_core::prompts::PromptRegistry::load(
         &wenlan_core::prompts::PromptRegistry::override_dir(),
@@ -1341,51 +1476,84 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
         });
     }
 
-    // Initialize on-device LLM in the background if a model is already cached.
+    // Initialize an explicitly selected, already-cached on-device LLM without
+    // making daemon restart itself a foreground-heavy event. Selection still
+    // supports explicit routes even when background source pins are absent, so
+    // we keep preload semantics; the load now waits for two quiet CPU samples
+    // and enough free memory for the registry working set *above* the normal
+    // scheduler reserve. A reservation also prevents an automatic turn from
+    // racing the load after observing the same quiet window.
+    //
     // This intentionally does NOT trigger a download — users opt in explicitly
     // via the settings UI (POST /api/on-device-model/download).
     if optional_runtime_workers_allowed(repair_recovery_pending) {
-        let shared_for_llm = shared.clone();
-        let on_device_id = config.on_device_model.clone();
-        tokio::spawn(async move {
-            let Some(on_device_id) = on_device_id else {
-                tracing::info!(
-                    "[on-device] no local model selected, skipping init (run `wenlan models install` to enable)"
-                );
-                return;
-            };
-            let result = tokio::task::spawn_blocking(move || {
-                let model =
-                    wenlan_core::on_device_models::resolve_or_default(Some(on_device_id.as_str()));
-                if !wenlan_core::on_device_models::is_cached(model) {
-                    tracing::info!(
-                        "[on-device] model {} not cached, skipping init (use settings to download)",
-                        model.id
-                    );
-                    return Ok::<
-                        Option<(Arc<dyn wenlan_core::llm_provider::LlmProvider>, String)>,
-                        wenlan_core::error::WenlanError,
-                    >(None);
-                }
-                let provider =
-                    wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some(model.id))?;
-                let arc: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(provider);
-                Ok(Some((arc, model.id.to_string())))
-            })
-            .await;
+        let selected_model = config
+            .on_device_model
+            .as_deref()
+            .map(|id| wenlan_core::on_device_models::resolve_or_default(Some(id)));
+        match selected_model {
+            None => tracing::info!(
+                "[on-device] no local model selected, skipping init (run `wenlan models install` to enable)"
+            ),
+            Some(model) if !wenlan_core::on_device_models::is_cached(model) => tracing::info!(
+                "[on-device] model {} not cached, skipping init (use settings to download)",
+                model.id
+            ),
+            Some(model) => {
+                let shared_for_llm = shared.clone();
+                let reservation = {
+                    let state = shared.read().await;
+                    state
+                        .startup_model_load_reserved
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    state.startup_model_load_reserved.clone()
+                };
+                let mut load_shutdown = {
+                    let state = shared.read().await;
+                    state.shutdown.subscribe()
+                };
+                let working_set_bytes = on_device_model_working_set_bytes(model);
+                tokio::spawn(async move {
+                    let _reservation = StartupModelLoadReservation(reservation);
+                    if !scheduler::wait_for_startup_model_admission(
+                        working_set_bytes,
+                        &mut load_shutdown,
+                    )
+                    .await
+                    {
+                        tracing::info!(
+                            "[on-device] shutdown requested before startup load admission"
+                        );
+                        return;
+                    }
+                    let model_id = model.id;
+                    let result = tokio::task::spawn_blocking(move || {
+                        let provider =
+                            wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some(
+                                model_id,
+                            ))?;
+                        let arc: Arc<dyn wenlan_core::llm_provider::LlmProvider> =
+                            Arc::new(provider);
+                        Ok::<_, wenlan_core::error::WenlanError>((
+                            arc,
+                            model_id.to_string(),
+                        ))
+                    })
+                    .await;
 
-            match result {
-                Ok(Ok(Some((provider, model_id)))) => {
-                    let mut state = shared_for_llm.write().await;
-                    state.llm = Some(provider);
-                    state.loaded_on_device_model = Some(model_id.clone());
-                    tracing::info!("[on-device] model {} loaded and available", model_id);
-                }
-                Ok(Ok(None)) => {} // Not cached — already logged
-                Ok(Err(e)) => tracing::error!("[on-device] init failed: {}", e),
-                Err(e) => tracing::error!("[on-device] init task panicked: {}", e),
+                    match result {
+                        Ok(Ok((provider, model_id))) => {
+                            let mut state = shared_for_llm.write().await;
+                            state.llm = Some(provider);
+                            state.loaded_on_device_model = Some(model_id.clone());
+                            tracing::info!("[on-device] model {} loaded and available", model_id);
+                        }
+                        Ok(Err(e)) => tracing::error!("[on-device] init failed: {}", e),
+                        Err(e) => tracing::error!("[on-device] init task panicked: {}", e),
+                    }
+                });
             }
-        });
+        }
     }
 
     // Register the LLM-readiness hook so that the `intelligence-ready`

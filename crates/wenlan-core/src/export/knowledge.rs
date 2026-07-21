@@ -29,6 +29,10 @@ type ProjectionStateMode = u32;
 #[cfg(not(unix))]
 type ProjectionStateMode = ();
 
+/// Process-local monotonic counter, combined with the pid, so concurrent
+/// `write_page` calls for the same page never pick the same temp filename.
+static TEMP_FILE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Debug, Serialize, Deserialize)]
 struct KnowledgeState {
     #[serde(default = "default_schema_v2")]
@@ -54,6 +58,55 @@ struct PageFileState {
     file: String,
     version: i64,
     last_written: String,
+}
+
+/// What one `reconcile` pass repaired. Logged as a single summary line at
+/// startup — per-page detail would be thousands of lines on a real corpus.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ReconcileStats {
+    /// Pages with a `state.json` entry, i.e. ones we could check at all.
+    pub checked: usize,
+    /// Projections found behind the DB and rewritten.
+    pub rewritten: usize,
+    /// `write_page` leftovers swept from the pages directory.
+    pub temp_files_removed: usize,
+    /// Repairs that failed; the page keeps its stale file until next boot.
+    pub errors: usize,
+}
+
+/// The `origin_version` stamp `render_markdown` writes into every projected
+/// file, or 0 when the file has no parseable frontmatter (empty, truncated, or
+/// never ours). Shared by the page-watcher and the startup reconcile: they
+/// make opposite decisions off this number, so reading it two different ways
+/// would let reconcile overwrite exactly what the watcher protects.
+///
+/// Tolerant of `3`, `3.0` and `"3"` — YAML gives each a different serde shape,
+/// and a hand-retyped frontmatter should not be mistaken for a stale one.
+pub(crate) fn projected_origin_version(fm: &crate::sources::obsidian::NoteFrontmatter) -> i64 {
+    fm.fields
+        .get("origin_version")
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_f64().map(|f| f as i64))
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        })
+        .unwrap_or(0)
+}
+
+/// True only for the `.{page_id}.{pid}.{seq}.tmp` names `write_page` creates.
+/// Page ids carry no dots, so "exactly three components, the last two all
+/// digits" is our writer's shape and nobody else's — an editor swap file or a
+/// user's own `.tmp` scratch in the pages directory does not match.
+fn is_write_page_temp_file(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('.').and_then(|n| n.strip_suffix(".tmp")) else {
+        return false;
+    };
+    let mut parts = rest.rsplitn(3, '.');
+    let seq = parts.next().unwrap_or_default();
+    let pid = parts.next().unwrap_or_default();
+    let page_id = parts.next().unwrap_or_default();
+    let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    !page_id.is_empty() && !page_id.contains('.') && all_digits(pid) && all_digits(seq)
 }
 
 /// Legacy v1 KnowledgeState. The Phase 0 (Page) taxonomy refactor renamed
@@ -143,6 +196,12 @@ impl KnowledgeWriter {
         self.remove_page(&guard, page_id)
     }
 
+    #[cfg(test)]
+    fn reconcile_for_test(&self, pages: &[Page]) -> Result<ReconcileStats, WenlanError> {
+        let guard = self.begin_test_write();
+        self.reconcile(&guard, pages)
+    }
+
     pub fn write_page(
         &self,
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
@@ -181,7 +240,27 @@ impl KnowledgeWriter {
         let file_path = self.path.join(&filename);
 
         let content = render_markdown(page);
-        write_regular_nofollow(&capabilities.root, &filename, content.as_bytes())?;
+        // Write to a temp file in the same capability directory, then rename
+        // over the target: rename within one directory is atomic, so a reader
+        // (Obsidian, the fs watcher) never observes a half-written page file.
+        // Truncating the target in place — what `write_regular_nofollow` does —
+        // cannot give that: it leaves a window where the file is short or empty.
+        //
+        // The symlink and regular-file guarantees are preserved: the temp is
+        // opened `create_new` + nofollow, and an existing target is checked to be
+        // a regular file before it is replaced.
+        let temp_filename = format!(
+            ".{}.{}.{}.tmp",
+            page.id,
+            std::process::id(),
+            TEMP_FILE_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        write_page_atomically_nofollow(
+            &capabilities.root,
+            &filename,
+            &temp_filename,
+            content.as_bytes(),
+        )?;
         after_target_write()?;
 
         if self.write_provenance {
@@ -222,6 +301,87 @@ impl KnowledgeWriter {
         self.save_state_cap(&capabilities.wenlan, &state)?;
 
         Ok(file_path.to_string_lossy().to_string())
+    }
+
+    /// Repair the markdown projection from the DB, which is authoritative.
+    ///
+    /// `write_page` deliberately skips fsync, so a crash can leave a page's
+    /// file missing, holding the previous version's bytes (rename undone), or
+    /// zero-length (rename durable, bytes not). This brings those forward
+    /// through the same atomic `write_page` path, and sweeps `.tmp` leftovers
+    /// from writes that died between write and rename.
+    ///
+    /// Staleness is judged by the `origin_version` stamp, NOT by comparing
+    /// bytes against `render_markdown`. md is canonical for prose (see
+    /// `sources::page_watcher`): a body that differs while the stamp is
+    /// current is a user edit made while the daemon was down, and the watcher
+    /// reflects it back into the DB on its next tick. Rewriting on
+    /// content-inequality would delete that edit before the watcher ever saw
+    /// it. A stale stamp, by contrast, can only mean the daemon wrote last and
+    /// the file did not keep up.
+    ///
+    /// ponytail: two known ceilings, both cheap to live with. (1) A file
+    /// corrupted in the BODY while its frontmatter still reads current is
+    /// indistinguishable from a user edit without a per-page checksum, so it
+    /// is left alone — add a content hash to `PageFileState` if that ever
+    /// bites. (2) Pages with no `state.json` entry are skipped: we cannot tell
+    /// which file on disk is theirs, and guessing forks a `<slug>-2.md`
+    /// duplicate. The empty-directory case is already covered by the daemon's
+    /// one-time backfill.
+    pub fn reconcile(
+        &self,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        pages: &[Page],
+    ) -> Result<ReconcileStats, WenlanError> {
+        self.validate_guard(guard)?;
+        let mut stats = ReconcileStats {
+            temp_files_removed: self.sweep_temp_leftovers(),
+            ..ReconcileStats::default()
+        };
+
+        let state = self.load_state();
+        for page in pages {
+            let Some(entry) = state.pages.get(&page.id) else {
+                continue;
+            };
+            stats.checked += 1;
+            if !self.projection_is_behind(&entry.file, page) {
+                continue;
+            }
+            match self.write_page(guard, page) {
+                Ok(_) => stats.rewritten += 1,
+                Err(e) => {
+                    log::warn!("[reconcile] repair failed for {}: {e}", page.id);
+                    stats.errors += 1;
+                }
+            }
+        }
+        Ok(stats)
+    }
+
+    /// Whether `filename` is missing, unreadable, or stamped with a version
+    /// older than the DB's. Unreadable counts as behind: the repair attempt
+    /// will surface the real error rather than silently skipping the page.
+    fn projection_is_behind(&self, filename: &str, page: &Page) -> bool {
+        let Ok(raw) = std::fs::read_to_string(self.path.join(filename)) else {
+            return true;
+        };
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&raw);
+        projected_origin_version(&fm) < page.version
+    }
+
+    /// Remove `write_page` temp files orphaned by a crash between write and
+    /// rename. Safe to run unconditionally at startup: the daemon holds the
+    /// port by this point, so no live writer owns any of these.
+    fn sweep_temp_leftovers(&self) -> usize {
+        let Ok(entries) = std::fs::read_dir(&self.path) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .filter(|e| is_write_page_temp_file(&e.file_name().to_string_lossy()))
+            .filter(|e| std::fs::remove_file(e.path()).is_ok())
+            .count()
     }
 
     fn unique_filename_cap(
@@ -2777,6 +2937,51 @@ fn write_new_file_nofollow(directory: &Dir, name: &OsStr, bytes: &[u8]) -> Resul
     Ok(())
 }
 
+/// Atomic, symlink-refusing page write: temp file in the same capability
+/// directory, fsync, then rename over the target.
+///
+/// `write_regular_nofollow` truncates the target and writes in place, so a
+/// concurrent reader can observe a short or empty page. A rename within one
+/// directory is atomic: a reader sees the old bytes or the new ones, never a
+/// torn file. `reconcile` repairs the remaining failure mode (temp written,
+/// rename never happened), which leaves the target's `origin_version` behind
+/// the DB's.
+fn write_page_atomically_nofollow(
+    directory: &Dir,
+    name: &str,
+    temporary: &str,
+    bytes: &[u8],
+) -> Result<(), WenlanError> {
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    let result = (|| {
+        let mut file = directory.open_with(temporary, &options)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        match directory.open_with(name, &regular_read_options()) {
+            Ok(current) => {
+                if !current.metadata()?.is_file() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "page_projection_target_invalid",
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        directory.rename(temporary, directory, name)?;
+        Ok::<(), std::io::Error>(())
+    })();
+    if result.is_err() {
+        let _ = directory.remove_file(temporary);
+    }
+    result.map_err(WenlanError::Io)
+}
+
 fn write_regular_nofollow(directory: &Dir, name: &str, bytes: &[u8]) -> Result<(), WenlanError> {
     let mut options = OpenOptions::new();
     options
@@ -3092,6 +3297,10 @@ impl KnowledgeProjectionWrite {
 
     pub fn remove_page(&self, page_id: &str) -> Result<(), WenlanError> {
         self.writer.remove_page(&self.guard, page_id)
+    }
+
+    pub fn reconcile(&self, pages: &[Page]) -> Result<ReconcileStats, WenlanError> {
+        self.writer.reconcile(&self.guard, pages)
     }
 }
 
@@ -4111,6 +4320,196 @@ mod tests {
         // State reflects new version
         let state = writer.load_state();
         assert_eq!(state.pages["concept_test123"].version, 3);
+    }
+
+    /// `write_page` must replace the target file via temp-file-then-rename,
+    /// never via in-place truncate+write, so a concurrent reader can never
+    /// observe a half-written page file. A plain `fs::write`
+    /// truncates and rewrites the *same* inode, so its inode number is
+    /// unchanged across writes; an atomic rename swaps in a new inode. That
+    /// difference is deterministic (no thread timing needed) and is what
+    /// actually distinguishes this from the old, non-atomic implementation —
+    /// unlike the leftover-temp-file check below, which passes trivially on
+    /// old code too (it never created temp files to begin with).
+    #[cfg(unix)]
+    #[test]
+    fn write_page_replaces_file_via_atomic_rename_not_in_place_write() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+        let ino_before = std::fs::metadata(&path).unwrap().ino();
+
+        page.version = 3;
+        page.content = "## Updated\nNew content for atomicity check.".to_string();
+        writer.write_page_for_test(&page).unwrap();
+
+        let ino_after = std::fs::metadata(&path).unwrap().ino();
+        assert_ne!(
+            ino_before, ino_after,
+            "rewrite kept the same inode — target was truncated in place, not atomically renamed"
+        );
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, render_markdown_for(&page));
+
+        let leftover_temp_files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftover_temp_files.is_empty(),
+            "leftover temp file(s): {leftover_temp_files:?}"
+        );
+    }
+
+    /// A projection file that vanished (rename never landed, user deleted it)
+    /// is rewritten from DB truth.
+    #[test]
+    fn reconcile_rewrites_page_whose_projection_file_vanished() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(stats.checked, 1);
+        assert_eq!(stats.rewritten, 1);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            render_markdown_for(&page),
+            "vanished projection was not restored from the DB"
+        );
+    }
+
+    /// The fsync-free write buys atomicity, not durability: after a power loss
+    /// the rename may be undone, leaving the *previous* version's bytes under
+    /// the target name. The `origin_version` stamp is what proves it — the DB
+    /// moved on, the file did not.
+    #[test]
+    fn reconcile_rewrites_projection_left_behind_by_a_torn_rename() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+
+        // DB advanced to v3; the file still holds the v2 projection.
+        page.version = 3;
+        page.content = "## Updated\nv3 body that never reached disk.".to_string();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(stats.rewritten, 1);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk,
+            render_markdown_for(&page),
+            "stale projection was not brought forward to the DB version"
+        );
+    }
+
+    /// The other power-loss shape: the rename is durable but the bytes are
+    /// not, so the target is zero-length. No frontmatter parses, so the
+    /// version stamp reads 0 — behind any real page (pages start at 1).
+    #[test]
+    fn reconcile_rewrites_projection_truncated_to_zero_bytes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+        std::fs::write(&path, "").unwrap();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(stats.rewritten, 1);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            render_markdown_for(&page)
+        );
+    }
+
+    /// The safety boundary. md is canonical for prose (see `page_watcher`), so
+    /// a body that differs from `render_markdown` while the version stamp is
+    /// current is a USER EDIT made while the daemon was down — the watcher
+    /// owns it, and reconcile must not clobber it on the way past. The temp
+    /// sweep is likewise scoped to `write_page`'s own name shape, never to a
+    /// file the user happens to have parked in the pages directory.
+    #[test]
+    fn reconcile_preserves_offline_user_edits_and_sweeps_only_our_temp_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+
+        let edited = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("Rust uses ownership", "Hand-written prose the user typed");
+        std::fs::write(&path, &edited).unwrap();
+
+        let ours = dir.path().join(format!(".{}.4242.7.tmp", page.id));
+        let user_scratch = dir.path().join("draft-notes.tmp");
+        let editor_swap = dir.path().join(".obsidian-swap.tmp");
+        for f in [&ours, &user_scratch, &editor_swap] {
+            std::fs::write(f, "scratch").unwrap();
+        }
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            edited,
+            "reconcile clobbered an offline user edit"
+        );
+        assert_eq!(stats.rewritten, 0);
+        assert_eq!(stats.temp_files_removed, 1);
+        assert!(!ours.exists(), "our own leftover temp file survived");
+        assert!(
+            user_scratch.exists() && editor_swap.exists(),
+            "reconcile deleted a temp file that isn't ours"
+        );
+    }
+
+    /// Without a `state.json` entry we cannot tell which file on disk is a
+    /// page's projection, and guessing forks a `<slug>-2.md` duplicate against
+    /// the real one (the hazard `page_watcher` calls out for vaults synced
+    /// without `.wenlan/`). Reconcile skips those rather than fork.
+    #[test]
+    fn reconcile_skips_pages_with_no_state_entry_rather_than_forking_a_duplicate() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        // A projection exists on disk, but state.json does not know about it.
+        std::fs::write(
+            dir.path().join("rust-ownership.md"),
+            render_markdown_for(&page),
+        )
+        .unwrap();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(stats.checked, 0);
+        assert_eq!(stats.rewritten, 0);
+        assert!(
+            !dir.path().join("rust-ownership-2.md").exists(),
+            "reconcile forked a duplicate projection"
+        );
     }
 
     #[test]
