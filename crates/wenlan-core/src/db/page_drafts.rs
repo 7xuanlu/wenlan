@@ -398,11 +398,24 @@ impl MemoryDB {
 
         let current = Self::required_page_draft_on_conn(&tx, id).await?;
         ensure_draft(&current)?;
+        // M1 read-collapse: the write below mirrors ONE resolved scope onto both
+        // NOT NULL columns via the Option A ladder (workspace wins, else space,
+        // else the 'unfiled' sentinel), and `row_to_page` translates that
+        // sentinel back to None. An exact retry must therefore compare against
+        // that SAME resolved wire scope, not the raw (possibly-divergent)
+        // requested columns -- otherwise a divergent-but-idempotent replay
+        // (e.g. Some("work"), None, which stores space=workspace="work") misses
+        // the fast-path and falls through to a spurious VersionConflict. Both
+        // callers agree here: on the registered path requested_space ==
+        // requested_workspace, so the ladder is a no-op.
+        let requested_scope = requested_workspace
+            .as_deref()
+            .or(requested_space.as_deref())
+            .filter(|s| *s != "unfiled");
         if expected_version.checked_add(1) == Some(current.version)
             && current.title == title
             && current.content == content
-            && current.space.as_deref() == requested_space.as_deref()
-            && current.workspace.as_deref() == requested_workspace.as_deref()
+            && current.space.as_deref() == requested_scope
         {
             return Ok(PageDraftUpdateOutcome::Updated(current));
         }
