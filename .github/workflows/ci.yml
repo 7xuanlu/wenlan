@@ -33,6 +33,7 @@ jobs:
       plugin:  ${{ steps.filter.outputs.plugin }}
       npm:     ${{ steps.filter.outputs.npm }}
       windows: ${{ steps.filter.outputs.windows }}
+      app:     ${{ steps.filter.outputs.app }}
       # Test matrix OSes as a JSON array. Windows is included only when
       # Windows-affecting files changed (saves ~30min per PR otherwise).
       test-oses: ${{ steps.matrix.outputs.json }}
@@ -91,6 +92,37 @@ jobs:
               - '.github/workflows/release.yml'
             npm:
               - 'crates/*/npm/**'
+            # Desktop app (Tauri + React). Most frontend lives at repo ROOT
+            # (src/, e2e/, vite/tsconfig/package.json), not under app/. Without
+            # this filter an app-only PR matches no filter and every job skips,
+            # so `conclusion` reports green with zero jobs run (silent-green).
+            app:
+              - 'app/**'
+              - 'src/**'
+              - 'e2e/**'
+              - 'preview/**'
+              - 'review/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'index.html'
+              - 'tsconfig.json'
+              - 'vite.config.ts'
+              - 'vite.preview.config.ts'
+              - 'vite.review.config.ts'
+              - 'vitest.config.ts'
+              - 'playwright.config.ts'
+              - 'playwright.review.config.ts'
+              - 'scripts/prepare-sidecars.sh'
+              - 'scripts/prepare-tauri-build-sidecars.sh'
+              - '.github/workflows/ci.yml'
+              # The app compiles wenlan-types by path and shares the workspace
+              # lockfile, so a types change or a shared-dep bump can break the
+              # app build while touching only rust-filter paths. Release PRs also
+              # match these — the app-check `if:` head_ref guard skips them.
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/wenlan-types/**'
             windows:
               # Files that change Windows-specific behavior. PRs not
               # touching any of these skip the Windows test job entirely.
@@ -155,7 +187,10 @@ jobs:
           # Cache the full crates.io registry. Cold cache pulls thousands of
           # small files otherwise; cached restore is ~2-3min faster.
           cache-all-crates: "true"
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # --exclude wenlan-app: the Tauri app crate needs webkit2gtk/GTK system
+      # libs absent on ubuntu runners. Its Rust clippy/tests run in `app-check`
+      # on macos-14. default-members already excludes it, but --workspace overrides.
+      - run: cargo clippy --workspace --exclude wenlan-app --all-targets -- -D warnings
       - name: Verify wenlan-mcp uses path dep for wenlan-types
         run: |
           SOURCE=$(cargo metadata --format-version 1 --locked \
@@ -236,12 +271,13 @@ jobs:
       # install round-trip E2E further down.
       - name: Workspace lib tests (Linux)
         if: matrix.os == 'ubuntu-24.04'
-        run: cargo nextest run --workspace --lib
+        # --exclude wenlan-app: desktop crate builds only in `app-check` (macos).
+        run: cargo nextest run --workspace --exclude wenlan-app --lib
       - name: Workspace lib tests (macOS, single-threaded)
         if: matrix.os == 'macos-14'
         # nextest spawns one process per test by default — sidesteps the
         # ONNX atexit FFI race that required --test-threads=1 with cargo test.
-        run: cargo nextest run --workspace --lib --test-threads=1
+        run: cargo nextest run --workspace --exclude wenlan-app --lib --test-threads=1
       - name: Page lint scale gate (Linux time + RSS)
         if: matrix.os == 'ubuntu-24.04'
         run: bash scripts/lint-scale-gate.sh "$RUNNER_TEMP/task-19-memory-lint-debugger-linux.txt"
@@ -495,7 +531,7 @@ jobs:
   # is their normal state on PRs not touching those surfaces.
   conclusion:
     name: conclusion
-    needs: [detect-changes, fmt, lint, test, docs, plugin, npm]
+    needs: [detect-changes, fmt, lint, test, docs, plugin, npm, app-check]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -506,7 +542,7 @@ jobs:
             echo "detect-changes did not succeed: $dc"
             exit 1
           fi
-          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.docs.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}'; do
+          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.docs.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}' '${{ needs.app-check.result }}'; do
             case "$r" in
               success|skipped) ;;
               *) echo "Upstream job failed: $r"; exit 1 ;;
@@ -558,3 +594,63 @@ jobs:
         run: |
           npm pack --dry-run
           node -c run.js
+
+  # Desktop app (Tauri + React). Ported from the app's pre-merge ci.yml `check`
+  # job. Runs only when app/frontend paths change (detect-changes.app). macos-14
+  # because Tauri needs the macOS toolchain and the app targets darwin-arm64.
+  # The release-PR skip uses github.head_ref (the PR branch name), NOT
+  # github.event.head_commit — head_commit is populated only on push events, so
+  # the old message-based guard was inert on pull_request runs.
+  app-check:
+    name: app-check
+    needs: detect-changes
+    if: "needs.detect-changes.outputs.app == 'true' && !startsWith(github.head_ref, 'release-please--')"
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: app-check
+          cache-all-crates: "true"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - name: Install frontend dependencies
+        run: pnpm install
+      # Tauri's build script resolves externalBin sidecars (wenlan, wenlan-server,
+      # wenlan-mcp, cloudflared) at compile time. PR CI doesn't ship the daemon;
+      # empty placeholders satisfy the resolver. Real DMG builds (release.yml)
+      # supply true binaries.
+      - name: Create sidecar placeholders for Tauri build script
+        run: |
+          mkdir -p app/binaries
+          touch app/binaries/wenlan-aarch64-apple-darwin
+          touch app/binaries/wenlan-server-aarch64-apple-darwin
+          touch app/binaries/wenlan-mcp-aarch64-apple-darwin
+          touch app/binaries/cloudflared-aarch64-apple-darwin
+      - name: Rust format (app)
+        run: cargo fmt --check -p wenlan-app
+      - name: Clippy (app)
+        run: cargo clippy -p wenlan-app --all-targets -- -D warnings
+      - name: Rust tests (app)
+        run: cargo test -p wenlan-app --lib
+      - name: TypeScript check
+        run: pnpm exec tsc -b
+      - name: i18n gates
+        run: pnpm test:i18n
+      - name: Frontend unit tests
+        run: pnpm test
+      - name: Build + verify fixture-only Review app
+        run: pnpm review:build && pnpm review:verify
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
+      - name: Frontend e2e
+        run: pnpm test:e2e
+      - name: Review e2e
+        run: pnpm test:e2e:review
