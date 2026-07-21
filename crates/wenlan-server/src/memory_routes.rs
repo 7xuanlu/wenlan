@@ -3572,6 +3572,8 @@ pub async fn handle_refresh_page(
                 .into(),
         ));
     }
+    wenlan_core::export::provenance::validate_canonical_page_content(&req.content)
+        .map_err(ServerError::from)?;
 
     let db = {
         let s = state.read().await;
@@ -3597,7 +3599,7 @@ pub async fn handle_refresh_page(
             "agent_refresh",
         )
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(ServerError::from)?;
         return Ok(Json(wenlan_types::responses::PageWriteResponse {
             ok: true,
             revision_card_id: result.revision_card_id,
@@ -3727,7 +3729,7 @@ pub async fn handle_refresh_page(
                     rb
                 );
             }
-            return Err(ServerError::IngestFailed(e.to_string()));
+            return Err(ServerError::from(e));
         }
     };
 
