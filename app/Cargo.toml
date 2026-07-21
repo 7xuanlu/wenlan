@@ -4,6 +4,9 @@ version = "0.14.0" # x-release-please-version
 edition = "2021"
 license = "AGPL-3.0-only"
 default-run = "wenlan-app"
+# Never published to crates.io: it's the AGPL bundle app and carries a git dep
+# (tauri-plugin-mcp) that would make `cargo publish` fail anyway.
+publish = false
 
 [lib]
 name = "wenlan_lib"

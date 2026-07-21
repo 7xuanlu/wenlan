@@ -116,6 +116,13 @@ jobs:
               - 'scripts/prepare-sidecars.sh'
               - 'scripts/prepare-tauri-build-sidecars.sh'
               - '.github/workflows/ci.yml'
+              # The app compiles wenlan-types by path and shares the workspace
+              # lockfile, so a types change or a shared-dep bump can break the
+              # app build while touching only rust-filter paths. Release PRs also
+              # match these — the app-check `if:` head_ref guard skips them.
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/wenlan-types/**'
             windows:
               # Files that change Windows-specific behavior. PRs not
               # touching any of these skip the Windows test job entirely.
@@ -591,10 +598,13 @@ jobs:
   # Desktop app (Tauri + React). Ported from the app's pre-merge ci.yml `check`
   # job. Runs only when app/frontend paths change (detect-changes.app). macos-14
   # because Tauri needs the macOS toolchain and the app targets darwin-arm64.
+  # The release-PR skip uses github.head_ref (the PR branch name), NOT
+  # github.event.head_commit — head_commit is populated only on push events, so
+  # the old message-based guard was inert on pull_request runs.
   app-check:
     name: app-check
     needs: detect-changes
-    if: "needs.detect-changes.outputs.app == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    if: "needs.detect-changes.outputs.app == 'true' && !startsWith(github.head_ref, 'release-please--')"
     runs-on: macos-14
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
