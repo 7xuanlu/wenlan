@@ -328,6 +328,7 @@ pub struct ExternalPool {
 pub struct OnDevicePool {
     pub selected: Option<String>,
     pub loaded: bool,
+    pub loading: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -428,6 +429,9 @@ pub async fn handle_get_resolved_routing(
         Some(OnDevicePool {
             selected,
             loaded: s.loaded_on_device_model.is_some(),
+            loading: s
+                .startup_model_load_reserved
+                .load(std::sync::atomic::Ordering::Acquire),
         })
     } else {
         None
@@ -763,6 +767,42 @@ mod setup_status_tests {
         assert_eq!(body["pool"]["anthropic"]["everyday_model"], Value::Null);
         assert_eq!(body["pool"]["external"], Value::Null);
         assert_eq!(body["pool"]["on_device"], Value::Null);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn routing_reports_selected_model_waiting_for_startup_admission() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let mut cfg = config::load_config();
+        cfg.on_device_model = Some("qwen3-4b".to_string());
+        config::save_config(&cfg).unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        state
+            .read()
+            .await
+            .startup_model_load_reserved
+            .store(true, std::sync::atomic::Ordering::Release);
+        let app = crate::router::build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/config/routing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["pool"]["on_device"]["selected"], "qwen3-4b");
+        assert_eq!(body["pool"]["on_device"]["loaded"], false);
+        assert_eq!(body["pool"]["on_device"]["loading"], true);
     }
 
     #[tokio::test(flavor = "current_thread")]

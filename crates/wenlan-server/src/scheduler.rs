@@ -337,11 +337,27 @@ pub async fn wait_for_startup_model_admission(
     }
 }
 
+fn startup_model_reservation_blocks_route(
+    startup_model_load_reserved: bool,
+    route_uses_on_device: bool,
+) -> bool {
+    startup_model_load_reserved && route_uses_on_device
+}
+
 fn background_heavy_resource_admitted(
     resource_admitted: bool,
     startup_model_load_reserved: bool,
+    route_uses_on_device: bool,
 ) -> bool {
-    resource_admitted && !startup_model_load_reserved
+    resource_admitted
+        && !startup_model_reservation_blocks_route(
+            startup_model_load_reserved,
+            route_uses_on_device,
+        )
+}
+
+fn periodic_directory_sync_allowed(resource_admitted: bool) -> bool {
+    resource_admitted
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1211,6 +1227,7 @@ pub fn spawn_scheduler(
         // CPU refresh has a valid comparison window without sleeping inside a
         // scheduler poll.
         let mut resource_probe = SystemResourceProbe::new(Instant::now());
+        let mut filesystem_resource_probe = SystemResourceProbe::new(Instant::now());
         if crate::lifecycle::sleep_or_shutdown(&mut shutdown, INITIAL_DELAY).await {
             tracing::info!("[scheduler] shutdown before initial delay completed");
             return;
@@ -1335,6 +1352,8 @@ pub fn spawn_scheduler(
             if crate::lifecycle::shutdown_requested(&shutdown) {
                 break;
             }
+            let filesystem_resource_status =
+                filesystem_resource_probe.sample(Instant::now(), resource_policy);
             // --- 0. Filesystem page watcher: md → DB ---
             //
             // md is canonical. When the user edits a page in Obsidian / VS
@@ -1368,7 +1387,14 @@ pub fn spawn_scheduler(
             // Directory source (mtime+hash diff, deletion propagation — no LLM),
             // Changed files are queued here; the ambient controller claims at
             // most one bounded document slice after resource/cooldown admission.
-            sync_directory_sources(&db).await;
+            if periodic_directory_sync_allowed(filesystem_resource_status.admitted) {
+                sync_directory_sources(&db).await;
+            } else {
+                tracing::debug!(
+                    "[scheduler] directory sync deferred reason={:?}",
+                    filesystem_resource_status.block_reason
+                );
+            }
             if crate::lifecycle::shutdown_requested(&shutdown) {
                 break;
             }
@@ -1412,6 +1438,10 @@ pub fn spawn_scheduler(
                 background_heavy_resource_admitted(
                     resource_status.admitted,
                     startup_model_load_reserved,
+                    matches!(
+                        synthesis_pin,
+                        Some(wenlan_core::refinery::SynthesisSource::OnDevice)
+                    ),
                 ),
                 ambient_turn_owed,
                 now,
@@ -1662,6 +1692,10 @@ pub fn spawn_scheduler(
                     background_heavy_resource_admitted(
                         resource_status.admitted,
                         startup_model_load_reserved,
+                        matches!(
+                            everyday_pin,
+                            Some(wenlan_core::refinery::EverydaySource::OnDevice)
+                        ),
                     ),
                     ambient_now,
                     ambient_schedule.next_allowed_at,
@@ -3080,10 +3114,19 @@ mod tests {
     }
 
     #[test]
-    fn startup_model_reservation_blocks_automatic_heavy_work() {
-        assert!(background_heavy_resource_admitted(true, false));
-        assert!(!background_heavy_resource_admitted(true, true));
-        assert!(!background_heavy_resource_admitted(false, false));
+    fn startup_model_reservation_blocks_only_on_device_routes() {
+        assert!(!startup_model_reservation_blocks_route(false, true));
+        assert!(!startup_model_reservation_blocks_route(true, false));
+        assert!(startup_model_reservation_blocks_route(true, true));
+        assert!(background_heavy_resource_admitted(true, true, false));
+        assert!(!background_heavy_resource_admitted(true, true, true));
+        assert!(!background_heavy_resource_admitted(false, true, false));
+    }
+
+    #[test]
+    fn periodic_directory_sync_requires_resource_admission() {
+        assert!(periodic_directory_sync_allowed(true));
+        assert!(!periodic_directory_sync_allowed(false));
     }
 
     #[test]
