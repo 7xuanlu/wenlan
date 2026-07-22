@@ -8175,16 +8175,32 @@ impl MemoryDB {
         //   3. Lineage -- one content-addressed `edge_id` can be dual-written
         //      by several legacy stores for the same fact (`page_evidence`/
         //      `page_sources` -> `evidence`; a `pages.citations` entry ->
-        //      `synthesis`), and a reactivation can arrive with a fresh
-        //      classification (e.g. its memory moved cross-space, so the caller
-        //      now passes `legacy`). The CASE is a TOTAL rule over all four
-        //      lineages: `legacy` (a cross-space downgrade) always wins;
-        //      `evidence` outranks `synthesis` (the precedence the migration-81
-        //      backfill already yields by ordering `page_sources`/`page_evidence`
-        //      before `page_citations`); otherwise the fresh (`excluded`) typed
-        //      value is adopted (assertion/synthesis reactivation, or a
-        //      legacy->typed same-space upgrade). So a live edge and its
-        //      backfilled twin agree regardless of which store wrote first.
+        //      `synthesis`, or `legacy` for an unknown citation kind), and a
+        //      reactivation can arrive with a fresh classification (e.g. its
+        //      memory moved cross-space, so the caller now passes `legacy`). The
+        //      CASE resolves lineage in three cases, split so the same-space
+        //      concurrent case is COMMUTATIVE (round-3 item 2c):
+        //        a. Reactivation (`edges.valid_until IS NOT NULL`) adopts the
+        //           FRESH (`excluded`) value -- a retracted-then-readded edge
+        //           takes its current classification (evidence can honestly
+        //           become legacy when the memory moved cross-space). Item 4.
+        //        b. A cross-space re-write of an ACTIVE edge
+        //           (`edges.space IS NOT excluded.space`) likewise adopts the
+        //           fresh value -- the caller passes `legacy` on a genuine
+        //           cross-space move; the AFTER UPDATE fence re-validates any
+        //           typed result. This is the item-4 fence downgrade, and it is
+        //           a time-ordered move, NOT an ordering violation.
+        //        c. Two concurrent ACTIVE, SAME-SPACE writes of one fact from
+        //           different stores resolve by a TOTAL, COMMUTATIVE rank so the
+        //           result is independent of which store wrote first:
+        //           `evidence` > `synthesis` > `legacy`. (`assertion`, from
+        //           `relates`/`mentions`, never shares a same-space active
+        //           edge_id with these -- distinct `edge_type` -- so its rank is
+        //           immaterial, but it is ranked above `legacy` for a total
+        //           order.) An unknown-kind citation's same-space `legacy` can
+        //           no longer clobber an active `evidence`/`synthesis`.
+        //      So a live edge and its backfilled twin agree regardless of which
+        //      store wrote first.
         // FENCE-SAFE: the AFTER UPDATE twin of the space fence re-validates any
         // update that keeps the edge active and typed, so a reactivation that
         // reconciles to a cross-space typed row is rejected here just as the
@@ -8198,10 +8214,12 @@ impl MemoryDB {
                  superseded_by = NULL,
                  space = excluded.space,
                  lineage = CASE
-                     WHEN excluded.lineage = 'legacy' THEN 'legacy'
-                     WHEN excluded.lineage = 'evidence' THEN 'evidence'
-                     WHEN edges.lineage = 'evidence' AND excluded.lineage = 'synthesis' THEN 'evidence'
-                     ELSE excluded.lineage
+                     WHEN edges.valid_until IS NOT NULL THEN excluded.lineage
+                     WHEN edges.space IS NOT excluded.space THEN excluded.lineage
+                     WHEN (CASE excluded.lineage WHEN 'evidence' THEN 3 WHEN 'synthesis' THEN 2 WHEN 'assertion' THEN 1 ELSE 0 END)
+                        > (CASE edges.lineage WHEN 'evidence' THEN 3 WHEN 'synthesis' THEN 2 WHEN 'assertion' THEN 1 ELSE 0 END)
+                     THEN excluded.lineage
+                     ELSE edges.lineage
                  END
              WHERE edges.valid_until IS NOT NULL
                 OR edges.space IS NOT excluded.space
@@ -62359,6 +62377,135 @@ pub(crate) mod tests {
             assert_eq!(
                 lineage, "evidence",
                 "evidence must not be downgraded when synthesis writes after"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dual_write_edge_unknown_citation_and_evidence_commute() {
+        // Item 2c (round-3): an unknown-kind pages.citations entry writes
+        // lineage='legacy' SAME-SPACE (the external destination is fence-exempt,
+        // so 'legacy' here is an unknown-KIND classification, not a cross-space
+        // downgrade). It shares one content-addressed edge_id with a
+        // page_evidence 'evidence' write for the same external locator. The
+        // resolved lineage must be 'evidence' regardless of which store wrote
+        // first: a same-space 'legacy' must never overwrite an active 'evidence'.
+        let loc = "https://example.com/unknown-kind";
+        let citations = format!(
+            r#"[{{"occurrence":1,"marker":1,"source_kind":"external_pdf","locator":"{loc}","score":0.0,"status":"unverified","scope":"paragraph"}}]"#
+        );
+        // Order A: unknown-kind citation (legacy) first, then page_evidence (evidence).
+        {
+            let (db, _dir) = test_db().await;
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_u1", "space_a").await;
+            MemoryDB::dual_write_page_citations(&conn, "page_u1", Some(&citations))
+                .await
+                .unwrap();
+            let (l0, _, _) = edge_row(&conn, "cites", "page_u1", loc).await.unwrap();
+            assert_eq!(
+                l0, "legacy",
+                "an unknown citation kind must classify same-space legacy"
+            );
+            MemoryDB::dual_write_edge(
+                &conn, "cites", "page", "page_u1", "external", loc, loc, "evidence", "space_a",
+                None,
+            )
+            .await
+            .unwrap();
+            let (lineage, _, _) = edge_row(&conn, "cites", "page_u1", loc).await.unwrap();
+            assert_eq!(
+                lineage, "evidence",
+                "evidence must win when legacy wrote first"
+            );
+        }
+        // Order B: page_evidence (evidence) first, then unknown-kind citation (legacy).
+        {
+            let (db, _dir) = test_db().await;
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_u2", "space_a").await;
+            MemoryDB::dual_write_edge(
+                &conn, "cites", "page", "page_u2", "external", loc, loc, "evidence", "space_a",
+                None,
+            )
+            .await
+            .unwrap();
+            MemoryDB::dual_write_page_citations(&conn, "page_u2", Some(&citations))
+                .await
+                .unwrap();
+            let (lineage, _, _) = edge_row(&conn, "cites", "page_u2", loc).await.unwrap();
+            assert_eq!(
+                lineage, "evidence",
+                "active evidence must not be downgraded when legacy writes after"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dual_write_edge_synthesis_and_legacy_commute() {
+        // Item 2c (round-3): synthesis and legacy on the same active, same-space
+        // external edge_id must resolve to 'synthesis' in BOTH write orders --
+        // the same-space total order is evidence > synthesis > legacy, commutative
+        // across every pair, not just evidence/synthesis.
+        let loc = "https://example.com/syn-legacy";
+        // Order A: legacy first, then synthesis.
+        {
+            let (db, _dir) = test_db().await;
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_s1", "space_a").await;
+            MemoryDB::dual_write_edge(
+                &conn, "cites", "page", "page_s1", "external", loc, loc, "legacy", "space_a", None,
+            )
+            .await
+            .unwrap();
+            MemoryDB::dual_write_edge(
+                &conn,
+                "cites",
+                "page",
+                "page_s1",
+                "external",
+                loc,
+                loc,
+                "synthesis",
+                "space_a",
+                None,
+            )
+            .await
+            .unwrap();
+            let (lineage, _, _) = edge_row(&conn, "cites", "page_s1", loc).await.unwrap();
+            assert_eq!(
+                lineage, "synthesis",
+                "synthesis must win when legacy wrote first"
+            );
+        }
+        // Order B: synthesis first, then legacy.
+        {
+            let (db, _dir) = test_db().await;
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_s2", "space_a").await;
+            MemoryDB::dual_write_edge(
+                &conn,
+                "cites",
+                "page",
+                "page_s2",
+                "external",
+                loc,
+                loc,
+                "synthesis",
+                "space_a",
+                None,
+            )
+            .await
+            .unwrap();
+            MemoryDB::dual_write_edge(
+                &conn, "cites", "page", "page_s2", "external", loc, loc, "legacy", "space_a", None,
+            )
+            .await
+            .unwrap();
+            let (lineage, _, _) = edge_row(&conn, "cites", "page_s2", loc).await.unwrap();
+            assert_eq!(
+                lineage, "synthesis",
+                "active synthesis must not be downgraded when legacy writes after"
             );
         }
     }

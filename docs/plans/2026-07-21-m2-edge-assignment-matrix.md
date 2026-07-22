@@ -158,32 +158,42 @@ same `edge_id`; `INSERT … ON CONFLICT(edge_id) DO NOTHING` (backfill) /
 
 One content-addressed `edge_id` can be produced by more than one legacy store
 for the same fact: `page_evidence` / `page_sources` → `evidence`, a
-`pages.citations` entry → `synthesis`. This holds for BOTH destinations —
-`(page, memory)` AND `(page, external)` — because a `pages.citations`
-external-URI entry is now `synthesis` (matrix row 6, fence-exempt destination),
-not `legacy`; writing it `legacy` made the shared external edge order-dependent
-(round-2 item #2). The resolved `lineage` is **deterministic and
-order-independent** under a TOTAL conflict rule over all four lineages:
+`pages.citations` entry → `synthesis` (external-URI kind) or `legacy` (unknown
+citation kind). This holds for BOTH destinations — `(page, memory)` AND
+`(page, external)` — and the external `legacy` case is SAME-SPACE (the external
+destination is fence-exempt), so `legacy` is NOT exclusively a cross-space
+marker (round-3 item #2c corrected the round-2 claim that it was). The resolved
+`lineage` is **deterministic and order-independent**, resolved in three cases so
+the same-space concurrent case is genuinely commutative:
 
-- `legacy` (a cross-space downgrade) always wins — a genuinely cross-space
-  reassertion of any pair reconciles the shadow row to `legacy`.
-- `evidence` outranks `synthesis`.
-- otherwise the fresh (`excluded`) typed value is adopted — an `assertion` /
-  `synthesis` reactivation, or a `legacy`→typed same-space upgrade.
+- **Reactivation** (the conflicting row was soft-invalidated): adopt the FRESH
+  (`excluded`) value. A retracted-then-readded edge takes its current
+  classification — `evidence` can honestly become `legacy` when its memory moved
+  cross-space. This is a time-ordered move, not a concurrent-write ordering.
+- **Cross-space re-write of an active edge** (`edges.space ≠ excluded.space`):
+  adopt the fresh value. The caller passes `legacy` on a genuine cross-space
+  move; the AFTER UPDATE fence re-validates any typed result. This is the
+  item-4 fence downgrade.
+- **Concurrent same-space active writes**: a TOTAL, COMMUTATIVE rank —
+  `evidence` > `synthesis` > `legacy` — so the result is independent of which
+  store wrote first. (`assertion`, from `relates`/`mentions`, never shares a
+  same-space active `edge_id` with these — distinct `edge_type` — so its rank is
+  immaterial; it sits above `legacy` for totality.) An unknown-kind citation's
+  same-space `legacy` can no longer overwrite an active `evidence`/`synthesis`.
 
 - **Backfill** already yields the `evidence` > `synthesis` case: migration 81
   runs `page_sources` / `page_evidence` before `page_citations`, and
   `insert_backfilled_edge` is `ON CONFLICT DO NOTHING`, so the first (evidence)
   writer wins.
-- **Live** dual-write's `ON CONFLICT DO UPDATE` applies the total rule above and
-  reconciles `space = excluded.space`, so a live edge and its backfilled twin
+- **Live** dual-write's `ON CONFLICT DO UPDATE` applies the three-case rule above
+  and reconciles `space = excluded.space`, so a live edge and its backfilled twin
   agree regardless of which store's write fired first, and a reactivation adopts
   the CURRENT classification rather than a stale one.
 
-Fence-safe: `evidence`/`synthesis` occur only same-space (or fence-exempt
-external), `legacy` only cross-space, and the AFTER UPDATE fence twin
-re-validates every active-and-typed reconciliation, so the row stays
-fence-valid.
+Fence-safe: `evidence`/`synthesis`/`assertion` occur only same-space (or the
+fence-exempt external destination); a genuinely cross-space reassertion arrives
+as `legacy` (fence-exempt); and the AFTER UPDATE fence twin re-validates every
+active-and-typed reconciliation, so the row stays fence-valid.
 
 ### Ownership / re-derivation of shared edges (PR-1 conservative, M3 gate)
 
