@@ -9,6 +9,18 @@ Status: COMPLETE — RB-01 closed by representative daemon and deterministic pro
 - Do not use Wenlan write recency as a foreground-idle proxy. Ambient and
   automatic admission have no fixed ten-minute delay; the existing ten-minute
   value remains only on the explicit Idle recap trigger.
+- Keep the production CPU admission ceiling at 20%, with two consecutive
+  30-second samples. A target-Mac calibration that measured foreground timer
+  jitter before and during the same one-request Document inference passed at a
+  20.70% starting load, but the 23.82% and 28.89% candidates both exceeded the
+  predeclared `p99 <= baseline p99 + 5 ms` budget. All three runs remained at
+  nominal thermal state, so 20% is a responsiveness reserve rather than a
+  claimed thermal cliff.
+- On-device background routes additionally require 2 GiB above the ordinary
+  `max(2 GiB, 15%)` memory floor. The calibration observed at most 1.59 GiB of
+  additional process RSS during one inference; the rounded reserve prevents a
+  model call from consuming the foreground floor. Remote routes keep the
+  ordinary memory policy.
 - Replace the provisional ten-minute inter-turn floor with
   `max(120 seconds, 19 × measured turn time)`. Across the five isolated lanes
   and two persistent-daemon turns below, the longest measured turn was
@@ -41,7 +53,7 @@ Status: COMPLETE — RB-01 closed by representative daemon and deterministic pro
   did not change lane algorithms. Their current behavior remains covered by
   deterministic scheduler/integration gates; only the representative
   persistent-daemon soak must be repeated.
-- The profile refuses to start unless the model is already cached, macOS thermal state is nominal, free memory is at least 15%, and two consecutive 30-second aggregate CPU samples are at or below 20%. The Rust runner additionally enforces the scheduler's 2 GiB memory floor.
+- The profile refuses to start unless the model is already cached, macOS thermal state is nominal, free memory is at least 15%, and two consecutive 30-second aggregate CPU samples are at or below 20%. The Rust runner additionally enforces the scheduler's ordinary memory floor plus the 2 GiB on-device inference reserve.
 - Real profiles take an exclusive atomic lock before the first admission window
   and retain it through build, the second admission window, and the measured
   child. A failed child cannot replace the pre-armed 5,700-second cooldown with
@@ -64,8 +76,11 @@ Status: COMPLETE — RB-01 closed by representative daemon and deterministic pro
 - The live daemon proof samples macOS thermal state and `sysinfo` total and
   available memory every 30 seconds from model load through the second turn.
   Missing telemetry, non-nominal thermal state, or memory below
-  `max(2 GiB, 15%)` requests cooperative shutdown and fails the proof. CPU
-  remains owned by the production two-sample admission gate.
+  the configured floor requests cooperative shutdown and fails the proof. The
+  historical representative artifact below used `max(2 GiB, 15%)`; the current
+  harness adds the new 2 GiB on-device inference reserve and compiles locally,
+  while the reserve behavior itself is covered by deterministic scheduler
+  tests. CPU remains owned by the production two-sample admission gate.
 - The profiler requires exact `refs/main` snapshots for both the Qwen GGUF and
   FastEmbed's `Qdrant/bge-base-en-v1.5-onnx-Q` model plus all four tokenizer
   metadata files. Real children remove inherited `HF_HOME`, pin Wenlan's
@@ -511,6 +526,42 @@ source tree for profiling.
 | Reconcile | 1,833 ms | 1 | 3,070,492,672 → 3,048,161,280 bytes; peak 3,818,110,976 | system 13.42% → 19.10% | 0 → 0 | yes |
 | Citation | 1,885 ms | 1 | 3,359,490,048 → 3,889,840,128 bytes; peak 4,554,539,008 | system 15.84% → 28.57% | 0 → 0 | yes |
 
+### CPU admission and foreground-latency calibration
+
+The 2026-07-21 target-Mac calibration used the same cached `qwen3-4b`, one
+Document slice, a bounded synthetic foreground load, 250 ms CPU/RAM samples,
+and a 5 ms timer probe. The acceptance rule was fixed before the runs: during
+inference, timer p99 must stay at or below 10 ms and no more than 5 ms above
+the loaded baseline. The load was admitted only when its measured starting CPU
+fell inside the requested band; an out-of-band 15.65% attempt was recorded as
+skipped and ran no inference.
+
+| Starting CPU | Inference | CPU peak | Timer p99 baseline → during | Delta | Thermal | Verdict |
+|---:|---:|---:|---:|---:|---:|---|
+| 20.70% | 4,447 ms | 91.26% | 1.241 → 3.014 ms | +1.773 ms | 0 → 0 | pass |
+| 23.82% | 3,374 ms | 91.44% | 2.275 → 8.036 ms | +5.761 ms | 0 → 0 | reject 25% candidate |
+| 28.89% | 3,493 ms | 93.10% | 2.336 → 7.436 ms | +5.100 ms | 0 → 0 | reject 30% candidate |
+
+The production ceiling therefore remains 20%. The result does not claim that
+24% causes thermal pressure; it shows that the short inference peak consumes
+enough scheduler headroom to miss the foreground-latency budget before thermal
+state changes.
+
+Across these runs, the largest process-RSS increase from immediately before
+the slice to its sampled peak was 1,706,475,520 bytes (1.59 GiB). Production
+rounds this to a 2 GiB on-device inference reserve above the existing
+foreground floor. The three accepted calibration artifacts are:
+
+- `c5e1a9813d6754e5959fffcbf4c6c28988b46bdf-e5fe4d9cf54c/20260722T023122Z-document`
+- `c5e1a9813d6754e5959fffcbf4c6c28988b46bdf-f822e5cc1c00/20260722T025557Z-document`
+- `c5e1a9813d6754e5959fffcbf4c6c28988b46bdf-da36e1939ae6/20260722T024617Z-document`
+
+They are stored under
+`/Users/lucian/.local/share/repo-data/wenlan/benchmarks/`. Each records the
+exact source bundle, frozen test binary, model blob, runtime samples, and
+foreground timer summary. No additional candidate or live lane matrix is
+required.
+
 These five isolated runs are stored under
 `/Users/lucian/.local/share/repo-data/wenlan/benchmarks/c8a87bfee2661b4c474b2df63b2d259563252d57-52740615cfcc/`
 at `20260721T000621Z-page-growth`, `20260721T021529Z-document`,
@@ -555,4 +606,6 @@ was 3,462,561,792 bytes, graceful shutdown completed, and the process exited 0.
 RB-01 is closed. The five isolated lane profiles cover lane functionality; the
 single representative daemon proof covers persistent model residency, resource
 admission, dependency order, cooldown, thermal state, and clean exit. No
-additional live matrix is required for this change.
+additional live matrix is required for this change. The later CPU calibration
+keeps the 20% ceiling and adds the deterministic 2 GiB route-memory reserve;
+it does not require repeating the completed lane matrix.

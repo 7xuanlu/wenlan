@@ -18,6 +18,7 @@ mod ambient_live_daemon {
 
     const OPT_IN_ENV: &str = "WENLAN_RB01_DAEMON_PROFILE";
     const MODEL_ID: &str = "qwen3-4b";
+    const ON_DEVICE_INFERENCE_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
     const MIN_PRODUCTION_COOLDOWN: Duration = Duration::from_secs(120);
     const SAFETY_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
     const RESIDENCY_CHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -1045,8 +1046,9 @@ mod ambient_live_daemon {
         let (child, receiver, readers) = spawn_observed_child(&mut command);
         let mut child = ChildGuard(child);
         let total_memory_bytes = system_total_memory_bytes();
-        let memory_floor_bytes =
-            (total_memory_bytes.saturating_mul(15) / 100).max(2 * 1024 * 1024 * 1024);
+        let memory_floor_bytes = (total_memory_bytes.saturating_mul(15) / 100)
+            .max(2 * 1024 * 1024 * 1024)
+            .saturating_add(ON_DEVICE_INFERENCE_HEADROOM_BYTES);
         let memory_floor_mb = memory_floor_bytes.div_ceil(1024 * 1024);
         let mut observer = LiveObserver::with_memory_floor_mb(memory_floor_mb);
         let port = wait_for_port(&mut child, &port_file).await;

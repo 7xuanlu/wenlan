@@ -330,6 +330,29 @@ cooldown_from_report() {
   } >>"${evidence_dir}/manifest.txt"
 }
 
+calibration_no_inference_reported() {
+  local raw_log="${1}"
+  /usr/bin/grep -Fq '"event":"rb01_calibration_no_inference"' "${raw_log}" ||
+    /usr/bin/grep -Fq '"event":"rb01_calibration_skipped"' "${raw_log}"
+}
+
+calibration_no_inference_recovered() {
+  local raw_log="${1}"
+  local thermal memory
+  calibration_no_inference_reported "${raw_log}" || return 1
+  thermal="$(thermal_state 2>/dev/null || true)"
+  memory="$(memory_free_percent 2>/dev/null || true)"
+  if [[ "${thermal}" != "0" || -z "${memory}" ]] ||
+    ! /usr/bin/awk -v value="${memory}" 'BEGIN { exit !(value >= 15.0) }'; then
+    return 1
+  fi
+  /bin/rm -f "${COOLDOWN_STATE}"
+  {
+    echo "cooldown_source=calibration_no_inference_recovered"
+    echo "cooldown_seconds=0"
+  } >>"${evidence_dir}/manifest.txt"
+}
+
 check_two_cpu_samples() {
   local samples count value
   samples="$(
@@ -970,6 +993,8 @@ else
   (
     /usr/bin/env -u HF_HOME \
       WENLAN_TEST_FASTEMBED_CACHE="${FASTEMBED_CACHE}" \
+      WENLAN_RB01_THERMAL_HELPER="${thermal_helper}" \
+      WENLAN_RB01_THERMAL_HELPER_SHA256="${thermal_helper_sha256}" \
       HF_ENDPOINT="http://127.0.0.1:9" \
       WENLAN_RB01_PROFILE=1 \
       WENLAN_RB01_LANE="${lane}" \
@@ -1000,7 +1025,12 @@ if [[ "${lane}" == "daemon" ]] &&
   /usr/bin/grep -Fq '"rb01_recovery_known"' "${evidence_dir}/raw.log"; then
   completed_thermal_work=1
 fi
-if (( status == 0 || completed_thermal_work != 0 )); then
+if (( status == 0 )) && calibration_no_inference_reported "${evidence_dir}/raw.log"; then
+  # The model process has exited and no request was sent. Release the pre-armed
+  # fail-safe only when the host has already returned to nominal thermal/RAM;
+  # otherwise leave the conservative fail-safe intact.
+  calibration_no_inference_recovered "${evidence_dir}/raw.log" || true
+elif (( status == 0 || completed_thermal_work != 0 )); then
   cooldown_from_report "${evidence_dir}/raw.log" || true
 fi
 finish_manifest "${status}"

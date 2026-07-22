@@ -38,6 +38,10 @@ const CITATION_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// hotfix. Automatic recap batching still uses its separate ten-minute window.
 const AMBIENT_MIN_RECOVERY: Duration = Duration::from_secs(120);
 const GIB: u64 = 1024 * 1024 * 1024;
+/// Target-Mac calibration observed up to 1.59 GiB of additional process RSS
+/// during one on-device ambient inference. Round up so background work never
+/// consumes the ordinary foreground memory reserve.
+const ON_DEVICE_INFERENCE_HEADROOM_BYTES: u64 = 2 * GIB;
 const AUTOMATIC_STEEP_PHASE_CURSOR_PREFIX: &str = "automatic_steep_phase_cursor_v1";
 const AUTOMATIC_MAINTENANCE_STAGE_CURSOR_KEY: &str = "automatic_maintenance_stage_cursor_v1";
 
@@ -345,11 +349,19 @@ fn startup_model_reservation_blocks_route(
 }
 
 fn background_heavy_resource_admitted(
-    resource_admitted: bool,
+    resource_status: ResourceStatus,
     startup_model_load_reserved: bool,
     route_uses_on_device: bool,
 ) -> bool {
-    resource_admitted
+    let route_memory_admitted = !route_uses_on_device
+        || resource_status.snapshot.is_some_and(|snapshot| {
+            ResourcePolicy::conservative()
+                .with_additional_memory_headroom(ON_DEVICE_INFERENCE_HEADROOM_BYTES)
+                .block_reason(snapshot)
+                .is_none()
+        });
+    resource_status.admitted
+        && route_memory_admitted
         && !startup_model_reservation_blocks_route(
             startup_model_load_reserved,
             route_uses_on_device,
@@ -1436,7 +1448,7 @@ pub fn spawn_scheduler(
 
             let selected_automatic = automatic_heavy_turn_allowed(
                 background_heavy_resource_admitted(
-                    resource_status.admitted,
+                    resource_status,
                     startup_model_load_reserved,
                     matches!(
                         synthesis_pin,
@@ -1690,7 +1702,7 @@ pub fn spawn_scheduler(
             if !automatic_work_ran
                 && ambient_turn_allowed(
                     background_heavy_resource_admitted(
-                        resource_status.admitted,
+                        resource_status,
                         startup_model_load_reserved,
                         matches!(
                             everyday_pin,
@@ -3118,9 +3130,54 @@ mod tests {
         assert!(!startup_model_reservation_blocks_route(false, true));
         assert!(!startup_model_reservation_blocks_route(true, false));
         assert!(startup_model_reservation_blocks_route(true, true));
-        assert!(background_heavy_resource_admitted(true, true, false));
-        assert!(!background_heavy_resource_admitted(true, true, true));
-        assert!(!background_heavy_resource_admitted(false, true, false));
+        let admitted = ResourceStatus {
+            admitted: true,
+            snapshot: Some(ResourceSnapshot {
+                cpu_usage_percent: 8.0,
+                available_memory_bytes: 8 * GIB,
+                total_memory_bytes: 16 * GIB,
+            }),
+            block_reason: None,
+        };
+        let blocked = ResourceStatus {
+            admitted: false,
+            ..admitted
+        };
+        assert!(background_heavy_resource_admitted(admitted, true, false));
+        assert!(!background_heavy_resource_admitted(admitted, true, true));
+        assert!(!background_heavy_resource_admitted(blocked, true, false));
+    }
+
+    #[test]
+    fn on_device_background_reserves_two_gib_for_inference() {
+        let total = 16 * GIB;
+        let ordinary_floor = total * 15 / 100;
+        let required = ordinary_floor + 2 * GIB;
+        let status = |available_memory_bytes| ResourceStatus {
+            admitted: true,
+            snapshot: Some(ResourceSnapshot {
+                cpu_usage_percent: 8.0,
+                available_memory_bytes,
+                total_memory_bytes: total,
+            }),
+            block_reason: None,
+        };
+
+        assert!(background_heavy_resource_admitted(
+            status(required - 1),
+            false,
+            false,
+        ));
+        assert!(!background_heavy_resource_admitted(
+            status(required - 1),
+            false,
+            true,
+        ));
+        assert!(background_heavy_resource_admitted(
+            status(required),
+            false,
+            true,
+        ));
     }
 
     #[test]
@@ -4301,6 +4358,184 @@ mod tests {
         .unwrap();
     }
 
+    fn rb01_parse_calibration_load_duties(value: Option<&str>) -> Result<Vec<u8>, String> {
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        if value.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let duties = value
+            .split(',')
+            .map(|part| {
+                let duty = part
+                    .trim()
+                    .parse::<u8>()
+                    .map_err(|error| format!("invalid calibration duty {part:?}: {error}"))?;
+                if !(1..=100).contains(&duty) {
+                    return Err(format!("calibration duty must be 1..=100, got {duty}"));
+                }
+                Ok(duty)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let total_duty = duties.iter().map(|duty| u16::from(*duty)).sum::<u16>();
+        if total_duty > 300 {
+            return Err(format!(
+                "calibration load is capped at three CPU cores, got {total_duty}%"
+            ));
+        }
+        Ok(duties)
+    }
+
+    fn rb01_parse_calibration_cpu_band(value: Option<&str>) -> Result<Option<(f32, f32)>, String> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        let (minimum, maximum) = value
+            .split_once(':')
+            .ok_or_else(|| format!("calibration CPU band must be min:max, got {value:?}"))?;
+        let minimum = minimum
+            .parse::<f32>()
+            .map_err(|error| format!("invalid calibration CPU minimum: {error}"))?;
+        let maximum = maximum
+            .parse::<f32>()
+            .map_err(|error| format!("invalid calibration CPU maximum: {error}"))?;
+        if !minimum.is_finite() || !maximum.is_finite() || minimum < 0.0 || minimum >= maximum {
+            return Err(format!(
+                "calibration CPU band must be finite and increasing, got {minimum}:{maximum}"
+            ));
+        }
+        Ok(Some((minimum, maximum)))
+    }
+
+    fn rb01_percentile_us(samples: &[u64], percentile: usize) -> u64 {
+        assert!(!samples.is_empty(), "latency percentile needs samples");
+        assert!((1..=100).contains(&percentile));
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        let rank = sorted.len().saturating_mul(percentile).div_ceil(100);
+        sorted[rank.saturating_sub(1)]
+    }
+
+    struct Rb01SyntheticLoad {
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        workers: Vec<std::thread::JoinHandle<()>>,
+    }
+
+    impl Rb01SyntheticLoad {
+        fn start(duties: &[u8]) -> Self {
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let workers = duties
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, duty)| {
+                    let stop = stop.clone();
+                    std::thread::Builder::new()
+                        .name(format!("rb01-calibration-load-{index}"))
+                        .spawn(move || {
+                            let window = Duration::from_millis(20);
+                            let busy = window.mul_f64(f64::from(duty) / 100.0);
+                            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                                let window_started = Instant::now();
+                                while window_started.elapsed() < busy
+                                    && !stop.load(std::sync::atomic::Ordering::Relaxed)
+                                {
+                                    std::hint::spin_loop();
+                                }
+                                let remaining = window.saturating_sub(window_started.elapsed());
+                                if !remaining.is_zero() {
+                                    std::thread::sleep(remaining);
+                                }
+                            }
+                        })
+                        .expect("spawn bounded RB-01 calibration load")
+                })
+                .collect();
+            Self { stop, workers }
+        }
+    }
+
+    impl Drop for Rb01SyntheticLoad {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            for worker in self.workers.drain(..) {
+                worker.join().expect("RB-01 calibration load stops");
+            }
+        }
+    }
+
+    fn rb01_spawn_latency_probe() -> (
+        Arc<std::sync::atomic::AtomicBool>,
+        std::thread::JoinHandle<Vec<u64>>,
+    ) {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let worker = std::thread::Builder::new()
+            .name("rb01-foreground-latency".to_string())
+            .spawn(move || {
+                let interval = Duration::from_millis(5);
+                let mut next = Instant::now() + interval;
+                let mut overshoot_us = Vec::new();
+                while !worker_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(next.saturating_duration_since(Instant::now()));
+                    let observed = Instant::now();
+                    overshoot_us.push(
+                        observed
+                            .saturating_duration_since(next)
+                            .as_micros()
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                    );
+                    next += interval;
+                    if next <= observed {
+                        next = observed + interval;
+                    }
+                }
+                overshoot_us
+            })
+            .expect("spawn RB-01 foreground latency probe");
+        (stop, worker)
+    }
+
+    fn rb01_finish_latency_probe(
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        worker: std::thread::JoinHandle<Vec<u64>>,
+    ) -> Vec<u64> {
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        worker.join().expect("RB-01 foreground latency probe stops")
+    }
+
+    fn rb01_latency_summary(samples: &[u64]) -> serde_json::Value {
+        serde_json::json!({
+            "samples": samples.len(),
+            "p50_us": rb01_percentile_us(samples, 50),
+            "p95_us": rb01_percentile_us(samples, 95),
+            "p99_us": rb01_percentile_us(samples, 99),
+            "max_us": samples.iter().copied().max().unwrap_or(0)
+        })
+    }
+
+    async fn rb01_sample_runtime_until(
+        started: Instant,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Vec<(u64, f32, u64)> {
+        let mut system = sysinfo::System::new_all();
+        system.refresh_cpu_usage();
+        let mut samples = Vec::new();
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            system.refresh_cpu_usage();
+            system.refresh_memory();
+            samples.push((
+                started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                system.global_cpu_usage(),
+                system.available_memory(),
+            ));
+        }
+        samples
+    }
+
     #[derive(Debug, Clone, Copy)]
     enum Rb01ProfileLane {
         Document,
@@ -4308,6 +4543,57 @@ mod tests {
         PageGrowth,
         Reconcile,
         Citation,
+    }
+
+    #[test]
+    fn rb01_calibration_load_parser_is_bounded() {
+        assert_eq!(
+            rb01_parse_calibration_load_duties(Some("100,50")).unwrap(),
+            vec![100, 50]
+        );
+        assert_eq!(
+            rb01_parse_calibration_load_duties(Some("100,100,50")).unwrap(),
+            vec![100, 100, 50]
+        );
+        assert_eq!(
+            rb01_parse_calibration_load_duties(None).unwrap(),
+            Vec::<u8>::new()
+        );
+        assert!(rb01_parse_calibration_load_duties(Some("0")).is_err());
+        assert!(rb01_parse_calibration_load_duties(Some("101")).is_err());
+        assert!(rb01_parse_calibration_load_duties(Some("100,100,100,1")).is_err());
+    }
+
+    #[test]
+    fn rb01_calibration_cpu_band_parser_rejects_inverted_bounds() {
+        assert_eq!(
+            rb01_parse_calibration_cpu_band(Some("20.1:26.0")).unwrap(),
+            Some((20.1, 26.0))
+        );
+        assert_eq!(rb01_parse_calibration_cpu_band(None).unwrap(), None);
+        assert!(rb01_parse_calibration_cpu_band(Some("26:20")).is_err());
+        assert!(rb01_parse_calibration_cpu_band(Some("bad")).is_err());
+    }
+
+    #[test]
+    fn rb01_calibration_recheck_is_fast_but_still_requires_two_samples() {
+        assert_eq!(
+            rb01_profile_admission_timing(false),
+            (POLL_INTERVAL, RB01_PROFILE_ADMISSION_MAX_SAMPLES)
+        );
+        assert_eq!(
+            rb01_profile_admission_timing(true),
+            (Duration::from_secs(2), 4)
+        );
+    }
+
+    #[test]
+    fn rb01_latency_percentile_uses_nearest_rank() {
+        let samples = (1..=100).collect::<Vec<u64>>();
+        assert_eq!(rb01_percentile_us(&samples, 50), 50);
+        assert_eq!(rb01_percentile_us(&samples, 95), 95);
+        assert_eq!(rb01_percentile_us(&samples, 99), 99);
+        assert_eq!(rb01_percentile_us(&[7], 99), 7);
     }
 
     impl Rb01ProfileLane {
@@ -4352,13 +4638,17 @@ mod tests {
         if !cfg!(target_os = "macos") {
             return None;
         }
-        let output = std::process::Command::new("/usr/bin/swift")
-            .args([
-                "-e",
-                "import Foundation; print(ProcessInfo.processInfo.thermalState.rawValue)",
-            ])
-            .output()
-            .ok()?;
+        let output = if let Some(helper) = std::env::var_os("WENLAN_RB01_THERMAL_HELPER") {
+            std::process::Command::new(helper).output().ok()?
+        } else {
+            std::process::Command::new("/usr/bin/swift")
+                .args([
+                    "-e",
+                    "import Foundation; print(ProcessInfo.processInfo.thermalState.rawValue)",
+                ])
+                .output()
+                .ok()?
+        };
         if !output.status.success() {
             return None;
         }
@@ -4392,13 +4682,25 @@ mod tests {
         }
     }
 
-    async fn rb01_wait_for_profile_admission() -> Result<ResourceSnapshot, String> {
-        let policy = ResourcePolicy::conservative();
+    fn rb01_profile_admission_timing(calibration: bool) -> (Duration, usize) {
+        if calibration {
+            (Duration::from_secs(2), 4)
+        } else {
+            (POLL_INTERVAL, RB01_PROFILE_ADMISSION_MAX_SAMPLES)
+        }
+    }
+
+    async fn rb01_wait_for_profile_admission(
+        calibration: bool,
+    ) -> Result<ResourceSnapshot, String> {
+        let policy = ResourcePolicy::conservative()
+            .with_additional_memory_headroom(ON_DEVICE_INFERENCE_HEADROOM_BYTES);
         let mut probe = SystemResourceProbe::new(Instant::now());
         let mut admission = Rb01ProfileAdmission::default();
+        let (sample_interval, max_samples) = rb01_profile_admission_timing(calibration);
 
-        for sample_index in 1..=RB01_PROFILE_ADMISSION_MAX_SAMPLES {
-            tokio::time::sleep(POLL_INTERVAL).await;
+        for sample_index in 1..=max_samples {
+            tokio::time::sleep(sample_interval).await;
             let status = probe.sample(Instant::now(), policy);
             let thermal = rb01_macos_thermal_state();
             match rb01_profile_sample_action(
@@ -4407,7 +4709,7 @@ mod tests {
                 thermal,
                 policy,
                 sample_index,
-                RB01_PROFILE_ADMISSION_MAX_SAMPLES,
+                max_samples,
             ) {
                 Rb01ProfileSampleAction::Retry => {}
                 Rb01ProfileSampleAction::Admit => {
@@ -4417,7 +4719,7 @@ mod tests {
                 }
                 Rb01ProfileSampleAction::Fail(reason) => {
                     return Err(format!(
-                        "profile preflight sample {sample_index}/{RB01_PROFILE_ADMISSION_MAX_SAMPLES} \
+                        "profile preflight sample {sample_index}/{max_samples} \
                          rejected: {reason:?}; \
                          resource={:?}; thermal_state={thermal:?}",
                         status.snapshot
@@ -4624,6 +4926,23 @@ mod tests {
             .expect("set WENLAN_RB01_LANE=document|entity|page-growth|reconcile|citation");
         let lane = Rb01ProfileLane::from_env(&lane_value)
             .expect("WENLAN_RB01_LANE must be document|entity|page-growth|reconcile|citation");
+        let calibration_duties = rb01_parse_calibration_load_duties(
+            std::env::var("WENLAN_RB01_CALIBRATION_LOAD_DUTIES")
+                .ok()
+                .as_deref(),
+        )
+        .expect("valid WENLAN_RB01_CALIBRATION_LOAD_DUTIES");
+        let calibration_cpu_band = rb01_parse_calibration_cpu_band(
+            std::env::var("WENLAN_RB01_CALIBRATION_CPU_BAND")
+                .ok()
+                .as_deref(),
+        )
+        .expect("valid WENLAN_RB01_CALIBRATION_CPU_BAND");
+        assert_eq!(
+            calibration_duties.is_empty(),
+            calibration_cpu_band.is_none(),
+            "calibration load duties and CPU band must be supplied together"
+        );
         let model = wenlan_core::on_device_models::get_model("qwen3-4b")
             .expect("qwen3-4b remains in the on-device registry");
         assert!(
@@ -4657,20 +4976,76 @@ mod tests {
             .map_or(0, |process| process.memory());
         let available_memory_model_loaded = process_system.available_memory();
 
-        let before = rb01_wait_for_profile_admission()
-            .await
-            .expect("RB-01 profile preflight must remain healthy");
+        let before = match rb01_wait_for_profile_admission(calibration_cpu_band.is_some()).await {
+            Ok(snapshot) => snapshot,
+            Err(error) if calibration_cpu_band.is_some() => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "rb01_calibration_no_inference",
+                        "lane": lane.as_str(),
+                        "reason": error,
+                        "boot_ms": boot_ms,
+                        "thermal_after": rb01_macos_thermal_state(),
+                        "report_elapsed_ms": 0
+                    })
+                );
+                return;
+            }
+            Err(error) => panic!("RB-01 profile preflight must remain healthy: {error}"),
+        };
         let thermal_before =
             rb01_macos_thermal_state().expect("macOS thermal state must be readable");
         process_system.refresh_all();
         let rss_before = process_system
             .process(pid)
             .map_or(0, |process| process.memory());
+        let mut calibration_load = if calibration_duties.is_empty() {
+            None
+        } else {
+            Some(Rb01SyntheticLoad::start(&calibration_duties))
+        };
+        let (calibration_cpu_before, foreground_latency_baseline) =
+            if let Some((minimum_cpu, maximum_cpu)) = calibration_cpu_band {
+                process_system.refresh_cpu_usage();
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                process_system.refresh_cpu_usage();
+                let observed_cpu = process_system.global_cpu_usage();
+
+                let (latency_stop, latency_worker) = rb01_spawn_latency_probe();
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let latency_samples = rb01_finish_latency_probe(latency_stop, latency_worker);
+                let latency_summary = rb01_latency_summary(&latency_samples);
+
+                if observed_cpu < minimum_cpu || observed_cpu > maximum_cpu {
+                    calibration_load.take();
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "event": "rb01_calibration_skipped",
+                            "lane": lane.as_str(),
+                            "load_duties_percent": calibration_duties,
+                            "requested_cpu_band_percent": [minimum_cpu, maximum_cpu],
+                            "observed_cpu_percent": observed_cpu,
+                            "foreground_timer_baseline": latency_summary,
+                            "thermal_after": rb01_macos_thermal_state(),
+                            "report_elapsed_ms": 0
+                        })
+                    );
+                    return;
+                }
+                (Some(observed_cpu), Some(latency_summary))
+            } else {
+                (None, None)
+            };
         let peak_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let peak_task = tokio::spawn(rb01_sample_peak_rss(pid, rss_before, peak_stop.clone()));
         tokio::task::yield_now().await;
 
         let started = Instant::now();
+        let runtime_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runtime_task = tokio::spawn(rb01_sample_runtime_until(started, runtime_stop.clone()));
+        let latency_probe = calibration_cpu_band.map(|_| rb01_spawn_latency_probe());
         let report = run_ambient_job_safe(
             lane.job(),
             &db,
@@ -4685,6 +5060,15 @@ mod tests {
         )
         .await;
         let wall_ms = started.elapsed().as_millis();
+        let foreground_latency_during = latency_probe.map(|(stop, worker)| {
+            let samples = rb01_finish_latency_probe(stop, worker);
+            rb01_latency_summary(&samples)
+        });
+        runtime_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let runtime_samples = runtime_task
+            .await
+            .expect("RB-01 runtime sampler must remain alive");
+        calibration_load.take();
         peak_stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let rss_peak_during_slice = peak_task
             .await
@@ -4704,6 +5088,20 @@ mod tests {
         let thermal_after =
             rb01_macos_thermal_state().expect("macOS thermal state must remain readable");
         let durable_progress = rb01_lane_progressed(lane, &db, &fixture).await;
+        let runtime_peak_cpu_percent = runtime_samples
+            .iter()
+            .map(|(_, cpu, _)| *cpu)
+            .reduce(f32::max);
+        let runtime_min_available_memory_bytes =
+            runtime_samples.iter().map(|(_, _, memory)| *memory).min();
+        let foreground_latency_ok = foreground_latency_baseline
+            .as_ref()
+            .zip(foreground_latency_during.as_ref())
+            .map(|(baseline, during)| {
+                let baseline_p99 = baseline["p99_us"].as_u64().unwrap_or(u64::MAX);
+                let during_p99 = during["p99_us"].as_u64().unwrap_or(u64::MAX);
+                during_p99 <= 10_000 && during_p99 <= baseline_p99.saturating_add(5_000)
+            });
 
         println!(
             "{}",
@@ -4727,6 +5125,20 @@ mod tests {
                 "available_memory_pre_model_bytes": available_memory_pre_model,
                 "available_memory_model_loaded_bytes": available_memory_model_loaded,
                 "system_cpu_before_percent": before.cpu_usage_percent,
+                "calibration_load_duties_percent": calibration_duties,
+                "calibration_requested_cpu_band_percent": calibration_cpu_band.map(|(min, max)| [min, max]),
+                "calibration_cpu_before_percent": calibration_cpu_before,
+                "foreground_timer_baseline": foreground_latency_baseline,
+                "foreground_timer_during": foreground_latency_during,
+                "foreground_timer_acceptance": "during p99 <= 10ms and <= baseline p99 + 5ms",
+                "foreground_timer_ok": foreground_latency_ok,
+                "runtime_cpu_samples": runtime_samples.iter().map(|(observed_ms, cpu, memory)| serde_json::json!({
+                    "observed_ms": observed_ms,
+                    "cpu_percent": cpu,
+                    "available_memory_bytes": memory
+                })).collect::<Vec<_>>(),
+                "runtime_peak_cpu_percent": runtime_peak_cpu_percent,
+                "runtime_min_available_memory_bytes": runtime_min_available_memory_bytes,
                 "system_cpu_after_percent": after.cpu_usage_percent,
                 "process_cpu_after_percent": process_cpu_after,
                 "available_memory_before_bytes": before.available_memory_bytes,

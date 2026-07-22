@@ -289,6 +289,13 @@ if ! /usr/bin/grep -q 'ambient_live_daemon::persistent_provider_respects_product
   exit 1
 fi
 
+if ! /usr/bin/grep -q 'calibration_no_inference_recovered' "${TARGET}" ||
+  ! /usr/bin/grep -q 'rb01_calibration_no_inference' "${TARGET}" ||
+  ! /usr/bin/grep -q 'rb01_calibration_skipped' "${TARGET}"; then
+  echo "expected calibration runs with no inference to release the fail-safe only after resource recovery" >&2
+  exit 1
+fi
+
 LIVE_HARNESS="${ROOT}/crates/wenlan-server/tests/ambient_live_daemon.rs"
 safety_sample_calls="$(
   /usr/bin/grep -Ec '^[[:space:]]*sample_safety_if_due\(' "${LIVE_HARNESS}" || true
