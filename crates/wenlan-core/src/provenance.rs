@@ -160,9 +160,15 @@ pub fn base_independence_key(signals: &IndependenceSignals) -> Option<String> {
 /// `sha256(edge_type, src_kind, src_id, dst_kind, dst_id, discriminator)`.
 /// A retried write recomputes the same `edge_id`; `INSERT ... ON
 /// CONFLICT(edge_id) DO NOTHING` converges on the one edge -- no duplicate
-/// voter, exactly the §6.1 retry-identity guarantee at the edge grain. Parts
-/// are null-byte-separated so no two distinct tuples can collide by
-/// concatenation ambiguity (e.g. ("ab", "c") vs ("a", "bc")).
+/// voter, exactly the §6.1 retry-identity guarantee at the edge grain.
+///
+/// Each part is **length-prefixed** (its byte length as a u64 LE, then the
+/// bytes) so no two distinct tuples can collide by concatenation ambiguity.
+/// A bare NUL *separator* is not enough: a part may itself contain a NUL byte
+/// (Rust `&str` is arbitrary UTF-8, and locators/labels are unvalidated), so
+/// `("x\0", "y")` and `("x", "\0y")` would hash identically under a
+/// separator-only scheme. Length-prefixing removes the separator's meaning
+/// entirely -- the boundary is the declared length, not a sentinel byte.
 pub fn compute_edge_id(
     edge_type: &str,
     src_kind: &str,
@@ -173,8 +179,9 @@ pub fn compute_edge_id(
 ) -> String {
     let mut hasher = Sha256::new();
     for part in [edge_type, src_kind, src_id, dst_kind, dst_id, discriminator] {
-        hasher.update(part.as_bytes());
-        hasher.update(b"\0");
+        let bytes = part.as_bytes();
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
     }
     format!("{:x}", hasher.finalize())
 }
@@ -340,5 +347,18 @@ mod tests {
         let a = compute_edge_id("cites", "page", "ab", "memory", "c", "loc");
         let b = compute_edge_id("cites", "page", "a", "memory", "bc", "loc");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn compute_edge_id_embedded_nul_no_collision() {
+        // A part may itself contain a NUL byte, so a NUL *separator* alone
+        // would let ("x\0", "y") and ("x", "\0y") hash identically. The
+        // length-prefix must keep them distinct.
+        let a = compute_edge_id("cites", "page", "p", "memory", "x\0", "y");
+        let b = compute_edge_id("cites", "page", "p", "memory", "x", "\0y");
+        assert_ne!(
+            a, b,
+            "an embedded NUL must not collide with a shifted split -- length-prefix, not separator"
+        );
     }
 }
