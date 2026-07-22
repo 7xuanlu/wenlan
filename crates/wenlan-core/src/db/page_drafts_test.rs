@@ -346,8 +346,12 @@ async fn simultaneous_same_id_creates_are_idempotent_or_conflict_by_snapshot() {
 #[tokio::test]
 async fn create_preserves_bytes_null_embedding_and_has_no_derived_rows() {
     let (db, _tmp) = test_db().await;
-    let content =
-        "Before\n<!-- origin:sources:start -->\nowned\n<!-- origin:sources:end -->\nAfter  \n";
+    let content = "\u{feff}\r\n  Before  \r\nAfter\t \r\n\r\n";
+    assert_ne!(
+        content.trim_end(),
+        content,
+        "positive control: trimming must change this fixture"
+    );
     let page = db
         .create_page_draft("  Draft  ", content, None, None)
         .await
@@ -374,6 +378,65 @@ async fn create_preserves_bytes_null_embedding_and_has_no_derived_rows() {
             }
         );
         assert_eq!(scalar_i64(&db, &sql, &page.id).await, 0);
+    }
+}
+
+#[tokio::test]
+async fn create_and_update_reject_reserved_delimiters_without_mutation() {
+    use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+
+    let (db, _tmp) = test_db().await;
+    let cases = [
+        format!("before {SOURCES_BLOCK_START} after"),
+        format!("before {SOURCES_BLOCK_END} after"),
+        format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+        format!(
+            "{SOURCES_BLOCK_START}\none\n{SOURCES_BLOCK_END}\n\
+             {SOURCES_BLOCK_START}\ntwo\n{SOURCES_BLOCK_END}"
+        ),
+        format!("```md\n{SOURCES_BLOCK_START}\n```\nkept prose"),
+    ];
+
+    let rejected_id = "page_00000000-0000-4000-8000-000000000099";
+    for content in &cases {
+        assert!(matches!(
+            db.create_page_draft_with_id(rejected_id, "Draft", content, None, None)
+                .await,
+            Err(WenlanError::Validation(_))
+        ));
+        assert!(db.get_page(rejected_id).await.unwrap().is_none());
+        assert_eq!(
+            scalar_i64(
+                &db,
+                "SELECT COUNT(*) FROM page_draft_create_requests WHERE page_id=?1",
+                rejected_id,
+            )
+            .await,
+            0
+        );
+    }
+
+    let draft = db
+        .create_page_draft("Original title", "Original body  \n", None, None)
+        .await
+        .unwrap();
+    for content in &cases {
+        assert!(matches!(
+            db.update_page_draft(
+                &draft.id,
+                draft.version,
+                "Changed title",
+                content,
+                None,
+                None,
+            )
+            .await,
+            Err(WenlanError::Validation(_))
+        ));
+        let after = db.get_page(&draft.id).await.unwrap().unwrap();
+        assert_eq!(after.title, draft.title);
+        assert_eq!(after.content, draft.content);
+        assert_eq!(after.version, draft.version);
     }
 }
 
@@ -463,6 +526,103 @@ async fn update_supports_exact_retry_and_rejects_stale_active_missing_and_empty(
             .await,
         Err(WenlanError::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn update_replay_matches_after_space_only_divergent_scope() {
+    // Regression: `update_page_draft` (validate_space=false) accepts divergent
+    // space/workspace, but the write mirrors ONE resolved scope onto both
+    // columns via the workspace-wins ladder. A space-only input (Some("work"),
+    // None) stores space=workspace="work". The exact retry must replay as
+    // Updated, not fall through to a spurious VersionConflict.
+    let (db, _tmp) = test_db().await;
+    let draft = db
+        .create_page_draft("Draft", "Original body", None, None)
+        .await
+        .unwrap();
+
+    let first = db
+        .update_page_draft(&draft.id, 1, "Revised", "Body", Some("work"), None)
+        .await
+        .unwrap();
+    let PageDraftUpdateOutcome::Updated(first) = first else {
+        panic!("expected initial divergent update");
+    };
+    assert_eq!(first.version, 2);
+    assert_eq!(first.space.as_deref(), Some("work"));
+    assert_eq!(first.workspace.as_deref(), Some("work"));
+
+    let retry = db
+        .update_page_draft(&draft.id, 1, "Revised", "Body", Some("work"), None)
+        .await
+        .unwrap();
+    let PageDraftUpdateOutcome::Updated(retry) = retry else {
+        panic!("space-only divergent retry must replay as Updated, not VersionConflict");
+    };
+    assert_eq!(retry.version, 2);
+}
+
+#[tokio::test]
+async fn update_replay_matches_after_workspace_only_divergent_scope() {
+    // Mirror of the space-only case: workspace-only input (None, Some("work"))
+    // also mirrors to space=workspace="work"; the exact retry must replay.
+    let (db, _tmp) = test_db().await;
+    let draft = db
+        .create_page_draft("Draft", "Original body", None, None)
+        .await
+        .unwrap();
+
+    let first = db
+        .update_page_draft(&draft.id, 1, "Revised", "Body", None, Some("work"))
+        .await
+        .unwrap();
+    let PageDraftUpdateOutcome::Updated(first) = first else {
+        panic!("expected initial divergent update");
+    };
+    assert_eq!(first.version, 2);
+    assert_eq!(first.space.as_deref(), Some("work"));
+    assert_eq!(first.workspace.as_deref(), Some("work"));
+
+    let retry = db
+        .update_page_draft(&draft.id, 1, "Revised", "Body", None, Some("work"))
+        .await
+        .unwrap();
+    let PageDraftUpdateOutcome::Updated(retry) = retry else {
+        panic!("workspace-only divergent retry must replay as Updated, not VersionConflict");
+    };
+    assert_eq!(retry.version, 2);
+}
+
+#[tokio::test]
+async fn update_replay_matches_for_unfiled_none_scope() {
+    // Guard: the None,None -> 'unfiled' sentinel retry must still replay. The
+    // stored 'unfiled' sentinel translates back to None on the wire, so both
+    // the current and requested resolved wire scopes are None and must match.
+    let (db, _tmp) = test_db().await;
+    let draft = db
+        .create_page_draft("Draft", "Original body", None, None)
+        .await
+        .unwrap();
+
+    let first = db
+        .update_page_draft(&draft.id, 1, "Revised", "Body", None, None)
+        .await
+        .unwrap();
+    let PageDraftUpdateOutcome::Updated(first) = first else {
+        panic!("expected initial unfiled update");
+    };
+    assert_eq!(first.version, 2);
+    assert_eq!(first.space, None);
+    assert_eq!(first.workspace, None);
+
+    let retry = db
+        .update_page_draft(&draft.id, 1, "Revised", "Body", None, None)
+        .await
+        .unwrap();
+    let PageDraftUpdateOutcome::Updated(retry) = retry else {
+        panic!("unfiled None,None retry must replay as Updated");
+    };
+    assert_eq!(retry.version, 2);
 }
 
 #[tokio::test]
