@@ -4,6 +4,21 @@
 // Re-export the wire type from wenlan-types so existing consumers keep working.
 pub use wenlan_types::pages::Page;
 
+/// Result of replacing one complete Page draft snapshot.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum PageDraftUpdateOutcome {
+    Updated(Page),
+    VersionConflict { current_version: i64 },
+}
+
+/// Result of discarding a Page draft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageDraftDeleteOutcome {
+    Deleted,
+    VersionConflict { current_version: i64 },
+}
+
 /// Generate a new unique page ID.
 ///
 /// Replaces the former `Page::new_id()` associated function now that `Page`

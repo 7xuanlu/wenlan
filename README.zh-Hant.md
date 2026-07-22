@@ -1,202 +1,288 @@
-<!-- README_SYNC: source=README.md sha256=e5f8fa13cd089f1b8daf98ba5adbbb28ccb0c7d26d9a572cfb246c69e9ebd76a -->
+<!-- README_SYNC: source=README.md sha256=d2ed67bd1a4b51576c1c33d57e40262cb257bec83b097e8f595d574f3c5e25bf -->
 
 <p align="center">
-  <img src="./docs/assets/social-preview.png" alt="Wenlan：面向 AI 原生時代的、會生長的個人知識庫。" width="100%">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-mobile.png">
+    <img src="./docs/assets/readme-banner.png" alt="Wenlan：有來源支撐、會持續累積的知識庫。" width="100%">
+  </picture>
 </p>
 
-<p align="center">
-  <a href="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
-  <a href="https://github.com/7xuanlu/wenlan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver&label=release"></a>
-  <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
-</p>
-
-<p align="center">
-  <a href="#claude-code-in-30-seconds"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-5D4E75"></a>
-  <a href="#codex-plugin"><img alt="Codex" src="https://img.shields.io/badge/Codex-plugin-111827"></a>
-  <a href="#mcp-setup"><img alt="MCP clients" src="https://img.shields.io/badge/MCP-clients-2563EB"></a>
-  <a href="#start-with-the-app"><img alt="Desktop app" src="https://img.shields.io/badge/Desktop-app-24C8DB"></a>
-  <a href="#what-you-get"><img alt="Markdown pages" src="https://img.shields.io/badge/Markdown-pages-7C3AED"></a>
-</p>
+和 AI 聊出的成果，不該在對話結束後消失。Wenlan 會建立真正需要的頁面，並在來源變動時讓它們保持最新；只有需要判斷時才找你。
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | 繁體中文
 </p>
 
-**面向 AI 原生時代的、會生長的個人知識庫，由你的 agents 構建，並由來源支撐。**
-
-不同於普通 llm-wiki 只根據固定文件集生成頁面，Wenlan 會從即時 agent 工作和你信任的來源中，持續維護一套帶來源引用的 wiki。它面向與 AI agents 一起推進的長期工作，從軟體開發和研究，到寫作、諮詢、產品決策和客戶工作。
-
-你的 agents 在會話中捕獲它們學到的內容；你也可以加入自己已經信任的頁面和來源。Wenlan 會把兩者提煉成 Markdown 頁面，並在會話之間刷新。每條新 thread 都從這套更新後的 wiki 開始，用 brief 帶回相關上下文，用 handoff 記錄下一次該從哪裡繼續。
-
-Wenlan（文瀾）的名字來自文瀾閣。這座皇家藏書樓藏有《四庫全書》，曾是中國規模最大的藏書之一。
+<p align="center">
+  <a href="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
+  <a href="https://github.com/7xuanlu/wenlan/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver&label=release"></a>
+  <a href="#license"><img alt="授權：Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+</p>
 
 <p align="center">
-  <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan 桌面 app，展示帶來源引用的 wiki 頁面和 source memory 懸浮卡片。" width="100%">
+  <a href="#start-in-30-seconds">開&#8288;始&#8288;使&#8288;用</a> ·
+  <a href="#what-does-wenlan-build">這&#8288;是&#8288;什&#8288;麼？</a> ·
+  <a href="#what-can-it-do">能&#8288;力</a> ·
+  <a href="#how-does-it-work">日&#8288;常&#8288;流&#8288;程</a> ·
+  <a href="#evaluation">評&#8288;估</a> ·
+  <a href="#learn-more">進&#8288;一&#8288;步&#8288;了&#8288;解</a>
+</p>
+
+<p align="center">
+  <img src="./docs/assets/desktop-wiki-preview.png" alt="Wenlan 桌面 app，展示有來源支撐的 wiki 頁面與可檢查的引用。" width="100%">
+</p>
+
+<p align="center">
+  <sub>桌面 app 中持續維護的頁面：開啟任一引用，就能檢查這項結論背後的來源或記憶。</sub>
 </p>
 
 ---
+
+<a id="quickstart"></a>
+<a id="start-in-30-seconds"></a>
+
+## 開始使用
 
 <a id="start-with-the-app"></a>
+<a id="open-the-wiki"></a>
 
-## 先從桌面 app 開始
+### 桌面 app
 
-桌面 app 是閱讀和整理這套帶來源引用 wiki 的最快入口。Agents 仍然可以在 Claude Code、Codex、Cursor、VS Code、Claude Desktop 或任何 MCP client 中捕獲和召回上下文；所有路徑都連接同一個本地 daemon 和 Markdown store。
-
-先設定一次 Wenlan：
+桌面 app 是最快看到完整工作流程的方式：閱讀頁面、檢查來源並整理知識體系。目前僅提供 macOS Apple Silicon 預覽版，尚未經 Apple notarization。下面的安裝器會驗證 GitHub release，只為 Wenlan 清除 quarantine，安裝後直接開啟，不會變更 macOS 系統安全設定：
 
 ```bash
-npx -y wenlan setup
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
 ```
 
-然後打開桌面 app releases 頁面，下載最新 macOS Apple Silicon DMG：[wenlan-app releases](https://github.com/7xuanlu/wenlan-app/releases/latest)。
-
-App 原始碼：[wenlan-app](https://github.com/7xuanlu/wenlan-app)。產品詳情：[wenlan.app](https://wenlan.app)。
-
----
-
-## Wenlan 有什麼不同
-
-1. **值得信任的來源。** 每個頁面都會引用背後的 memories；Wenlan 會拒絕沒有來源的頁面，而不是讓幻覺摘要混進來。事實會被去重，變化時舊版本會被取代，所以 wiki 保持乾淨，而日常捕獲不需要變成審批隊列。
-2. **會話之間保持更新。** Wenlan 會在會話之間把新的捕獲聚類為帶來源引用的頁面，並讓頁面和背後的 atomic notes 一起參與檢索。這套 wiki 會反映你的最新工作，而不是停在過期快照。
-3. **一個家，不鎖定任何工具。** 每個 MCP client 都查詢同一個本地 daemon，所以在一個工具裡積累的上下文會出現在下一個工具裡。Obsidian 只是一個可選視圖，可以 symlink 進去，但你的工作並不住在那裡。
-4. **真正的 git 版本管理。** Memory、page 和 session 寫入都會提交到 `~/.wenlan/.git/`，所以你可以 inspect、diff、revert 或 branch 這些 Markdown artifacts。
-   ```text
-   a1b2c3d page: embedding-retrieval refreshed (4 sources)
-   9f8e7d6 session: handoff embedding-work
-   5a4b3c2 capture: decision mem_abc123
-   ```
-
-下面這段短 reel 展示完整產品循環：帶來源支撐的頁面、source cards、graph structure、agent capture，以及進入召回前的整理。
-
-<p align="center">
-  <img src="./docs/assets/feature-reel.gif" alt="Wenlan 五段式 feature reel，展示帶來源支撐的頁面、source cards、graph structure、agent capture 和整理 review。" width="100%">
-</p>
-
----
-
-## 快速開始
+你可以直接[檢查安裝器原始碼](scripts/install-macos-app.sh)。安裝器會先用 GitHub 發布的 SHA-256 核對下載檔案，再替換現有 app。偏好 DMG 或想查看 app 原始碼？請前往 [wenlan-app releases](https://github.com/7xuanlu/wenlan-app/releases/latest) 和 [wenlan-app](https://github.com/7xuanlu/wenlan-app)。
 
 <a id="claude-code-in-30-seconds"></a>
 
-### Claude Code 30 秒接入
-
-```text
-/plugin marketplace add 7xuanlu/wenlan
-/plugin install wenlan@7xuanlu-wenlan
-/setup
-```
-
-如果 Claude Code 在安裝後要求重啟，請重啟一次，然後執行 `/setup`。插件會處理本地 runtime 設定、MCP wiring、本地記憶初始化，以及第一次 round-trip 檢查。
-
-想在一個地方裝下所有插件？[`7xuanlu/claude-plugins`](https://github.com/7xuanlu/claude-plugins) 把 Wenlan 和 [boule](https://github.com/7xuanlu/boule)、[ultrapowers](https://github.com/7xuanlu/ultrapowers) 放在同一個 marketplace 裡：
-
-```text
-/plugin marketplace add 7xuanlu/claude-plugins
-/plugin install wenlan@7xuanlu
-```
-
-插件細節和日常命令見：[plugin/](plugin/.claude-plugin/README.md)。
-
-### Codex plugin
-
-```bash
-npx -y wenlan setup
-codex plugin marketplace add .
-codex plugin add wenlan@7xuanlu-wenlan
-```
-
-安裝後開啟新的 Codex thread，讓 plugin 和 MCP server 載入。
-
-Plugin 細節和開發說明見：[plugin-codex/](plugin-codex/README.md)。
+<a id="codex-plugin"></a>
 
 <a id="mcp-setup"></a>
+<a id="mcp-clients"></a>
 
-### MCP 設定
+### 讓你的 AI 完成設定
 
-兩個插件底層都會調用同一個本地 MCP server。核心工具是 `context`、`capture`、`recall`、`pages` 和 `doctor`。
-
-如果你想在不安裝插件的情況下把 Wenlan tools 接入 Claude Code，或接入 Codex、Cursor、Claude Desktop、VS Code、Gemini CLI，請使用這種方式：
-
-```bash
-npx -y wenlan setup
-wenlan connect claude-code      # or: codex, cursor, claude-desktop, vscode, gemini
-```
-
-僅 MCP clients 會直接使用相同的核心工具，用於 context、capture、recall、doctor checks 和 page distillation。
-
-### CLI
-
-先設定一次 Wenlan：
-
-```bash
-npx -y wenlan setup
-```
-
-然後直接使用 CLI：
-
-```bash
-wenlan status
-wenlan recall <query>
-wenlan capture <text>
-```
-
-CLI 細節見：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
-
-## Wenlan 如何工作
-
-每次會話都會執行同一個 loop：工作時捕獲，讓 daemon 在會話之間 refine，然後在下一次帶著已有知識回來。
+把下面這段貼給 Claude Code、Codex，或其他能夠讀取設定指南的工具：
 
 ```text
-      ┌──────── loops back · /handoff closes each pass ─────────┐
-      ▼                                                         │
-┌─────┴─────┐    ┌─────────────┐    ┌────────────────┐    ┌─────┴─────┐
-│ CAPTURE   │    │ DAEMON      │    │ ONE STORE      │    │ RECALL +  │
-│  in flow  │ ─▶ │  refines    │ ─▶ │  (local)       │ ─▶ │  BRIEF    │
-│  /capture │    │  between    │    │  · memories    │    │  next     │
-│           │    │  sessions   │    │  · wiki pages  │    │  session  │
-│           │    │  dedup·link │    │  · graph       │    │  /recall  │
-│           │    │  /distill   │    │                │    │  /brief   │
-└───────────┘    └─────────────┘    └────────────────┘    └───────────┘
-   one local daemon · one store · every MCP client reads it
-   Claude Code · Cursor · Codex · Claude Desktop · VS Code · Gemini
+請為目前的 AI 用戶端設定 Wenlan，並嚴格遵循：
+https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
+
+只安裝這個用戶端需要的內容。完成後驗證本地 runtime、
+Wenlan connection，以及一次 capture/recall round trip。
 ```
 
-每一輪都會讓 store 更清晰。放在別處會變成鬆散 snippets 的捕獲內容，會在這裡被去重、連結到相關的人和專案，並提煉成引用來源的頁面；所以下一次會話帶回來的不是原始歷史，而是知識。這就是這個 loop 所說的 compounding。
+指南會識別目前使用的 client，把各平台命令留在專門文件中。除非你明確要求，否則它不會設定所有 AI 工具。
 
-這五個動作驅動它：
+只需要在 macOS Apple Silicon 上執行的無 GUI 本地服務？
 
-1. **會話開始。** `/brief [topic]` 載入專案狀態、身份、偏好，以及和主題相關的 memories，讓 agent 帶著上下文進入工作。
-2. **工作過程中。** `/capture <thing>` 在 flow 中保存 decision、lesson、gotcha 或 project fact。`/recall <query>` 用來查找任何內容。
-3. **會話結束。** `/handoff` 寫下發生了什麼、還剩什麼、從哪裡繼續，讓下一輪乾淨接上。
-4. **會話之間。** daemon 在後台去重重疊捕獲，並連結相關 ideas。想做一次有意的整理時，可以用 `/distill` 從相關 memories 的 clusters 中合成 wiki 頁面。
-5. **下一次會話。** Claude Code 和 Codex plugins 裡的 `/brief` 會把上下文帶回來；僅 MCP clients 呼叫 `context` tool 獲得同樣的 memory。Recall 只拉回相關切片，而不是你的全部歷史，所以 context window 會留給目前工作。
+```bash
+npx -y wenlan setup
+```
 
-完整 skill reference：[plugin/skills](plugin/skills/README.md)。
+這個命令會下載預先編譯的 CLI、背景服務（daemon）與 MCP 連接器，啟動並驗證本地服務；不需要安裝 Rust 或 Cargo。使用 glibc 的 Linux x64/ARM64 可以採用自動化的 [shell 設定流程](docs/setup-with-ai.md#install-the-runtime)；Windows x64 請從 [Releases](https://github.com/7xuanlu/wenlan/releases/latest) 下載對應的 archive。macOS Intel 目前[沒有受支援的完整 runtime 安裝方式](crates/wenlan-cli/README.md#macos-intel)。
 
-完全本地可用，不需要 API key、cloud account 或 signup。Capture、recall、hybrid search 和 graph context 都不需要外部服務；只有自動 page distillation 才需要添加本地模型或 API key。無 telemetry。
+手動與各 client 設定說明：[AI 輔助設定](docs/setup-with-ai.md) · [Claude Code plugin](plugin/.claude-plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 與 MCP](crates/wenlan-cli/README.md)。
+
+---
+
+<a id="what-does-wenlan-build"></a>
+<a id="why-it-compounds"></a>
+
+## 這是什麼？
+
+Wenlan 把文件、筆記和過去的 AI 對話整理成會隨工作持續更新、每個結論都能追溯來源的知識庫。原始材料保留為來源；工作中的決策、經驗與修正成為長期記憶；兩者都能支撐同一批持續維護的頁面。
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-zh-Hant-mobile.png">
+    <img src="./docs/assets/wenlan-system-zh-Hant.png" alt="來源與記憶分別支撐同一個持續維護的頁面。頁面過時後，Wenlan 可以依目前依據重建；可選的衝突審核可以讓受保護內容的衝突浮現，對人工文字的改動則等待使用者判斷。" width="100%">
+  </picture>
+</p>
+
+<a id="what-wenlan-is-not"></a>
+
+**適合需要長期延續的工作。** Wenlan 面向研究者、寫作者、顧問、產品團隊與軟體團隊：當知識散落在文件、筆記和 AI 對話裡，它會把這些材料變成可檢查、能隨專案持續改進的頁面，而不是另一份聊天紀錄或孤立的記憶庫。它不是生活管理系統，也不是嵌入其他產品的 memory SDK。
+
+**一個知識系統，三種角色：**
+
+- **來源讓 Wenlan 讀到的材料始終可追溯。** 匯入的對話保留為捕獲時的記錄；已登錄檔案會隨內容變化同步目前版本。
+- **記憶保留工作真正教會你的內容。** AI agent 捕獲原子的決策、經驗、修正與取代關係，並保留出處。
+- **頁面彙整目前知識。** Wenlan 把相關來源與記憶整理成附有引用的 Markdown，讓你反覆使用、更新與審核。
+
+**在 LLM-wiki 的基礎上繼續推進：**
+
+- **[LLM-wiki v1](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：** Karpathy 提出不可變的來源、由 AI 維護的 Markdown Wiki，以及會隨你和 AI 一起演進、規定組織與維護方式的 Schema（規則層）。Wenlan 以[類型化記憶欄位](docs/technical-foundations.md#typed-memory-schema)與內建規則，落實頁面結構、出處、引用、更新、歸屬和審核。
+- **[LLM-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2)：** Rohitg00 加入記憶生命週期。Wenlan 把這個方向做成可以直接使用的產品：可追溯的來源、由 AI agent 依 Zettelkasten（卡片盒筆記法）捕獲的原子記憶（每條只表達一個完整想法），以及同時由兩者建立並持續維護的頁面。
+
+**Wenlan 最獨特的做法：** 來源與原子記憶會分別支撐持續維護的頁面。記憶歷史保留知識如何改變；頁面歷史說明目前結論由哪些依據支撐。機器維護的頁面可以依目前依據重建；對人工文字的改動則成為可審核的修訂，不會直接覆蓋。
+
+<p align="center">
+  <img src="./docs/assets/feature-reel.gif" alt="Wenlan feature reel，展示有來源支撐的頁面、來源檢查、graph context、agent capture 與 curation。" width="100%">
+</p>
+
+<a id="knowledge-graph"></a>
+
+### 越用越有價值的知識圖譜
+
+實體關係圖譜只是 Wenlan 更大連接式 wiki 的一部分。**知識頁面**保留持續維護的結論，**實體**固定可複用的人物、專案與概念，**來源頁面**讓匯入或同步的材料可檢查，原子**記憶**則保留決策與變化。它們透過彼此分開的明確連接協作：頁面間的 wikilink、頁面依據、記憶到實體的連接，以及實體間的有向關係。
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-knowledge-network-zh-Hant-mobile.png">
+    <img src="./docs/assets/wenlan-knowledge-network-zh-Hant.png" alt="Wenlan 連接式知識系統的概念圖：知識頁面、來源頁面、原子記憶與實體透過頁面連結、依據、記憶到實體的連接和實體關係互相連接。" width="100%">
+  </picture>
+</p>
+
+在實體圖譜這一層，設定 enrichment 模型後，Wenlan 會從記憶中提取帶有類型的實體、觀察與有方向的關係。實體連結與解析會複用既有節點，而不是把每次提及都當成新事物；每條記憶仍保留來源，並可連結多個實體。[查看連接模型如何儲存 ->](docs/technical-foundations.md#connected-knowledge-model)
+
+- **含義與方向：** 關係使用 `uses`、`part_of`、`contradicts`、`replaced_by` 等預置詞彙；未知類型會回退為 `related_to`，並成為可審核的詞彙提案。
+- **強度與出處：** 關係可以保存信賴度、解釋與對應的來源記憶，讓強弱不同的主張仍可區分、可檢查。
+- **形成可複用群組：** 標籤傳播會依關係密度為實體分組，並按每對實體之間的關係數量加權。這些群組可組織選用的全域摘要，實體連結也會為檢索補充脈絡。
+- **修正但不抹除：** 相關說法、修正與明確的取代關係可以放在一起檢查，原始來源與記憶歷史仍會保留。
+
+檢索時，Wenlan 會用實體向量比對找到與問題相關的實體。存在符合條件的圖譜連結時，預設開啟的圖譜記憶訊號（graph-memory stream）會把相連記憶作為第三路 [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf) 排名訊號加以提升。這個路徑取決於現有圖譜資料與讀取範圍，Space 邊界仍然有效。[查看圖譜檢索如何運作 ->](docs/technical-foundations.md#graph-assisted-retrieval)
+
+<a id="retrieval"></a>
+
+### 從關鍵字、語意與關聯找回正確內容
+
+Wenlan 的核心搜尋是本地混合檢索流程，不是單一的向量查詢。每個階段負責不同工作：
+
+- **原詞比對 — [SQLite FTS5](https://www.sqlite.org/fts5.html)：** 全文索引查找字面關鍵字、識別碼與短語。
+- **相近含義 — FastEmbed + [`Qdrant/bge-base-en-v1.5-onnx-Q`](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q)：** 量化的英文模型會產生 768 維語意向量；[libSQL cosine DiskANN](https://turso.tech/blog/approximate-nearest-neighbor-search-with-diskann-in-libsql) 再以近似最近鄰搜尋（ANN）快速取得候選。
+- **合併排名 — 加權 [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf)（`k = 60`）：** 融合原詞與語意排名，不假設兩者的原始分數採用同一尺度；向量訊號還會由餘弦相似度加權。
+- **關聯脈絡 — 圖譜記憶訊號（graph-memory stream）：** 符合條件的實體連結會加入第三路 RRF 訊號，傳回的記憶仍受目前讀取範圍限制。
+- **可選精排 — 交叉編碼器（cross-encoder）：** 與分別編碼查詢和記憶的 embedding 不同，[`jinaai/jina-reranker-v1-turbo-en`](https://huggingface.co/jinaai/jina-reranker-v1-turbo-en) 或 [`BAAI/bge-reranker-base`](https://huggingface.co/BAAI/bge-reranker-base) 會同時讀取查詢與單一候選，再對較小的候選池重新排名；預設關閉。
+
+頁面、情節記憶與事實（fact）通道都需要主動啟用；不可用時會退回其餘搜尋訊號。Space 仍負責限制讀取範圍。[查看方法、預設值與限制 ->](docs/technical-foundations.md)
+
+<a id="what-makes-wenlan-distinct"></a>
+<a id="why-is-wenlan-different"></a>
+<a id="two-lifecycles"></a>
+
+### 兩套生命週期，一個持續維護的知識系統
+
+一次生成的 wiki 會過時；只存記憶又容易碎成互不相連的事實。Wenlan 連結兩套生命週期，但不把它們混成同一層。
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-zh-Hant-mobile.png">
+    <img src="./docs/assets/wenlan-lifecycle-zh-Hant.png" alt="明確取代舊說法的新記憶仍會保留前後關聯。頁面過時後，Wenlan 會依目前來源與記憶重建、記錄修訂，並把對人工文字的改動變成審核提案。" width="100%">
+  </picture>
+</p>
+
+#### 原子記憶
+
+`CAPTURE -> CLASSIFY -> ENRICH -> LINK -> RECONCILE`
+
+Capture 與明確的 supersession 屬於核心流程。模型支援的階段只會在設定相應模型後執行，Reconcile 預設關閉。
+
+| 操作 | Wenlan 做什麼 |
+|---|---|
+| **Capture** | AI agent 每次寫入一條完整、自足的想法，遵循 Zettelkasten 的原子筆記原則，而不是保存整段對話。 |
+| **Classify** | 設定本地模型後，Wenlan 將記憶分為 `identity`、`preference`、`decision`、`lesson`、`gotcha` 或 `fact`；呼叫端明確提供的準確類型優先。 |
+| **Enrich** | 設定本地模型後，在可用時補充結構化欄位、檢索提示、事件日期、品質、重要性與標籤。 |
+| **Link** | 保留出處；啟用 enrichment 後，把記憶連結到知識圖譜中的實體與關係。 |
+| **Reconcile** | 明確取代舊說法時保留 `supersedes` 鏈。可選的本地模型流程可以把受保護內容的衝突放入審核，而不是覆蓋歷史；它預設關閉，必須明確啟用。 |
+
+進階設定：使用 `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` 啟用這個 Reconcile 流程。
+
+#### 持續維護的頁面
+
+`DISTILL -> CITE -> TRACK -> REFRESH -> REVIEW`
+
+| 操作 | Wenlan 做什麼 |
+|---|---|
+| **Distill** | 把相關來源與記憶彙整成一個 Markdown 頁面。 |
+| **Cite** | 保留引用紀錄與驗證狀態；自動 refresh 若未通過引用支撐檢查，就會捨棄草稿。 |
+| **Track** | 記錄哪些證據支撐頁面、頁面為何過時，以及有上限的變更紀錄。 |
+| **Refresh** | 頁面被標記為過時後，依目前證據重建符合條件、由機器維護的頁面。 |
+| **Review** | 對你編輯過的頁面提出修訂，而不是靜默改寫。 |
+
+例如，匯入一份設計文件，再讓 Codex 捕獲一次除錯決策。Wenlan 可以把兩者整理成一個同時引用兩份依據的頁面。這個頁面 refresh 時，會依目前依據重建；如果你已經編輯過它，改動提案會等待審核。
+
+<a id="local-markdown"></a>
+
+### 與 Obsidian 共存的本地 Markdown
+
+長期知識保留為一般檔案，不被鎖在專有編輯器格式裡：
+
+- **純文字檔案：** 頁面與 session notes 都以 Markdown 保存在 `~/.wenlan/`。
+- **可檢查的歷史：** Distill 與 handoff 可以把邏輯上屬於同一批的檔案提交到本地 git repository。
+- **與 Obsidian 共存：** Wenlan 把現有 vault 當成來源讀取。你可以把 `~/.wenlan/pages/` symlink 到 vault，或從桌面 app 匯出頁面；你的編輯仍由你擁有，之後的機器更新會成為可審核的修訂建議。
+
+本地歷史可以直接檢查：
+
+```text
+$ git -C ~/.wenlan log --oneline
+a1b2c3d distill: 4 pages
+9f8e7d6 session: embedding-work
+```
 
 ---
 
 <a id="what-you-get"></a>
+<a id="what-can-it-do"></a>
+<a id="what-can-i-bring-in"></a>
 
-## 你會得到什麼
+## 能力
 
-- **Typed captures**：每條 capture 都會帶著 source agent、confidence、stability 和 supersession metadata 儲存。
-- **Source-backed pages**：頁面保留 source memory IDs、stale reasons 和 revision state，這樣 distillation 可以刷新頁面而不丟 provenance。
-- **基於 libSQL 的 hybrid retrieval**：memories、pages、FTS5 text、vector embeddings 和 graph context 位於同一個本地 store，供你的 MCP clients 查詢，並透過 reciprocal-rank fusion 融合。可選的本地 cross-encoder reranker 會進一步優化 top results。
-- **Connected recall**：people、projects、tools 和 decisions 會帶著連結回來，所以一條 memory 不會孤零零出現，而是帶著周圍上下文。
-- **Distill cycles**：今天可以手動執行 `/distill`；也可以添加本地模型或 API key，啟用 background extraction、page refreshes、recaps 和更豐富的 graph links。
-- **會話之間刷新**：後台 pass 會連結 entities、擴展匹配頁面，並根據 type、access 和 age 更新每條 memory 的 effective confidence，所以最近和關鍵的 memories 會浮現，陳舊內容會淡出。
-- **先 review，再 trust**：低置信度 captures、pending revisions、contradictions 和 supersessions 可以浮現出來，而不是靜默進入 context。
-- **Explicit spaces**：用 `space=work | personal | client-X` 給 memories、pages 和 recalls 打標籤，避免日常工作捕獲流入副專案 brief。未設定時會從目前 repo 或 workspace 自動偵測；也始終可以覆蓋。
-- **資料歸你**：所有內容都是 `~/.wenlan/` 下的 plain Markdown，並由 git 版本管理。可以 grep、symlink 到 Obsidian，或隨時帶走檔案。無 lock-in。
+- **對話匯入：** 匯入 ChatGPT 或 Claude 的 ZIP；Wenlan 會自動略過已經匯入的對話。
+- **文件來源：** 匯入單一 `.md`、`.txt` 或可擷取文字的 `.pdf`，遞迴讀取包含它們的資料夾，或索引 Obsidian 儲存庫中的 Markdown。
+- **增量同步：** 單一檔案與一般資料夾來源會在背景追蹤變更；Obsidian 儲存庫維持唯讀，按需重新同步。
+- **原子記憶（Atomic Memory）：** MCP 用戶端把一個完整的決策、經驗、更正、偏好或事實存成一筆，並用[溯源與取代](https://wenlan.app/learn/ai-memory-provenance)記錄它來自哪裡、取代了什麼。
+- **[類型化補全（Typed enrichment）](docs/technical-foundations.md#typed-memory-schema)：** 設定模型後，Wenlan 會分類每筆記憶，並補上該類型定義的結構化欄位、日期、標籤、檢索提示與圖譜連結。
+- **[來源支撐頁面（Source-backed Pages）](https://wenlan.app/docs/source-backed-pages)：** 把相關來源與記憶提煉成帶來源標記與 `[[wikilinks]]` 的 Markdown 頁面；daemon 還能驗證並記錄逐條引用。
+- **引用門控更新（Citation-gated refresh）：** 自動更新時，引用支撐不足的草稿會被拒絕；機器頁面可更新，使用者文字只進入待審修訂。
+- **[混合檢索（Hybrid retrieval）](docs/technical-foundations.md#retrieval-pipeline)：** FTS5 找原詞，本地 BGE embedding 找語意，RRF 融合排序，圖譜連結補充脈絡。
+- **[檢索通道（Retrieval channels）](docs/technical-foundations.md#optional-channels-and-defaults)：** 可選的頁面、情節記憶（episodic）與逐事實（per-fact）通道擴大召回；cross-encoder 重排提高精度。
+- **[知識圖譜（Knowledge graph）](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 類型化實體、關係與觀察連接人物、專案、主張及其支撐記憶。
+- **[人在迴路審查（Human-in-the-loop）](https://wenlan.app/docs/review-and-trust)：** 日常工作維持自動；受保護衝突、頁面修訂、實體合併與新詞彙才等待判斷。
+- **[空間（Spaces）](https://wenlan.app/docs/spaces)：** 用明確範圍隔開工作、個人、客戶與程式庫的記憶、頁面和檢索結果。
+- **[本地 daemon + MCP](https://wenlan.app/docs/architecture)：** 一個輕量 Rust daemon 作為本地唯一事實來源。桌面 app 與 CLI 直接呼叫它；各 AI client 透過小型 MCP 連接器存取同一份知識。
+- **自訂整合：** localhost HTTP API 可接收其他收集流程準備好的文字、網頁內容與記憶。
+- **背景維護：** 關閉桌面 app 後，daemon 仍會繼續執行已設定的同步、補全、引用與頁面更新。
+- **[模型選擇](docs/technical-foundations.md#model-roles)：** 基礎檢索留在本機；補全與合成可用裝置端 Qwen、與 OpenAI 相容的本地端點或雲端模型。
+- **[可檢查的所有權](https://wenlan.app/learn/markdown-local-index-ai-memory)：** 記憶與圖譜留在本地 libSQL；Markdown、引用、修訂、git 歷史與 Obsidian 匯出都可檢查。
+- **唯讀健康檢查：** [`doctor`](https://wenlan.app/docs/diagnostics-and-issue-reports) 檢查本地服務；[`lint`](plugin/skills/lint/SKILL.md) 找出格式錯誤的引用、孤立連結、損壞的 embedding，以及搜尋索引或圖譜完整性問題，但不會改寫知識。
 
 ---
 
-## Evaluation
+<a id="how-wenlan-works"></a>
+<a id="how-does-it-work"></a>
 
-下表是 retrieval-only snapshot，不是端到端 answer quality。方法和更新流程見 [docs/eval](docs/eval/README.md)。
+## 日常流程
 
+日常使用分成一個小循環：取回相關知識、保存工作重點、以 handoff 收尾，再由 Wenlan 整理下次需要的內容。每一輪都改善同一個知識庫，不再累積互不相連的歷史。
+
+這個循環分成四步：
+
+1. **找到最新知識。** 開啟相關 Page、搜尋，或使用 `/recall <query>`；`/brief [topic]` 可選擇性彙整更完整的 session-start context。其他 AI 工具可使用等價的 page、search、recall 與 context 工具。
+2. **工作時隨手保存與查找。** `/capture <thing>` 保存決策、經驗、踩坑或事實，並記錄來源。`/recall <query>` 只取回相關內容，不載入全部歷史。
+3. **閉合循環。** `/handoff` 記錄改動與待辦，也指出下次工作的起點。
+4. **讓 wiki 保持最新。** `/distill` 主動建立或刷新頁面。可選的模型流程會在兩次工作之間補充已保存內容、連結相關知識，並刷新符合條件的頁面。`/lint` 檢查知識庫健康狀態；`/curate` 讓你審核頁面更新提案，以及可選 Reconcile 流程產生的衝突項目。
+
+### 模型與隱私
+
+- **本地基礎檢索：** [BGE 向量模型（embedding model）](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) 透過 FastEmbed 在你的裝置上執行，用於混合搜尋，不需要 API key。
+- **可選的裝置端整理：** 內容補充（enrichment）與頁面彙整可以使用你選擇的 [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) 或 [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF)，並透過 [llama.cpp](https://github.com/ggml-org/llama.cpp) 執行。你沒有選擇前，Wenlan 不會下載或啟用語言模型。
+- **其他模型來源：** Ollama 或 LM Studio 等 OpenAI 相容的本地端點，或已設定的雲端 provider，也可以提供模型支援的內容補充與頁面彙整。
+- **雲端說明：** 如果你選擇的模型端點位於遠端，Wenlan 會把該任務需要的 system prompt 與 user prompt 傳給它。本地檢索與裝置端整理仍留在你的裝置上。
+- **無遙測：** Wenlan 不傳送使用遙測。
+
+完整 workflow 參考：[plugin/skills](plugin/skills/README.md)。模型分工與限制見：[技術基礎（英文）](docs/technical-foundations.md#model-roles)。
+
+---
+
+<a id="evaluation"></a>
+
+## 評估
+
+以下是 retrieval-only snapshot，不代表 end-to-end answer quality。方法、環境 receipts 與更新流程見 [docs/eval](docs/eval/README.md)。
 
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
@@ -207,84 +293,70 @@ CLI 細節見：[crates/wenlan-cli](crates/wenlan-cli/README.md)。
 
 ---
 
-## 從原始碼構建
+<a id="learn-more"></a>
 
-Wenlan 可以在 macOS（Apple Silicon + Intel）、Linux（x86_64 + ARM64；glibc）和 Windows（x86_64）上從原始碼構建。目前預編譯 release 覆蓋 macOS Apple Silicon、使用 glibc 的 Linux x86_64/ARM64，以及 Windows x86_64；macOS Intel 仍僅支援原始碼構建。npm wrapper（`wenlan`、`wenlan-mcp`）和 `install.sh` 會自動偵測受支援的預編譯平台。大多數使用者應該透過 Claude Code 插件或 `npx` 安裝。本地開發：
+## 進一步了解
+
+更完整的文件、概念說明與比較：
+
+### 文件
+
+- [開始使用](https://wenlan.app/docs/get-started)：安裝並驗證第一個本地循環。
+- [日常工作流程](https://wenlan.app/docs/daily-workflow)：brief、capture、recall、handoff、distill、lint 與 curate。
+- [MCP 用戶端](https://wenlan.app/docs/mcp-clients)：連接 Claude Code、Codex、Cursor、Claude Desktop 與其他工具。
+
+### 概念
+
+- [為什麼需要持續演進的 wiki，而不只是 AI 記憶](https://wenlan.app/learn/ai-work-memory)：深入理解問題與產品模型。
+- [MCP 記憶伺服器](https://wenlan.app/learn/mcp-memory-server)：Wenlan 如何讓知識跨 AI 工具使用。
+- [本機優先的 AI 記憶](https://wenlan.app/learn/local-first-ai-memory)：資料、隱私與控制權。
+- [Markdown 與本地索引](https://wenlan.app/learn/markdown-local-index-ai-memory)：儲存、檢索與所有權。
+- [AI agent 的交接循環](https://wenlan.app/learn/ai-agent-handoff-loop)：把工作完整帶到下一次會話。
+
+### 比較
+
+- [Wenlan 與 Basic Memory](https://wenlan.app/learn/wenlan-vs-basic-memory)
+- [Wenlan 與 claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
+- [Wenlan 與 Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
+
+---
+
+## 貢獻
+
+歡迎 bug fixes、eval cases、文件與功能。安裝 Wenlan 不需要從原始碼建置。本機開發時，請從對應 repository 的根目錄執行每組命令：
 
 ```bash
-git clone https://github.com/7xuanlu/wenlan.git
-cd wenlan
+# 7xuanlu/wenlan — runtime、CLI 與 MCP
 cargo build --workspace
-cargo run -p wenlan-server
+cargo test --workspace
+
+# 7xuanlu/wenlan-app — 桌面 app
+pnpm install
+pnpm tauri dev
+pnpm build:all
 ```
 
-daemon、MCP server、CLI 和 core crates 的構建細節在上面連結的 crate READMEs 中。跨平台細節（service registration、paths、Windows install limitation）見 [AGENTS.md](AGENTS.md#cross-platform)。
-
----
-
-## 瞭解更多
-
-關於 AI work memory 以及 Wenlan 對比的長文在 [wenlan.app/learn](https://wenlan.app/learn)：
-
-**Concepts**
-- [What is AI work memory?](https://wenlan.app/learn/ai-work-memory)：Wenlan 要解決的問題形態
-- [MCP memory server](https://wenlan.app/learn/mcp-memory-server)：Wenlan 如何透過 Model Context Protocol 暴露 memory
-- [Local-first AI memory](https://wenlan.app/learn/local-first-ai-memory)：data、privacy 和 control
-- [Markdown + local index](https://wenlan.app/learn/markdown-local-index-ai-memory)：storage model
-- [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop)：防止 context loss 的 session-end discipline
-
-**Comparisons**
-- [Wenlan vs Basic Memory](https://wenlan.app/learn/wenlan-vs-basic-memory)：Markdown knowledge base vs AI work-session memory
-- [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)：observer-style Claude Code memory vs MCP-first cross-tool memory
-- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)：與另一種本地記憶形態的 tradeoffs
-
-**Docs**
-- [Get started](https://wenlan.app/docs/get-started)：install + verify 第一個本地 memory loop
-- [Daily workflow](https://wenlan.app/docs/daily-workflow)：capture、handoff、distill
-- [MCP clients](https://wenlan.app/docs/mcp-clients)：連接 Claude Code、Cursor、Codex、Claude Desktop、Gemini CLI
-
----
-
-## Wenlan 不是什麼
-
-- **不是 Life OS。** 沒有 habits、calendar、journal 或 life-management modules。Wenlan 只聚焦 AI work artifacts。如果你想要完整 personal OS，可以看 [PAI](https://github.com/danielmiessler/PAI)。
-- **不是 workflow suite。** 一個 daemon 上約 30 個 MCP tools。如果你想要打包好的 30+ skills、8+ agents 和 auto-research loop，可以看 [pro-workflow](https://github.com/rohitg00/pro-workflow)。Wenlan 用 breadth 換 focus。
-- **不是 memory infrastructure SDK。** 它面向每天使用 AI 的人，而不是給其他 app 構建 memory features 的 backend。
-- **不適合一次性聊天。** 當工作跨越 sessions、projects 和 weeks 時，它最有價值。
-
----
-
-## Contributing
-
-歡迎 bug fixes、eval cases、docs 和 features。先看 [CONTRIBUTING.md](CONTRIBUTING.md)。Architecture 和 development rules 在 [CLAUDE.md](CLAUDE.md)。Security reports：[SECURITY.md](SECURITY.md)。也請閱讀 [Code of Conduct](CODE_OF_CONDUCT.md)。
+需要從全新的 daemon 開始執行 app 時，請在 app repository 使用 `pnpm dev:all`。完整開發流程見本 repository 的 [AGENTS.md](AGENTS.md) 與 [CONTRIBUTING.md](CONTRIBUTING.md)，以及 [wenlan-app 的 AGENTS.md](https://github.com/7xuanlu/wenlan-app/blob/main/AGENTS.md)。安全性問題請見 [SECURITY.md](SECURITY.md)，也請閱讀 [Code of Conduct](CODE_OF_CONDUCT.md)。
 
 ---
 
 <a id="license"></a>
 
-## License
+## 授權
 
-Wenlan 使用 **Apache-2.0** 授權。這包括本 repo 中的 local runtime、CLI、MCP server、shared types，以及 Claude Code/Codex plugin files。
-
-這個寬鬆授權讓 daemon boundary 對 MCP clients 和下游本地工具保持可用。
+Wenlan 採用 **Apache-2.0** 授權，包括本 repository 內的 local runtime、CLI、MCP server、shared types，以及 Claude Code/Codex plugin files。
 
 ---
 
-## Acknowledgments
+<a id="acknowledgments"></a>
 
-前輩：
+## 源流與同類專案
 
-- [Karpathy's LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)。Raw-to-wiki distillation pattern。
-- Claude Code 的 `MEMORY.md`。這個想法最簡單的版本。
+Wenlan（文瀾）的名字來自文瀾閣。這座皇家藏書樓收藏《四庫全書》，曾是中國最大的藏書之一。
 
-同路專案：
+Wenlan 的 llm-wiki v2 模型是自己的產品方向，並受到 LLM-wiki 與 agent-memory 兩條脈絡啟發：
 
-- [agentmemory](https://github.com/rohitg00/agentmemory)。Agent-side memory framework。
-- [basic-memory](https://github.com/basicmachines-co/basic-memory)。面向 Claude 的 local-first knowledge management。
-- [obsidian-mind](https://github.com/breferrari/obsidian-mind)。面向 coding agents 的 Obsidian-native memory and review loop。
-- [pro-workflow](https://github.com/rohitg00/pro-workflow)。Claude Code productivity suite。
-- [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)。MCP memory service。
-- [Memoria](https://github.com/matrixorigin/Memoria)。透過 Copy-on-Write 實現的 "Git for AI Agent Memory"。
-- [OpenMemory](https://github.com/CaviraOSS/OpenMemory)、[claude-memory-compiler](https://github.com/coleam00/claude-memory-compiler)、[PAI](https://github.com/danielmiessler/PAI)、Palinode。相鄰形態。
-
-它們是同一個問題的不同形狀。選擇適合你的那個。
+- [Karpathy 的 LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 建立了從 raw sources 到持續維護 wiki 的模式。
+- [Rohitg00 的 LLM Wiki v2 proposal](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) 加入 memory lifecycle、confidence、graph 與 retrieval mechanisms。[agentmemory](https://github.com/rohitg00/agentmemory) 是其具體的 agent-memory implementation。
+- [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) 是以文件為核心的 LLM-wiki 完整桌面實作。
+- [basic-memory](https://github.com/basicmachines-co/basic-memory)、[obsidian-mind](https://github.com/breferrari/obsidian-mind)、[mcp-memory-service](https://pypi.org/project/mcp-memory-service/)、[Memoria](https://github.com/matrixorigin/Memoria) 和 [OpenMemory](https://github.com/CaviraOSS/OpenMemory) 探索相鄰的本地知識與 agent-memory 方向。

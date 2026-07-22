@@ -1,0 +1,104 @@
+{
+  "manifest_schema_version": 1,
+  "manifest_id": "repair_550e8400-e29b-41d4-a716-446655440000",
+  "prepared_at": 1721000000,
+  "source": {
+    "report_schema_version": 4,
+    "check_catalog_version": 2,
+    "lint_scope": {
+      "kind": "global"
+    },
+    "report_scope": {
+      "kind": "global"
+    },
+    "check_id": "memories.semantic.classification",
+    "finding": {
+      "candidate_id": 1,
+      "proposed_action": "reclassify_memory",
+      "reason_code": "classification_mismatch",
+      "confidence_basis_points": 9000,
+      "provider_route": "calling_agent",
+      "evidence_ids": [
+        "000000000000002a"
+      ],
+      "counterevidence_ids": [],
+      "unresolved_disagreement": false
+    },
+    "general_snapshots": {
+      "db": {
+        "mode": "transactional_read_only",
+        "analysis_digest": "0000000000000001",
+        "post_run_digest": "0000000000000001"
+      },
+      "pages": {
+        "mode": "best_effort",
+        "before_scan_digest": "0000000000000002",
+        "after_scan_digest": "0000000000000002"
+      }
+    },
+    "deep_snapshots": {
+      "db": {
+        "mode": "transactional_read_only",
+        "analysis_digest": "0000000000000003",
+        "post_run_digest": "0000000000000003"
+      },
+      "pages": {
+        "mode": "best_effort",
+        "before_scan_digest": "0000000000000004",
+        "after_scan_digest": "0000000000000004"
+      }
+    },
+    "general_producer_receipt": {
+      "runtime_commit": null
+    },
+    "deep_producer_receipt": {
+      "runtime_commit": null
+    },
+    "agent_work_digest": "0000000000000005"
+  },
+  "target": {
+    "kind": "memory",
+    "source_id": "mem_target",
+    "scope": {
+      "kind": "registered",
+      "space": "work"
+    }
+  },
+  "expected_state": {
+    "canonical_receipt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "writer": "reclassify_memory",
+  "mutation": {
+    "kind": "reclassify_memory",
+    "before_memory_type": "fact",
+    "after_memory_type": "decision"
+  },
+  "allowed_effects": {
+    "owner": {
+      "kind": "memory",
+      "source_id": "mem_target",
+      "scope": {
+        "kind": "registered",
+        "space": "work"
+      }
+    },
+    "fields": [
+      "memory_type"
+    ]
+  },
+  "rollback": {
+    "format_version": 1,
+    "relative_path": "rollback-v1.json",
+    "digest": "13f263e12b211c197519cea152705c573fc21c2352cbca6f757043a04feae623"
+  },
+  "post_assertions": {
+    "target_check_id": "memories.semantic.classification",
+    "target_evidence_id": "000000000000002a",
+    "require_complete_general": true,
+    "require_complete_deep": true,
+    "reject_new_actionable": true,
+    "reject_new_incomplete": true,
+    "allowed_non_target_check_deltas": []
+  },
+  "manifest_digest": "f1e21fb246b6d1bda32b9620798241d53e590adce683e231179f01e9f00599c1"
+}

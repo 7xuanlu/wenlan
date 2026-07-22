@@ -3,8 +3,8 @@
 //!
 //! Accepts both `X-Wenlan-Space: <name>` (new, preferred) and `X-Origin-Space: <name>` (legacy).
 //! Prefers the new header; falls back to legacy if only that is present.
-//! Handlers use it as a fallback applied only when the request body omits the `space` field.
-//! Explicit body `space` always wins to preserve the user's per-call override path.
+//! Most handlers use it as a fallback applied only when the request body omits the `space` field.
+//! Repair preparation handlers instead require body/report scope to match a present header.
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;

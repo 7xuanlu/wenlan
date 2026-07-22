@@ -24,6 +24,7 @@ pub enum Phase {
     PruneRejections,
     Evict,
     KgRethink,
+    PageMaps,
 }
 
 impl Phase {
@@ -46,6 +47,7 @@ impl Phase {
         Phase::PruneRejections,
         Phase::Evict,
         Phase::KgRethink,
+        Phase::PageMaps,
     ];
 
     /// Stable string identifier — preserved across the refactor for log
@@ -69,6 +71,7 @@ impl Phase {
             Phase::PruneRejections => "prune_rejections",
             Phase::Evict => "evict",
             Phase::KgRethink => "kg_rethink",
+            Phase::PageMaps => "page_maps",
         }
     }
 }

@@ -144,6 +144,121 @@ async fn snapshot_receipt_detects_same_row_count_update() {
 }
 
 #[tokio::test]
+async fn completed_receipt_is_invalidated_by_a_later_same_row_update() {
+    // Given: a complete receipt from the daemon's shared freshness observer.
+    let (db, _dir) = test_db().await;
+    db.bootstrap_profile()
+        .await
+        .expect("profile fixture exists");
+    let before = db
+        .open_lint_snapshot()
+        .await
+        .expect("first snapshot opens")
+        .finish()
+        .await
+        .expect("first snapshot finishes");
+
+    // When: a canonical UPDATE commits without changing schema or row counts.
+    let changed = db
+        .conn
+        .lock()
+        .await
+        .execute("UPDATE profiles SET updated_at = updated_at + 1", ())
+        .await
+        .expect("same-row update commits");
+    assert_eq!(changed, 1);
+    let after = db
+        .open_lint_snapshot()
+        .await
+        .expect("second snapshot opens")
+        .finish()
+        .await
+        .expect("second snapshot finishes");
+
+    // Then: a prepare/verify freshness comparison rejects the older report.
+    assert_ne!(
+        before.analysis_receipt_digest(),
+        after.analysis_receipt_digest()
+    );
+}
+
+#[tokio::test]
+async fn structural_snapshot_work_is_independent_of_table_payload_bytes() {
+    // Given: an ordinary table whose schema is fixed before the receipt work starts.
+    let (db, _dir) = test_db().await;
+    let connection = db._db.connect().expect("receipt probe connection opens");
+    connection
+        .execute(
+            "CREATE TABLE lint_payload_probe (payload BLOB NOT NULL)",
+            (),
+        )
+        .await
+        .expect("receipt probe table is created");
+    let before = super::structural_digest(&connection)
+        .await
+        .expect("pre-payload structural digest succeeds");
+
+    // When: the table gains a payload large enough to expose any row-byte scan.
+    connection
+        .execute(
+            "INSERT INTO lint_payload_probe(payload) VALUES (zeroblob(8388608))",
+            (),
+        )
+        .await
+        .expect("large payload is inserted");
+    let after = super::structural_digest(&connection)
+        .await
+        .expect("post-payload structural digest succeeds");
+
+    // Then: structural receipt work is bounded by schema objects, not data bytes.
+    // Committed data freshness is carried separately by the freshness sample.
+    assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn replacing_the_freshness_observer_invalidates_prior_receipts() {
+    // Given: a receipt produced under one daemon-lifetime freshness observer.
+    let (db, _dir) = test_db().await;
+    db.bootstrap_profile()
+        .await
+        .expect("profile fixture exists");
+    let old_clock =
+        Arc::new(super::LintFreshnessClock::new(&db._db).expect("old freshness observer opens"));
+    let old = super::LintReadSnapshot::open_with_freshness(&db._db, old_clock)
+        .await
+        .expect("old snapshot opens")
+        .finish()
+        .await
+        .expect("old snapshot finishes");
+
+    // When: a same-row canonical write commits and a new daemon lifetime opens
+    // a fresh observer connection over the same database.
+    let changed = db
+        .conn
+        .lock()
+        .await
+        .execute("UPDATE profiles SET updated_at = updated_at + 1", ())
+        .await
+        .expect("same-row update commits");
+    assert_eq!(
+        changed, 1,
+        "the probe must update exactly one canonical row"
+    );
+    let new_clock =
+        Arc::new(super::LintFreshnessClock::new(&db._db).expect("new freshness observer opens"));
+    let new = super::LintReadSnapshot::open_with_freshness(&db._db, new_clock)
+        .await
+        .expect("new snapshot opens")
+        .finish()
+        .await
+        .expect("new snapshot finishes");
+
+    // Then: receipts cannot compare equal across observer/process lifetimes,
+    // even though PRAGMA data_version counters are connection-relative.
+    assert_ne!(old.analysis_receipt_digest(), new.analysis_receipt_digest());
+}
+
+#[tokio::test]
 async fn post_run_receipt_uses_one_version_while_writer_commits() {
     // Given: an open snapshot and a writer waiting for the post-run snapshot to be pinned.
     let (db, _dir) = test_db().await;

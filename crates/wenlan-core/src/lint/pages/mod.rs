@@ -3,9 +3,9 @@ mod frontmatter;
 mod link_checks;
 mod path;
 mod provenance_checks;
-mod state;
-mod state_checks;
-mod traversal;
+pub(crate) mod state;
+pub(crate) mod state_checks;
+pub(crate) mod traversal;
 
 pub mod fs;
 
@@ -26,10 +26,15 @@ pub(crate) async fn run(
     page_projection_enabled: bool,
 ) -> Vec<LintCheckResult> {
     if !page_projection_enabled {
-        if record_placeholder_populations(context, |_| true).is_err() {
+        if record_placeholder_populations(context, |id| id != db_checks::SOURCE_INTEGRITY_ID)
+            .is_err()
+        {
             return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
         }
-        return configured_off_results_for_group(context.clock(), LintCheckGroup::Pages);
+        let source = db_checks::run_source_integrity(context).await;
+        let mut results = configured_off_results_for_group(context.clock(), LintCheckGroup::Pages);
+        replace_source_integrity(&mut results, source);
+        return results;
     }
     if context.gate().check(std::time::Duration::ZERO).is_err() {
         if record_placeholder_populations(context, |_| true).is_err() {
@@ -38,10 +43,15 @@ pub(crate) async fn run(
         return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
     }
     if context.page_scan().is_none() {
-        if record_placeholder_populations(context, |_| true).is_err() {
+        if record_placeholder_populations(context, |id| id != db_checks::SOURCE_INTEGRITY_ID)
+            .is_err()
+        {
             return failed_results_for_group(context.clock(), LintCheckGroup::Pages);
         }
-        return prerequisite_results_for_group(context.clock(), LintCheckGroup::Pages);
+        let source = db_checks::run_source_integrity(context).await;
+        let mut results = prerequisite_results_for_group(context.clock(), LintCheckGroup::Pages);
+        replace_source_integrity(&mut results, source);
+        return results;
     }
 
     let mut results = state_checks::run(context).await;
@@ -58,6 +68,7 @@ pub(crate) async fn run(
         db_checks::DUPLICATE_TITLES_ID,
         db_checks::ARCHIVE_ID,
         db_checks::REVIEW_ID,
+        db_checks::SOURCE_INTEGRITY_ID,
         link_checks::ORPHAN_LABELS_ID,
         link_checks::MANIFEST_ID,
         link_checks::ARTIFACT_ID,
@@ -71,6 +82,15 @@ pub(crate) async fn run(
             .filter(|result| !implemented_ids.contains(&result.check_id())),
     );
     results
+}
+
+fn replace_source_integrity(results: &mut [LintCheckResult], source: LintCheckResult) {
+    if let Some(result) = results
+        .iter_mut()
+        .find(|result| result.check_id() == db_checks::SOURCE_INTEGRITY_ID)
+    {
+        *result = source;
+    }
 }
 
 fn record_placeholder_populations(

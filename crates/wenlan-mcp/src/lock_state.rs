@@ -44,7 +44,7 @@ pub fn is_locked() -> bool {
 /// `LOCKED` RwLock. Exposed as `pub(crate)` so `client::tests` can share the
 /// same serialisation lock and avoid races between test threads.
 #[cfg(test)]
-pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 mod tests {
@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn locked_space_returns_none_when_env_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.blocking_lock();
         std::env::remove_var("WENLAN_SPACE");
         init_from_env();
         assert_eq!(locked_space(), None);
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn locked_space_returns_value_when_env_set() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "work");
         init_from_env();
         assert_eq!(locked_space().as_deref(), Some("work"));
@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn whitespace_only_value_treated_as_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.blocking_lock();
         std::env::set_var("WENLAN_SPACE", "   ");
         init_from_env();
         assert_eq!(locked_space(), None);

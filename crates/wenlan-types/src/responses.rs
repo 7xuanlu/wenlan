@@ -4,6 +4,7 @@
 use crate::entities::{Entity, EntitySearchResult};
 use crate::memory::{IndexedFileInfo, MemoryItem, MemoryStats, SearchResult};
 use crate::pages::Page;
+use crate::repair::RepairDigest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -432,6 +433,9 @@ pub struct ConfigResponse {
     /// `"external"`, or absent/null when unpinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synthesis_source: Option<String>,
+    /// Whether the proactive Page-Map suggestion phase is enabled. Default true.
+    #[serde(default)]
+    pub page_map_auto_suggest: bool,
 }
 
 // ===== On-device model =====
@@ -488,6 +492,12 @@ pub struct PageWriteResponse {
     pub revision_card_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub gated: bool,
+}
+
+/// Page draft create, update, and publish response envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageDraftResponse {
+    pub page: Page,
 }
 
 // ===== Memory detail =====
@@ -692,6 +702,7 @@ pub enum ProposalAction {
     PageMerge,
     CrossSpaceDiscovery,
     PageKeepOrArchive,
+    LintRepairReview,
     VocabPromote,
     /// ponytail: deserialize-only catch-all. Lets a stale client decode a
     /// newer daemon's action tag instead of failing the whole list. NEVER
@@ -753,6 +764,14 @@ pub enum RefinementPayload {
         page_id: String,
         source_count: usize,
         allowed_actions: Vec<RefinementCardAction>,
+    },
+    LintRepairReview {
+        check_id: String,
+        occurrence_digest: RepairDigest,
+        owner_binding_digest: RepairDigest,
+        issue: String,
+        choices: Vec<String>,
+        suggested_research_queries: Vec<String>,
     },
     VocabPromote {
         kind: String,

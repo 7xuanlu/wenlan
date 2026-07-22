@@ -18,9 +18,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 mod count;
+mod page_drafts;
+pub mod page_map;
 mod scoped_entities;
 mod scoped_pages;
 
+#[cfg(test)]
+mod page_drafts_test;
 #[cfg(test)]
 mod scoped_entities_test;
 #[cfg(test)]
@@ -524,12 +528,83 @@ impl MemoryDB {
     }
 }
 
-/// Embedding dimension — must match the model (GTE-Base-EN-v1.5-Q = 768).
+/// Embedding dimension — must match the model (BGE-Base-EN-v1.5-Q = 768).
 pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 72;
+pub const SCHEMA_VERSION: u32 = 80;
+
+/// Reserved id AND name of the uncategorized-page sentinel space (M1 honest
+/// columns). Uncategorized pages store this value in `pages.space`/`workspace`
+/// (both NOT NULL) instead of NULL; `row_to_page` folds it back to `None` on
+/// the wire. It is minted by migration 80 as a spaces row whose `id` AND `name`
+/// are both this UUID string — the name is the UUID (not the word "unfiled") so
+/// a user's own space literally named "unfiled" can never collide with the
+/// sentinel on the name-unique constraint. `create_space`/`update_space` reject
+/// this exact string as a user-supplied name, keeping the reservation closed.
+pub(crate) const UNFILED_SPACE_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// A retry receipt to commit alongside a mutation.
+///
+/// Borrowed rather than owned so a caller can hand one to the write without
+/// cloning the response it already built.
+#[derive(Debug, Clone, Copy)]
+pub struct OperationReceipt<'a> {
+    pub caller_id: &'a str,
+    pub operation_id: &'a str,
+    /// Digest of the request that produced `response`. A later call with the
+    /// same `(caller_id, operation_id)` but a different digest is a different
+    /// operation wearing a used id — a conflict, not a retry.
+    pub request_digest: &'a str,
+    /// Serialized response to hand back verbatim on a replay.
+    pub response: &'a str,
+}
+
+/// A retry receipt as stored, returned when a caller replays an operation id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredReceipt {
+    pub request_digest: String,
+    pub response: String,
+    pub created_at: i64,
+}
+
+/// Test-only fault injection: abort a page write after the row, the history
+/// row, and the receipt are all staged, but before COMMIT. That window is the
+/// only place the "a receipt cannot outlive a rolled-back write" claim is
+/// observable — a refused CAS returns long before the receipt is written, so
+/// no ordinary test can tell an in-transaction receipt from an after-COMMIT
+/// one. One-shot, and keyed to a page id so an armed fault cannot be consumed
+/// by whatever else the test binary is writing in parallel.
+#[cfg(test)]
+pub(crate) static FAIL_BEFORE_COMMIT: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn take_fail_before_commit(page_id: &str) -> bool {
+    let mut armed = FAIL_BEFORE_COMMIT.lock().unwrap();
+    if armed.as_deref() == Some(page_id) {
+        *armed = None;
+        return true;
+    }
+    false
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn take_fail_before_commit(_page_id: &str) -> bool {
+    false
+}
+
+/// One recorded version of a page, as stored in `page_history`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageHistoryEntry {
+    pub version: i64,
+    pub content: String,
+    pub source_memory_ids: Vec<String>,
+    pub edited_by: String,
+    pub created_at: i64,
+}
 
 /// Shared embedder reference. Pass to [`MemoryDB::new_with_shared_embedder`] to
 /// reuse a single embedder across many `MemoryDB` instances. Created via
@@ -2077,6 +2152,61 @@ pub struct RefinementProposal {
     pub created_at: String,
 }
 
+/// Decode and verify the full identity/ownership contract of a lint Review Item.
+///
+/// This is shared by storage, diagnostics, and HTTP surfacing so a typed payload
+/// whose id or durable owners were tampered cannot cross any boundary.
+pub fn validate_lint_review_contract(
+    id: &str,
+    source_ids: &[String],
+    payload: &str,
+) -> Result<wenlan_types::RefinementPayload, WenlanError> {
+    let canonical_source_ids = crate::repair::canonical_lint_review_source_ids(source_ids)?;
+    if canonical_source_ids != source_ids {
+        return Err(WenlanError::Validation(
+            "lint repair review source_ids must be canonically sorted".to_string(),
+        ));
+    }
+    let decoded =
+        serde_json::from_str::<wenlan_types::RefinementPayload>(payload).map_err(|error| {
+            WenlanError::Validation(format!("invalid lint repair review payload: {error}"))
+        })?;
+    let wenlan_types::RefinementPayload::LintRepairReview {
+        check_id,
+        occurrence_digest,
+        owner_binding_digest,
+        issue,
+        choices,
+        suggested_research_queries,
+    } = &decoded
+    else {
+        return Err(WenlanError::Validation(
+            "invalid lint repair review payload action".to_string(),
+        ));
+    };
+    if id != format!("lint_review_{}", occurrence_digest.as_str()) {
+        return Err(WenlanError::Validation(
+            "lint repair review id does not match occurrence digest".to_string(),
+        ));
+    }
+    let expected_owner_binding =
+        crate::repair::lint_review_owner_binding_digest(occurrence_digest, source_ids)?;
+    if &expected_owner_binding != owner_binding_digest {
+        return Err(WenlanError::Validation(
+            "lint repair review owner binding mismatch".to_string(),
+        ));
+    }
+    wenlan_types::repair_plan::RepairReviewItem::try_new(
+        id.to_string(),
+        check_id.clone(),
+        issue.clone(),
+        choices.clone(),
+        suggested_research_queries.clone(),
+    )
+    .map_err(|error| WenlanError::Validation(error.to_string()))?;
+    Ok(decoded)
+}
+
 /// A consolidation candidate: a space with N+ decayed memories.
 #[derive(Debug, Clone)]
 pub struct ConsolidationCandidate {
@@ -2341,9 +2471,10 @@ END;
 pub struct MemoryDB {
     pub(crate) _db: libsql::Database,
     pub(crate) conn: tokio::sync::Mutex<libsql::Connection>,
+    pub(crate) lint_freshness: Arc<crate::lint::snapshot::LintFreshnessClock>,
     page_projection_tracker: Arc<crate::page_projection_tracker::PageProjectionTracker>,
     pub(crate) derived_artifact_state: Arc<crate::derived_artifact_state::DerivedArtifactState>,
-    embedder: Arc<std::sync::Mutex<TextEmbedding>>,
+    embedder: Option<Arc<std::sync::Mutex<TextEmbedding>>>,
     chunker: ChunkingEngine,
     embedding_cache: std::sync::Mutex<EmbeddingCache>,
 }
@@ -2397,6 +2528,71 @@ impl MemoryDB {
             return query.to_string();
         }
         words.join(" OR ")
+    }
+
+    /// Open an already-current database for one approval-gated repair without
+    /// running startup migrations, schema creation, profile bootstrap, or the
+    /// embedding-model loader. The repair contract refuses stale schemas
+    /// instead of mutating them outside the approved manifest.
+    pub async fn open_for_repair(db_path: &Path) -> Result<Self, WenlanError> {
+        let db_file = db_path.join("origin_memory.db");
+        if !db_file.is_file() {
+            return Err(WenlanError::Validation(
+                "repair_database_missing".to_string(),
+            ));
+        }
+
+        let db = libsql::Builder::new_local(db_file.to_str().unwrap_or("origin_memory.db"))
+            .build()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair database open: {error}")))?;
+        let conn = db
+            .connect()
+            .map_err(|error| WenlanError::VectorDb(format!("repair database connect: {error}")))?;
+        // Connection-local integrity enforcement; unlike journal_mode, this
+        // PRAGMA does not rewrite canonical database state.
+        conn.execute("PRAGMA foreign_keys = ON", ())
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair database foreign keys: {error}"))
+            })?;
+        let mut rows = conn
+            .query("PRAGMA user_version", ())
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair database schema version: {error}"))
+            })?;
+        let user_version = rows
+            .next()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair database schema row: {error}")))?
+            .ok_or_else(|| WenlanError::Validation("repair_database_schema_missing".to_string()))?
+            .get::<i64>(0)
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair database schema value: {error}"))
+            })?;
+        drop(rows);
+        if user_version != i64::from(SCHEMA_VERSION) {
+            return Err(WenlanError::Validation(
+                "repair_database_schema_mismatch".to_string(),
+            ));
+        }
+
+        let lint_freshness = Arc::new(
+            crate::lint::snapshot::LintFreshnessClock::new(&db).map_err(|error| {
+                WenlanError::VectorDb(format!("lint freshness observer: {error}"))
+            })?,
+        );
+        Ok(Self {
+            _db: db,
+            conn: tokio::sync::Mutex::new(conn),
+            lint_freshness,
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
+            embedder: None,
+            chunker: ChunkingEngine::default(),
+            embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
+        })
     }
 
     pub async fn new(db_path: &Path, emitter: Arc<dyn EventEmitter>) -> Result<Self, WenlanError> {
@@ -2584,12 +2780,18 @@ impl MemoryDB {
 
         log::info!("[memory_db] initialized at {}", db_file.display());
 
+        let lint_freshness = Arc::new(
+            crate::lint::snapshot::LintFreshnessClock::new(&db).map_err(|error| {
+                WenlanError::VectorDb(format!("lint freshness observer: {error}"))
+            })?,
+        );
         let instance = Self {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            lint_freshness,
             page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
-            embedder: Arc::new(std::sync::Mutex::new(embedder)),
+            embedder: Some(Arc::new(std::sync::Mutex::new(embedder))),
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
@@ -2657,12 +2859,18 @@ impl MemoryDB {
             )", (),
         ).await;
 
+        let lint_freshness = Arc::new(
+            crate::lint::snapshot::LintFreshnessClock::new(&db).map_err(|error| {
+                WenlanError::VectorDb(format!("lint freshness observer: {error}"))
+            })?,
+        );
         let instance = Self {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            lint_freshness,
             page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
-            embedder,
+            embedder: Some(embedder),
             chunker: build_chunker(db_path),
             embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
         };
@@ -2745,6 +2953,22 @@ impl MemoryDB {
             0
         };
         drop(rows);
+
+        // A database migrated by a NEWER daemon is not ours to write to. Every
+        // migration below is gated `if version < N`, so a newer user_version
+        // silently skips all of them and we would go on writing against a
+        // schema we cannot see — ignoring columns and constraints added after
+        // us. This is not hypothetical: an older installed build can still be
+        // running and reopening the same file every few seconds.
+        //
+        // Refusing to open is the recoverable failure; writing is not.
+        if version > i64::from(SCHEMA_VERSION) {
+            return Err(WenlanError::VectorDb(format!(
+                "database schema is version {version}, newer than this build supports \
+                 ({SCHEMA_VERSION}); a newer Wenlan has already migrated it. Upgrade \
+                 Wenlan (or quit the older copy) rather than letting this one write to it."
+            )));
+        }
 
         if version < 1 {
             // Migration 1: reserved (initial schema — no-op since CREATE TABLE IF NOT EXISTS handles it)
@@ -7022,9 +7246,869 @@ impl MemoryDB {
                     "[migration] Migration 72 applied: dismissed deprecated dedup_merge rows"
                 );
             }
+
+            // Migrations 70 and 71 were assigned independently on two branches:
+            // one added vocabulary substrate, while the other added page compile
+            // CAS and lint-review owner bindings. A database that ran either
+            // branch can therefore claim version 71/72 while missing the other
+            // branch's schema. Migration 73 reconciles both histories
+            // idempotently before version 74 validates lint-review ownership.
+            if version < 73 {
+                self.migrate_73_schema_collision_reconciliation(73).await?;
+            }
+
+            if version < 74 {
+                self.migrate_74_lint_review_owner_bindings(74).await?;
+            }
+
+            // Migration 75 (Page Map v1): page_maps / page_map_nodes / page_map_edges.
+            // Numbered 75, not 73: versions 73/74 were already claimed on live
+            // user DBs by the in-flight wiki-spaces branch (page_evidence /
+            // document_enrichment_queue / derived_artifact_sweeps), and a
+            // `< 73` guard silently skips on any DB those daemons touched.
+            // Presentation-only per-page mind map: page_maps carries the
+            // optimistic-concurrency revision + viewport, page_map_nodes is the
+            // parent_id spine (the flextree input, dedup+tombstone keyed by
+            // `fingerprint`), page_map_edges holds only cross-links and
+            // suggested links (tree edges are derived from the spine, never
+            // stored). See
+            // docs/superpowers/plans/2026-07-18-page-map-api-spec.md.
+            if version < 75 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_maps (
+                        page_id     TEXT PRIMARY KEY REFERENCES pages(id),
+                        revision    INTEGER NOT NULL DEFAULT 0,
+                        map_schema  INTEGER NOT NULL DEFAULT 1,
+                        viewport    TEXT,
+                        generated_at TEXT,
+                        created_at  TEXT DEFAULT (datetime('now')),
+                        updated_at  TEXT DEFAULT (datetime('now'))
+                    );
+
+                    CREATE TABLE IF NOT EXISTS page_map_nodes (
+                        id          TEXT PRIMARY KEY,
+                        page_id     TEXT NOT NULL REFERENCES page_maps(page_id) ON DELETE CASCADE,
+                        parent_id   TEXT REFERENCES page_map_nodes(id),
+                        rank        REAL NOT NULL DEFAULT 0,
+                        ref_kind    TEXT NOT NULL CHECK (ref_kind IN ('memory','entity','page','section')),
+                        ref_id      TEXT NOT NULL,
+                        label       TEXT,
+                        status      TEXT NOT NULL DEFAULT 'active'
+                                    CHECK (status IN ('suggested','active','dismissed')),
+                        pinned      INTEGER NOT NULL DEFAULT 0,
+                        placed      INTEGER NOT NULL DEFAULT 0,
+                        collapsed   INTEGER NOT NULL DEFAULT 0,
+                        x REAL, y REAL, width REAL, height REAL,
+                        fingerprint TEXT NOT NULL,
+                        provenance  TEXT,
+                        created_at  TEXT DEFAULT (datetime('now')),
+                        updated_at  TEXT DEFAULT (datetime('now'))
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_pmn_fp ON page_map_nodes(page_id, fingerprint);
+                    CREATE INDEX IF NOT EXISTS idx_pmn_page ON page_map_nodes(page_id, status);
+
+                    CREATE TABLE IF NOT EXISTS page_map_edges (
+                        id         TEXT PRIMARY KEY,
+                        page_id    TEXT NOT NULL REFERENCES page_maps(page_id) ON DELETE CASCADE,
+                        from_node  TEXT NOT NULL REFERENCES page_map_nodes(id) ON DELETE CASCADE,
+                        to_node    TEXT NOT NULL REFERENCES page_map_nodes(id) ON DELETE CASCADE,
+                        kind       TEXT NOT NULL DEFAULT 'link' CHECK (kind IN ('link','suggested')),
+                        label      TEXT,
+                        status     TEXT NOT NULL DEFAULT 'active'
+                                   CHECK (status IN ('suggested','active','dismissed')),
+                        provenance TEXT,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        CHECK (from_node <> to_node),
+                        UNIQUE (page_id, from_node, to_node, kind)
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m75 create page_map tables: {e}")))?;
+                conn.execute("PRAGMA user_version = 75", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m75 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 75 applied: page_maps + page_map_nodes + page_map_edges (Page Map v1)"
+                );
+            }
+
+            // Migration 76: preserve the immutable first Page-draft request.
+            // Mutable Page columns cannot identify an ambiguous create retry
+            // after a server-side Space rename, move, or unassign. The ledger
+            // deliberately outlives Page deletion so a delayed retry cannot
+            // resurrect a draft that the user discarded.
+            if version < 76 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_draft_create_requests (
+                        page_id   TEXT PRIMARY KEY,
+                        title     TEXT,
+                        content   TEXT,
+                        space     TEXT,
+                        workspace TEXT
+                    );",
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("m76 create page_draft_create_requests: {e}"))
+                })?;
+                conn.execute("PRAGMA user_version = 76", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m76 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 76 applied: immutable Page draft create requests"
+                );
+            }
+
+            // Migration 77 reconciles the second schema-version collision.
+            // origin/main reached version 76 with Page Map/Page Draft tables,
+            // while the lint-repair branch reached it with vocabulary, Page
+            // compile CAS, and repair-review owner bindings. Re-run both
+            // idempotent repair migrations for every pre-77 database so either
+            // history gains the other branch's substrate.
+            if version < 77 {
+                self.migrate_74_lint_review_owner_bindings(76).await?;
+                self.migrate_73_schema_collision_reconciliation(77).await?;
+            }
+
+            // Migration 78: page_history. One immutable row per page version,
+            // written in the same transaction as the page write itself, so a
+            // version can never exist without the snapshot that produced it.
+            // This is what makes page evolution inspectable and a version
+            // recoverable; the `changelog` column on `pages` stays as the
+            // FIFO-capped summary the app already reads.
+            //
+            // UNIQUE(page_id, version) is the real guard: it makes a double
+            // append for one version an error rather than a silent duplicate.
+            //
+            // ponytail: full content per version, no delta compression and no
+            // retention cap. Storage is bounded by edit volume, and a page body
+            // is small; add compaction when a real corpus says it matters.
+            if version < 78 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        page_id TEXT NOT NULL,
+                        version INTEGER NOT NULL,
+                        content TEXT NOT NULL,
+                        source_memory_ids TEXT NOT NULL DEFAULT '[]',
+                        edited_by TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        UNIQUE(page_id, version)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_page_history_page
+                        ON page_history(page_id, version DESC);",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 78 DDL: {e}")))?;
+                // Seed the current state of every existing page as its first
+                // history row, so a page that predates this table still has a
+                // recoverable version rather than an empty timeline.
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_history \
+                       (page_id, version, content, source_memory_ids, edited_by, created_at) \
+                     SELECT id, version, content, source_memory_ids, 'migration_78', ?1 \
+                     FROM pages",
+                    libsql::params![chrono::Utc::now().timestamp()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 78 seed: {e}")))?;
+                conn.execute("PRAGMA user_version = 78", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 78 bump: {e}")))?;
+                log::info!(
+                    "[migration] Migration 78 applied: page_history table seeded from current pages"
+                );
+            }
+
+            // Migration 79: operation_receipts. A durable record of "this
+            // caller already ran this operation, and here is what it got",
+            // committed in the same transaction as the mutation it describes.
+            // That is the whole point: a receipt can never claim an effect
+            // that rolled back, and an effect can never land twice under one
+            // operation id.
+            //
+            // PRIMARY KEY(caller_id, operation_id) is the enforcement. The
+            // digest distinguishes an honest retry (same request, replay the
+            // stored response) from an id collision (different request, refuse).
+            //
+            // ponytail: no expiry sweep. Receipts are small and the table only
+            // grows with distinct mutating operations; add retention when a
+            // real corpus says it matters.
+            if version < 79 {
+                let conn = self.conn.lock().await;
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS operation_receipts (
+                        caller_id TEXT NOT NULL,
+                        operation_id TEXT NOT NULL,
+                        request_digest TEXT NOT NULL,
+                        response TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        PRIMARY KEY (caller_id, operation_id)
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("migration 79 DDL: {e}")))?;
+                conn.execute("PRAGMA user_version = 79", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("migration 79 bump: {e}")))?;
+                log::info!("[migration] Migration 79 applied: operation_receipts table");
+            }
+
+            // Migration 80 (M1 "honest columns"): fold `pages.workspace`
+            // (authoritative page-scope axis since migration 63) into
+            // `pages.space` and stamp both columns NOT NULL. Extracted (like
+            // migrations 73/74) because the fold + ledger + batched backfill
+            // is too large for an inline block. See migrate_80_page_scope_fold.
+            if version < 80 {
+                self.migrate_80_page_scope_fold().await?;
+            }
         }
 
         Ok(())
+    }
+
+    // Migration 80 (M1 "honest columns"). GT3: `pages.workspace` is the
+    // authoritative page-scope axis (migration 63, backfilled from the modal
+    // `space` of a page's source memories); `pages.space` is a rename of the
+    // old `domain` column (migration 50) and was never a scope column on its
+    // own. Scope migrates FROM `workspace` INTO `space`: the fold prefers
+    // `workspace`, falls back to `space` only when it names a *registered*
+    // space (not category residue -- the M1 audit found zero category
+    // residue on the reference database, so this rule is data-driven, not
+    // value-listed), and falls back to the `unfiled` sentinel space
+    // otherwise. `workspace` is kept and dual-written -- dropping it would
+    // make the fold irreversible.
+    //
+    // `registered_space_or_none` (used by every write path) silently NULLs
+    // any space with no matching `spaces` row, so backfilling
+    // `space = 'unfiled'` without first minting that row would reintroduce
+    // the exact NULLs this migration removes. Minting it and populating the
+    // fold ledger (the rollback artifact -- it freezes each page's pre-fold
+    // prior_space/prior_workspace before any row is mutated) therefore both
+    // run, and commit, before any backfill batch.
+    //
+    // The backfill UPDATE is idempotent by construction: once a row is
+    // folded, `space` equals `workspace` and both are non-NULL, so
+    // COALESCE(workspace, ...) short-circuits to the already-correct value
+    // on any re-run. That is what makes rowid-range batching with a
+    // per-batch commit safe to resume from rowid 0 after a kill --
+    // already-folded rows are cheap no-ops, not double-applies.
+    //
+    // A full table rebuild is out: migration 67 (see writable_schema comment
+    // there) already ruled against rebuilding `pages` -- `pages_fts` is
+    // contentless with 3 rowid-coupled triggers and `search_pages` joins
+    // vector_top_k on c.rowid. NOT NULL is instead stamped via the same
+    // writable_schema text-patch migration 67 uses, which validates nothing
+    // -- so the in-transaction NULL assertion is the only thing standing
+    // between a surviving NULL and a column that lies about itself.
+    async fn migrate_80_page_scope_fold(&self) -> Result<(), WenlanError> {
+        // Measured 2026-07-19 on this machine: 100k synthetic pages, combined
+        // space+workspace UPDATE = 389ms (~3.9µs/row-pair). Targeting a
+        // ~50ms/batch lock-duration budget gives ~12.8k rows; 10k leaves
+        // headroom for slower production hardware and larger real indexes.
+        const BATCH_SIZE: i64 = 10_000;
+
+        // Steps 1-2: mint the uncategorized sentinel space + create and
+        // populate the fold ledger from the pre-fold values, together in one
+        // transaction, before any backfill batch runs. The sentinel row's
+        // `name` is the reserved UUID (`?1`), NOT the word "unfiled", so a
+        // user's own space literally named "unfiled" never collides with it on
+        // the name-unique constraint.
+        {
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 begin setup: {e}")))?;
+            let result: Result<(), WenlanError> = async {
+                conn.execute(
+                    "INSERT OR IGNORE INTO spaces (id, name, description, suggested, created_at, updated_at) \
+                     VALUES (?1, ?1, NULL, 0, unixepoch('now'), unixepoch('now'))",
+                    libsql::params![UNFILED_SPACE_ID],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 mint unfiled: {e}")))?;
+
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS page_space_fold_ledger (
+                        page_id TEXT PRIMARY KEY,
+                        prior_space TEXT,
+                        prior_workspace TEXT,
+                        assigned_space TEXT NOT NULL,
+                        rule TEXT NOT NULL CHECK(rule IN ('workspace','space_residue','unfiled')),
+                        migrated_at TEXT NOT NULL
+                    );",
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 create ledger: {e}")))?;
+
+                // assigned_space/rule mirror the backfill formula below
+                // exactly, computed here from the pre-fold `pages` columns
+                // before step 3 touches anything.
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_space_fold_ledger \
+                        (page_id, prior_space, prior_workspace, assigned_space, rule, migrated_at) \
+                     SELECT id, space, workspace, \
+                        COALESCE(workspace, CASE WHEN space IN (SELECT name FROM spaces) THEN space END, ?2), \
+                        CASE WHEN workspace IS NOT NULL THEN 'workspace' \
+                             WHEN space IN (SELECT name FROM spaces) THEN 'space_residue' \
+                             ELSE 'unfiled' END, \
+                        ?1 \
+                     FROM pages",
+                    libsql::params![chrono::Utc::now().to_rfc3339(), UNFILED_SPACE_ID],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 populate ledger: {e}")))?;
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 commit setup: {e}")))?;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Steps 3-4: backfill in rowid-range batches, one commit per batch,
+        // so a kill mid-run resumes from the lowest rowid rather than
+        // restarting a half-open transaction. Resuming re-touches
+        // already-folded rows, which is a no-op (see idempotency note on the
+        // fn doc comment), not a correctness risk. The cursor starts at
+        // i64::MIN, not 0, so rows at a non-positive rowid (a rowid can be
+        // negative or 0 when set explicitly) are backfilled too -- otherwise
+        // such a row keeps its pre-fold value and the mirror-equality
+        // assertion below would (correctly) refuse to stamp NOT NULL over it.
+        let mut cursor: i64 = i64::MIN;
+        loop {
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 begin batch: {e}")))?;
+            let result: Result<Option<i64>, WenlanError> = async {
+                let hi: Option<i64> =
+                    {
+                        let mut rows = conn
+                            .query(
+                                "SELECT MAX(rowid) FROM \
+                             (SELECT rowid FROM pages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)",
+                                libsql::params![cursor, BATCH_SIZE],
+                            )
+                            .await
+                            .map_err(|e| WenlanError::VectorDb(format!("m80 batch bound: {e}")))?;
+                        match rows.next().await.map_err(|e| {
+                            WenlanError::VectorDb(format!("m80 batch bound row: {e}"))
+                        })? {
+                            Some(row) => row.get::<Option<i64>>(0).map_err(|e| {
+                                WenlanError::VectorDb(format!("m80 batch bound col: {e}"))
+                            })?,
+                            None => None,
+                        }
+                    };
+                let Some(hi) = hi else {
+                    return Ok(None);
+                };
+                conn.execute(
+                    "UPDATE pages SET space = COALESCE( \
+                        workspace, \
+                        CASE WHEN space IN (SELECT name FROM spaces) THEN space END, \
+                        ?3 \
+                     ) WHERE rowid > ?1 AND rowid <= ?2",
+                    libsql::params![cursor, hi, UNFILED_SPACE_ID],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 backfill space: {e}")))?;
+                conn.execute(
+                    "UPDATE pages SET workspace = space \
+                     WHERE workspace IS NULL AND rowid > ?1 AND rowid <= ?2",
+                    libsql::params![cursor, hi],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 backfill workspace: {e}")))?;
+                Ok(Some(hi))
+            }
+            .await;
+            match result {
+                Ok(Some(hi)) => {
+                    conn.execute("COMMIT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 commit batch: {e}")))?;
+                    cursor = hi;
+                }
+                Ok(None) => {
+                    conn.execute("COMMIT", ()).await.map_err(|e| {
+                        WenlanError::VectorDb(format!("m80 commit final batch: {e}"))
+                    })?;
+                    break;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Steps 6-7: assert every row resolved, then rebuild both scope
+        // indexes without their now-vacuous partial predicate.
+        {
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 begin assert: {e}")))?;
+            let result: Result<(), WenlanError> = async {
+                Self::assert_pages_scope_columns_backfilled(&conn).await?;
+                conn.execute("DROP INDEX IF EXISTS idx_pages_workspace", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 drop idx workspace: {e}")))?;
+                conn.execute("DROP INDEX IF EXISTS idx_pages_space", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 drop idx space: {e}")))?;
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pages_workspace ON pages(workspace)",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 create idx workspace: {e}")))?;
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pages_space ON pages(space)",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 create idx space: {e}")))?;
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    conn.execute("COMMIT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 commit assert: {e}")))?;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Step 8: stamp NOT NULL via the migration-67 writable_schema
+        // pattern rather than rebuilding `pages`. Bare autocommit
+        // statements, matching migration 67 exactly (writable_schema is not
+        // exercised inside an explicit transaction there either).
+        // `workspace TEXT,` is patched first: its text ends in the same
+        // `space TEXT,` suffix the bare `space` column's own pattern
+        // matches, so patching workspace first (turning it into
+        // `workspace TEXT NOT NULL DEFAULT '<UNFILED_SPACE_ID>',`) removes that
+        // shadow match before the `space` replacement runs. The DEFAULT is the
+        // reserved sentinel id, so a bare INSERT that omits scope lands the
+        // sentinel (folded to None on the wire), never NULL or a colliding name.
+        let conn = self.conn.lock().await;
+        let current_sql: Option<String> = {
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 read pages sql: {e}")))?;
+            match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 pages sql row: {e}")))?
+            {
+                Some(row) => Some(
+                    row.get::<String>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 pages sql col: {e}")))?,
+                ),
+                None => None,
+            }
+        };
+        if let Some(sql) = current_sql {
+            let mut patched = sql.replacen(
+                "workspace TEXT,",
+                &format!("workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
+                1,
+            );
+            patched = patched.replacen(
+                "space TEXT,",
+                &format!("space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
+                1,
+            );
+            if patched != sql {
+                conn.execute("PRAGMA writable_schema=ON", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 writable on: {e}")))?;
+                conn.execute(
+                    "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+                    libsql::params![patched],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 patch schema: {e}")))?;
+                conn.execute("PRAGMA writable_schema=RESET", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m80 writable reset: {e}")))?;
+            }
+        }
+
+        // Step 9.
+        conn.execute("PRAGMA user_version = 80", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m80 bump: {e}")))?;
+        log::info!(
+            "[migration] Migration 80 applied: pages.space/workspace scope fold + NOT NULL (M1 honest columns)"
+        );
+        Ok(())
+    }
+
+    /// Extracted so it is directly testable: the `writable_schema` NOT NULL
+    /// patch (step 8) validates nothing on its own, so this EXISTS check is
+    /// the only thing standing between a surviving NULL and a column that
+    /// lies about itself. It also asserts the M1 mirror invariant
+    /// (`space == workspace` on every row): the backfill mirrors one resolved
+    /// scope onto both columns, so a surviving divergence means a row escaped
+    /// the fold (e.g. a non-positive rowid the batch cursor missed) and the
+    /// read-collapse -- which reads `space` alone -- would silently disagree
+    /// with `workspace`. `SELECT COUNT(*) FROM pages` returns 0 on this
+    /// codebase (the libSQL vector-index COUNT bug) -- EXISTS is immune.
+    async fn assert_pages_scope_columns_backfilled(
+        conn: &libsql::Connection,
+    ) -> Result<(), WenlanError> {
+        let unresolved: bool = {
+            let mut rows = conn
+                .query(
+                    "SELECT EXISTS(SELECT 1 FROM pages \
+                     WHERE space IS NULL OR workspace IS NULL OR space <> workspace)",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 assert query: {e}")))?;
+            match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m80 assert row: {e}")))?
+            {
+                Some(row) => {
+                    row.get::<i64>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("m80 assert col: {e}")))?
+                        != 0
+                }
+                None => false,
+            }
+        };
+        if unresolved {
+            return Err(WenlanError::VectorDb(
+                "m80: a pages row still has NULL or divergent space/workspace after backfill -- \
+                 refusing to stamp NOT NULL over a lie or break the mirror invariant"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn migrate_73_schema_collision_reconciliation(
+        &self,
+        schema_version_after: u32,
+    ) -> Result<(), WenlanError> {
+        debug_assert!(matches!(schema_version_after, 73 | 77));
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN TRANSACTION", ())
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m73 begin: {error}")))?;
+        let migration = async {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS entity_type_vocabulary (
+                    canonical TEXT PRIMARY KEY,
+                    aliases TEXT,
+                    category TEXT,
+                    count INTEGER DEFAULT 0
+                );
+                INSERT OR IGNORE INTO entity_type_vocabulary
+                    (canonical, aliases, category, count) VALUES
+                    ('concept',      '[]', 'general', 0),
+                    ('technology',   '[]', 'general', 0),
+                    ('project',      '[]', 'general', 0),
+                    ('organization', '[]', 'general', 0),
+                    ('person',       '[]', 'general', 0),
+                    ('place',        '[]', 'general', 0);
+                CREATE TABLE IF NOT EXISTS vocab_heal_ledger (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    old_value TEXT NOT NULL,
+                    new_value TEXT NOT NULL,
+                    pre_image TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );",
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m73 reconcile tables: {error}")))?;
+
+            let has_source_revision = {
+                let mut rows = conn
+                    .query(
+                        "SELECT COUNT(*) FROM pragma_table_info('pages')
+                          WHERE name = 'source_revision'",
+                        (),
+                    )
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!("m73 source_revision check: {error}"))
+                    })?;
+                rows.next()
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!("m73 source_revision row: {error}"))
+                    })?
+                    .is_some_and(|row| row.get::<i64>(0).unwrap_or(0) > 0)
+            };
+            if !has_source_revision {
+                conn.execute(
+                    "ALTER TABLE pages
+                         ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("m73 add source_revision: {error}"))
+                })?;
+            }
+
+            let version_bump = match schema_version_after {
+                73 => "PRAGMA user_version = 73",
+                77 => "PRAGMA user_version = 77",
+                _ => unreachable!("unsupported schema reconciliation target"),
+            };
+            conn.execute(version_bump, ())
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("m73 bump: {error}")))?;
+            Ok(())
+        }
+        .await;
+
+        match migration {
+            Ok(()) => {
+                if let Err(error) = conn.execute("COMMIT", ()).await {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(WenlanError::VectorDb(format!("m73 commit: {error}")));
+                }
+                log::info!(
+                    "[migration] Migration 73 applied: reconciled vocabulary and page compile schema"
+                );
+                Ok(())
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn migrate_74_lint_review_owner_bindings(
+        &self,
+        schema_version_after: u32,
+    ) -> Result<(), WenlanError> {
+        debug_assert!(matches!(schema_version_after, 74 | 76));
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN TRANSACTION", ())
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m74 begin: {error}")))?;
+        let migration = async {
+            let mut rows = conn
+                .query(
+                    "SELECT id,source_ids,payload,status
+                       FROM refinement_queue
+                      WHERE action='lint_repair_review'
+                      ORDER BY id",
+                    (),
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("m74 read lint reviews: {error}"))
+                })?;
+            let mut legacy_rows = Vec::new();
+            while let Some(row) = rows.next().await.map_err(|error| {
+                WenlanError::VectorDb(format!("m74 read lint review row: {error}"))
+            })? {
+                legacy_rows.push((
+                    row.get::<String>(0)
+                        .map_err(|error| WenlanError::VectorDb(format!("m74 read id: {error}")))?,
+                    row.get::<String>(1).map_err(|error| {
+                        WenlanError::VectorDb(format!("m74 read source_ids: {error}"))
+                    })?,
+                    row.get::<Option<String>>(2).map_err(|error| {
+                        WenlanError::VectorDb(format!("m74 read payload: {error}"))
+                    })?,
+                    row.get::<String>(3).map_err(|error| {
+                        WenlanError::VectorDb(format!("m74 read status: {error}"))
+                    })?,
+                ));
+            }
+            drop(rows);
+
+            let mut updates = Vec::with_capacity(legacy_rows.len());
+            for (id, source_ids_json, payload, status) in legacy_rows {
+                if !matches!(
+                    status.as_str(),
+                    "awaiting_review" | "resolved" | "dismissed"
+                ) {
+                    return Err(WenlanError::Validation(format!(
+                        "m74 malformed lint review {id}: invalid status {status}"
+                    )));
+                }
+                let source_ids =
+                    serde_json::from_str::<Vec<String>>(&source_ids_json).map_err(|error| {
+                        WenlanError::Validation(format!(
+                            "m74 malformed lint review {id} source_ids: {error}"
+                        ))
+                    })?;
+                let canonical_source_ids = crate::repair::canonical_lint_review_source_ids(
+                    &source_ids,
+                )
+                .map_err(|error| {
+                    WenlanError::Validation(format!(
+                        "m74 malformed lint review {id} source_ids: {error}"
+                    ))
+                })?;
+                let payload = payload.ok_or_else(|| {
+                    WenlanError::Validation(format!(
+                        "m74 malformed lint review {id}: missing payload"
+                    ))
+                })?;
+                let mut value =
+                    serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
+                        WenlanError::Validation(format!(
+                            "m74 malformed lint review {id} payload: {error}"
+                        ))
+                    })?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    WenlanError::Validation(format!(
+                        "m74 malformed lint review {id}: payload is not an object"
+                    ))
+                })?;
+                let occurrence_digest = object
+                    .get("occurrence_digest")
+                    .cloned()
+                    .ok_or_else(|| {
+                        WenlanError::Validation(format!(
+                            "m74 malformed lint review {id}: missing occurrence_digest"
+                        ))
+                    })
+                    .and_then(|value| {
+                        serde_json::from_value::<wenlan_types::repair::RepairDigest>(value).map_err(
+                            |error| {
+                                WenlanError::Validation(format!(
+                                    "m74 malformed lint review {id} occurrence_digest: {error}"
+                                ))
+                            },
+                        )
+                    })?;
+                let owner_binding_digest = crate::repair::lint_review_owner_binding_digest(
+                    &occurrence_digest,
+                    &canonical_source_ids,
+                )?;
+                if let Some(existing) = object.get("owner_binding_digest") {
+                    let existing = serde_json::from_value::<wenlan_types::repair::RepairDigest>(
+                        existing.clone(),
+                    )
+                    .map_err(|error| {
+                        WenlanError::Validation(format!(
+                            "m74 malformed lint review {id} owner_binding_digest: {error}"
+                        ))
+                    })?;
+                    if existing != owner_binding_digest {
+                        return Err(WenlanError::Validation(format!(
+                            "m74 malformed lint review {id}: owner binding mismatch"
+                        )));
+                    }
+                } else {
+                    object.insert(
+                        "owner_binding_digest".to_string(),
+                        serde_json::to_value(&owner_binding_digest)?,
+                    );
+                }
+                let decoded =
+                    serde_json::from_value::<wenlan_types::RefinementPayload>(value.clone())
+                        .map_err(|error| {
+                            WenlanError::Validation(format!(
+                                "m74 malformed lint review {id} payload contract: {error}"
+                            ))
+                        })?;
+                let wenlan_types::RefinementPayload::LintRepairReview {
+                    check_id,
+                    occurrence_digest: decoded_occurrence,
+                    owner_binding_digest: decoded_owner_binding,
+                    issue,
+                    choices,
+                    suggested_research_queries,
+                } = decoded
+                else {
+                    return Err(WenlanError::Validation(format!(
+                        "m74 malformed lint review {id}: wrong payload action"
+                    )));
+                };
+                if id != format!("lint_review_{}", decoded_occurrence.as_str())
+                    || decoded_owner_binding != owner_binding_digest
+                    || wenlan_types::repair_plan::RepairReviewItem::try_new(
+                        id.clone(),
+                        check_id,
+                        issue,
+                        choices,
+                        suggested_research_queries,
+                    )
+                    .is_err()
+                {
+                    return Err(WenlanError::Validation(format!(
+                        "m74 malformed lint review {id}: payload contract mismatch"
+                    )));
+                }
+                updates.push((
+                    id,
+                    serde_json::to_string(&canonical_source_ids)?,
+                    serde_json::to_string(&value)?,
+                ));
+            }
+            for (id, source_ids, payload) in updates {
+                conn.execute(
+                    "UPDATE refinement_queue SET source_ids=?1,payload=?2 WHERE id=?3",
+                    libsql::params![source_ids, payload, id],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("m74 update lint review: {error}"))
+                })?;
+            }
+            let version_bump = match schema_version_after {
+                74 => "PRAGMA user_version = 74",
+                76 => "PRAGMA user_version = 76",
+                _ => unreachable!("unsupported lint-review migration target"),
+            };
+            conn.execute(version_bump, ())
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("m74 bump: {error}")))?;
+            Ok(())
+        }
+        .await;
+
+        match migration {
+            Ok(()) => {
+                if let Err(error) = conn.execute("COMMIT", ()).await {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(WenlanError::VectorDb(format!("m74 commit: {error}")));
+                }
+                log::info!("[migration] Migration 74 applied: lint review owner binding digests");
+                Ok(())
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
     }
 
     /// Migration 41 helper: seed one self-alias per entity, then collapse
@@ -7179,8 +8263,9 @@ impl MemoryDB {
                         (SELECT COUNT(*) FROM entities e WHERE e.space = s.name) as ent_count,
                         s.sort_order, s.starred
                  FROM spaces s
+                 WHERE s.id != ?1
                  ORDER BY s.starred DESC, s.sort_order, s.name",
-                (),
+                libsql::params![UNFILED_SPACE_ID],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_spaces: {}", e)))?;
@@ -7264,6 +8349,15 @@ impl MemoryDB {
         description: Option<&str>,
         suggested: bool,
     ) -> Result<Space, WenlanError> {
+        // The reserved sentinel id is not a legal user space name -- allowing it
+        // would let a user re-open the exact collision M1 closed (a real space
+        // whose name equals the stored uncategorized token). The word "unfiled"
+        // stays fully legal; only this UUID string is reserved.
+        if name.trim() == UNFILED_SPACE_ID {
+            return Err(WenlanError::Validation(format!(
+                "space name {UNFILED_SPACE_ID:?} is reserved for the uncategorized sentinel"
+            )));
+        }
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp() as f64;
@@ -7311,76 +8405,77 @@ impl MemoryDB {
         new_name: &str,
         description: Option<&str>,
     ) -> Result<Space, WenlanError> {
+        // Renaming a space TO the reserved sentinel id would re-open the M1
+        // collision (see `create_space`); reject it. The word "unfiled" stays a
+        // legal rename target.
+        if new_name.trim() == UNFILED_SPACE_ID {
+            return Err(WenlanError::Validation(format!(
+                "space name {UNFILED_SPACE_ID:?} is reserved for the uncategorized sentinel"
+            )));
+        }
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().timestamp() as f64;
-
-        conn.execute("BEGIN", ())
+        let page_now = chrono::Utc::now().to_rfc3339();
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .map_err(|e| WenlanError::VectorDb(format!("update_space begin: {}", e)))?;
 
-        let txn_result = async {
-            let updated_spaces = conn
-                .execute(
+        let updated_spaces = tx
+            .execute(
                 "UPDATE spaces SET name = ?1, description = ?2, updated_at = ?3 WHERE name = ?4",
                 libsql::params![new_name, description, now, name],
             )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
-            if updated_spaces == 0 {
-                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
-            }
-
-            if name != new_name {
-                conn.execute(
-                    "UPDATE memories SET space = ?1 WHERE space = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade memories: {}", e))
-                })?;
-
-                conn.execute(
-                    "UPDATE entities SET space = ?1 WHERE space = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade entities: {}", e))
-                })?;
-
-                conn.execute(
-                    "UPDATE pages SET space = ?1 WHERE space = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade pages.space: {}", e))
-                })?;
-
-                conn.execute(
-                    "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
-                    libsql::params![new_name, name],
-                )
-                .await
-                .map_err(|e| {
-                    WenlanError::VectorDb(format!("update_space cascade pages.workspace: {}", e))
-                })?;
-            }
-
-            conn.execute("COMMIT", ())
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("update_space commit: {}", e)))?;
-
-            Ok::<(), WenlanError>(())
-        }
-        .await;
-
-        if let Err(e) = txn_result {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(e);
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space: {}", e)))?;
+        if updated_spaces == 0 {
+            return Err(WenlanError::NotFound(format!("space '{name}' not found")));
         }
 
+        if name != new_name {
+            tx.execute(
+                "UPDATE memories SET space = ?1 WHERE space = ?2",
+                libsql::params![new_name, name],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space cascade memories: {}", e)))?;
+
+            tx.execute(
+                "UPDATE entities SET space = ?1 WHERE space = ?2",
+                libsql::params![new_name, name],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space cascade entities: {}", e)))?;
+
+            tx.execute(
+                "UPDATE pages
+                     SET version = CASE
+                             WHEN status='draft' THEN version+1
+                             ELSE version
+                         END,
+                         last_modified = CASE
+                             WHEN status='draft' THEN ?1
+                             ELSE last_modified
+                         END,
+                         space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                         workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
+                     WHERE space=?2 OR workspace=?2",
+                libsql::params![page_now, name, new_name],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("update_space cascade pages scope: {}", e))
+            })?;
+            #[cfg(test)]
+            page_drafts_test::transaction_test_hooks::after_space_cascade(&format!(
+                "update_space:{name}"
+            ))
+            .await;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("update_space commit: {}", e)))?;
         drop(conn);
         self.get_space(new_name)
             .await?
@@ -7394,158 +8489,184 @@ impl MemoryDB {
     /// - "move:target" = memories moved to target space
     pub async fn delete_space(&self, name: &str, memory_action: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        let page_now = chrono::Utc::now().to_rfc3339();
 
-        conn.execute("BEGIN", ())
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_space begin: {}", e)))?;
 
-        let txn_result = async {
-            let mut source_rows = conn
-                .query(
-                    "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+        let mut source_rows = tx
+            .query(
+                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                libsql::params![name],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
+        let source_count = if let Some(row) = source_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            row.get::<i64>(0).unwrap_or(0)
+        } else {
+            0
+        };
+        drop(source_rows);
+        if source_count == 0 {
+            return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+        }
+
+        match memory_action {
+            "keep" => { /* do nothing — orphan memories with space tag intact */ }
+            "unassign" => {
+                tx.execute(
+                    "UPDATE memories SET space = NULL WHERE space = ?1",
                     libsql::params![name],
                 )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
-            let source_count = if let Some(row) = source_rows
-                .next()
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space unassign memories: {}", e))
+                })?;
+                tx.execute(
+                    "UPDATE entities SET space = NULL WHERE space = ?1",
+                    libsql::params![name],
+                )
                 .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-            {
-                row.get::<i64>(0).unwrap_or(0)
-            } else {
-                0
-            };
-            drop(source_rows);
-            if source_count == 0 {
-                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space unassign entities: {}", e))
+                })?;
             }
-
-            match memory_action {
-                "keep" => { /* do nothing — orphan memories with space tag intact */ }
-                "unassign" => {
-                    conn.execute(
-                        "UPDATE memories SET space = NULL WHERE space = ?1",
+            "delete" => {
+                let mut rows = tx
+                    .query(
+                        "SELECT DISTINCT source, source_id
+                         FROM memories
+                         WHERE space = ?1 AND source = 'memory'",
                         libsql::params![name],
                     )
                     .await
                     .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space unassign memories: {}", e))
+                        WenlanError::VectorDb(format!("delete_space source inventory: {e}"))
                     })?;
-                    conn.execute(
-                        "UPDATE entities SET space = NULL WHERE space = ?1",
-                        libsql::params![name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space unassign entities: {}", e))
-                    })?;
+                let mut deleted_sources = Vec::new();
+                while let Some(row) = rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space source inventory row: {e}"))
+                })? {
+                    deleted_sources.push((
+                        row.get::<String>(0).map_err(|e| {
+                            WenlanError::VectorDb(format!(
+                                "delete_space source inventory source: {e}"
+                            ))
+                        })?,
+                        row.get::<String>(1).map_err(|e| {
+                            WenlanError::VectorDb(format!("delete_space source inventory id: {e}"))
+                        })?,
+                    ));
                 }
-                "delete" => {
-                    conn.execute(
-                        "DELETE FROM memories WHERE space = ?1 AND source IN ('memory','episode')",
-                        libsql::params![name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space delete memories: {}", e))
-                    })?;
-                    conn.execute(
-                        "DELETE FROM entities WHERE space = ?1",
-                        libsql::params![name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space delete entities: {}", e))
-                    })?;
-                }
-                other if other.starts_with("move:") => {
-                    let target = &other[5..];
-                    if target == name {
-                        return Err(WenlanError::Validation(
-                            "destination space must differ from source space".to_string(),
-                        ));
-                    }
-                    let mut rows = conn
-                        .query(
-                            "SELECT COUNT(*) FROM spaces WHERE name = ?1",
-                            libsql::params![target],
-                        )
-                        .await
-                        .map_err(|e| {
-                            WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
-                        })?;
-                    let target_count = if let Some(row) = rows
-                        .next()
-                        .await
-                        .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-                    {
-                        row.get::<i64>(0).unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    drop(rows);
-                    if target_count == 0 {
-                        return Err(WenlanError::VectorDb(format!(
-                            "destination space not found: {target}"
-                        )));
-                    }
+                drop(rows);
+                Self::mark_pages_depending_on_memory_sources(&tx, &deleted_sources).await?;
 
-                    conn.execute(
-                        "UPDATE memories SET space = ?1 WHERE space = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move memories: {}", e))
-                    })?;
-                    conn.execute(
-                        "UPDATE entities SET space = ?1 WHERE space = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move entities: {}", e))
-                    })?;
-                    conn.execute(
-                        "UPDATE pages SET space = ?1 WHERE space = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move pages.space: {}", e))
-                    })?;
-                    conn.execute(
-                        "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
-                        libsql::params![target, name],
-                    )
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("delete_space move pages.workspace: {}", e))
-                    })?;
-                }
-                _ => { /* unknown action — treat as keep */ }
-            }
-
-            let deleted_spaces = conn
-                .execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
+                tx.execute(
+                    "DELETE FROM memories WHERE space = ?1 AND source IN ('memory','episode')",
+                    libsql::params![name],
+                )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete_space: {}", e)))?;
-            if deleted_spaces != 1 {
-                return Err(WenlanError::NotFound(format!("space '{name}' not found")));
-            }
-
-            conn.execute("COMMIT", ())
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space delete memories: {}", e))
+                })?;
+                tx.execute(
+                    "DELETE FROM entities WHERE space = ?1",
+                    libsql::params![name],
+                )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("delete_space commit: {}", e)))?;
-            Ok::<(), WenlanError>(())
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space delete entities: {}", e))
+                })?;
+            }
+            other if other.starts_with("move:") => {
+                let target = &other[5..];
+                if target == name {
+                    return Err(WenlanError::Validation(
+                        "destination space must differ from source space".to_string(),
+                    ));
+                }
+                let mut rows = tx
+                    .query(
+                        "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                        libsql::params![target],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
+                    })?;
+                let target_count = if let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+                {
+                    row.get::<i64>(0).unwrap_or(0)
+                } else {
+                    0
+                };
+                drop(rows);
+                if target_count == 0 {
+                    return Err(WenlanError::VectorDb(format!(
+                        "destination space not found: {target}"
+                    )));
+                }
+
+                tx.execute(
+                    "UPDATE memories SET space = ?1 WHERE space = ?2",
+                    libsql::params![target, name],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_space move memories: {}", e)))?;
+                tx.execute(
+                    "UPDATE entities SET space = ?1 WHERE space = ?2",
+                    libsql::params![target, name],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_space move entities: {}", e)))?;
+                tx.execute(
+                    "UPDATE pages
+                             SET version = CASE
+                                     WHEN status='draft' THEN version+1
+                                     ELSE version
+                                 END,
+                                 last_modified = CASE
+                                     WHEN status='draft' THEN ?1
+                                     ELSE last_modified
+                                 END,
+                                 space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                                 workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
+                             WHERE space=?2 OR workspace=?2",
+                    libsql::params![page_now, name, target],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space move pages scope: {}", e))
+                })?;
+                #[cfg(test)]
+                page_drafts_test::transaction_test_hooks::after_space_cascade(&format!(
+                    "delete_space:{name}"
+                ))
+                .await;
+            }
+            _ => { /* unknown action — treat as keep */ }
         }
-        .await;
 
-        if let Err(e) = txn_result {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(e);
+        let deleted_spaces = tx
+            .execute("DELETE FROM spaces WHERE name = ?1", libsql::params![name])
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_space: {}", e)))?;
+        if deleted_spaces != 1 {
+            return Err(WenlanError::NotFound(format!("space '{name}' not found")));
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_space commit: {}", e)))?;
         Ok(())
     }
 
@@ -7557,9 +8678,20 @@ impl MemoryDB {
         from: &str,
         to: &str,
     ) -> Result<usize, WenlanError> {
+        if from == to {
+            return Err(WenlanError::Validation(
+                "destination space must differ from source space".to_string(),
+            ));
+        }
         let conn = self.conn.lock().await;
+        let page_now = chrono::Utc::now().to_rfc3339();
 
-        let mut rows = conn
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign_memories_space begin: {}", e)))?;
+
+        let mut rows = tx
             .query(
                 "SELECT COUNT(*) FROM spaces WHERE name = ?1",
                 libsql::params![from],
@@ -7582,7 +8714,7 @@ impl MemoryDB {
             )));
         }
 
-        let mut rows = conn
+        let mut rows = tx
             .query(
                 "SELECT COUNT(*) FROM spaces WHERE name = ?1",
                 libsql::params![to],
@@ -7605,55 +8737,48 @@ impl MemoryDB {
             )));
         }
 
-        conn.execute("BEGIN", ())
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign_memories_space begin: {}", e)))?;
-
-        let txn_result = async {
-            let updated = conn
-                .execute(
-                    "UPDATE memories SET space = ?1 WHERE space = ?2",
-                    libsql::params![to, from],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("reassign memories: {}", e)))?;
-
-            conn.execute(
-                "UPDATE entities SET space = ?1 WHERE space = ?2",
+        let updated = tx
+            .execute(
+                "UPDATE memories SET space = ?1 WHERE space = ?2",
                 libsql::params![to, from],
             )
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign entities: {}", e)))?;
+            .map_err(|e| WenlanError::VectorDb(format!("reassign memories: {}", e)))?;
 
-            conn.execute(
-                "UPDATE pages SET space = ?1 WHERE space = ?2",
-                libsql::params![to, from],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.space: {}", e)))?;
+        tx.execute(
+            "UPDATE entities SET space = ?1 WHERE space = ?2",
+            libsql::params![to, from],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("reassign entities: {}", e)))?;
 
-            conn.execute(
-                "UPDATE pages SET workspace = ?1 WHERE workspace = ?2",
-                libsql::params![to, from],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("reassign pages.workspace: {}", e)))?;
-
-            conn.execute("COMMIT", ()).await.map_err(|e| {
-                WenlanError::VectorDb(format!("reassign_memories_space commit: {}", e))
-            })?;
-
-            Ok::<usize, WenlanError>(updated as usize)
-        }
+        tx.execute(
+            "UPDATE pages
+                 SET version = CASE
+                         WHEN status='draft' THEN version+1
+                         ELSE version
+                     END,
+                     last_modified = CASE
+                         WHEN status='draft' THEN ?1
+                         ELSE last_modified
+                     END,
+                     space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                     workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
+                 WHERE space=?2 OR workspace=?2",
+            libsql::params![page_now, from, to],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("reassign pages scope: {}", e)))?;
+        #[cfg(test)]
+        page_drafts_test::transaction_test_hooks::after_space_cascade(&format!(
+            "reassign_memories_space:{from}"
+        ))
         .await;
 
-        match txn_result {
-            Ok(n) => Ok(n),
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                Err(e)
-            }
-        }
+        tx.commit()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reassign_memories_space commit: {}", e)))?;
+        Ok(updated as usize)
     }
 
     pub async fn confirm_space(&self, name: &str) -> Result<(), WenlanError> {
@@ -7780,7 +8905,10 @@ impl MemoryDB {
                 return Ok(cached);
             }
         }
-        let mut embedder = self.embedder.lock().unwrap();
+        let embedder = self.embedder.as_ref().ok_or_else(|| {
+            WenlanError::Embedding("embedding_unavailable_in_repair_mode".to_string())
+        })?;
+        let mut embedder = embedder.lock().unwrap();
         let embeddings = embedder
             .embed(vec![text], None)
             .map_err(|e| WenlanError::Embedding(e.to_string()))?;
@@ -7802,7 +8930,10 @@ impl MemoryDB {
             return Ok(vec![]);
         }
         let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        let mut embedder = self.embedder.lock().unwrap();
+        let embedder = self.embedder.as_ref().ok_or_else(|| {
+            WenlanError::Embedding("embedding_unavailable_in_repair_mode".to_string())
+        })?;
+        let mut embedder = embedder.lock().unwrap();
         embedder
             .embed(text_refs, None)
             .map_err(|e| WenlanError::Embedding(e.to_string()))
@@ -7999,7 +9130,7 @@ impl MemoryDB {
                      OR (dt.source = 'page' AND EXISTS (
                             SELECT 1 FROM pages p
                              WHERE p.id = dt.source_id
-                               AND p.workspace IS NULL
+                               AND p.workspace = '00000000-0000-4000-8000-000000000001'
                         ))
                   ORDER BY dt.source, dt.source_id, dt.tag"
                     .to_string(),
@@ -8823,6 +9954,13 @@ impl MemoryDB {
 
         let total = memory_rows.len();
         let transaction_result: Result<(), WenlanError> = async {
+            let replaced_sources: Vec<(String, String)> = source_ids_to_delete
+                .iter()
+                .filter(|(source, _)| source != "episode")
+                .cloned()
+                .collect();
+            Self::mark_pages_depending_on_memory_sources(&conn, &replaced_sources).await?;
+
             // Delete existing rows for these source_ids
             for (source, source_id) in &source_ids_to_delete {
                 conn.execute(
@@ -13206,6 +14344,7 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_by_source_id BEGIN: {e}")))?;
         let result: Result<(), WenlanError> = async {
+            Self::mark_pages_depending_on_memory_source(&conn, source, source_id).await?;
             conn.execute(
                 "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
                 libsql::params![source.to_string(), source_id.to_string()],
@@ -13256,6 +14395,116 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Invalidate every page whose join-table or legacy JSON provenance names
+    /// either the stable logical source id or one of that source's physical
+    /// memory-row ids. The owner existence guard keeps a delete of a
+    /// nonexistent source a true no-op.
+    /// Callers run this inside the same transaction as the source mutation so
+    /// page compile CAS can never observe new source content with an old token.
+    async fn mark_pages_depending_on_memory_source(
+        conn: &libsql::Connection,
+        source: &str,
+        source_id: &str,
+    ) -> Result<(), WenlanError> {
+        Self::mark_pages_depending_on_memory_sources(
+            conn,
+            &[(source.to_string(), source_id.to_string())],
+        )
+        .await
+    }
+
+    /// Batch form of [`Self::mark_pages_depending_on_memory_source`]. Locator
+    /// aliases (logical source id, physical row id, and the legacy JSON mirror)
+    /// contribute only one changed-source count. A page matched by several
+    /// logical sources advances its compile CAS token once for the atomic batch.
+    async fn mark_pages_depending_on_memory_sources(
+        conn: &libsql::Connection,
+        sources: &[(String, String)],
+    ) -> Result<(), WenlanError> {
+        let mut unique_sources: Vec<_> = sources
+            .iter()
+            .filter(|(source, _)| source != "episode")
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        unique_sources.sort();
+
+        let mut affected_pages: HashMap<String, i64> = HashMap::new();
+        for (source, source_id) in unique_sources {
+            let mut rows = conn
+                .query(
+                    "SELECT DISTINCT p.id
+                     FROM pages p
+                     WHERE EXISTS (
+                               SELECT 1 FROM memories owner
+                               WHERE owner.source = ?1 AND owner.source_id = ?2
+                           )
+                       AND (
+                           EXISTS (
+                               SELECT 1 FROM page_sources ps
+                               WHERE ps.page_id = p.id
+                                 AND (
+                                     ps.memory_source_id = ?2
+                                     OR ps.memory_source_id IN (
+                                         SELECT m.id FROM memories m
+                                         WHERE m.source = ?1 AND m.source_id = ?2
+                                     )
+                                 )
+                           )
+                           OR EXISTS (
+                               SELECT 1
+                               FROM json_each(COALESCE(p.source_memory_ids, '[]')) legacy_source
+                               WHERE CAST(legacy_source.value AS TEXT) = ?2
+                                  OR CAST(legacy_source.value AS TEXT) IN (
+                                      SELECT m.id FROM memories m
+                                      WHERE m.source = ?1 AND m.source_id = ?2
+                                  )
+                           )
+                       )",
+                    libsql::params![source.as_str(), source_id.as_str()],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "inventory pages for memory source {source_id}: {e}"
+                    ))
+                })?;
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!(
+                    "inventory page row for memory source {source_id}: {e}"
+                ))
+            })? {
+                let page_id = row.get::<String>(0).map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "inventory page id for memory source {source_id}: {e}"
+                    ))
+                })?;
+                *affected_pages.entry(page_id).or_default() += 1;
+            }
+        }
+
+        let mut affected_pages: Vec<_> = affected_pages.into_iter().collect();
+        affected_pages.sort_by(|left, right| left.0.cmp(&right.0));
+        for (page_id, changed_source_count) in affected_pages {
+            conn.execute(
+                "UPDATE pages
+                 SET stale_reason = 'source_updated',
+                     sources_updated_count = COALESCE(sources_updated_count, 0) + ?1,
+                     source_revision = COALESCE(source_revision, 0) + 1
+                 WHERE id = ?2",
+                libsql::params![changed_source_count, page_id.as_str()],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!(
+                    "invalidate page {page_id} for dependent memory sources: {e}"
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Rebind chunks from one source_id to another. Used for rename optimization:
     /// when a file is renamed (old vanishes, new appears with same content_hash),
     /// rebind the old document's chunks to the new doc_source_id instead of
@@ -13272,6 +14521,119 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("rebind_source_id begin: {e}")))?;
         let result = async {
+            if source != "episode" {
+                Self::mark_pages_depending_on_memory_source(&conn, source, old_source_id).await?;
+
+                let mut page_rows = conn
+                    .query(
+                        "SELECT p.id, p.source_memory_ids
+                         FROM pages p
+                         WHERE EXISTS (
+                                   SELECT 1 FROM memories owner
+                                   WHERE owner.source = ?1 AND owner.source_id = ?2
+                               )
+                           AND EXISTS (
+                               SELECT 1
+                               FROM json_each(COALESCE(p.source_memory_ids, '[]')) legacy_source
+                               WHERE CAST(legacy_source.value AS TEXT) = ?2
+                           )",
+                        libsql::params![source, old_source_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("rebind_source_id page JSON inventory: {e}"))
+                    })?;
+                let mut page_json_updates = Vec::new();
+                while let Some(row) = page_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("rebind_source_id page JSON row: {e}"))
+                })? {
+                    let page_id = row.get::<String>(0).map_err(|e| {
+                        WenlanError::VectorDb(format!("rebind_source_id page id: {e}"))
+                    })?;
+                    let source_ids_json = row.get::<String>(1).map_err(|e| {
+                        WenlanError::VectorDb(format!("rebind_source_id page sources: {e}"))
+                    })?;
+                    let source_ids: Vec<String> =
+                        serde_json::from_str(&source_ids_json).map_err(|e| {
+                            WenlanError::VectorDb(format!(
+                                "rebind_source_id parse page sources for {page_id}: {e}"
+                            ))
+                        })?;
+                    let mut rebound = Vec::with_capacity(source_ids.len());
+                    let mut seen = HashSet::new();
+                    for source_id in source_ids {
+                        let source_id = if source_id == old_source_id {
+                            new_source_id.to_string()
+                        } else {
+                            source_id
+                        };
+                        if seen.insert(source_id.clone()) {
+                            rebound.push(source_id);
+                        }
+                    }
+                    page_json_updates.push((
+                        page_id,
+                        serde_json::to_string(&rebound).map_err(|e| {
+                            WenlanError::VectorDb(format!(
+                                "rebind_source_id serialize page sources: {e}"
+                            ))
+                        })?,
+                    ));
+                }
+                drop(page_rows);
+
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_sources
+                         (page_id, memory_source_id, linked_at, link_reason)
+                     SELECT page_id, ?1, linked_at, link_reason
+                     FROM page_sources WHERE memory_source_id = ?2",
+                    libsql::params![new_source_id, old_source_id],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("rebind_source_id page sources insert: {e}"))
+                })?;
+                conn.execute(
+                    "DELETE FROM page_sources WHERE memory_source_id = ?1",
+                    libsql::params![old_source_id],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("rebind_source_id page sources delete: {e}"))
+                })?;
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_evidence
+                         (page_id, source_kind, locator, title, linked_at, link_reason)
+                     SELECT page_id, source_kind, ?1, title, linked_at, link_reason
+                     FROM page_evidence
+                     WHERE source_kind = 'memory' AND locator = ?2",
+                    libsql::params![new_source_id, old_source_id],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("rebind_source_id page evidence insert: {e}"))
+                })?;
+                conn.execute(
+                    "DELETE FROM page_evidence
+                     WHERE source_kind = 'memory' AND locator = ?1",
+                    libsql::params![old_source_id],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("rebind_source_id page evidence delete: {e}"))
+                })?;
+                for (page_id, source_ids_json) in page_json_updates {
+                    conn.execute(
+                        "UPDATE pages SET source_memory_ids = ?1 WHERE id = ?2",
+                        libsql::params![source_ids_json, page_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("rebind_source_id page JSON update: {e}"))
+                    })?;
+                }
+            }
+
             conn.execute(
                 "UPDATE memories SET source_id = ?1 WHERE source = ?2 AND source_id = ?3",
                 libsql::params![new_source_id, source, old_source_id],
@@ -13674,13 +15036,60 @@ impl MemoryDB {
     /// Delete memories within a time range. Returns the number deleted.
     pub async fn delete_by_time_range(&self, start: i64, end: i64) -> Result<usize, WenlanError> {
         let conn = self.conn.lock().await;
-        let deleted = conn
-            .execute(
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_time_range begin: {e}")))?;
+        let result: Result<u64, WenlanError> = async {
+            let mut rows = conn
+                .query(
+                    "SELECT DISTINCT source, source_id
+                     FROM memories
+                     WHERE last_modified >= ?1 AND last_modified <= ?2
+                       AND source != 'episode'",
+                    libsql::params![start, end],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_time_range source inventory: {e}"))
+                })?;
+            let mut deleted_sources = Vec::new();
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("delete_time_range source inventory row: {e}"))
+            })? {
+                deleted_sources.push((
+                    row.get::<String>(0).map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "delete_time_range source inventory source: {e}"
+                        ))
+                    })?,
+                    row.get::<String>(1).map_err(|e| {
+                        WenlanError::VectorDb(format!("delete_time_range source inventory id: {e}"))
+                    })?,
+                ));
+            }
+            drop(rows);
+            Self::mark_pages_depending_on_memory_sources(&conn, &deleted_sources).await?;
+            conn.execute(
                 "DELETE FROM memories WHERE last_modified >= ?1 AND last_modified <= ?2",
                 libsql::params![start, end],
             )
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("delete_time_range: {}", e)))?;
+            .map_err(|e| WenlanError::VectorDb(format!("delete_time_range: {e}")))
+        }
+        .await;
+        let deleted = match result {
+            Ok(deleted) => deleted,
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "delete_time_range commit: {error}"
+            )));
+        }
         Ok(deleted as usize)
     }
 
@@ -13690,13 +15099,38 @@ impl MemoryDB {
             return Ok(());
         }
         let conn = self.conn.lock().await;
-        for (source, source_id) in items {
-            conn.execute(
-                "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
-                libsql::params![source.clone(), source_id.clone()],
-            )
+        conn.execute("BEGIN", ())
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("delete_bulk: {}", e)))?;
+            .map_err(|e| WenlanError::VectorDb(format!("delete_bulk begin: {e}")))?;
+        let mut unique_items: Vec<_> = items
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        unique_items.sort();
+        let result: Result<(), WenlanError> = async {
+            Self::mark_pages_depending_on_memory_sources(&conn, &unique_items).await?;
+            for (source, source_id) in &unique_items {
+                conn.execute(
+                    "DELETE FROM memories WHERE source = ?1 AND source_id = ?2",
+                    libsql::params![source.as_str(), source_id.as_str()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete_bulk: {e}")))?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "delete_bulk commit: {error}"
+            )));
         }
         Ok(())
     }
@@ -13968,6 +15402,8 @@ impl MemoryDB {
                         "memory {source_id} changed before update"
                     )));
                 }
+
+                Self::mark_pages_depending_on_memory_source(&conn, &head.source, source_id).await?;
 
                 conn.execute(
                     "DELETE FROM memories
@@ -21376,6 +22812,12 @@ impl MemoryDB {
         payload: Option<&str>,
         confidence: f64,
     ) -> Result<(), WenlanError> {
+        if action == "lint_repair_review" {
+            return Err(WenlanError::Validation(
+                "lint repair reviews require the canonical insert_lint_review_if_absent writer"
+                    .to_string(),
+            ));
+        }
         let conn = self.conn.lock().await;
         let source_ids_json = serde_json::to_string(source_ids).unwrap_or_default();
         conn.execute(
@@ -21383,6 +22825,85 @@ impl MemoryDB {
             libsql::params![id, action, source_ids_json, payload, confidence],
         ).await.map_err(|e| WenlanError::VectorDb(format!("insert_refinement: {}", e)))?;
         Ok(())
+    }
+
+    /// Persist one stable lint Review Item without overwriting an existing
+    /// open or terminal decision. The deterministic id is the dedupe key;
+    /// `INSERT OR IGNORE` deliberately never resurrects a dismissed item.
+    pub async fn insert_lint_review_if_absent(
+        &self,
+        id: &str,
+        source_ids: &[String],
+        payload: &str,
+    ) -> Result<bool, WenlanError> {
+        let expected_payload = validate_lint_review_contract(id, source_ids, payload)?;
+        let source_ids_json = serde_json::to_string(source_ids)?;
+        let conn = self.conn.lock().await;
+        let changed = conn
+            .execute(
+                "INSERT OR IGNORE INTO refinement_queue
+                     (id, action, source_ids, payload, confidence, status)
+                 VALUES (?1, 'lint_repair_review', ?2, ?3, 1.0, 'awaiting_review')",
+                libsql::params![id.to_string(), source_ids_json.clone(), payload.to_string()],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("insert lint repair review: {error}"))
+            })?;
+        if changed == 1 {
+            return Ok(true);
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT action,source_ids,payload
+                   FROM refinement_queue
+                  WHERE id=?1
+                  LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("read lint repair review collision: {error}"))
+            })?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("read lint repair review collision row: {error}"))
+            })?
+            .ok_or_else(|| {
+                WenlanError::Validation("lint repair review collision row disappeared".to_string())
+            })?;
+        let existing_action = row
+            .get::<String>(0)
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+        let existing_source_ids = row
+            .get::<String>(1)
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+        let existing_payload = row
+            .get::<Option<String>>(2)
+            .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+        let existing_source_ids = serde_json::from_str::<Vec<String>>(&existing_source_ids)
+            .map_err(|error| {
+                WenlanError::Validation(format!(
+                    "lint repair review collision has invalid source_ids: {error}"
+                ))
+            })?;
+        let existing_payload = existing_payload.ok_or_else(|| {
+            WenlanError::Validation("lint repair review collision has no payload".to_string())
+        })?;
+        let existing_payload =
+            validate_lint_review_contract(id, &existing_source_ids, &existing_payload)?;
+        if existing_action != "lint_repair_review"
+            || existing_source_ids.as_slice() != source_ids
+            || existing_payload != expected_payload
+        {
+            return Err(WenlanError::Validation(
+                "lint repair review id collision is not equivalent".to_string(),
+            ));
+        }
+        Ok(false)
     }
 
     /// Stable fingerprint for a vocab proposal — keyed on (kind, old_value) ONLY,
@@ -22616,6 +24137,109 @@ impl MemoryDB {
         Ok(highest)
     }
 
+    /// Remove non-head chunks from an atomic merged memory. Pages should not
+    /// normally cite those transient physical rows, but a concurrent attach
+    /// can race the merge cleanup. Inventory and invalidate exactly those
+    /// physical locators in the same transaction as their deletion.
+    async fn delete_non_head_memory_chunks(&self, source_id: &str) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge chunk cleanup begin: {e}")))?;
+        let result: Result<(), WenlanError> =
+            async {
+                let mut chunk_rows = conn
+                    .query(
+                        "SELECT id FROM memories
+                     WHERE source_id = ?1 AND source = 'memory' AND chunk_index > 0",
+                        libsql::params![source_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("merge chunk cleanup inventory: {e}"))
+                    })?;
+                let mut chunk_ids = Vec::new();
+                while let Some(row) = chunk_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("merge chunk cleanup inventory row: {e}"))
+                })? {
+                    chunk_ids.push(row.get::<String>(0).map_err(|e| {
+                        WenlanError::VectorDb(format!("merge chunk cleanup id: {e}"))
+                    })?);
+                }
+                drop(chunk_rows);
+
+                let mut affected_pages = HashSet::new();
+                for chunk_id in &chunk_ids {
+                    let mut page_rows = conn
+                        .query(
+                            "SELECT DISTINCT p.id
+                         FROM pages p
+                         WHERE EXISTS (
+                                   SELECT 1 FROM page_sources ps
+                                   WHERE ps.page_id = p.id AND ps.memory_source_id = ?1
+                               )
+                            OR EXISTS (
+                                   SELECT 1
+                                   FROM json_each(COALESCE(p.source_memory_ids, '[]')) legacy_source
+                                   WHERE CAST(legacy_source.value AS TEXT) = ?1
+                               )",
+                            libsql::params![chunk_id.as_str()],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!(
+                                "merge chunk cleanup page inventory for {chunk_id}: {e}"
+                            ))
+                        })?;
+                    while let Some(row) = page_rows.next().await.map_err(|e| {
+                        WenlanError::VectorDb(format!("merge chunk cleanup page row: {e}"))
+                    })? {
+                        affected_pages.insert(row.get::<String>(0).map_err(|e| {
+                            WenlanError::VectorDb(format!("merge chunk cleanup page id: {e}"))
+                        })?);
+                    }
+                }
+
+                let mut affected_pages: Vec<_> = affected_pages.into_iter().collect();
+                affected_pages.sort();
+                for page_id in affected_pages {
+                    conn.execute(
+                        "UPDATE pages
+                     SET stale_reason = 'source_updated',
+                         sources_updated_count = COALESCE(sources_updated_count, 0) + 1,
+                         source_revision = COALESCE(source_revision, 0) + 1
+                     WHERE id = ?1",
+                        libsql::params![page_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("merge chunk cleanup page invalidation: {e}"))
+                    })?;
+                }
+
+                conn.execute(
+                    "DELETE FROM memories
+                 WHERE source_id = ?1 AND source = 'memory' AND chunk_index > 0",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("apply_merge dedup memories: {e}")))?;
+                Ok(())
+            }
+            .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        if let Err(error) = conn.execute("COMMIT", ()).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "merge chunk cleanup commit: {error}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Apply a merge: create a new memory with merged content that supersedes the originals.
     pub async fn apply_merge(
         &self,
@@ -22686,14 +24310,7 @@ impl MemoryDB {
 
         // Distilled memories are atomic — must be exactly 1 chunk.
         // The chunker sometimes produces duplicates; clean up any extras.
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "DELETE FROM memories WHERE source_id = ?1 AND source = 'memory' AND chunk_index > 0",
-            [merged_id.as_str()],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("apply_merge dedup memories: {}", e)))?;
-        drop(conn);
+        self.delete_non_head_memory_chunks(&merged_id).await?;
 
         // Archive the original source memories so they're hidden from stream
         // Skip archiving merged memories — they're handled via supersedes chain
@@ -23109,7 +24726,7 @@ impl MemoryDB {
                         ReadScope::Uncategorized => (
                             "SELECT id, title FROM pages
                           WHERE status = 'active' AND source_memory_ids LIKE ?1
-                            AND workspace IS NULL
+                            AND workspace = '00000000-0000-4000-8000-000000000001'
                           LIMIT 5",
                             vec![libsql::Value::Text(pattern)],
                         ),
@@ -24342,6 +25959,41 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Append the immutable `page_history` row for the version a write just
+    /// produced, on the caller's already-open transaction.
+    ///
+    /// `SELECT ... FROM pages` reads the row the caller just updated, inside
+    /// that same transaction, so the snapshot and its version number can never
+    /// disagree with what landed — and no caller has to compute the post-bump
+    /// version itself. A history row is therefore not "written alongside" the
+    /// page: either both exist or neither does.
+    ///
+    /// This is the ONE site that appends a version row, shared by every path
+    /// that bumps `pages.version`. A path that grows its own copy of this
+    /// statement is how the invariant "one durable row per page version" drifts
+    /// back into being false for some page kinds but not others — which is
+    /// exactly what happened to source pages before this was factored out.
+    ///
+    /// A plain INSERT, not `OR IGNORE`: `UNIQUE(page_id, version)` colliding
+    /// means a row already exists for a version this write claims to have just
+    /// created, and failing the transaction is the correct answer to that.
+    async fn append_page_history(
+        conn: &libsql::Connection,
+        page_id: &str,
+        edited_by: &str,
+        created_at: i64,
+    ) -> Result<(), libsql::Error> {
+        conn.execute(
+            "INSERT INTO page_history \
+               (page_id, version, content, source_memory_ids, edited_by, created_at) \
+             SELECT id, version, content, source_memory_ids, ?2, ?3 \
+             FROM pages WHERE id = ?1",
+            libsql::params![page_id, edited_by, created_at],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Batch-resolve typed `page_evidence.source_kind` values
     /// (`memory` | `external_url` | `external_file` | `authored`) for a list
     /// of source ids, keyed by id. The ONE wiring site for every citation
@@ -24431,12 +26083,36 @@ impl MemoryDB {
         workspace: Option<&str>,
         citations_json: Option<&str>,
     ) -> Result<(), WenlanError> {
-        // Sanitize daemon-reserved Sources delimiters from client content so
-        // persisted `Page.content` never carries them (symmetric with the
-        // watcher's egress canonicalization). Shadows `content` so both the
-        // INSERT and the wikilink refresh below see the sanitized value.
-        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
-        let content: &str = &sanitized_content;
+        // M1 honest columns: this is the single storage-layer wrapper every
+        // page-insert path funnels through, so both scope columns leave here
+        // carrying the same non-NULL value -- the mirror invariant the M1
+        // read-collapse depends on (a read that filters `space` alone is only
+        // correct because `workspace` == `space` for every row this writes).
+        // Per spec line 518, `workspace` is the authoritative scope input
+        // (migration 63) and wins unconditionally when present; otherwise the
+        // caller-named `space` is trusted verbatim, defaulting to the reserved
+        // sentinel id (`UNFILED_SPACE_ID`).
+        //
+        // This primitive does NOT registration-gate `space`, because it is not
+        // the trust boundary: untrusted external scope input is validated one
+        // layer up at the daemon's `handle_create_page` (`registered_request_space`).
+        // Migration 80's own backfill DOES gate `space` on registration -- but
+        // there it is classifying legacy residue of unknown provenance (category
+        // vs. scope), a different problem from a live caller naming a scope.
+        // Gating here instead collapsed every unregistered test space to
+        // 'unfiled', silently breaking scope-isolation assertions (Option A
+        // ruling; the prior gate was the bug, not the 14 tests).
+        let resolved_space = match workspace {
+            Some(ws) => ws.to_string(),
+            None => space.unwrap_or(UNFILED_SPACE_ID).to_string(),
+        };
+        let space: &str = &resolved_space;
+        let workspace: &str = &resolved_space;
+
+        // Canonical storage is exact source. Projection-owned delimiters are
+        // rejected rather than rewritten, and every consumer below sees the
+        // same caller-supplied representation.
+        let content = crate::export::provenance::validate_canonical_page_content(content)?;
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
 
@@ -24518,6 +26194,23 @@ impl MemoryDB {
             )));
         }
 
+        // A page's first version is history too — without this row a freshly
+        // created page has an empty timeline until someone happens to edit it.
+        // Same transaction as the INSERT, same reasoning as the update path.
+        if let Err(e) = conn
+            .execute(
+                "INSERT OR IGNORE INTO page_history \
+                   (page_id, version, content, source_memory_ids, edited_by, created_at) \
+                 SELECT id, version, content, source_memory_ids, 'create', ?2 \
+                 FROM pages WHERE id = ?1",
+                libsql::params![id, linked_at],
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!("insert_page history: {e}")));
+        }
+
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("insert_page commit: {e}")))?;
@@ -24545,10 +26238,10 @@ impl MemoryDB {
         source_memory_ids: &[&str],
         link_reason: &str,
     ) -> Result<bool, WenlanError> {
-        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
+        let content = crate::export::provenance::validate_canonical_page_content(content)?;
         let source_ids_json = serde_json::to_string(source_memory_ids)
             .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
-        let embed_text = crate::pages::page_embedding_text(title, summary, &sanitized_content);
+        let embed_text = crate::pages::page_embedding_text(title, summary, content);
         let embedding_sql = match self.generate_embeddings(&[embed_text]) {
             Ok(mut vectors) if !vectors.is_empty() => {
                 vectors.pop().map(|embedding| Self::vec_to_sql(&embedding))
@@ -24575,13 +26268,14 @@ impl MemoryDB {
                         "UPDATE pages SET title=?1, summary=?2, content=?3,
                              source_memory_ids=?4, version=version+1,
                              last_compiled=?5, last_modified=?5,
-                             embedding=vector32(?6), citations='[]'
+                             embedding=vector32(?6), citations='[]',
+                             source_revision=COALESCE(source_revision, 0)+1
                          WHERE id=?7 AND status='active'
                            AND creation_kind='source' AND COALESCE(user_edited,0)=0",
                         libsql::params![
                             title,
                             summary,
-                            sanitized_content.as_str(),
+                            content,
                             source_ids_json.as_str(),
                             now.as_str(),
                             embedding,
@@ -24594,13 +26288,14 @@ impl MemoryDB {
                     conn.execute(
                         "UPDATE pages SET title=?1, summary=?2, content=?3,
                              source_memory_ids=?4, version=version+1,
-                             last_compiled=?5, last_modified=?5, citations='[]'
+                             last_compiled=?5, last_modified=?5, citations='[]',
+                             source_revision=COALESCE(source_revision, 0)+1
                          WHERE id=?6 AND status='active'
                            AND creation_kind='source' AND COALESCE(user_edited,0)=0",
                         libsql::params![
                             title,
                             summary,
-                            sanitized_content.as_str(),
+                            content,
                             source_ids_json.as_str(),
                             now.as_str(),
                             id
@@ -24642,6 +26337,12 @@ impl MemoryDB {
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("replace_source_page evidence insert: {e}"))
                 })?;
+            // Same transaction as the version bump above: a re-enriched source
+            // page is a new version like any other, and leaves the same durable
+            // row behind.
+            Self::append_page_history(&conn, id, link_reason, now_ts)
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("replace_source_page history: {e}")))?;
             Ok::<bool, WenlanError>(true)
         }
         .await;
@@ -24663,10 +26364,46 @@ impl MemoryDB {
             )));
         }
         drop(conn);
-        if let Err(error) = self.refresh_page_wikilinks(id, &sanitized_content).await {
+        if let Err(error) = self.refresh_page_wikilinks(id, content).await {
             log::warn!("[page-links] source Page refresh failed for {id}: {error}");
         }
         Ok(true)
+    }
+
+    async fn page_status_on_conn(
+        conn: &libsql::Connection,
+        page_id: &str,
+    ) -> Result<Option<String>, WenlanError> {
+        let mut rows = conn
+            .query(
+                "SELECT status FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page status: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("page status row: {e}")))?
+        {
+            Some(row) => row
+                .get::<String>(0)
+                .map(Some)
+                .map_err(|e| WenlanError::VectorDb(format!("page status value: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    async fn reject_page_draft_on_conn(
+        conn: &libsql::Connection,
+        page_id: &str,
+    ) -> Result<(), WenlanError> {
+        if Self::page_status_on_conn(conn, page_id).await?.as_deref() == Some("draft") {
+            return Err(WenlanError::Validation(format!(
+                "Page {page_id} is not active"
+            )));
+        }
+        Ok(())
     }
 
     /// Retrieve a page by id. Returns None if not found.
@@ -24792,6 +26529,7 @@ impl MemoryDB {
     /// can write through afterwards.
     pub async fn clear_user_edited(&self, page_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET user_edited = 0, stale_reason = 'manual_force' WHERE id = ?1",
             libsql::params![page_id],
@@ -24813,7 +26551,7 @@ impl MemoryDB {
         let (sql, params): (String, Vec<libsql::Value>) = match space {
             Some("uncategorized") => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations
-                 FROM pages WHERE status = ?1 AND space IS NULL ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                 FROM pages WHERE status = ?1 AND space = '00000000-0000-4000-8000-000000000001' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
                     libsql::Value::Integer(limit as i64),
@@ -24856,6 +26594,72 @@ impl MemoryDB {
         Ok(results)
     }
 
+    /// Every recorded version of a page, newest first. The version a page is
+    /// currently at is always the first entry — `page_history` is written in the
+    /// same transaction as the page itself, so it cannot lag behind.
+    pub async fn list_page_history(
+        &self,
+        page_id: &str,
+        limit: i64,
+    ) -> Result<Vec<PageHistoryEntry>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT version, content, source_memory_ids, edited_by, created_at \
+                 FROM page_history WHERE page_id = ?1 \
+                 ORDER BY version DESC LIMIT ?2",
+                libsql::params![page_id, limit],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_page_history: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("list_page_history row: {e}")))?
+        {
+            let source_ids_json: String = row.get(2).unwrap_or_else(|_| "[]".to_string());
+            out.push(PageHistoryEntry {
+                version: row.get(0).unwrap_or(0),
+                content: row.get(1).unwrap_or_default(),
+                source_memory_ids: serde_json::from_str(&source_ids_json).unwrap_or_default(),
+                edited_by: row.get(3).unwrap_or_default(),
+                created_at: row.get(4).unwrap_or(0),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Look up a stored retry receipt. `None` means this caller has not run
+    /// this operation — or ran it and rolled back, which is the same thing.
+    pub async fn get_operation_receipt(
+        &self,
+        caller_id: &str,
+        operation_id: &str,
+    ) -> Result<Option<StoredReceipt>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT request_digest, response, created_at FROM operation_receipts \
+                 WHERE caller_id = ?1 AND operation_id = ?2",
+                libsql::params![caller_id, operation_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_operation_receipt: {e}")))?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_operation_receipt row: {e}")))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(StoredReceipt {
+            request_digest: row.get(0).unwrap_or_default(),
+            response: row.get(1).unwrap_or_default(),
+            created_at: row.get(2).unwrap_or(0),
+        }))
+    }
+
     /// Update a page's content + source memory ids in a single atomic UPDATE
     /// (content, version bump, timestamps, user_edited flag). Reconciles the
     /// `page_sources` join table to match the new source set: rows no longer
@@ -24874,6 +26678,8 @@ impl MemoryDB {
             source_memory_ids,
             link_reason,
             false,
+            None,
+            None,
             None,
             None,
             None,
@@ -24907,6 +26713,40 @@ impl MemoryDB {
             None,
             None,
             None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn try_update_page_content_with_changelog_at_source_revision(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        require_stale: bool,
+        changelog: &str,
+        citations_json: Option<&str>,
+        expected_source_revision: i64,
+        receipt: Option<OperationReceipt<'_>>,
+    ) -> Result<bool, WenlanError> {
+        // `expected_version` stays None here on purpose: the inner fn refuses a
+        // write that carries both CAS modes, and this entry point's guard is the
+        // source revision.
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            require_stale,
+            Some(changelog),
+            citations_json,
+            None,
+            Some(expected_source_revision),
+            None,
+            receipt,
         )
         .await
     }
@@ -24919,6 +26759,11 @@ impl MemoryDB {
     /// `citations_json`: `Some(json)` writes fresh per-claim citation records
     /// atomically with the content; `None` resets `citations` to `'[]'` (stale
     /// claim-maps must never survive a content change — global constraint).
+    ///
+    /// `expected_version`: `Some(v)` folds an optimistic-concurrency guard into
+    /// the same UPDATE, so the row the caller made its ownership decision from is
+    /// provably the row being written. A mismatch affects zero rows and returns
+    /// `false` rather than clobbering whatever landed in between.
     #[allow(clippy::too_many_arguments)]
     pub async fn try_update_page_content_with_changelog(
         &self,
@@ -24929,6 +26774,8 @@ impl MemoryDB {
         require_stale: bool,
         changelog: &str,
         citations_json: Option<&str>,
+        expected_version: Option<i64>,
+        receipt: Option<OperationReceipt<'_>>,
     ) -> Result<bool, WenlanError> {
         self.try_update_page_content(
             id,
@@ -24938,8 +26785,10 @@ impl MemoryDB {
             require_stale,
             Some(changelog),
             citations_json,
+            expected_version,
             None,
             None,
+            receipt,
         )
         .await
     }
@@ -24967,6 +26816,8 @@ impl MemoryDB {
             citations_json,
             Some(expected_version),
             None,
+            None,
+            None,
         )
         .await
     }
@@ -24992,7 +26843,9 @@ impl MemoryDB {
             Some(changelog),
             None,
             expected_version,
+            None,
             Some(revision_source_id),
+            None,
         )
         .await
     }
@@ -25015,22 +26868,26 @@ impl MemoryDB {
         changelog: Option<&str>,
         citations_json: Option<&str>,
         expected_version: Option<i64>,
+        expected_source_revision: Option<i64>,
         consume_revision_id: Option<&str>,
+        receipt: Option<OperationReceipt<'_>>,
     ) -> Result<bool, WenlanError> {
+        if expected_version.is_some() && expected_source_revision.is_some() {
+            return Err(WenlanError::Validation(
+                "page update cannot combine version and source-revision CAS".to_string(),
+            ));
+        }
         let citations_bind: &str = citations_json.unwrap_or("[]");
-        // Sanitize daemon-reserved Sources delimiters from client content so
-        // persisted `Page.content` never carries them (symmetric with the
-        // watcher's egress canonicalization). Shadows `content` so both the
-        // UPDATE and the wikilink refresh below see the sanitized value. The
-        // watcher's apply path already passes a canonicalized body, so this is
-        // an idempotent no-op there.
-        let sanitized_content = crate::export::provenance::sanitize_ingress_content(content);
-        let content: &str = &sanitized_content;
+        // Canonical storage is exact source. The watcher already decodes its
+        // projection before this boundary; all other callers must supply
+        // delimiter-free source, which is stored without transformation.
+        let content = crate::export::provenance::validate_canonical_page_content(content)?;
         let source_ids_json = serde_json::to_string(&source_memory_ids)
             .map_err(|e| WenlanError::VectorDb(format!("serialize source_memory_ids: {e}")))?;
         let now = chrono::Utc::now().to_rfc3339();
         let now_ts = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("update_page_content begin: {e}")))?;
@@ -25061,7 +26918,10 @@ impl MemoryDB {
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
                    changelog = ?6, \
-                   citations = ?7 \
+                   citations = ?7, \
+                   stale_reason = NULL, \
+                   sources_updated_count = 0, \
+                   source_revision = COALESCE(source_revision, 0) + 1 \
                  WHERE id = ?5 \
                    AND stale_reason IS NOT NULL \
                    AND COALESCE(user_edited, 0) = 0"
@@ -25075,42 +26935,66 @@ impl MemoryDB {
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
                    changelog = ?6, \
-                   citations = ?7 \
+                   citations = ?7, \
+                   source_revision = COALESCE(source_revision, 0) + 1 \
                  WHERE id = ?5"
             }
             .to_string();
             if expected_version.is_some() {
                 sql.push_str(" AND version = ?8");
             }
-            let update_result = if let Some(version) = expected_version {
-                conn.execute(
-                    &sql,
-                    libsql::params![
-                        content,
-                        source_ids_json,
-                        now,
-                        link_reason,
-                        id,
-                        cl,
-                        citations_bind,
-                        version
-                    ],
-                )
-                .await
-            } else {
-                conn.execute(
-                    &sql,
-                    libsql::params![
-                        content,
-                        source_ids_json,
-                        now,
-                        link_reason,
-                        id,
-                        cl,
-                        citations_bind
-                    ],
-                )
-                .await
+            if expected_source_revision.is_some() {
+                sql.push_str(" AND COALESCE(source_revision, 0) = ?8");
+            }
+            let update_result = match (expected_version, expected_source_revision) {
+                (Some(version), None) => {
+                    conn.execute(
+                        &sql,
+                        libsql::params![
+                            content,
+                            source_ids_json,
+                            now,
+                            link_reason,
+                            id,
+                            cl,
+                            citations_bind,
+                            version
+                        ],
+                    )
+                    .await
+                }
+                (None, Some(revision)) => {
+                    conn.execute(
+                        &sql,
+                        libsql::params![
+                            content,
+                            source_ids_json,
+                            now,
+                            link_reason,
+                            id,
+                            cl,
+                            citations_bind,
+                            revision
+                        ],
+                    )
+                    .await
+                }
+                (None, None) => {
+                    conn.execute(
+                        &sql,
+                        libsql::params![
+                            content,
+                            source_ids_json,
+                            now,
+                            link_reason,
+                            id,
+                            cl,
+                            citations_bind
+                        ],
+                    )
+                    .await
+                }
+                (Some(_), Some(_)) => unreachable!("validated above"),
             };
             match update_result {
                 Ok(n) => n,
@@ -25129,7 +27013,10 @@ impl MemoryDB {
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
-                   citations = ?6 \
+                   citations = ?6, \
+                   stale_reason = NULL, \
+                   sources_updated_count = 0, \
+                   source_revision = COALESCE(source_revision, 0) + 1 \
                  WHERE id = ?5 \
                    AND stale_reason IS NOT NULL \
                    AND COALESCE(user_edited, 0) = 0"
@@ -25142,40 +27029,63 @@ impl MemoryDB {
                    last_modified = ?3, \
                    user_edited = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 1 ELSE user_edited END, \
                    review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
-                   citations = ?6 \
+                   citations = ?6, \
+                   source_revision = COALESCE(source_revision, 0) + 1 \
                  WHERE id = ?5"
             }
             .to_string();
             if expected_version.is_some() {
                 sql.push_str(" AND version = ?7");
             }
-            let update_result = if let Some(version) = expected_version {
-                conn.execute(
-                    &sql,
-                    libsql::params![
-                        content,
-                        source_ids_json,
-                        now,
-                        link_reason,
-                        id,
-                        citations_bind,
-                        version
-                    ],
-                )
-                .await
-            } else {
-                conn.execute(
-                    &sql,
-                    libsql::params![
-                        content,
-                        source_ids_json,
-                        now,
-                        link_reason,
-                        id,
-                        citations_bind
-                    ],
-                )
-                .await
+            if expected_source_revision.is_some() {
+                sql.push_str(" AND COALESCE(source_revision, 0) = ?7");
+            }
+            let update_result = match (expected_version, expected_source_revision) {
+                (Some(version), None) => {
+                    conn.execute(
+                        &sql,
+                        libsql::params![
+                            content,
+                            source_ids_json,
+                            now,
+                            link_reason,
+                            id,
+                            citations_bind,
+                            version
+                        ],
+                    )
+                    .await
+                }
+                (None, Some(revision)) => {
+                    conn.execute(
+                        &sql,
+                        libsql::params![
+                            content,
+                            source_ids_json,
+                            now,
+                            link_reason,
+                            id,
+                            citations_bind,
+                            revision
+                        ],
+                    )
+                    .await
+                }
+                (None, None) => {
+                    conn.execute(
+                        &sql,
+                        libsql::params![
+                            content,
+                            source_ids_json,
+                            now,
+                            link_reason,
+                            id,
+                            citations_bind
+                        ],
+                    )
+                    .await
+                }
+                (Some(_), Some(_)) => unreachable!("validated above"),
             };
             match update_result {
                 Ok(n) => n,
@@ -25185,7 +27095,10 @@ impl MemoryDB {
                 }
             }
         };
-        if (require_stale || expected_version.is_some() || consume_revision_id.is_some())
+        if (require_stale
+            || expected_version.is_some()
+            || expected_source_revision.is_some()
+            || consume_revision_id.is_some())
             && affected == 0
         {
             // No rows matched the CAS condition (concurrent writer won or page
@@ -25329,6 +27242,54 @@ impl MemoryDB {
             }
         }
 
+        // Append the immutable history row for the version this write produced.
+        if let Err(e) = Self::append_page_history(&conn, id, link_reason, now_ts).await {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "update_page_content history: {e}"
+            )));
+        }
+
+        // Record the retry receipt in the same transaction as the write it
+        // describes. Committed together or not at all — a receipt that
+        // outlived a rolled-back write would tell the next retry "already
+        // done" about a change that never landed.
+        //
+        // A plain INSERT (not OR IGNORE): the PRIMARY KEY collision is the
+        // signal that another attempt with this id got there first, and
+        // rolling back is the correct answer — the caller re-reads the
+        // receipt and replays what actually landed.
+        if let Some(r) = receipt {
+            if let Err(e) = conn
+                .execute(
+                    "INSERT INTO operation_receipts \
+                       (caller_id, operation_id, request_digest, response, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    libsql::params![
+                        r.caller_id,
+                        r.operation_id,
+                        r.request_digest,
+                        r.response,
+                        now_ts
+                    ],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::Conflict(format!(
+                    "operation {}/{} already recorded: {e}",
+                    r.caller_id, r.operation_id
+                )));
+            }
+        }
+
+        if take_fail_before_commit(id) {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(
+                "injected failure before commit".into(),
+            ));
+        }
+
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("update_page_content commit: {e}")))?;
@@ -25415,8 +27376,9 @@ impl MemoryDB {
 
     /// Scoped successor to `find_matching_page` for cluster-dedup (P2).
     /// Entity-first, then embedding cosine, but constrained:
-    ///  - `workspace` (when Some): only pages whose `workspace` matches are eligible,
-    ///    falling back to `space` for legacy pages that predate the workspace column.
+    ///  - `workspace` (when Some): only pages whose `space` column matches are
+    ///    eligible (M1 honest columns, migration 80: `workspace` and `space`
+    ///    are mirrored duplicates, so reading either is equivalent).
     ///    `None` = no workspace constraint.
     ///  - only `review_status='confirmed'` pages are dedup targets.
     ///  - when `allow_user_edited=false`, human-owned pages (`user_edited=1` or
@@ -25440,7 +27402,7 @@ impl MemoryDB {
                      FROM pages
                      WHERE entity_id = ?1 AND status = 'active'
                        AND COALESCE(review_status, 'confirmed') = 'confirmed'
-                       AND (?2 IS NULL OR COALESCE(workspace, space) = ?2)
+                       AND (?2 IS NULL OR space = ?2)
                        AND (?3 != 0 OR (COALESCE(user_edited, 0) = 0 AND COALESCE(creation_kind, 'distilled') <> 'authored'))
                      ORDER BY id ASC LIMIT 1",
                     libsql::params![eid, workspace, allow_human_owned],
@@ -25470,7 +27432,7 @@ impl MemoryDB {
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
                    AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
-                   AND (?2 IS NULL OR COALESCE(c.workspace, c.space) = ?2)
+                   AND (?2 IS NULL OR c.space = ?2)
                    AND (?3 != 0 OR (COALESCE(c.user_edited, 0) = 0 AND COALESCE(c.creation_kind, 'distilled') <> 'authored'))
                  ORDER BY dist ASC LIMIT 1",
                 libsql::params![emb_sql, workspace, allow_human_owned],
@@ -25519,29 +27481,6 @@ impl MemoryDB {
                             return Ok(true);
                         }
                     }
-                }
-            }
-        }
-
-        // Check 2: New memories linked to same entity but not in source_memory_ids?
-        if let Some(ref entity_id) = page.entity_id {
-            let mut rows = conn
-                .query(
-                    "SELECT COUNT(*) FROM memories \
-                 WHERE entity_id = ?1 AND chunk_index = 0 AND source = 'memory' \
-                   AND is_recap = 0 AND source_id NOT LIKE 'merged_%'",
-                    libsql::params![entity_id.clone()],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("page new mem check: {e}")))?;
-            if let Some(row) = rows
-                .next()
-                .await
-                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-            {
-                let total: u64 = row.get(0).unwrap_or(0);
-                if total as usize > page.source_memory_ids.len() {
-                    return Ok(true);
                 }
             }
         }
@@ -25604,6 +27543,7 @@ impl MemoryDB {
     pub async fn archive_page(&self, id: &str) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, id).await?;
         conn.execute(
             "UPDATE pages SET status = 'archived', last_modified = ?1 WHERE id = ?2",
             libsql::params![now, id],
@@ -25692,6 +27632,7 @@ impl MemoryDB {
                        source_memory_ids = ?1, \
                        stale_reason = 'source_updated', \
                        sources_updated_count = COALESCE(sources_updated_count, 0) + ?2, \
+                       source_revision = COALESCE(source_revision, 0) + 1, \
                        last_modified = ?3 \
                      WHERE id = ?4 AND status = 'active'",
                     libsql::params![
@@ -25928,6 +27869,7 @@ impl MemoryDB {
 
     pub async fn delete_page(&self, id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_page begin: {e}")))?;
@@ -25984,8 +27926,8 @@ impl MemoryDB {
     }
 
     /// Return active page titles ranked by embedding similarity to `query`,
-    /// optionally constrained to the same workspace. Falls back to `space`
-    /// for legacy pages created before the dedicated workspace column.
+    /// optionally constrained to the same space (M1 honest columns:
+    /// `workspace` and `space` are mirrored duplicates, so this reads `space`).
     pub async fn list_relevant_active_page_titles(
         &self,
         query: &str,
@@ -26005,7 +27947,7 @@ impl MemoryDB {
                 "SELECT title FROM pages \
                  WHERE status = 'active' \
                    AND embedding IS NOT NULL \
-                   AND COALESCE(workspace, space) = ?2 \
+                   AND space = ?2 \
                  ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
                  LIMIT ?3"
                     .to_string(),
@@ -26096,8 +28038,7 @@ impl MemoryDB {
             .query(
                 "SELECT id FROM pages
                  WHERE LOWER(title) = LOWER(?1) AND status = 'active'
-                   AND ((?2 IS NULL AND COALESCE(workspace, space) IS NULL)
-                        OR COALESCE(workspace, space) = ?2)
+                   AND space = COALESCE(?2, '00000000-0000-4000-8000-000000000001')
                  ORDER BY id ASC LIMIT 2",
                 libsql::params![trimmed, scope],
             )
@@ -26139,6 +28080,7 @@ impl MemoryDB {
         links: &[crate::synthesis::wikilinks::Wikilink],
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, source_page_id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("replace_page_links begin: {e}")))?;
@@ -26286,14 +28228,14 @@ impl MemoryDB {
     /// Snapshots the orphan rows
     /// under a brief lock, then drops the connection before the per-label
     /// lookups so other writers aren't starved while the resolver scans.
-    /// Resolution is per source Page and scope; existing non-NULL targets are
+    /// Resolution is per source Page and space; existing non-NULL targets are
     /// explicit inventory and are never rewritten here.
     pub async fn resolve_orphan_page_links(&self) -> Result<usize, WenlanError> {
         let orphan_rows: Vec<(String, String, Option<String>)> = {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT pl.source_page_id, pl.label_key, COALESCE(p.workspace, p.space)
+                    "SELECT pl.source_page_id, pl.label_key, p.space
                      FROM page_links pl
                      INNER JOIN pages p ON p.id = pl.source_page_id
                      WHERE pl.target_page_id IS NULL AND p.status = 'active'
@@ -26526,7 +28468,8 @@ impl MemoryDB {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT id, title, summary FROM pages WHERE embedding IS NULL",
+                    "SELECT id, title, summary FROM pages \
+                     WHERE embedding IS NULL AND status != 'draft'",
                     (),
                 )
                 .await
@@ -26563,7 +28506,8 @@ impl MemoryDB {
             let emb_sql = Self::vec_to_sql(emb);
             if conn
                 .execute(
-                    "UPDATE pages SET embedding = vector32(?1) WHERE id = ?2",
+                    "UPDATE pages SET embedding = vector32(?1) \
+                     WHERE id = ?2 AND status != 'draft'",
                     libsql::params![emb_sql, id.clone()],
                 )
                 .await
@@ -26586,7 +28530,7 @@ impl MemoryDB {
     /// citations (JSON array of `wenlan_types::pages::PageCitation`, may be NULL —
     /// NULL and unparseable both default to an empty Vec).
     /// In ranking SELECTs (find_matching_page, search_pages vector branch), dist is at column 20.
-    fn row_to_page(row: &libsql::Row) -> Result<Page, WenlanError> {
+    pub(crate) fn row_to_page(row: &libsql::Row) -> Result<Page, WenlanError> {
         let source_ids_json: String = row.get::<String>(6).unwrap_or_else(|_| "[]".to_string());
         let source_memory_ids: Vec<String> =
             serde_json::from_str(&source_ids_json).unwrap_or_default();
@@ -26611,7 +28555,15 @@ impl MemoryDB {
                 .get::<String>(3)
                 .map_err(|e| WenlanError::VectorDb(format!("page content: {e}")))?,
             entity_id: row.get::<Option<String>>(4).unwrap_or(None),
-            space: row.get::<Option<String>>(5).unwrap_or(None),
+            // M1: NULL scopes are normalized to the reserved sentinel id so
+            // the scope columns stay NOT NULL (spec §7). Translate it back to None
+            // on the wire so a pre-M1 uncategorized page surfaces identically
+            // (no wire-contract change). Registered scopes -- including a user's
+            // own space literally named "unfiled" -- pass through verbatim.
+            space: row
+                .get::<Option<String>>(5)
+                .unwrap_or(None)
+                .filter(|s| s != UNFILED_SPACE_ID),
             source_memory_ids,
             version: row.get::<i64>(7).unwrap_or(1),
             status: row
@@ -26643,7 +28595,11 @@ impl MemoryDB {
             review_status: row
                 .get::<String>(17)
                 .unwrap_or_else(|_| "confirmed".to_string()),
-            workspace: row.get::<Option<String>>(18).unwrap_or(None),
+            // M1: reserved sentinel id hidden on the wire (see `space` above).
+            workspace: row
+                .get::<Option<String>>(18)
+                .unwrap_or(None)
+                .filter(|s| s != UNFILED_SPACE_ID),
             citations,
         })
     }
@@ -26680,19 +28636,42 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("link_page_source begin: {e}")))?;
 
-        if let Err(e) = conn
+        let inserted = match conn
             .execute(
                 "INSERT OR IGNORE INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, ?3, ?4)",
                 libsql::params![page_id, memory_source_id, now, link_reason],
             )
             .await
         {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(WenlanError::VectorDb(format!("link_page_source: {e}")));
+            Ok(inserted) => inserted,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!("link_page_source: {e}")));
+            }
+        };
+
+        if inserted > 0 {
+            if let Err(e) = conn
+                .execute(
+                    "UPDATE pages
+                     SET stale_reason = 'source_updated',
+                         sources_updated_count = COALESCE(sources_updated_count, 0) + 1,
+                         source_revision = COALESCE(source_revision, 0) + 1
+                     WHERE id = ?1",
+                    libsql::params![page_id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "link_page_source mark stale: {e}"
+                )));
+            }
         }
 
         if let Err(e) = Self::insert_resolved_page_evidence(
@@ -26734,9 +28713,38 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources begin: {e}")))?;
+
+        let desired_sources: std::collections::BTreeSet<&str> =
+            memory_source_ids.iter().copied().collect();
+        let mut current_rows = conn
+            .query(
+                "SELECT memory_source_id FROM page_sources WHERE page_id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources read: {e}")))?;
+        let mut current_sources = std::collections::BTreeSet::new();
+        while let Some(row) = current_rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("replace_page_sources read: {e}")))?
+        {
+            current_sources.insert(
+                row.get::<String>(0).map_err(|e| {
+                    WenlanError::VectorDb(format!("replace_page_sources read: {e}"))
+                })?,
+            );
+        }
+        drop(current_rows);
+        let sources_changed = current_sources
+            != desired_sources
+                .iter()
+                .map(|source| (*source).to_string())
+                .collect();
 
         if memory_source_ids.is_empty() {
             if let Err(e) = conn
@@ -26839,6 +28847,25 @@ impl MemoryDB {
             return Err(WenlanError::VectorDb(format!(
                 "replace_page_sources evidence insert: {e}"
             )));
+        }
+
+        if sources_changed {
+            if let Err(e) = conn
+                .execute(
+                    "UPDATE pages
+                     SET stale_reason = 'source_updated',
+                         sources_updated_count = COALESCE(sources_updated_count, 0) + 1,
+                         source_revision = COALESCE(source_revision, 0) + 1
+                     WHERE id = ?1",
+                    libsql::params![page_id],
+                )
+                .await
+            {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "replace_page_sources mark stale: {e}"
+                )));
+            }
         }
 
         conn.execute("COMMIT", ())
@@ -26966,6 +28993,7 @@ impl MemoryDB {
         citations_json: Option<&str>,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET citations = ?1 WHERE id = ?2",
             libsql::params![citations_json, page_id],
@@ -26989,6 +29017,7 @@ impl MemoryDB {
         changelog_json: &str,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET citations = ?1, changelog = ?2 WHERE id = ?3",
             libsql::params![citations_json, changelog_json, page_id],
@@ -27028,6 +29057,7 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -27205,38 +29235,101 @@ impl MemoryDB {
         Ok(result)
     }
 
-    /// Remove page_sources rows where the referenced memory no longer exists.
-    /// Also mirrors the DELETE to page_evidence (dual-write contract).
+    /// Remove unique orphaned memory locators from page_sources and the legacy
+    /// JSON provenance mirror. Also mirrors the DELETE to page_evidence.
+    /// Returns the number of unique `(page, locator)` pairs removed.
     pub async fn cleanup_orphaned_page_sources(&self) -> Result<usize, WenlanError> {
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ()).await.map_err(|e| {
             WenlanError::VectorDb(format!("cleanup_orphaned_page_sources begin: {e}"))
         })?;
 
-        let rows_affected = match conn
-            .execute(
+        let cleanup_result: Result<usize, WenlanError> = async {
+            let mut affected_pages: HashMap<String, HashSet<String>> = HashMap::new();
+            let mut orphan_rows = conn
+                .query(
+                    "SELECT page_id, memory_source_id
+                     FROM page_sources
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM memories m
+                         WHERE m.source != 'episode'
+                           AND (m.source_id = page_sources.memory_source_id
+                                OR m.id = page_sources.memory_source_id)
+                     )",
+                    (),
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("cleanup_orphaned_page_sources inventory: {e}"))
+                })?;
+            while let Some(row) = orphan_rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("cleanup_orphaned_page_sources inventory row: {e}"))
+            })? {
+                let page_id = row.get::<String>(0).map_err(|e| {
+                    WenlanError::VectorDb(format!("cleanup_orphaned_page_sources page id: {e}"))
+                })?;
+                let locator = row.get::<String>(1).map_err(|e| {
+                    WenlanError::VectorDb(format!("cleanup_orphaned_page_sources locator: {e}"))
+                })?;
+                affected_pages.entry(page_id).or_default().insert(locator);
+            }
+            drop(orphan_rows);
+
+            // Legacy JSON may contain provenance that never received a join row.
+            // Inventory it independently so JSON-only ghosts cannot survive the
+            // canonical orphan sweep.
+            let mut json_orphan_rows = conn
+                .query(
+                    "SELECT p.id, CAST(legacy_source.value AS TEXT)
+                     FROM pages p,
+                          json_each(COALESCE(p.source_memory_ids, '[]')) legacy_source
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM memories m
+                         WHERE m.source != 'episode'
+                           AND (m.source_id = CAST(legacy_source.value AS TEXT)
+                                OR m.id = CAST(legacy_source.value AS TEXT))
+                     )",
+                    (),
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "cleanup_orphaned_page_sources JSON inventory: {e}"
+                    ))
+                })?;
+            while let Some(row) = json_orphan_rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!(
+                    "cleanup_orphaned_page_sources JSON inventory row: {e}"
+                ))
+            })? {
+                let page_id = row.get::<String>(0).map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "cleanup_orphaned_page_sources JSON page id: {e}"
+                    ))
+                })?;
+                let locator = row.get::<String>(1).map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "cleanup_orphaned_page_sources JSON locator: {e}"
+                    ))
+                })?;
+                affected_pages.entry(page_id).or_default().insert(locator);
+            }
+            drop(json_orphan_rows);
+
+            conn.execute(
                 "DELETE FROM page_sources
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM memories m
-                     WHERE m.source != 'episode'
-                       AND (m.source_id = page_sources.memory_source_id
-                            OR m.id = page_sources.memory_source_id)
-                 )",
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM memories m
+                         WHERE m.source != 'episode'
+                           AND (m.source_id = page_sources.memory_source_id
+                                OR m.id = page_sources.memory_source_id)
+                     )",
                 (),
             )
             .await
-        {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(WenlanError::VectorDb(format!(
-                    "cleanup_orphaned_page_sources: {e}"
-                )));
-            }
-        };
+            .map_err(|e| WenlanError::VectorDb(format!("cleanup_orphaned_page_sources: {e}")))?;
 
-        if let Err(e) = conn
-            .execute(
+            conn.execute(
                 "DELETE FROM page_evidence
                  WHERE source_kind = 'memory'
                    AND NOT EXISTS (
@@ -27248,17 +29341,127 @@ impl MemoryDB {
                 (),
             )
             .await
-        {
+            .map_err(|e| WenlanError::VectorDb(format!("cleanup_orphaned_page_evidence: {e}")))?;
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let removed_count: usize = affected_pages.values().map(HashSet::len).sum();
+            let mut affected_pages: Vec<_> = affected_pages.into_iter().collect();
+            affected_pages.sort_by(|left, right| left.0.cmp(&right.0));
+            for (page_id, removed_locators) in affected_pages {
+                let mut source_rows = conn
+                    .query(
+                        "SELECT memory_source_id FROM page_sources
+                         WHERE page_id = ?1
+                         ORDER BY linked_at ASC, memory_source_id ASC",
+                        libsql::params![page_id.as_str()],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "cleanup_orphaned_page_sources surviving sources: {e}"
+                        ))
+                    })?;
+                let mut source_ids = Vec::new();
+                while let Some(row) = source_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "cleanup_orphaned_page_sources surviving source row: {e}"
+                    ))
+                })? {
+                    source_ids.push(row.get::<String>(0).map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "cleanup_orphaned_page_sources surviving source id: {e}"
+                        ))
+                    })?);
+                }
+                drop(source_rows);
+
+                // Some pre-join pages still carry valid provenance only in
+                // `source_memory_ids`. Preserve those locators while pruning
+                // ghosts; cleanup must not turn a partial legacy row into an
+                // empty source set merely because it lacks `page_sources`.
+                let mut legacy_rows = conn
+                    .query(
+                        "SELECT CAST(legacy_source.value AS TEXT)
+                         FROM pages p,
+                              json_each(COALESCE(p.source_memory_ids, '[]')) legacy_source
+                         WHERE p.id = ?1
+                           AND EXISTS (
+                               SELECT 1 FROM memories m
+                               WHERE m.source != 'episode'
+                                 AND (m.source_id = CAST(legacy_source.value AS TEXT)
+                                      OR m.id = CAST(legacy_source.value AS TEXT))
+                           )
+                         ORDER BY CAST(legacy_source.key AS INTEGER)",
+                        libsql::params![page_id.as_str()],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "cleanup_orphaned_page_sources surviving legacy sources: {e}"
+                        ))
+                    })?;
+                let mut seen_sources: HashSet<String> = source_ids.iter().cloned().collect();
+                while let Some(row) = legacy_rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "cleanup_orphaned_page_sources surviving legacy source row: {e}"
+                    ))
+                })? {
+                    let source_id = row.get::<String>(0).map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "cleanup_orphaned_page_sources surviving legacy source id: {e}"
+                        ))
+                    })?;
+                    if seen_sources.insert(source_id.clone()) {
+                        source_ids.push(source_id);
+                    }
+                }
+                drop(legacy_rows);
+                let source_ids_json = serde_json::to_string(&source_ids).map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "cleanup_orphaned_page_sources serialize sources: {e}"
+                    ))
+                })?;
+                conn.execute(
+                    "UPDATE pages
+                     SET source_memory_ids = ?1,
+                         stale_reason = 'source_updated',
+                         sources_updated_count = COALESCE(sources_updated_count, 0) + ?2,
+                         source_revision = COALESCE(source_revision, 0) + 1,
+                         last_modified = ?3
+                     WHERE id = ?4",
+                    libsql::params![
+                        source_ids_json,
+                        removed_locators.len() as i64,
+                        now.as_str(),
+                        page_id.as_str()
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "cleanup_orphaned_page_sources synchronize page: {e}"
+                    ))
+                })?;
+            }
+
+            Ok(removed_count)
+        }
+        .await;
+        let rows_affected = match cleanup_result {
+            Ok(rows_affected) => rows_affected,
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = conn.execute("COMMIT", ()).await {
             let _ = conn.execute("ROLLBACK", ()).await;
             return Err(WenlanError::VectorDb(format!(
-                "cleanup_orphaned_page_evidence: {e}"
+                "cleanup_orphaned_page_sources commit: {error}"
             )));
         }
-
-        conn.execute("COMMIT", ()).await.map_err(|e| {
-            WenlanError::VectorDb(format!("cleanup_orphaned_page_sources commit: {e}"))
-        })?;
-        Ok(rows_affected as usize)
+        Ok(rows_affected)
     }
 
     /// Build the two candidate pools for T14 dual-pool resolution.
@@ -27587,13 +29790,106 @@ impl MemoryDB {
     /// Mark a page as stale with a specific reason.
     pub async fn set_page_stale(&self, page_id: &str, reason: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
-            "UPDATE pages SET stale_reason = ?1 WHERE id = ?2",
+            "UPDATE pages
+             SET stale_reason = ?1,
+                 source_revision = COALESCE(source_revision, 0) + 1
+             WHERE id = ?2",
             libsql::params![reason, page_id],
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("set_page_stale: {e}")))?;
         Ok(())
+    }
+
+    /// Monotonic compile-input token for page synthesis. It advances whenever
+    /// the source set or source content is invalidated and never resets when
+    /// pending staleness is acknowledged.
+    pub async fn get_page_source_revision(&self, page_id: &str) -> Result<i64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COALESCE(source_revision, 0) FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_page_source_revision: {e}")))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_page_source_revision: {e}")))?
+            .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
+        row.get::<i64>(0)
+            .map_err(|e| WenlanError::VectorDb(format!("get_page_source_revision: {e}")))
+    }
+
+    /// A verified refresh can produce byte-identical prose and sources. In
+    /// that case advance only the compile watermark and clear the exact stale
+    /// work item; do not invent a prose version or changelog entry.
+    pub async fn acknowledge_page_compile(
+        &self,
+        page_id: &str,
+        expected_version: i64,
+        expected_source_revision: Option<i64>,
+    ) -> Result<bool, WenlanError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        let affected = if let Some(revision) = expected_source_revision {
+            conn.execute(
+                "UPDATE pages
+                 SET last_compiled = ?1, stale_reason = NULL, sources_updated_count = 0
+                 WHERE id = ?2 AND version = ?3 AND stale_reason IS NOT NULL
+                   AND COALESCE(source_revision, 0) = ?4",
+                libsql::params![now, page_id, expected_version, revision],
+            )
+            .await
+        } else {
+            conn.execute(
+                "UPDATE pages
+                 SET last_compiled = ?1, stale_reason = NULL, sources_updated_count = 0
+                 WHERE id = ?2 AND version = ?3 AND stale_reason IS NOT NULL",
+                libsql::params![now, page_id, expected_version],
+            )
+            .await
+        }
+        .map_err(|e| WenlanError::VectorDb(format!("acknowledge_page_compile: {e}")))?;
+        Ok(affected == 1)
+    }
+
+    /// Clear a human-owned page's queued stale item after its review card was
+    /// staged, but only if the exact page/source snapshot is still current.
+    /// Unlike `acknowledge_page_compile`, this does not claim the prose itself
+    /// was recompiled.
+    pub async fn clear_page_staleness_at_source_revision(
+        &self,
+        page_id: &str,
+        expected_version: i64,
+        expected_source_revision: Option<i64>,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        let affected = if let Some(revision) = expected_source_revision {
+            conn.execute(
+                "UPDATE pages
+                 SET stale_reason = NULL, sources_updated_count = 0
+                 WHERE id = ?1 AND version = ?2 AND stale_reason IS NOT NULL
+                   AND COALESCE(source_revision, 0) = ?3",
+                libsql::params![page_id, expected_version, revision],
+            )
+            .await
+        } else {
+            conn.execute(
+                "UPDATE pages
+                 SET stale_reason = NULL, sources_updated_count = 0
+                 WHERE id = ?1 AND version = ?2 AND stale_reason IS NOT NULL",
+                libsql::params![page_id, expected_version],
+            )
+            .await
+        }
+        .map_err(|e| {
+            WenlanError::VectorDb(format!("clear_page_staleness_at_source_revision: {e}"))
+        })?;
+        Ok(affected == 1)
     }
 
     /// Set the page trust state. Used by manual-edit + future review routes.
@@ -27604,6 +29900,7 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET review_status = ?1, last_modified = ?2 WHERE id = ?3",
             libsql::params![status, now, page_id],
@@ -27613,17 +29910,23 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Set `pages.workspace` for a given page. Used by the P3 backfill step and
-    /// integration tests that seed workspace-scoped pages outside of `insert_page_with_kind`.
+    /// Set a page's scope. Named `set_page_workspace` for its P3-backfill-era
+    /// callers, but under M1 (one honest column, spec §1/§7) a page carries a
+    /// single scope mirrored across BOTH columns: this writes `space` and
+    /// `workspace` to the same value, and normalizes `None` to the reserved
+    /// sentinel id so neither column can go NULL. The sentinel is translated
+    /// back to None on the wire by `row_to_page`, so a `None` write here still
+    /// surfaces as an uncategorized page (pre-M1 contract preserved).
     pub async fn set_page_workspace(
         &self,
         page_id: &str,
         workspace: Option<&str>,
     ) -> Result<(), WenlanError> {
+        let resolved = workspace.unwrap_or(UNFILED_SPACE_ID);
         let conn = self.conn.lock().await;
         conn.execute(
-            "UPDATE pages SET workspace = ?1 WHERE id = ?2",
-            libsql::params![workspace, page_id],
+            "UPDATE pages SET workspace = ?1, space = ?1 WHERE id = ?2",
+            libsql::params![resolved, page_id],
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("set_page_workspace: {e}")))?;
@@ -27633,8 +29936,12 @@ impl MemoryDB {
     /// Increment a page's sources_updated_count (for trivial/non-conflicting source changes).
     pub async fn increment_page_sources_updated(&self, page_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
-            "UPDATE pages SET sources_updated_count = sources_updated_count + 1 WHERE id = ?1",
+            "UPDATE pages
+             SET sources_updated_count = COALESCE(sources_updated_count, 0) + 1,
+                 source_revision = COALESCE(source_revision, 0) + 1
+             WHERE id = ?1",
             libsql::params![page_id],
         )
         .await
@@ -27671,7 +29978,7 @@ impl MemoryDB {
             bind.push(libsql::Value::Text(eid.to_string()));
         }
         if let Some(d) = domain_filter {
-            sql.push_str(" AND COALESCE(workspace, space) = ?");
+            sql.push_str(" AND space = ?");
             bind.push(libsql::Value::Text(d.to_string()));
         }
         sql.push_str(" ORDER BY last_modified DESC LIMIT 10");
@@ -27702,7 +30009,7 @@ impl MemoryDB {
                  FROM pages
                  WHERE status = 'archived'
                    AND entity_id IS NULL
-                   AND space IS NULL
+                   AND space = '00000000-0000-4000-8000-000000000001'
                    AND COALESCE(user_edited, 0) = 0
                    AND json_array_length(source_memory_ids) > 50
                  ORDER BY created_at DESC",
@@ -27725,6 +30032,7 @@ impl MemoryDB {
     /// Clear staleness fields after successful re-distillation.
     pub async fn clear_page_staleness(&self, page_id: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute(
             "UPDATE pages SET stale_reason = NULL, sources_updated_count = 0 WHERE id = ?1",
             libsql::params![page_id],
@@ -27745,6 +30053,7 @@ impl MemoryDB {
         summary: Option<&str>,
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE pages SET summary = ?1, last_modified = ?2 WHERE id = ?3",
@@ -27958,15 +30267,17 @@ impl MemoryDB {
             conn.execute("BEGIN", ())
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("upsert_in_place BEGIN: {e}")))?;
+            let source_keys = [(saved.source.clone(), source_id.to_string())];
+            let transaction_result: Result<(), WenlanError> = async {
+                Self::mark_pages_depending_on_memory_sources(&conn, &source_keys).await?;
+                conn.execute(
+                    "DELETE FROM memories WHERE source_id = ?1 AND source != 'episode'",
+                    libsql::params![source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("upsert_in_place DELETE: {e}")))?;
 
-            conn.execute(
-                "DELETE FROM memories WHERE source_id = ?1 AND source != 'episode'",
-                libsql::params![source_id],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("upsert_in_place DELETE: {e}")))?;
-
-            let insert_sql = "INSERT INTO memories (
+                let insert_sql = "INSERT INTO memories (
                     id, content, source, source_id, title, summary, url,
                     chunk_index, last_modified, chunk_type, language, byte_start, byte_end,
                     semantic_unit, memory_type, space, source_agent, confidence, confirmed,
@@ -27984,45 +30295,54 @@ impl MemoryDB {
                     vector32(?25), ?26, ?27, ?28
                 )";
 
-            conn.execute(
-                insert_sql,
-                libsql::params![
-                    new_chunk_id,
-                    new_content,
-                    saved.source,
-                    source_id,
-                    saved.title,
-                    saved.summary,
-                    saved.url,
-                    now_ts,
-                    saved.chunk_type,
-                    saved.language,
-                    saved.memory_type,
-                    saved.space,
-                    source_agent,
-                    saved.confidence,
-                    saved.confirmed,
-                    saved.stability,
-                    new_word_count,
-                    saved.entity_id,
-                    "legacy", // column retired; status derived from enrichment_steps
-                    saved.quality,
-                    saved.is_recap,
-                    saved.structured_fields,
-                    saved.retrieval_cue,
-                    saved.source_text,
-                    vec_sql,
-                    saved.created_at,
-                    new_version,
-                    changelog_json
-                ],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("upsert_in_place INSERT: {e}")))?;
-
-            conn.execute("COMMIT", ())
+                conn.execute(
+                    insert_sql,
+                    libsql::params![
+                        new_chunk_id,
+                        new_content,
+                        saved.source,
+                        source_id,
+                        saved.title,
+                        saved.summary,
+                        saved.url,
+                        now_ts,
+                        saved.chunk_type,
+                        saved.language,
+                        saved.memory_type,
+                        saved.space,
+                        source_agent,
+                        saved.confidence,
+                        saved.confirmed,
+                        saved.stability,
+                        new_word_count,
+                        saved.entity_id,
+                        "legacy", // column retired; status derived from enrichment_steps
+                        saved.quality,
+                        saved.is_recap,
+                        saved.structured_fields,
+                        saved.retrieval_cue,
+                        saved.source_text,
+                        vec_sql,
+                        saved.created_at,
+                        new_version,
+                        changelog_json
+                    ],
+                )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("upsert_in_place COMMIT: {e}")))?;
+                .map_err(|e| WenlanError::VectorDb(format!("upsert_in_place INSERT: {e}")))?;
+                Ok(())
+            }
+            .await;
+            if let Err(error) = transaction_result {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+            if let Err(error) = conn.execute("COMMIT", ()).await {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(WenlanError::VectorDb(format!(
+                    "upsert_in_place COMMIT: {error}"
+                )));
+            }
         }
 
         log::info!(
@@ -30068,12 +32388,16 @@ pub(crate) mod tests {
             )
             .await;
 
+        let lint_freshness = Arc::new(
+            crate::lint::snapshot::LintFreshnessClock::new(&db).expect("lint freshness observer"),
+        );
         let memory_db = MemoryDB {
             _db: db,
             conn: tokio::sync::Mutex::new(conn),
+            lint_freshness,
             page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
-            embedder: shared_embedder(),
+            embedder: Some(shared_embedder()),
             // Token-aware chunker matching production; falls back to char-based
             // when the BGE tokenizer isn't in the resolved cache.
             chunker: build_chunker(std::path::Path::new(".nonexistent")),
@@ -30139,6 +32463,101 @@ pub(crate) mod tests {
             pending_revision: false,
             supersede_mode,
             ..Default::default()
+        }
+    }
+
+    async fn memory_row_id(db: &MemoryDB, source: &str, source_id: &str) -> String {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM memories
+                 WHERE source = ?1 AND source_id = ?2 AND chunk_index = 0",
+                libsql::params![source, source_id],
+            )
+            .await
+            .unwrap();
+        rows.next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<String>(0)
+            .unwrap()
+    }
+
+    async fn install_page_locator_forms(
+        db: &MemoryDB,
+        prefix: &str,
+        logical_source_id: &str,
+        row_id: &str,
+    ) -> Vec<(String, i64, i64)> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mixed_page_id = format!("{prefix}-mixed");
+        db.insert_page(
+            &mixed_page_id,
+            &mixed_page_id,
+            None,
+            "body",
+            None,
+            None,
+            &[logical_source_id, row_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let json_only_page_id = format!("{prefix}-json-only");
+        db.insert_page(
+            &json_only_page_id,
+            &json_only_page_id,
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET source_memory_ids = ?1 WHERE id = ?2",
+                libsql::params![
+                    serde_json::to_string(&[logical_source_id, row_id]).unwrap(),
+                    json_only_page_id.as_str()
+                ],
+            )
+            .await
+            .unwrap();
+        }
+
+        let mut before = Vec::new();
+        for page_id in [mixed_page_id, json_only_page_id] {
+            db.clear_page_staleness(&page_id).await.unwrap();
+            let page = db.get_page(&page_id).await.unwrap().unwrap();
+            before.push((
+                page_id.clone(),
+                db.get_page_source_revision(&page_id).await.unwrap(),
+                page.sources_updated_count,
+            ));
+        }
+        before
+    }
+
+    async fn assert_pages_invalidated_once(db: &MemoryDB, before: &[(String, i64, i64)]) {
+        for (page_id, revision_before, count_before) in before {
+            let page = db.get_page(page_id).await.unwrap().unwrap();
+            assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+            assert_eq!(
+                db.get_page_source_revision(page_id).await.unwrap(),
+                revision_before + 1,
+                "{page_id} must advance its CAS token exactly once even when both logical and row locators match"
+            );
+            assert_eq!(
+                page.sources_updated_count,
+                count_before + 1,
+                "{page_id} must count one changed logical source, not locator aliases"
+            );
         }
     }
 
@@ -30239,6 +32658,102 @@ pub(crate) mod tests {
 
         // Should have roughly the same number of memories, not double
         assert_eq!(count1, count2, "upsert should replace, not accumulate");
+    }
+
+    #[tokio::test]
+    async fn upsert_documents_replacement_invalidates_all_page_locator_forms_once() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "replace-page-source",
+            "Original source content.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let row_id = memory_row_id(&db, "memory", "replace-page-source").await;
+        let pages =
+            install_page_locator_forms(&db, "page-upsert-replace", "replace-page-source", &row_id)
+                .await;
+
+        db.upsert_documents(vec![make_memory_doc(
+            "replace-page-source",
+            "Replacement source content.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+
+        assert_pages_invalidated_once(&db, &pages).await;
+    }
+
+    #[tokio::test]
+    async fn upsert_documents_page_invalidation_rolls_back_with_replacement() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "replace-page-rollback",
+            "Original source content survives rollback.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let row_id = memory_row_id(&db, "memory", "replace-page-rollback").await;
+        let pages = install_page_locator_forms(
+            &db,
+            "page-upsert-rollback",
+            "replace-page-rollback",
+            &row_id,
+        )
+        .await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "CREATE TRIGGER reject_upsert_page_invalidation
+                 BEFORE UPDATE OF stale_reason ON pages
+                 WHEN OLD.id = 'page-upsert-rollback-mixed'
+                 BEGIN SELECT RAISE(ABORT, 'blocked upsert page invalidation'); END",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let error = db
+            .upsert_documents(vec![make_memory_doc(
+                "replace-page-rollback",
+                "Replacement must roll back.",
+                "knowledge",
+                "work",
+                "agent",
+            )])
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("blocked upsert page invalidation"));
+
+        let memories = db
+            .get_memories_by_source_id("memory", "replace-page-rollback")
+            .await
+            .unwrap();
+        assert_eq!(
+            memories[0].content,
+            "Original source content survives rollback."
+        );
+        for (page_id, revision_before, count_before) in pages {
+            let page = db.get_page(&page_id).await.unwrap().unwrap();
+            assert_eq!(page.stale_reason, None);
+            assert_eq!(page.sources_updated_count, count_before);
+            assert_eq!(
+                db.get_page_source_revision(&page_id).await.unwrap(),
+                revision_before
+            );
+        }
     }
 
     #[tokio::test]
@@ -32233,6 +34748,89 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn delete_memory_marks_every_dependent_page_stale_before_removing_the_source() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "mem-page-delete",
+            "Memory whose dependent pages must be invalidated.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let row_id = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM memories
+                     WHERE source = 'memory' AND source_id = 'mem-page-delete' AND chunk_index = 0",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap()
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        for (page_id, locator) in [
+            ("page-delete-logical", "mem-page-delete"),
+            ("page-delete-row", row_id.as_str()),
+        ] {
+            db.insert_page(page_id, page_id, None, "body", None, None, &[], &now)
+                .await
+                .unwrap();
+            db.link_page_source(page_id, locator, "test").await.unwrap();
+            db.clear_page_staleness(page_id).await.unwrap();
+            assert_eq!(db.get_page_source_revision(page_id).await.unwrap(), 1);
+        }
+        db.insert_page(
+            "page-delete-json-only",
+            "JSON-only legacy provenance",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET source_memory_ids = '[\"mem-page-delete\"]'
+                 WHERE id = 'page-delete-json-only'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        db.delete_by_source_id("memory", "mem-page-delete")
+            .await
+            .unwrap();
+
+        for page_id in ["page-delete-logical", "page-delete-row"] {
+            let page = db.get_page(page_id).await.unwrap().unwrap();
+            assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+            assert_eq!(db.get_page_source_revision(page_id).await.unwrap(), 2);
+        }
+        let json_only = db.get_page("page-delete-json-only").await.unwrap().unwrap();
+        assert_eq!(json_only.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            db.get_page_source_revision("page-delete-json-only")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn test_delete_memory_cleans_derived_links_and_tags() {
         let (db, _dir) = test_db().await;
         let conn = db.conn.lock().await;
@@ -32302,6 +34900,30 @@ pub(crate) mod tests {
         .unwrap();
         drop(conn);
 
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-delete-rollback",
+            "Delete rollback",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.link_page_source("page-delete-rollback", "mem-rollback", "test")
+            .await
+            .unwrap();
+        db.clear_page_staleness("page-delete-rollback")
+            .await
+            .unwrap();
+        let source_revision_before = db
+            .get_page_source_revision("page-delete-rollback")
+            .await
+            .unwrap();
+
         assert!(db
             .delete_by_source_id("memory", "mem-rollback")
             .await
@@ -32315,6 +34937,15 @@ pub(crate) mod tests {
             rows.len(),
             1,
             "failed cleanup must roll back primary delete"
+        );
+        let page = db.get_page("page-delete-rollback").await.unwrap().unwrap();
+        assert_eq!(page.stale_reason, None);
+        assert_eq!(
+            db.get_page_source_revision("page-delete-rollback")
+                .await
+                .unwrap(),
+            source_revision_before,
+            "failed delete must roll back dependent-page invalidation"
         );
     }
 
@@ -32344,6 +34975,26 @@ pub(crate) mod tests {
             .await
             .unwrap();
         }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-rebind-rollback",
+            "Rebind rollback",
+            None,
+            "body",
+            None,
+            None,
+            &["source-old"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.clear_page_staleness("page-rebind-rollback")
+            .await
+            .unwrap();
+        let page_revision_before = db
+            .get_page_source_revision("page-rebind-rollback")
+            .await
+            .unwrap();
 
         let result = db
             .rebind_source_id("memory", "source-old", "source-new")
@@ -32384,6 +35035,15 @@ pub(crate) mod tests {
         );
         assert_eq!((old_memories, new_memories), (1, 0));
         assert_eq!((old_steps, new_steps), (1, 0));
+        let page = db.get_page("page-rebind-rollback").await.unwrap().unwrap();
+        assert_eq!(page.source_memory_ids, vec!["source-old".to_string()]);
+        assert_eq!(page.stale_reason, None);
+        assert_eq!(
+            db.get_page_source_revision("page-rebind-rollback")
+                .await
+                .unwrap(),
+            page_revision_before
+        );
 
         db.rebind_source_id("memory", "source-old", "source-new")
             .await
@@ -32419,6 +35079,81 @@ pub(crate) mod tests {
             .get::<String>(0)
             .unwrap();
         assert_eq!(child_owner, "source-new");
+        drop(conn);
+        let page = db.get_page("page-rebind-rollback").await.unwrap().unwrap();
+        assert_eq!(page.source_memory_ids, vec!["source-new".to_string()]);
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            db.get_page_source_revision("page-rebind-rollback")
+                .await
+                .unwrap(),
+            page_revision_before + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn rebind_source_id_updates_page_provenance_and_compile_token() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "rebind-page-old",
+            "Source that is renamed without changing its content.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-rebind-source",
+            "Rebound source",
+            None,
+            "body",
+            None,
+            None,
+            &["rebind-page-old"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.clear_page_staleness("page-rebind-source").await.unwrap();
+        let revision_before = db
+            .get_page_source_revision("page-rebind-source")
+            .await
+            .unwrap();
+
+        db.rebind_source_id("memory", "rebind-page-old", "rebind-page-new")
+            .await
+            .unwrap();
+
+        let page = db.get_page("page-rebind-source").await.unwrap().unwrap();
+        assert_eq!(page.source_memory_ids, vec!["rebind-page-new".to_string()]);
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            db.get_page_source_revision("page-rebind-source")
+                .await
+                .unwrap(),
+            revision_before + 1
+        );
+        assert_eq!(
+            db.get_page_sources("page-rebind-source")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect::<Vec<_>>(),
+            vec!["rebind-page-new".to_string()]
+        );
+        assert_eq!(
+            db.get_page_evidence("page-rebind-source")
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|evidence| evidence.source_kind == "memory")
+                .filter_map(|evidence| evidence.locator)
+                .collect::<Vec<_>>(),
+            vec!["rebind-page-new".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -32605,6 +35340,126 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(!memories.is_empty(), "f3 (future) should survive");
+    }
+
+    #[tokio::test]
+    async fn delete_by_time_range_invalidates_all_page_locator_forms_once() {
+        let (db, _dir) = test_db().await;
+        let mut doomed = make_memory_doc(
+            "time-range-page-source",
+            "Source deleted by timestamp.",
+            "knowledge",
+            "work",
+            "agent",
+        );
+        doomed.last_modified = 2_000;
+        db.upsert_documents(vec![doomed]).await.unwrap();
+        let row_id = memory_row_id(&db, "memory", "time-range-page-source").await;
+        let pages = install_page_locator_forms(
+            &db,
+            "page-time-range-delete",
+            "time-range-page-source",
+            &row_id,
+        )
+        .await;
+
+        db.delete_by_time_range(1_500, 2_500).await.unwrap();
+
+        assert!(db
+            .get_memories_by_source_id("memory", "time-range-page-source")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_pages_invalidated_once(&db, &pages).await;
+    }
+
+    #[tokio::test]
+    async fn delete_bulk_invalidates_page_locator_forms_once_and_deduplicates_items() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "bulk-page-source",
+                "First source deleted in a bulk request.",
+                "knowledge",
+                "work",
+                "agent",
+            ),
+            make_memory_doc(
+                "bulk-page-source-two",
+                "Second source deleted in the same bulk request.",
+                "knowledge",
+                "work",
+                "agent",
+            ),
+        ])
+        .await
+        .unwrap();
+        let row_id = memory_row_id(&db, "memory", "bulk-page-source").await;
+        let second_row_id = memory_row_id(&db, "memory", "bulk-page-source-two").await;
+        let pages =
+            install_page_locator_forms(&db, "page-bulk-delete", "bulk-page-source", &row_id).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-bulk-delete-two-sources",
+            "Two bulk-deleted sources",
+            None,
+            "body",
+            None,
+            None,
+            &[
+                "bulk-page-source",
+                row_id.as_str(),
+                "bulk-page-source-two",
+                second_row_id.as_str(),
+            ],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.clear_page_staleness("page-bulk-delete-two-sources")
+            .await
+            .unwrap();
+        let two_source_before = db
+            .get_page("page-bulk-delete-two-sources")
+            .await
+            .unwrap()
+            .unwrap();
+        let two_source_revision_before = db
+            .get_page_source_revision("page-bulk-delete-two-sources")
+            .await
+            .unwrap();
+        let item = ("memory".to_string(), "bulk-page-source".to_string());
+
+        db.delete_bulk(&[
+            item.clone(),
+            item,
+            ("memory".to_string(), "bulk-page-source-two".to_string()),
+        ])
+        .await
+        .unwrap();
+
+        assert!(db
+            .get_memories_by_source_id("memory", "bulk-page-source")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_pages_invalidated_once(&db, &pages).await;
+        let two_source_page = db
+            .get_page("page-bulk-delete-two-sources")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            two_source_page.sources_updated_count,
+            two_source_before.sources_updated_count + 2
+        );
+        assert_eq!(
+            db.get_page_source_revision("page-bulk-delete-two-sources")
+                .await
+                .unwrap(),
+            two_source_revision_before + 1,
+            "one atomic bulk mutation advances a shared page CAS token once"
+        );
     }
 
     // ==================== update_document_summary ====================
@@ -33457,6 +36312,159 @@ pub(crate) mod tests {
         assert_eq!(
             updated_memories[0].content,
             "New updated memory content about machine learning."
+        );
+    }
+
+    #[tokio::test]
+    async fn update_memory_marks_every_dependent_page_stale_for_logical_and_row_locators() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "mem-page-edit",
+            "Original content used by two pages.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let row_id = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM memories
+                     WHERE source = 'memory' AND source_id = 'mem-page-edit' AND chunk_index = 0",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap()
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        for (page_id, locator) in [
+            ("page-edit-logical", "mem-page-edit"),
+            ("page-edit-row", row_id.as_str()),
+        ] {
+            db.insert_page(page_id, page_id, None, "body", None, None, &[], &now)
+                .await
+                .unwrap();
+            db.link_page_source(page_id, locator, "test").await.unwrap();
+            db.clear_page_staleness(page_id).await.unwrap();
+            assert_eq!(db.get_page_source_revision(page_id).await.unwrap(), 1);
+        }
+        db.insert_page(
+            "page-edit-json-only",
+            "JSON-only legacy provenance",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET source_memory_ids = '[\"mem-page-edit\"]'
+                 WHERE id = 'page-edit-json-only'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        db.update_memory("mem-page-edit", "Edited content invalidates both pages.")
+            .await
+            .unwrap();
+
+        for page_id in ["page-edit-logical", "page-edit-row"] {
+            let page = db.get_page(page_id).await.unwrap().unwrap();
+            assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+            assert_eq!(db.get_page_source_revision(page_id).await.unwrap(), 2);
+        }
+        let json_only = db.get_page("page-edit-json-only").await.unwrap().unwrap();
+        assert_eq!(json_only.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            db.get_page_source_revision("page-edit-json-only")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn update_memory_and_dependent_page_invalidation_share_one_transaction() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "mem-page-edit-rollback",
+            "Original atomic content.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-edit-rollback",
+            "Edit rollback",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.link_page_source("page-edit-rollback", "mem-page-edit-rollback", "test")
+            .await
+            .unwrap();
+        db.clear_page_staleness("page-edit-rollback").await.unwrap();
+        let source_revision_before = db
+            .get_page_source_revision("page-edit-rollback")
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "CREATE TRIGGER reject_dependent_page_invalidation
+                 BEFORE UPDATE OF stale_reason ON pages
+                 WHEN OLD.id = 'page-edit-rollback'
+                 BEGIN SELECT RAISE(ABORT, 'blocked page invalidation'); END",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let error = db
+            .update_memory(
+                "mem-page-edit-rollback",
+                "Replacement must roll back with its page invalidation.",
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("blocked page invalidation"));
+
+        let memories = db
+            .get_memories_by_source_id("memory", "mem-page-edit-rollback")
+            .await
+            .unwrap();
+        assert_eq!(memories[0].content, "Original atomic content.");
+        let page = db.get_page("page-edit-rollback").await.unwrap().unwrap();
+        assert_eq!(page.stale_reason, None);
+        assert_eq!(
+            db.get_page_source_revision("page-edit-rollback")
+                .await
+                .unwrap(),
+            source_revision_before
         );
     }
 
@@ -38070,6 +41078,95 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn delete_non_head_memory_chunks_invalidates_physical_page_locator_atomically() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "INSERT INTO memories
+                     (id,content,source,source_id,title,chunk_index,last_modified,chunk_type)
+                 VALUES
+                     ('merge-head','head','memory','merged-test','merged',0,1,'text'),
+                     ('merge-extra','extra','memory','merged-test','merged',1,1,'text');
+                 CREATE TRIGGER reject_non_head_merge_delete
+                 BEFORE DELETE ON memories
+                 WHEN OLD.id = 'merge-extra'
+                 BEGIN SELECT RAISE(ABORT, 'blocked non-head merge delete'); END;",
+            )
+            .await
+            .unwrap();
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-merge-extra",
+            "Physical merge chunk",
+            None,
+            "body",
+            None,
+            None,
+            &["merge-extra"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.clear_page_staleness("page-merge-extra").await.unwrap();
+        let revision_before = db
+            .get_page_source_revision("page-merge-extra")
+            .await
+            .unwrap();
+
+        let error = db
+            .delete_non_head_memory_chunks("merged-test")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("blocked non-head merge delete"));
+        let page = db.get_page("page-merge-extra").await.unwrap().unwrap();
+        assert_eq!(page.stale_reason, None);
+        assert_eq!(
+            db.get_page_source_revision("page-merge-extra")
+                .await
+                .unwrap(),
+            revision_before
+        );
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM memories WHERE id = 'merge-extra'", ())
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+                1
+            );
+            drop(rows);
+            conn.execute("DROP TRIGGER reject_non_head_merge_delete", ())
+                .await
+                .unwrap();
+        }
+
+        db.delete_non_head_memory_chunks("merged-test")
+            .await
+            .unwrap();
+        let page = db.get_page("page-merge-extra").await.unwrap().unwrap();
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            db.get_page_source_revision("page-merge-extra")
+                .await
+                .unwrap(),
+            revision_before + 1
+        );
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memories WHERE id = 'merge-extra'", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
     async fn test_migration_6_access_log_and_word_count() {
         let (db, _dir) = test_db().await;
         // access_log table should exist
@@ -38485,6 +41582,98 @@ pub(crate) mod tests {
         assert_eq!(spaces[0].memory_count, 0);
     }
 
+    /// M1 honest columns: `set_page_workspace` mirrors the scope onto BOTH
+    /// columns and normalizes `None` to the 'unfiled' sentinel (never NULL);
+    /// `row_to_page` hides that sentinel on the wire so an uncategorized page
+    /// surfaces as it did pre-M1. Load-bearing for the read-collapse (which now
+    /// reads `space` alone) and the NOT NULL rebuild.
+    #[tokio::test]
+    async fn set_page_workspace_mirrors_scope_and_wire_hides_unfiled_sentinel() {
+        let (db, _dir) = test_db().await;
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page_with_kind(
+            "p-scoped",
+            "Scoped",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "p-unfiled",
+            "Unfiled",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Some(x) mirrors x onto both columns; None mirrors the sentinel onto both.
+        db.set_page_workspace("p-scoped", Some("career"))
+            .await
+            .unwrap();
+        db.set_page_workspace("p-unfiled", None).await.unwrap();
+
+        // Storage: both columns carry the resolved scope, neither is NULL.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT space, workspace FROM pages WHERE id = ?1",
+                    libsql::params!["p-scoped"],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), "career");
+            assert_eq!(row.get::<String>(1).unwrap(), "career");
+            let mut rows = conn
+                .query(
+                    "SELECT space, workspace FROM pages WHERE id = ?1",
+                    libsql::params!["p-unfiled"],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), UNFILED_SPACE_ID);
+            assert_eq!(row.get::<String>(1).unwrap(), UNFILED_SPACE_ID);
+        }
+
+        // Wire: registered scope passes through; the sentinel is hidden (None).
+        let scoped = db.get_page("p-scoped").await.unwrap().unwrap();
+        assert_eq!(scoped.space.as_deref(), Some("career"));
+        assert_eq!(scoped.workspace.as_deref(), Some("career"));
+        let unfiled = db.get_page("p-unfiled").await.unwrap().unwrap();
+        assert_eq!(
+            unfiled.space, None,
+            "unfiled sentinel must not leak onto the wire (space)"
+        );
+        assert_eq!(
+            unfiled.workspace, None,
+            "unfiled sentinel must not leak onto the wire (workspace)"
+        );
+    }
+
     #[tokio::test]
     async fn test_space_crud() {
         let (db, _dir) = test_db().await;
@@ -38546,9 +41735,9 @@ pub(crate) mod tests {
             "page_workspace_work",
             "Workspace Work",
             None,
-            "newer page using pages.workspace as the space axis",
+            "newer page scoped by pages.workspace (single-axis: space mirrors workspace)",
             None,
-            Some("recap"),
+            None,
             &[],
             &now,
             "authored",
@@ -38571,8 +41760,8 @@ pub(crate) mod tests {
         let scoped = db.get_page("page_workspace_work").await.unwrap().unwrap();
         assert_eq!(
             scoped.space.as_deref(),
-            Some("recap"),
-            "rename must not overwrite page category values that differ from the old space"
+            Some("career"),
+            "rename mirrors the scope onto pages.space -- one honest column, no independent category (spec §1)"
         );
         assert_eq!(
             scoped.workspace.as_deref(),
@@ -38681,9 +41870,9 @@ pub(crate) mod tests {
             "page_delete_move_workspace",
             "Delete Move Workspace",
             None,
-            "newer page using pages.workspace as the space axis",
+            "newer page scoped by pages.workspace (single-axis: space mirrors workspace)",
             None,
-            Some("recap"),
+            None,
             &[],
             &now,
             "authored",
@@ -38719,14 +41908,42 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(
             scoped.space.as_deref(),
-            Some("recap"),
-            "delete-space move must not overwrite page category values that differ from the old space"
+            Some("new"),
+            "delete-space move mirrors the scope onto pages.space -- one honest column, no independent category (spec §1)"
         );
         assert_eq!(
             scoped.workspace.as_deref(),
             Some("new"),
             "delete-space move must update pages.workspace values"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_space_delete_invalidates_all_page_locator_forms_once() {
+        let (db, _dir) = test_db().await;
+        db.create_space("doomed", None, false).await.unwrap();
+        db.upsert_documents(vec![make_memory_doc(
+            "space-page-source",
+            "Source deleted with its space.",
+            "knowledge",
+            "doomed",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let row_id = memory_row_id(&db, "memory", "space-page-source").await;
+        let pages =
+            install_page_locator_forms(&db, "page-space-delete", "space-page-source", &row_id)
+                .await;
+
+        db.delete_space("doomed", "delete").await.unwrap();
+
+        assert!(db
+            .get_memories_by_source_id("memory", "space-page-source")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_pages_invalidated_once(&db, &pages).await;
     }
 
     #[tokio::test]
@@ -41247,18 +44464,20 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn insert_page_strips_daemon_sources_delimiters_from_client_content() {
-        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+    async fn insert_page_preserves_delimiter_free_content_exactly() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        let content = format!(
-            "## Overview\nReal prose.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_99]]\n{SOURCES_BLOCK_END}\n"
+        let content = "\u{feff}\r\n  ## Overview  \r\nReal prose.\t \r\n\r\n";
+        assert_ne!(
+            content.trim_end(),
+            content,
+            "positive control: trimming must change this fixture"
         );
         db.insert_page(
             "page_ingress",
             "Ingress",
             None,
-            &content,
+            content,
             None,
             None,
             &[],
@@ -41267,52 +44486,92 @@ pub(crate) mod tests {
         .await
         .unwrap();
         let stored = db.get_page("page_ingress").await.unwrap().unwrap();
-        assert!(!stored.content.contains(SOURCES_BLOCK_START));
-        assert!(!stored.content.contains(SOURCES_BLOCK_END));
-        assert!(!stored.content.contains("## Sources"));
-        assert!(!stored.content.contains("[[mem_99]]"));
-        assert!(stored.content.contains("Real prose."));
+        assert_eq!(stored.content, content);
+        let history = db.list_page_history("page_ingress", 10).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, content);
     }
 
     #[tokio::test]
-    async fn update_page_content_strips_daemon_sources_delimiters_from_client_content() {
-        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+    async fn update_page_content_preserves_delimiter_free_content_exactly() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
         db.insert_page("page_upd", "Upd", None, "seed", None, None, &[], &now)
             .await
             .unwrap();
-        let content = format!(
-            "Updated prose.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_7]]\n{SOURCES_BLOCK_END}\n"
-        );
-        db.update_page_content("page_upd", &content, &[], "manual_edit")
+        let content = "\r\n  Updated prose.\t \r\n\r\n";
+        db.update_page_content("page_upd", content, &[], "manual_edit")
             .await
             .unwrap();
         let stored = db.get_page("page_upd").await.unwrap().unwrap();
-        assert!(!stored.content.contains(SOURCES_BLOCK_START));
-        assert!(!stored.content.contains(SOURCES_BLOCK_END));
-        assert!(!stored.content.contains("## Sources"));
-        assert!(!stored.content.contains("[[mem_7]]"));
-        assert!(stored.content.contains("Updated prose."));
+        assert_eq!(stored.content, content);
+        let history = db.list_page_history("page_upd", 10).await.unwrap();
+        assert_eq!(history[0].content, content);
     }
 
     #[tokio::test]
-    async fn insert_page_stray_start_delimiter_does_not_truncate_prose() {
-        // Data-loss regression: a lone START token (no matching END) must not
-        // cause the prose after it to be dropped. Both halves must survive and
-        // the delimiter token must be removed.
+    async fn insert_page_rejects_reserved_sources_delimiter_without_mutation() {
         use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
-        let content = format!("prose A {SOURCES_BLOCK_START} prose B");
-        db.insert_page("page_stray", "Stray", None, &content, None, None, &[], &now)
+        let content =
+            format!("prose A {SOURCES_BLOCK_START} daemon block {SOURCES_BLOCK_END} prose B");
+        let error = db
+            .insert_page(
+                "page_rejected",
+                "Rejected",
+                None,
+                &content,
+                None,
+                None,
+                &[],
+                &now,
+            )
             .await
-            .unwrap();
-        let stored = db.get_page("page_stray").await.unwrap().unwrap();
-        assert!(stored.content.contains("prose A"));
-        assert!(stored.content.contains("prose B"));
-        assert!(!stored.content.contains(SOURCES_BLOCK_START));
-        assert!(!stored.content.contains(SOURCES_BLOCK_END));
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        assert!(db.get_page("page_rejected").await.unwrap().is_none());
+        assert!(db
+            .list_page_history("page_rejected", 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_page_content_rejects_reserved_sources_delimiter_without_mutation() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_rejected_upd",
+            "Upd",
+            None,
+            "seed",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        let before = db.get_page("page_rejected_upd").await.unwrap().unwrap();
+        let history_before = db.list_page_history("page_rejected_upd", 10).await.unwrap();
+        let error = db
+            .update_page_content(
+                "page_rejected_upd",
+                &format!("prose A {SOURCES_BLOCK_START} prose B"),
+                &[],
+                "manual_edit",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        let after = db.get_page("page_rejected_upd").await.unwrap().unwrap();
+        let history_after = db.list_page_history("page_rejected_upd", 10).await.unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(history_after.len(), history_before.len());
     }
 
     // ---- page_links / wikilink graph ----
@@ -44084,6 +47343,265 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn page_source_revision_advances_only_when_the_source_set_changes() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_rev",
+            "Revision",
+            None,
+            "content",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        for source_id in ["src_rev_a", "src_rev_b"] {
+            db.upsert_documents(vec![make_memory_doc(
+                source_id,
+                "Source revision content",
+                "knowledge",
+                "work",
+                "agent",
+            )])
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(db.get_page_source_revision("page_rev").await.unwrap(), 0);
+        db.link_page_source("page_rev", "src_rev_a", "attach")
+            .await
+            .unwrap();
+        assert_eq!(db.get_page_source_revision("page_rev").await.unwrap(), 1);
+        db.link_page_source("page_rev", "src_rev_a", "duplicate")
+            .await
+            .unwrap();
+        db.replace_page_sources("page_rev", &["src_rev_a"], "same_set")
+            .await
+            .unwrap();
+        assert_eq!(db.get_page_source_revision("page_rev").await.unwrap(), 1);
+
+        db.replace_page_sources("page_rev", &["src_rev_b"], "changed_set")
+            .await
+            .unwrap();
+        assert_eq!(db.get_page_source_revision("page_rev").await.unwrap(), 2);
+        assert_eq!(
+            db.get_page_sources("page_rev")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect::<Vec<_>>(),
+            vec!["src_rev_b"]
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_source_page_advances_source_revision_with_exact_provenance() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let replacement = "\u{feff}\r\n  Updated body  \r\n\r\n";
+        db.insert_page_with_kind(
+            "page-source-replace",
+            "Source page",
+            None,
+            "Original body",
+            None,
+            None,
+            &["source-old"],
+            &now,
+            "source",
+            "confirmed",
+            None,
+            Some("[]"),
+        )
+        .await
+        .unwrap();
+
+        let replaced = db
+            .replace_source_page(
+                "page-source-replace",
+                "Source page",
+                Some("Updated summary"),
+                replacement,
+                &["source-new-a", "source-new-b"],
+                "source_refresh",
+            )
+            .await
+            .unwrap();
+
+        assert!(replaced);
+        assert_eq!(
+            db.get_page_source_revision("page-source-replace")
+                .await
+                .unwrap(),
+            1
+        );
+        let page = db.get_page("page-source-replace").await.unwrap().unwrap();
+        assert_eq!(page.content, replacement);
+        assert_eq!(
+            page.source_memory_ids,
+            vec!["source-new-a".to_string(), "source-new-b".to_string()]
+        );
+        let sources: HashSet<_> = db
+            .get_page_sources("page-source-replace")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+        assert_eq!(
+            sources,
+            HashSet::from(["source-new-a".to_string(), "source-new-b".to_string()])
+        );
+        let history = db
+            .list_page_history("page-source-replace", 10)
+            .await
+            .unwrap();
+        assert_eq!(history[0].content, replacement);
+    }
+
+    #[tokio::test]
+    async fn replace_source_page_rejects_reserved_delimiter_without_mutation() {
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page-source-rejected",
+            "Source page",
+            None,
+            "Original body",
+            None,
+            None,
+            &["source-old"],
+            &now,
+            "source",
+            "confirmed",
+            None,
+            Some("[]"),
+        )
+        .await
+        .unwrap();
+        let before = db.get_page("page-source-rejected").await.unwrap().unwrap();
+        let history_before = db
+            .list_page_history("page-source-rejected", 10)
+            .await
+            .unwrap();
+        let sources_before: HashSet<_> = db
+            .get_page_sources("page-source-rejected")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+
+        let error = db
+            .replace_source_page(
+                "page-source-rejected",
+                "Changed title",
+                Some("Changed summary"),
+                &format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+                &["source-new"],
+                "source_refresh",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+
+        let after = db.get_page("page-source-rejected").await.unwrap().unwrap();
+        let history_after = db
+            .list_page_history("page-source-rejected", 10)
+            .await
+            .unwrap();
+        let sources_after: HashSet<_> = db
+            .get_page_sources("page-source-rejected")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.summary, before.summary);
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(history_after.len(), history_before.len());
+        assert_eq!(sources_after, sources_before);
+    }
+
+    #[tokio::test]
+    async fn accepted_page_merge_advances_survivor_source_revision() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-merge-revision-survivor",
+            "Merge survivor",
+            None,
+            "Survivor body",
+            None,
+            None,
+            &["source-survivor"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page(
+            "page-merge-revision-absorbed",
+            "Merge absorbed",
+            None,
+            "Absorbed body",
+            None,
+            None,
+            &["source-absorbed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_refinement_proposal(
+            "proposal-merge-revision",
+            "page_merge",
+            &[
+                "page-merge-revision-survivor".to_string(),
+                "page-merge-revision-absorbed".to_string(),
+            ],
+            None,
+            1.0,
+        )
+        .await
+        .unwrap();
+
+        db.accept_page_merge(
+            "proposal-merge-revision",
+            "page-merge-revision-survivor",
+            "page-merge-revision-absorbed",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.get_page_source_revision("page-merge-revision-survivor")
+                .await
+                .unwrap(),
+            1
+        );
+        let survivor = db
+            .get_page("page-merge-revision-survivor")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(survivor.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            survivor
+                .source_memory_ids
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from(["source-survivor".to_string(), "source-absorbed".to_string()])
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_concept_sources_ordered() {
         let (db, _dir) = test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
@@ -44290,6 +47808,8 @@ pub(crate) mod tests {
         db.link_page_source("c_clean", "mem_ghost", "reason")
             .await
             .unwrap();
+        db.clear_page_staleness("c_clean").await.unwrap();
+        let source_revision_before = db.get_page_source_revision("c_clean").await.unwrap();
 
         // Delete the memory directly to simulate an orphan.
         {
@@ -44327,6 +47847,89 @@ pub(crate) mod tests {
             orphan_evidence.len(),
             0,
             "cleanup_orphaned_page_sources must mirror DELETE to page_evidence (dual-write contract)"
+        );
+        let page = db.get_page("c_clean").await.unwrap().unwrap();
+        assert!(page.source_memory_ids.is_empty());
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            db.get_page_source_revision("c_clean").await.unwrap(),
+            source_revision_before + 1,
+            "pruning an orphan changes the source set and must advance its CAS token"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_source_prune_and_page_provenance_sync_share_one_transaction() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.upsert_documents(vec![make_memory_doc(
+            "mem-orphan-rollback",
+            "Orphan cleanup rollback source.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        db.insert_page(
+            "page-orphan-rollback",
+            "Orphan rollback",
+            None,
+            "body",
+            None,
+            None,
+            &["mem-orphan-rollback"],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "DELETE FROM memories WHERE source_id = 'mem-orphan-rollback'",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "CREATE TRIGGER reject_orphan_page_sync
+                 BEFORE UPDATE OF source_memory_ids ON pages
+                 WHEN OLD.id = 'page-orphan-rollback'
+                 BEGIN SELECT RAISE(ABORT, 'blocked orphan page sync'); END",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let source_revision_before = db
+            .get_page_source_revision("page-orphan-rollback")
+            .await
+            .unwrap();
+
+        let error = db.cleanup_orphaned_page_sources().await.unwrap_err();
+        assert!(error.to_string().contains("blocked orphan page sync"));
+
+        assert_eq!(
+            db.get_page_sources("page-orphan-rollback")
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "failed page synchronization must roll back the join-row prune"
+        );
+        assert_eq!(
+            db.get_page_source_revision("page-orphan-rollback")
+                .await
+                .unwrap(),
+            source_revision_before
+        );
+        assert_eq!(
+            db.get_page("page-orphan-rollback")
+                .await
+                .unwrap()
+                .unwrap()
+                .source_memory_ids,
+            vec!["mem-orphan-rollback".to_string()]
         );
     }
 
@@ -44420,6 +48023,23 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         }
+        let expected_before_cleanup =
+            serde_json::to_string(&["logical_locator", row_id.as_str(), "missing_locator"])
+                .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET source_memory_ids = ?1 WHERE id = 'page_locator_forms'",
+                libsql::params![expected_before_cleanup],
+            )
+            .await
+            .unwrap();
+        }
+        db.clear_page_staleness("page_locator_forms").await.unwrap();
+        let source_revision_before = db
+            .get_page_source_revision("page_locator_forms")
+            .await
+            .unwrap();
 
         let removed = db.cleanup_orphaned_page_sources().await.unwrap();
         assert_eq!(removed, 1, "only the missing owner should be removed");
@@ -44445,6 +48065,199 @@ pub(crate) mod tests {
             .filter_map(|evidence| evidence.locator)
             .collect();
         assert_eq!(evidence_locators, source_locators);
+
+        let page = db.get_page("page_locator_forms").await.unwrap().unwrap();
+        assert_eq!(
+            page.source_memory_ids.into_iter().collect::<HashSet<_>>(),
+            source_locators,
+            "orphan cleanup must keep legacy JSON provenance synchronized with page_sources"
+        );
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            db.get_page_source_revision("page_locator_forms")
+                .await
+                .unwrap(),
+            source_revision_before + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphaned_page_sources_prunes_json_only_ghosts_once_per_page() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.upsert_documents(vec![make_memory_doc(
+            "json-cleanup-valid",
+            "Valid source retained by JSON cleanup.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        db.insert_page(
+            "page-json-only-ghosts",
+            "JSON-only ghost cleanup",
+            None,
+            "body",
+            None,
+            None,
+            &["json-cleanup-valid"],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages
+                 SET source_memory_ids = '[\"json-cleanup-valid\",\"json-ghost-a\",\"json-ghost-b\"]'
+                 WHERE id = 'page-json-only-ghosts'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        db.clear_page_staleness("page-json-only-ghosts")
+            .await
+            .unwrap();
+        let before = db.get_page("page-json-only-ghosts").await.unwrap().unwrap();
+        let revision_before = db
+            .get_page_source_revision("page-json-only-ghosts")
+            .await
+            .unwrap();
+
+        let removed = db.cleanup_orphaned_page_sources().await.unwrap();
+
+        assert_eq!(removed, 2, "both JSON-only ghost locators are removed");
+        let page = db.get_page("page-json-only-ghosts").await.unwrap().unwrap();
+        assert_eq!(
+            page.source_memory_ids,
+            vec!["json-cleanup-valid".to_string()]
+        );
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            page.sources_updated_count,
+            before.sources_updated_count + 2,
+            "pending-source count records both removed locators"
+        );
+        assert_eq!(
+            db.get_page_source_revision("page-json-only-ghosts")
+                .await
+                .unwrap(),
+            revision_before + 1,
+            "one cleanup transaction advances each affected page exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphaned_page_sources_preserves_valid_json_only_locator() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.upsert_documents(vec![make_memory_doc(
+            "json-only-valid",
+            "Valid legacy JSON provenance.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        db.insert_page(
+            "page-json-only-valid",
+            "Preserve valid JSON-only provenance",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages
+                 SET source_memory_ids = '[\"json-only-valid\",\"json-only-ghost\"]'
+                 WHERE id = 'page-json-only-valid'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let removed = db.cleanup_orphaned_page_sources().await.unwrap();
+
+        assert_eq!(removed, 1);
+        let page = db.get_page("page-json-only-valid").await.unwrap().unwrap();
+        assert_eq!(page.source_memory_ids, vec!["json-only-valid".to_string()]);
+        assert!(db
+            .get_page_sources("page-json-only-valid")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn json_only_orphan_cleanup_and_page_sync_share_one_transaction() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-json-ghost-rollback",
+            "JSON ghost rollback",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "UPDATE pages
+                 SET source_memory_ids = '[\"json-only-ghost\"]'
+                 WHERE id = 'page-json-ghost-rollback';
+                 CREATE TRIGGER reject_json_only_orphan_sync
+                 BEFORE UPDATE OF source_memory_ids ON pages
+                 WHEN OLD.id = 'page-json-ghost-rollback'
+                 BEGIN SELECT RAISE(ABORT, 'blocked JSON-only orphan sync'); END;",
+            )
+            .await
+            .unwrap();
+        }
+        db.clear_page_staleness("page-json-ghost-rollback")
+            .await
+            .unwrap();
+        let before = db
+            .get_page("page-json-ghost-rollback")
+            .await
+            .unwrap()
+            .unwrap();
+        let revision_before = db
+            .get_page_source_revision("page-json-ghost-rollback")
+            .await
+            .unwrap();
+
+        let error = db.cleanup_orphaned_page_sources().await.unwrap_err();
+        assert!(error.to_string().contains("blocked JSON-only orphan sync"));
+
+        let page = db
+            .get_page("page-json-ghost-rollback")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(page.source_memory_ids, vec!["json-only-ghost".to_string()]);
+        assert_eq!(page.stale_reason, None);
+        assert_eq!(page.sources_updated_count, before.sources_updated_count);
+        assert_eq!(
+            db.get_page_source_revision("page-json-ghost-rollback")
+                .await
+                .unwrap(),
+            revision_before
+        );
     }
 
     // ---- upsert_memory_in_place ----
@@ -44496,6 +48309,115 @@ pub(crate) mod tests {
 
         assert_eq!(content, new_content, "content should be updated");
         assert_eq!(version, 2, "version should be incremented to 2");
+    }
+
+    #[tokio::test]
+    async fn upsert_memory_in_place_invalidates_all_page_locator_forms_once() {
+        let (db, _dir) = test_db().await;
+        db.upsert_documents(vec![make_memory_doc(
+            "in-place-page-source",
+            "Original in-place source content.",
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let row_id = memory_row_id(&db, "memory", "in-place-page-source").await;
+        let pages =
+            install_page_locator_forms(&db, "page-in-place", "in-place-page-source", &row_id).await;
+        let new_content = "Updated in-place source content.";
+        let embedding = db
+            .generate_embeddings(&[new_content.to_string()])
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        db.upsert_memory_in_place(
+            "in-place-page-source",
+            new_content,
+            &embedding,
+            Some("test-agent"),
+            None,
+            50,
+        )
+        .await
+        .unwrap();
+
+        assert_pages_invalidated_once(&db, &pages).await;
+    }
+
+    #[tokio::test]
+    async fn upsert_memory_in_place_rolls_back_page_invalidation_and_content() {
+        let (db, _dir) = test_db().await;
+        let original = "Original in-place content survives rollback.";
+        db.upsert_documents(vec![make_memory_doc(
+            "in-place-page-rollback",
+            original,
+            "knowledge",
+            "work",
+            "agent",
+        )])
+        .await
+        .unwrap();
+        let row_id = memory_row_id(&db, "memory", "in-place-page-rollback").await;
+        let pages = install_page_locator_forms(
+            &db,
+            "page-in-place-rollback",
+            "in-place-page-rollback",
+            &row_id,
+        )
+        .await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "CREATE TRIGGER reject_in_place_page_invalidation
+                 BEFORE UPDATE OF stale_reason ON pages
+                 WHEN OLD.id = 'page-in-place-rollback-mixed'
+                 BEGIN SELECT RAISE(ABORT, 'blocked in-place page invalidation'); END",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let new_content = "Replacement in-place content must roll back.";
+        let embedding = db
+            .generate_embeddings(&[new_content.to_string()])
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let error = db
+            .upsert_memory_in_place(
+                "in-place-page-rollback",
+                new_content,
+                &embedding,
+                Some("test-agent"),
+                None,
+                50,
+            )
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("blocked in-place page invalidation"));
+
+        let memories = db
+            .get_memories_by_source_id("memory", "in-place-page-rollback")
+            .await
+            .unwrap();
+        assert_eq!(memories[0].content, original);
+        for (page_id, revision_before, count_before) in pages {
+            let page = db.get_page(&page_id).await.unwrap().unwrap();
+            assert_eq!(page.stale_reason, None);
+            assert_eq!(page.sources_updated_count, count_before);
+            assert_eq!(
+                db.get_page_source_revision(&page_id).await.unwrap(),
+                revision_before
+            );
+        }
     }
 
     #[tokio::test]
@@ -44583,6 +48505,38 @@ pub(crate) mod tests {
     }
 
     // ---- set_page_stale / clear_page_staleness / list_stale_pages ----
+
+    #[tokio::test]
+    async fn same_entity_memory_not_explicitly_linked_does_not_change_page() {
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page_theme_a",
+            "Theme A",
+            None,
+            "content",
+            Some("ent_shared"),
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        insert_memory_with_entity(
+            &db,
+            "mem_theme_b",
+            "Theme B evidence",
+            "belongs to another thematic page",
+            10,
+            10,
+            "enriched",
+            "ent_shared",
+        )
+        .await;
+        let page = db.get_page("page_theme_a").await.unwrap().unwrap();
+
+        assert!(!db.has_page_sources_changed(&page).await.unwrap());
+    }
 
     #[tokio::test]
     async fn test_stale_concepts_lifecycle() {
@@ -47106,6 +51060,8 @@ pub(crate) mod tests {
             false,
             "User-edited content",
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -47135,6 +51091,8 @@ pub(crate) mod tests {
             false,
             "user-edited",
             None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -47150,6 +51108,186 @@ pub(crate) mod tests {
             Some("manual_force"),
             "clear_user_edited should mark stale so refinery picks it up"
         );
+    }
+
+    #[tokio::test]
+    async fn production_page_mutators_reject_drafts_without_changing_owned_state() {
+        let (db, _tmp) = test_db().await;
+        let page_id = "page_draft_isolation_floor";
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            page_id,
+            "Draft isolation guard",
+            None,
+            "Exact editor-owned body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET status='draft', embedding=NULL WHERE id=?1",
+                libsql::params![page_id],
+            )
+            .await
+            .unwrap();
+        }
+
+        let draft = db.get_page(page_id).await.unwrap().unwrap();
+        let original = serde_json::to_value(&draft).unwrap();
+        let link = crate::synthesis::wikilinks::Wikilink {
+            label: "Derived target".to_string(),
+            target_page_id: None,
+        };
+        let citations = r#"[{"occurrence":1,"marker":1,"source_kind":"memory","locator":"mem-citation","score":1.0,"status":"verified","scope":"sentence"}]"#;
+        let changelog = r#"[{"edited_by":"citation_backfill","at":1,"delta_summary":"mutated"}]"#;
+        let expected_error = format!("Page {page_id} is not active");
+
+        let outcomes = vec![
+            ("archive_page", db.archive_page(page_id).await),
+            ("delete_page", db.delete_page(page_id).await),
+            (
+                "update_page_content",
+                db.update_page_content(page_id, "mutated", &[], "manual_edit")
+                    .await,
+            ),
+            ("clear_user_edited", db.clear_user_edited(page_id).await),
+            (
+                "replace_page_links",
+                db.replace_page_links(page_id, &[link]).await,
+            ),
+            (
+                "link_page_source",
+                db.link_page_source(page_id, "mem-source-a", "test").await,
+            ),
+            (
+                "replace_page_sources",
+                db.replace_page_sources(page_id, &["mem-source-b"], "test")
+                    .await,
+            ),
+            (
+                "set_page_citations",
+                db.set_page_citations(page_id, Some(citations)).await,
+            ),
+            (
+                "set_page_citations_with_changelog",
+                db.set_page_citations_with_changelog(page_id, Some(citations), changelog)
+                    .await,
+            ),
+            (
+                "link_page_evidence",
+                db.link_page_evidence(page_id, "authored", None, Some("Editor note"), "test")
+                    .await,
+            ),
+            (
+                "set_page_stale",
+                db.set_page_stale(page_id, "source_updated").await,
+            ),
+            (
+                "set_page_review_status",
+                db.set_page_review_status(page_id, "confirmed").await,
+            ),
+            (
+                "increment_page_sources_updated",
+                db.increment_page_sources_updated(page_id).await,
+            ),
+            (
+                "clear_page_staleness",
+                db.clear_page_staleness(page_id).await,
+            ),
+            (
+                "update_page_summary",
+                db.update_page_summary(page_id, Some("mutated summary"))
+                    .await,
+            ),
+        ];
+
+        for (name, outcome) in outcomes {
+            match outcome {
+                Err(WenlanError::Validation(message)) => {
+                    assert_eq!(message, expected_error, "{name} rejection");
+                }
+                other => panic!("{name} must reject a draft as not active, got {other:?}"),
+            }
+        }
+        assert_eq!(db.backfill_page_embeddings().await.unwrap(), 0);
+
+        let current = db
+            .get_page(page_id)
+            .await
+            .unwrap()
+            .expect("production mutators must not remove a draft");
+        assert_eq!(serde_json::to_value(&current).unwrap(), original);
+        for table in ["page_sources", "page_evidence", "page_links"] {
+            let key = if table == "page_links" {
+                "source_page_id"
+            } else {
+                "page_id"
+            };
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE {key}=?1"),
+                    libsql::params![page_id],
+                )
+                .await
+                .unwrap();
+            let count = rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap();
+            assert_eq!(count, 0, "{table} must remain empty for a draft");
+        }
+    }
+
+    #[tokio::test]
+    async fn draft_isolation_preserves_archived_and_missing_mutator_behavior() {
+        let (db, _tmp) = test_db().await;
+        let page_id = "page_draft_archived_control";
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            page_id,
+            "Archived control",
+            None,
+            "Original body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.archive_page(page_id).await.unwrap();
+
+        db.update_page_content(
+            page_id,
+            "Archived body with [[Unresolved target]]",
+            &[],
+            "test",
+        )
+        .await
+        .unwrap();
+        let archived = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(archived.status, "archived");
+        assert_eq!(archived.content, "Archived body with [[Unresolved target]]");
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE pages SET embedding = NULL WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(db.backfill_page_embeddings().await.unwrap(), 1);
+
+        db.update_page_summary("missing_page", Some("ignored"))
+            .await
+            .unwrap();
+        db.clear_user_edited("missing_page").await.unwrap();
+        db.delete_page("missing_page").await.unwrap();
     }
 
     // ── migration 50 replay test ──────────────────────────────────────────────
@@ -47800,9 +51938,9 @@ pub(crate) mod tests {
             "page_workspace_src",
             "Workspace Src",
             None,
-            "newer page using pages.workspace as the space axis",
+            "newer page scoped by pages.workspace (single-axis: space mirrors workspace)",
             None,
-            Some("recap"),
+            None,
             &["mem_page_move_1"],
             &now,
             "authored",
@@ -47825,8 +51963,8 @@ pub(crate) mod tests {
         let scoped = db.get_page("page_workspace_src").await.unwrap().unwrap();
         assert_eq!(
             scoped.space.as_deref(),
-            Some("recap"),
-            "space move must not overwrite page category values that differ from the old space"
+            Some("dest"),
+            "space move mirrors the scope onto pages.space -- one honest column, no independent category (spec §1)"
         );
         assert_eq!(
             scoped.workspace.as_deref(),
@@ -51614,7 +55752,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51631,7 +55768,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51665,7 +55803,6 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
-        assert_eq!(uv, 72);
     }
 
     #[tokio::test]
@@ -51682,7 +55819,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
     }
@@ -51729,10 +55867,10 @@ pub(crate) mod tests {
 
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
         assert_eq!(
-            uv, 72,
-            "terminal version is 72 after dedup_merge retirement"
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
+            "terminal version matches the current schema after all migrations"
         );
     }
 
@@ -51750,7 +55888,8 @@ pub(crate) mod tests {
         let mut vrows = conn.query("PRAGMA user_version", ()).await.unwrap();
         let uv: i64 = vrows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(
-            uv, 72,
+            uv as u32,
+            crate::db::SCHEMA_VERSION,
             "user_version restored to current terminal version after idempotent re-run"
         );
 
@@ -51764,6 +55903,87 @@ pub(crate) mod tests {
             .unwrap();
         let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(present, 1, "child_vectors survives idempotent re-run");
+    }
+
+    /// A database a NEWER daemon already migrated must not be opened. Every
+    /// migration is gated `if version < N`, so a newer `user_version` skips all
+    /// of them silently — without this check an older build would go on writing
+    /// against columns and constraints it cannot see. Refusing is recoverable;
+    /// writing is not.
+    #[tokio::test]
+    async fn opening_a_newer_schema_database_is_refused() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                &format!("PRAGMA user_version = {}", crate::db::SCHEMA_VERSION + 1),
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let err = db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect_err("a newer schema must be refused, not silently accepted");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("newer than this build supports"),
+            "the error must say why it refused, not just fail; got: {msg}"
+        );
+    }
+
+    /// A fresh install and an upgraded install must end up with the same
+    /// schema. They share one incremental chain, so this holds by construction
+    /// today — the test is here to catch the day someone adds a fresh-path DDL
+    /// shortcut and the two paths quietly diverge.
+    ///
+    /// Exercises the real upgrade for M0's migrations: drop what 73 and 74
+    /// added, rewind the version, and re-migrate.
+    #[tokio::test]
+    async fn fresh_and_upgraded_schemas_agree() {
+        async fn schema_of(db: &MemoryDB) -> Vec<(String, String)> {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT name, COALESCE(sql, '') FROM sqlite_master \
+                     WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut out = Vec::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                out.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+            }
+            out
+        }
+
+        let (fresh, _fresh_dir) = test_db().await;
+        let (upgraded, _up_dir) = test_db().await;
+
+        // Rewind `upgraded` to a genuine pre-M0 database.
+        {
+            let conn = upgraded.conn.lock().await;
+            conn.execute("DROP TABLE IF EXISTS operation_receipts", ())
+                .await
+                .unwrap();
+            conn.execute("DROP TABLE IF EXISTS page_history", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 72", ()).await.unwrap();
+        }
+        upgraded
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migrating a pre-M0 database must succeed");
+
+        assert_eq!(
+            schema_of(&fresh).await,
+            schema_of(&upgraded).await,
+            "a fresh install and an upgraded one must have identical schemas"
+        );
     }
 
     #[tokio::test]
@@ -53509,6 +57729,8 @@ pub(crate) mod tests {
                 false,
                 "[]",
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -53640,6 +57862,10 @@ pub(crate) mod tests {
         // Roll user_version back so migration 63 re-runs over the seeded rows.
         {
             let conn = db.conn.lock().await;
+            // M1: migration 80 made the scope columns NOT NULL. Relax them first so
+            // the rollback can null out `workspace`; the migration 80 re-run below
+            // rebuilds the NOT NULL constraint after migration 63 backfills.
+            relax_pages_scope_columns_to_nullable(&conn).await;
             conn.execute("UPDATE pages SET workspace = NULL", ())
                 .await
                 .unwrap();
@@ -53822,5 +58048,1321 @@ pub(crate) mod tests {
             );
         }
         assert_eq!(seen, n, "every upserted chunk row should be returned");
+    }
+
+    #[tokio::test]
+    async fn lint_review_enqueue_rejects_invalid_contracts_and_non_equivalent_collisions() {
+        let (db, _dir) = test_db().await;
+        let occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let review_id = format!("lint_review_{occurrence}");
+        let source_ids = vec!["mem_a".to_string()];
+        let payload_for = |issue: &str, owners: &[String]| {
+            serde_json::json!({
+                "action": "lint_repair_review",
+                "check_id": "identity.memory_state_integrity",
+                "occurrence_digest": occurrence,
+                "owner_binding_digest": crate::repair::lint_review_owner_binding_digest(
+                    &wenlan_types::repair::RepairDigest::parse(occurrence).unwrap(),
+                    owners,
+                )
+                .unwrap(),
+                "issue": issue,
+                "choices": ["confirm", "unpin"],
+                "suggested_research_queries": []
+            })
+            .to_string()
+        };
+        let payload = payload_for("ambiguous state", &source_ids);
+
+        assert!(db
+            .insert_refinement_proposal(
+                &review_id,
+                "lint_repair_review",
+                &source_ids,
+                Some(&payload),
+                1.0,
+            )
+            .await
+            .is_err());
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, "not-json")
+            .await
+            .is_err());
+        assert!(db
+            .insert_lint_review_if_absent(
+                "lint_review_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                &source_ids,
+                &payload,
+            )
+            .await
+            .is_err());
+        assert!(db
+            .insert_lint_review_if_absent(
+                &review_id,
+                &source_ids,
+                &payload_for("ambiguous state", &["mem_b".to_string()]),
+            )
+            .await
+            .is_err());
+
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, &payload)
+            .await
+            .unwrap());
+        assert!(db
+            .insert_lint_review_if_absent(
+                &review_id,
+                &source_ids,
+                &payload_for("different issue", &source_ids),
+            )
+            .await
+            .is_err());
+
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE refinement_queue
+                    SET action = 'relation_conflict'
+                  WHERE id = ?1",
+                libsql::params![review_id.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, &payload)
+            .await
+            .is_err());
+
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE refinement_queue
+                    SET action = 'lint_repair_review',
+                        source_ids = '[\"mem_b\"]'
+                  WHERE id = ?1",
+                libsql::params![review_id.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(db
+            .insert_lint_review_if_absent(&review_id, &source_ids, &payload)
+            .await
+            .is_err());
+    }
+
+    async fn create_repair_open_probe(dir: &std::path::Path, schema_version: u32) {
+        std::fs::create_dir_all(dir).unwrap();
+        let db_file = dir.join("origin_memory.db");
+        let database = libsql::Builder::new_local(db_file.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute_batch(&format!(
+                "PRAGMA user_version = {schema_version}; \
+                 CREATE TABLE repair_open_probe (value TEXT NOT NULL);"
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_73_reconciles_both_colliding_schema_histories() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "DROP TABLE entity_type_vocabulary;
+                 DROP TABLE vocab_heal_ledger;
+                 ALTER TABLE pages DROP COLUMN source_revision;
+                 PRAGMA user_version = 72;",
+            )
+            .await
+            .unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut table_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='table'
+                    AND name IN ('entity_type_vocabulary','vocab_heal_ledger')",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            table_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            2
+        );
+        let mut vocabulary_rows = conn
+            .query("SELECT COUNT(*) FROM entity_type_vocabulary", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            vocabulary_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            6
+        );
+        let mut column_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('pages')
+                  WHERE name='source_revision'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            column_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            1
+        );
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            i64::from(SCHEMA_VERSION)
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_77_reconciles_origin_main_v76_without_repair_substrate() {
+        let (db, _dir) = test_db().await;
+        let occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let review_id = format!("lint_review_{occurrence}");
+        let legacy_payload = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": occurrence,
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": [],
+        })
+        .to_string();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "DROP TABLE entity_type_vocabulary;
+                 DROP TABLE vocab_heal_ledger;
+                 ALTER TABLE pages DROP COLUMN source_revision;",
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES (?1,'lint_repair_review','[\"page-b\",\"page-a\"]',?2,
+                         'dismissed','2023-11-14 22:13:20')",
+                libsql::params![review_id.clone(), legacy_payload],
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 76", ()).await.unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut table_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='table'
+                    AND name IN ('entity_type_vocabulary','vocab_heal_ledger')",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            table_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            2,
+            "origin/main v76 databases must gain both repair vocabulary tables"
+        );
+        let mut vocabulary_rows = conn
+            .query("SELECT COUNT(*) FROM entity_type_vocabulary", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            vocabulary_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            6,
+            "origin/main v76 databases must gain the canonical vocabulary seeds"
+        );
+        let mut column_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('pages')
+                  WHERE name='source_revision'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            column_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            1,
+            "origin/main v76 databases must gain the Page compile CAS column"
+        );
+        let mut review_rows = conn
+            .query(
+                "SELECT source_ids,payload FROM refinement_queue WHERE id=?1",
+                libsql::params![review_id],
+            )
+            .await
+            .unwrap();
+        let review = review_rows.next().await.unwrap().unwrap();
+        assert_eq!(
+            review.get::<String>(0).unwrap(),
+            r#"["page-a","page-b"]"#,
+            "origin/main v76 review owners must be canonicalized"
+        );
+        let payload: wenlan_types::RefinementPayload =
+            serde_json::from_str(&review.get::<String>(1).unwrap()).unwrap();
+        assert!(matches!(
+            payload,
+            wenlan_types::RefinementPayload::LintRepairReview { .. }
+        ));
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            i64::from(SCHEMA_VERSION),
+            "the post-merge reconciliation must migrate a v76 database all the way \
+             to the current terminal schema version"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_77_rejects_malformed_v76_review_before_advancing_schema() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "DROP TABLE entity_type_vocabulary;
+                 DROP TABLE vocab_heal_ledger;
+                 ALTER TABLE pages DROP COLUMN source_revision;
+                 INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES ('lint_review_malformed','lint_repair_review','[\"page-b\"]',
+                         'not-json','awaiting_review','2023-11-14 22:13:20');
+                 PRAGMA user_version = 76;",
+            )
+            .await
+            .unwrap();
+        }
+
+        let error = db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("m74"));
+
+        let conn = db.conn.lock().await;
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            76,
+            "malformed owner data must block the terminal version bump"
+        );
+        let mut column_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('pages')
+                  WHERE name='source_revision'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            column_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            0,
+            "schema reconciliation must not run before owner validation succeeds"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_74_backfills_lint_review_owner_binding_without_changing_row_identity() {
+        let (db, _dir) = test_db().await;
+        let occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let id = format!("lint_review_{occurrence}");
+        let legacy_source_ids_json = r#"["page-b","page-a"]"#;
+        let canonical_source_ids_json = r#"["page-a","page-b"]"#;
+        let legacy_payload = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": occurrence,
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": [],
+        })
+        .to_string();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES (?1,'lint_repair_review',?2,?3,'dismissed','2023-11-14 22:13:20')",
+                libsql::params![id.clone(), legacy_source_ids_json, legacy_payload],
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 73", ()).await.unwrap();
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 74 must be idempotent");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id,status,source_ids,payload
+                   FROM refinement_queue WHERE id=?1",
+                libsql::params![id.clone()],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<String>(0).unwrap(), id);
+        assert_eq!(row.get::<String>(1).unwrap(), "dismissed");
+        assert_eq!(
+            row.get::<String>(2).unwrap(),
+            canonical_source_ids_json,
+            "migration must safely canonicalize the existing owner set"
+        );
+        let payload: wenlan_types::RefinementPayload =
+            serde_json::from_str(&row.get::<String>(3).unwrap()).unwrap();
+        let wenlan_types::RefinementPayload::LintRepairReview {
+            occurrence_digest,
+            owner_binding_digest,
+            ..
+        } = payload
+        else {
+            panic!("expected lint repair review payload");
+        };
+        assert_eq!(
+            owner_binding_digest,
+            crate::repair::lint_review_owner_binding_digest(
+                &occurrence_digest,
+                &["page-a".to_string(), "page-b".to_string()],
+            )
+            .unwrap()
+        );
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            i64::from(crate::db::SCHEMA_VERSION)
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_74_rejects_malformed_lint_review_without_partial_backfill_or_version_bump() {
+        let (db, _dir) = test_db().await;
+        let valid_occurrence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let valid_id = format!("lint_review_{valid_occurrence}");
+        let valid_payload = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": valid_occurrence,
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": [],
+        })
+        .to_string();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES (?1,'lint_repair_review','[\"page-a\"]',?2,'awaiting_review',
+                         '2023-11-14 22:13:20')",
+                libsql::params![valid_id.clone(), valid_payload.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO refinement_queue
+                     (id,action,source_ids,payload,status,created_at)
+                 VALUES ('lint_review_malformed','lint_repair_review','[\"page-b\"]',
+                         'not-json','awaiting_review','2023-11-14 22:13:20')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 73", ()).await.unwrap();
+        }
+
+        let error = db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("m74"));
+
+        let conn = db.conn.lock().await;
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            73
+        );
+        let mut payload_rows = conn
+            .query(
+                "SELECT payload FROM refinement_queue WHERE id=?1",
+                libsql::params![valid_id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            payload_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            valid_payload
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_open_requires_an_existing_current_schema_without_bootstrap_or_embedder() {
+        let root = tempfile::tempdir().unwrap();
+        let db_path = root.path().join("memorydb");
+        create_repair_open_probe(&db_path, SCHEMA_VERSION).await;
+
+        let db = MemoryDB::open_for_repair(&db_path).await.unwrap();
+        let connection = db.conn.lock().await;
+        let mut rows = connection
+            .query(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut tables = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            tables.push(row.get::<String>(0).unwrap());
+        }
+        drop(rows);
+        drop(connection);
+
+        assert_eq!(tables, vec!["repair_open_probe"]);
+        assert!(db
+            .generate_embeddings(&["must stay unloaded".to_string()])
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn repair_open_rejects_missing_or_stale_database_without_creating_one() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing");
+        assert!(MemoryDB::open_for_repair(&missing).await.is_err());
+        assert!(!missing.exists());
+
+        let stale = root.path().join("stale");
+        create_repair_open_probe(&stale, SCHEMA_VERSION - 1).await;
+        assert!(MemoryDB::open_for_repair(&stale).await.is_err());
+    }
+
+    /// Test-only inverse of migration 80's writable_schema NOT NULL patch --
+    /// restores pages.space/workspace to nullable so a test can seed
+    /// pre-fold data, mirroring the reverse-rename technique
+    /// test_migration_50_renames_domain_to_space already uses for `domain`.
+    async fn relax_pages_scope_columns_to_nullable(conn: &libsql::Connection) {
+        let sql: String = {
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        let mut patched = sql.replacen(
+            &format!("workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
+            "workspace TEXT,",
+            1,
+        );
+        patched = patched.replacen(
+            &format!("space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"),
+            "space TEXT,",
+            1,
+        );
+        assert_ne!(
+            patched, sql,
+            "expected pages.space/workspace to already be NOT NULL before relaxing"
+        );
+        conn.execute("PRAGMA writable_schema=ON", ()).await.unwrap();
+        conn.execute(
+            "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+            libsql::params![patched],
+        )
+        .await
+        .unwrap();
+        conn.execute("PRAGMA writable_schema=RESET", ())
+            .await
+            .unwrap();
+    }
+
+    /// Minimal raw page insert for migration-80 tests: supplies every NOT
+    /// NULL column without a DEFAULT (id, title, content, created_at,
+    /// last_compiled, last_modified) and leaves space/workspace to the
+    /// caller. Caller must have relaxed the schema to nullable first if
+    /// either argument is None.
+    async fn insert_raw_page_for_m80_test(
+        conn: &libsql::Connection,
+        id: &str,
+        space: Option<&str>,
+        workspace: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO pages \
+                (id, title, content, created_at, last_compiled, last_modified, space, workspace) \
+             VALUES (?1, ?2, 'content', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', \
+                     '2024-01-01T00:00:00Z', ?3, ?4)",
+            libsql::params![id, format!("title {id}"), space, workspace],
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_80_fresh_and_upgraded_schema_agree() {
+        // Fresh: nothing seeded, migration 80 runs over an empty pages table.
+        let (fresh_db, _fresh_dir) = test_db().await;
+        let fresh_sql: String = {
+            let conn = fresh_db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+
+        // Upgraded: real pre-fold data (a collision-shaped row and a
+        // both-NULL row), relaxed back to nullable, migration 80 re-fires
+        // over populated rows.
+        let (upgraded_db, _upgraded_dir) = test_db().await;
+        {
+            let conn = upgraded_db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_a", Some("wenlan"), Some("origin-website"))
+                .await;
+            insert_raw_page_for_m80_test(&conn, "page_b", None, None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        upgraded_db
+            .run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 80 re-fires over populated rows");
+        let upgraded_sql: String = {
+            let conn = upgraded_db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+
+        assert_eq!(
+            fresh_sql, upgraded_sql,
+            "fresh-DB and upgraded-DB pages DDL must agree byte-for-byte"
+        );
+        // "space TEXT NOT NULL" is a substring of "workspace TEXT NOT NULL",
+        // so a plain .contains() check would pass even if the bare `space`
+        // column were never patched -- anchor on the standalone column
+        // line's own indentation/newline instead.
+        assert!(
+            fresh_sql.contains(&format!(
+                "\n                        space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"
+            )),
+            "space must be NOT NULL DEFAULT the sentinel id on its own column line: {fresh_sql}"
+        );
+        assert!(
+            fresh_sql.contains(&format!(
+                "workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}'"
+            )),
+            "workspace must be NOT NULL DEFAULT the sentinel id: {fresh_sql}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_80_backfill_precedence_workspace_wins_over_differing_space() {
+        let (db, _dir) = test_db().await;
+        db.create_space("wenlan", None, false).await.unwrap();
+        db.create_space("origin-website", None, false)
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(
+                &conn,
+                "page_collision",
+                Some("wenlan"),
+                Some("origin-website"),
+            )
+            .await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_collision'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, "origin-website", "workspace must win the collision");
+        assert_eq!(workspace, "origin-website");
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT prior_space, prior_workspace, assigned_space, rule \
+                 FROM page_space_fold_ledger WHERE page_id = 'page_collision'",
+                (),
+            )
+            .await
+            .unwrap();
+        let ledger_row = ledger_rows.next().await.unwrap().unwrap();
+        let prior_space: String = ledger_row.get(0).unwrap();
+        let prior_workspace: String = ledger_row.get(1).unwrap();
+        let assigned_space: String = ledger_row.get(2).unwrap();
+        let rule: String = ledger_row.get(3).unwrap();
+        assert_eq!(prior_space, "wenlan");
+        assert_eq!(prior_workspace, "origin-website");
+        assert_eq!(assigned_space, "origin-website");
+        assert_eq!(rule, "workspace");
+    }
+
+    #[tokio::test]
+    async fn migration_80_backfill_precedence_space_residue_when_workspace_null() {
+        let (db, _dir) = test_db().await;
+        db.create_space("engineering", None, false).await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_residue", Some("engineering"), None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_residue'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, "engineering");
+        assert_eq!(workspace, "engineering");
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT rule FROM page_space_fold_ledger WHERE page_id = 'page_residue'",
+                (),
+            )
+            .await
+            .unwrap();
+        let rule: String = ledger_rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(rule, "space_residue");
+    }
+
+    #[tokio::test]
+    async fn migration_80_backfill_precedence_unfiled_when_both_null() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_unfiled", None, None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_unfiled'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, UNFILED_SPACE_ID);
+        assert_eq!(workspace, UNFILED_SPACE_ID);
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT rule FROM page_space_fold_ledger WHERE page_id = 'page_unfiled'",
+                (),
+            )
+            .await
+            .unwrap();
+        let rule: String = ledger_rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(rule, "unfiled");
+    }
+
+    #[tokio::test]
+    async fn migration_80_unregistered_space_routes_to_unfiled_with_ledger_record() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_bogus", Some("not-a-real-space"), None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_bogus'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(
+            space, UNFILED_SPACE_ID,
+            "an unregistered space value is residue, not scope"
+        );
+        assert_eq!(workspace, UNFILED_SPACE_ID);
+
+        let mut ledger_rows = conn
+            .query(
+                "SELECT prior_space, rule FROM page_space_fold_ledger WHERE page_id = 'page_bogus'",
+                (),
+            )
+            .await
+            .unwrap();
+        let ledger_row = ledger_rows.next().await.unwrap().unwrap();
+        let prior_space: String = ledger_row.get(0).unwrap();
+        let rule: String = ledger_row.get(1).unwrap();
+        assert_eq!(prior_space, "not-a-real-space");
+        assert_eq!(rule, "unfiled");
+    }
+
+    #[tokio::test]
+    async fn migration_80_registered_space_or_none_resolves_reserved_sentinel_id() {
+        let (db, _dir) = test_db().await;
+        // The sentinel is minted as a real spaces row keyed by the reserved id,
+        // so it resolves by that id.
+        let sentinel = db
+            .registered_space_or_none(Some(UNFILED_SPACE_ID))
+            .await
+            .unwrap();
+        assert_eq!(sentinel, Some(UNFILED_SPACE_ID.to_string()));
+        // But the bare word "unfiled" is NOT auto-registered -- Option B mints
+        // the sentinel under the UUID name, never the word -- so a fresh DB has
+        // no space named "unfiled", leaving that name free for the user (this is
+        // the collision M1's sentinel-by-id fix closes).
+        let word = db.registered_space_or_none(Some("unfiled")).await.unwrap();
+        assert_eq!(word, None);
+    }
+
+    /// End-to-end guard for the M1 sentinel-by-id fix (Option B): a user DB that
+    /// ALREADY has a real space literally named "unfiled" (with a page in it)
+    /// must survive migration 80 with nothing hidden or reclassified. The
+    /// sentinel is keyed by the reserved UUID, so the user's "unfiled" space (a
+    /// different id) is never mistaken for it. Under the pre-fix sentinel-by-name
+    /// design this scenario could not even be constructed (the mint already
+    /// occupied the name-unique "unfiled" row), which is exactly the collision
+    /// that silently hid the user's real space and folded their pages to None.
+    #[tokio::test]
+    async fn migration_80_preexisting_user_unfiled_space_survives_fold() {
+        let (db, _dir) = test_db().await;
+        // The user's own space, literally named "unfiled" -- legal, because the
+        // reserved token is the UUID string, not the word.
+        let user_space = db.create_space("unfiled", None, false).await.unwrap();
+        assert_ne!(
+            user_space.id, UNFILED_SPACE_ID,
+            "a user space gets a random id, never the reserved sentinel id"
+        );
+
+        // Seed a page in the user's "unfiled" space and a truly-uncategorized
+        // page, then re-fire migration 80 over them (the same rollback harness
+        // the other migration_80 tests use). Pre-M1 scope lived in the
+        // authoritative `workspace` column (migration 63).
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "user_unfiled_page", None, Some("unfiled")).await;
+            insert_raw_page_for_m80_test(&conn, "truly_uncategorized_page", None, None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 80 must fold cleanly with a pre-existing user 'unfiled' space");
+
+        // (1) The user's "unfiled" space still lists -- it is NOT the sentinel,
+        // so `list_spaces` (which excludes only the reserved id) keeps it.
+        let spaces = db.list_spaces().await.unwrap();
+        assert!(
+            spaces
+                .iter()
+                .any(|s| s.name == "unfiled" && s.id == user_space.id),
+            "the user's own 'unfiled' space must still be listed after the fold: {spaces:?}"
+        );
+
+        // (2) The user's page keeps its scope: "unfiled" is a registered space
+        // name, so the fold treats it as residue (kept), and `row_to_page` does
+        // NOT hide it -- only the reserved sentinel id is hidden on the wire.
+        let user_page = db.get_page("user_unfiled_page").await.unwrap().unwrap();
+        assert_eq!(
+            user_page.space.as_deref(),
+            Some("unfiled"),
+            "a page in the user's real 'unfiled' space must keep that scope on the wire"
+        );
+        assert_eq!(user_page.workspace.as_deref(), Some("unfiled"));
+
+        // (3) The truly-uncategorized page folds to the reserved sentinel in
+        // storage and back to None on the wire (pre-M1 contract preserved).
+        let uncategorized = db
+            .get_page("truly_uncategorized_page")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            uncategorized.space, None,
+            "a genuinely uncategorized page still surfaces as None"
+        );
+        assert_eq!(uncategorized.workspace, None);
+    }
+
+    #[tokio::test]
+    async fn migration_80_not_null_constraint_rejects_null_space_insert() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let result = conn
+            .execute(
+                "INSERT INTO pages \
+                    (id, title, content, created_at, last_compiled, last_modified, space, workspace) \
+                 VALUES ('page_null_test', 't', 'c', '2024-01-01T00:00:00Z', \
+                         '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 'wenlan')",
+                (),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "inserting a NULL space must be rejected once migration 80 has run"
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_page_with_kind_defaults_missing_space_and_mirrors_workspace() {
+        // Proves the coalesce half of the fix: `insert_page_with_kind` is
+        // the single storage-layer wrapper every page-insert path funnels
+        // through, so it must never bind an explicit NULL space/workspace
+        // regardless of what a caller passes -- matching the default+mirror
+        // pattern already applied at the HTTP layer (memory_routes.rs
+        // handle_create_page): a missing space defaults to "unfiled", and a
+        // missing workspace mirrors the resolved space.
+        let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.insert_page(
+            "page_no_space",
+            "No Space",
+            None,
+            "body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "page_space_no_workspace",
+            "Space No Workspace",
+            None,
+            "body",
+            None,
+            Some("engineering"),
+            &[],
+            &now,
+            "distilled",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, space, workspace FROM pages                  WHERE id IN ('page_no_space', 'page_space_no_workspace')                  ORDER BY id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            let id: String = row.get(0).unwrap();
+            let space: String = row.get(1).unwrap();
+            let workspace: String = row.get(2).unwrap();
+            seen.push((id, space, workspace));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                (
+                    "page_no_space".to_string(),
+                    UNFILED_SPACE_ID.to_string(),
+                    UNFILED_SPACE_ID.to_string()
+                ),
+                (
+                    "page_space_no_workspace".to_string(),
+                    "engineering".to_string(),
+                    "engineering".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_80_raw_insert_omitting_scope_columns_lands_unfiled() {
+        // Proves the DEFAULT half of the fix: a raw INSERT that omits
+        // space/workspace entirely (exactly what the ~15 raw-SQL test
+        // files across lint/, db/page_map_test.rs, db/page_drafts_test.rs,
+        // and repair/title_rename_tests.rs do) must land 'unfiled' on both
+        // columns rather than tripping the NOT NULL constraint --
+        // migration_80_not_null_constraint_rejects_null_space_insert proves
+        // the companion case: an EXPLICIT NULL bind is still rejected,
+        // since a column DEFAULT only fires when the column is omitted.
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO pages (id, title, content, created_at, last_compiled, last_modified)              VALUES ('page_omitted_scope', 't', 'c', '2024-01-01T00:00:00Z',                      '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+            (),
+        )
+        .await
+        .expect("omitting space/workspace must fall back to the column DEFAULT, not error");
+
+        let mut rows = conn
+            .query(
+                "SELECT space, workspace FROM pages WHERE id = 'page_omitted_scope'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let space: String = row.get(0).unwrap();
+        let workspace: String = row.get(1).unwrap();
+        assert_eq!(space, UNFILED_SPACE_ID);
+        assert_eq!(workspace, UNFILED_SPACE_ID);
+    }
+
+    #[tokio::test]
+    async fn migration_80_replay_after_partial_backfill_converges_without_ledger_drift() {
+        let (db, _dir) = test_db().await;
+        db.create_space("engineering", None, false).await.unwrap();
+
+        // First (real) fold of this row.
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            insert_raw_page_for_m80_test(&conn, "page_replay", Some("engineering"), None).await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .unwrap();
+
+        let (first_prior_space, first_prior_workspace, first_assigned, first_rule): (
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        ) = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT prior_space, prior_workspace, assigned_space, rule \
+                     FROM page_space_fold_ledger WHERE page_id = 'page_replay'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            (
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+                row.get(3).unwrap(),
+            )
+        };
+        assert_eq!(first_assigned, "engineering");
+        assert_eq!(first_rule, "space_residue");
+
+        // Simulate a crash where the ledger committed but this row's own
+        // backfill UPDATE never landed: poke it back to its exact pre-fold
+        // values (from the ledger's own prior_* columns) without touching
+        // the ledger itself, then replay the migration.
+        {
+            let conn = db.conn.lock().await;
+            relax_pages_scope_columns_to_nullable(&conn).await;
+            conn.execute(
+                "UPDATE pages SET space = ?1, workspace = ?2 WHERE id = 'page_replay'",
+                libsql::params![first_prior_space.clone(), first_prior_workspace.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("replay after a simulated partial backfill must converge");
+
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT space, workspace FROM pages WHERE id = 'page_replay'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let space: String = row.get(0).unwrap();
+            let workspace: String = row.get(1).unwrap();
+            assert_eq!(
+                space, "engineering",
+                "resumed backfill must reach the same value"
+            );
+            assert_eq!(workspace, "engineering");
+
+            // No duplicate ledger row, and prior_* must not have drifted to
+            // reflect the manually-poked NULL state.
+            let mut ledger_rows = conn
+                .query(
+                    "SELECT prior_space, prior_workspace, assigned_space, rule \
+                     FROM page_space_fold_ledger WHERE page_id = 'page_replay'",
+                    (),
+                )
+                .await
+                .unwrap();
+            let mut seen = 0;
+            let mut last: Option<(Option<String>, Option<String>, String, String)> = None;
+            while let Some(row) = ledger_rows.next().await.unwrap() {
+                seen += 1;
+                last = Some((
+                    row.get(0).unwrap(),
+                    row.get(1).unwrap(),
+                    row.get(2).unwrap(),
+                    row.get(3).unwrap(),
+                ));
+            }
+            assert_eq!(seen, 1, "no duplicate ledger rows after replay");
+            let (prior_space, prior_workspace, assigned_space, rule) = last.unwrap();
+            assert_eq!(
+                prior_space, first_prior_space,
+                "ledger prior_space must not drift on replay"
+            );
+            assert_eq!(
+                prior_workspace, first_prior_workspace,
+                "ledger prior_workspace must not drift on replay"
+            );
+            assert_eq!(assigned_space, first_assigned);
+            assert_eq!(rule, first_rule);
+        }
+
+        // Third run: replay again, this time from an already-NOT-NULL,
+        // already-folded state -- no relax, no poke. Step 8's
+        // writable_schema patch is only proven idempotent for the case
+        // where migration_66_idempotent rolls user_version back and
+        // re-runs against an unrelated table's already-applied patch
+        // (db.rs migrate_66, `patched == sql` skips the block entirely).
+        // This exercises that exact skip branch for M1's own substitution
+        // rather than inheriting the assumption from migration 66.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 79", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("replay against an already-NOT-NULL table must be a no-op, not an error");
+
+        let conn = db.conn.lock().await;
+        let final_sql: String = {
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pages'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(
+            final_sql
+                .matches(&format!(
+                    "\n                        space TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"
+                ))
+                .count(),
+            1,
+            "space NOT NULL DEFAULT the sentinel id must appear exactly once, not doubled by a replayed patch: {final_sql}"
+        );
+        assert_eq!(
+            final_sql
+                .matches(&format!("workspace TEXT NOT NULL DEFAULT '{UNFILED_SPACE_ID}',"))
+                .count(),
+            1,
+            "workspace NOT NULL DEFAULT the sentinel id must appear exactly once, not doubled by a replayed patch: {final_sql}"
+        );
+        assert!(
+            !final_sql.contains("NOT NULL NOT NULL"),
+            "no doubled NOT NULL from a replayed patch: {final_sql}"
+        );
+
+        let mut ledger_rows_2 = conn
+            .query(
+                "SELECT prior_space, prior_workspace, assigned_space, rule \
+                 FROM page_space_fold_ledger WHERE page_id = 'page_replay'",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut seen_2 = 0;
+        let mut last_2: Option<(Option<String>, Option<String>, String, String)> = None;
+        while let Some(row) = ledger_rows_2.next().await.unwrap() {
+            seen_2 += 1;
+            last_2 = Some((
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+                row.get(3).unwrap(),
+            ));
+        }
+        assert_eq!(seen_2, 1, "no duplicate ledger rows after the no-op replay");
+        let (prior_space_2, prior_workspace_2, assigned_space_2, rule_2) = last_2.unwrap();
+        assert_eq!(
+            prior_space_2, first_prior_space,
+            "ledger prior_space must not drift on the no-op replay"
+        );
+        assert_eq!(
+            prior_workspace_2, first_prior_workspace,
+            "ledger prior_workspace must not drift on the no-op replay"
+        );
+        assert_eq!(assigned_space_2, first_assigned);
+        assert_eq!(rule_2, first_rule);
+    }
+
+    #[tokio::test]
+    async fn migration_80_assertion_detects_unresolved_scope_columns() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        relax_pages_scope_columns_to_nullable(&conn).await;
+        insert_raw_page_for_m80_test(&conn, "page_unresolved", None, None).await;
+
+        let result = MemoryDB::assert_pages_scope_columns_backfilled(&conn).await;
+        let err = result.expect_err("assertion must detect the NULL survivor");
+        assert!(
+            err.to_string().contains("m80"),
+            "error should identify migration 80: {err}"
+        );
     }
 }

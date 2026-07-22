@@ -6,7 +6,7 @@ Wenlan owns storage, search, embeddings, pages, and distill cycles. `wenlan-mcp`
 
 ## Install
 
-Most users should install through the root README. After `npx -y wenlan setup`, use the product CLI to configure supported clients:
+Most users should install the runtime through the root README (`npx -y wenlan setup` on macOS Apple Silicon, the automated shell setup on Linux, or the matching release archive on Windows). Then use the product CLI to configure supported clients:
 
 ```bash
 wenlan connect codex              # or: claude-code, cursor, claude-desktop, vscode, gemini
@@ -28,7 +28,7 @@ If you only need the raw MCP connector config, add this to your MCP client:
 }
 ```
 
-The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Wenlan release. Supported: macOS (arm64, x64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building from source via `cargo install wenlan-mcp`.
+The npm wrapper auto-detects the host platform and downloads the matching prebuilt binary from the Wenlan release. Supported: macOS (arm64), Linux (x64, arm64; glibc), Windows (x64). Other targets require building the connector from source via `cargo install wenlan-mcp`; macOS Intel does not currently have a supported complete local runtime.
 
 Or install a binary directly:
 

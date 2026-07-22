@@ -4,17 +4,24 @@ The Codex plugin wraps the shared `wenlan-mcp` server with Codex slash skills.
 Use it when you want the session workflow commands in Codex, not just raw MCP
 tools.
 
-## Install from this repo
+## Install
+
+Install the runtime using the host-specific path in [Set up Wenlan with your AI client](../docs/setup-with-ai.md). On macOS Apple Silicon, that step is:
 
 ```bash
 npx -y wenlan setup
-codex plugin marketplace add .
+```
+
+Then install the Codex plugin:
+
+```bash
+codex plugin marketplace add 7xuanlu/wenlan
 codex plugin add wenlan@7xuanlu-wenlan
 ```
 
 Start a new Codex thread after installing so the skills and MCP server load.
 Then try `/setup`, `/brief`, `/capture <memory>`, `/recall <query>`,
-`/pages <query>`, or `/handoff`.
+`/lint [deep|repair] [scope]`, `/pages <query>`, or `/handoff`.
 
 ## Development
 
@@ -26,7 +33,7 @@ codex plugin add wenlan@7xuanlu-wenlan
 ```
 
 The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back
-to `npx -y wenlan-mcp@^0.13.2`. It passes `--agent-name codex` so captures are
+to `npx -y wenlan-mcp@^0.14.1`. It passes `--agent-name codex` so captures are
 labeled as Codex writes.
 
 Before changing plugin skills, manifests, MCP runner wiring, or the local

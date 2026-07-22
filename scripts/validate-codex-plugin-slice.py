@@ -45,7 +45,7 @@ REQUIRED_SKILL_INTERFACE = {
     },
     "lint": {
         "display_name": "Wenlan Lint",
-        "short_description": "Run general or agent-assisted deep diagnostics",
+        "short_description": "Diagnose and resolve every finding without hidden mutation",
     },
     "pages": {
         "display_name": "Wenlan Pages",
@@ -77,6 +77,32 @@ REQUIRED_GUARDRAILS = {
         "revision_source_id",
         "Perform no mutation until the user replies",
         "Ambiguous replies do not mutate",
+    ],
+    "lint": [
+        "Population truncation is honest coverage metadata, not an automatic incomplete result.",
+        "every packet candidate has exactly one accepted verdict",
+        "trust the typed report's `complete` flag and preserve its denominator, evaluated, and truncation metadata",
+        "Lint creates durable Review Items for choices that are not yet exact.",
+        "turns exactly one Review Item into a separately approved manifest",
+        "`lint_repair_review` generic accept remains rejected and non-mutating",
+        "Never call `apply_lint_repair` in the same turn as `prepare_lint_repair`.",
+        "prepare_lint_repair",
+        "Lead repair output with exactly one compact typed-count funnel",
+        "Never substitute check, family, or candidate counts for occurrence counts",
+        "one or more exact approval lines",
+        "contain only ready tuples from the same displayed plan",
+        "no duplicates, blank lines, prose, or code fences",
+        "A single line remains valid",
+        "Validate the complete reply before the first apply",
+        "one contiguous copy-pasteable block",
+        "in the order they appear among ready tuples in the displayed plan",
+        "Immediately rerun fresh General once",
+        "Only after one manifest is `verified` may the next approved manifest begin",
+        "`next_apply`",
+        "bounded daemon handoff reservation",
+        "Do not apply any later approved manifest",
+        "`verified`, `applied_unverified`, `failed`, or `not_attempted`",
+        "Use `applied_unverified` whenever an apply receipt exists but durable verification does not",
     ],
 }
 CLAUDE_ONLY_TOKENS = (
@@ -113,6 +139,19 @@ def assert_no_claude_tokens(path: Path) -> None:
     for token in CLAUDE_ONLY_TOKENS:
         if token in text:
             fail(f"{path.relative_to(ROOT)} contains Claude-only token {token!r}")
+
+
+def frontmatter_value(text: str, key: str) -> str | None:
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        return None
+    prefix = f"{key}:"
+    for line in lines[1:]:
+        if line == "---":
+            return None
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip().strip('"')
+    return None
 
 
 def shared_codex_skills() -> tuple[str, ...]:
@@ -161,6 +200,8 @@ def validate_mcp() -> None:
         fail(".mcp.json must define the wenlan MCP server")
     if wenlan.get("command") != "./bin/wenlan-mcp-runner.sh":
         fail("wenlan MCP server must run ./bin/wenlan-mcp-runner.sh")
+    if wenlan.get("cwd") != ".":
+        fail("wenlan MCP server must resolve its runner from plugin cwd")
 
 
 def validate_runner() -> None:
@@ -192,8 +233,13 @@ def validate_skills() -> None:
         assert_no_claude_tokens(path)
         assert_no_claude_tokens(metadata_path)
         text = path.read_text(encoding="utf-8")
+        normalized_text = " ".join(text.split())
         if f"name: {skill}" not in text:
             fail(f"{path.relative_to(ROOT)} frontmatter must name {skill}")
+        if skill == "lint" and frontmatter_value(text, "argument-hint") != (
+            "[deep|repair] [global|uncategorized|space:<name>]"
+        ):
+            fail(f"{path.relative_to(ROOT)} exposes the wrong lint argument grammar")
         if "user-invocable: true" not in text:
             fail(f"{path.relative_to(ROOT)} must be marked user-invocable for slash autocomplete")
         if skill not in SKILLS_WITHOUT_MCP_REFERENCE and "mcp__wenlan__" not in text:
@@ -201,7 +247,7 @@ def validate_skills() -> None:
         if skill in SKILLS_USING_RESOLVER and "plugin-codex/bin/resolve-space.sh" not in text:
             fail(f"{path.relative_to(ROOT)} must use plugin-codex/bin/resolve-space.sh")
         for needle in REQUIRED_GUARDRAILS.get(skill, []):
-            if needle not in text:
+            if " ".join(needle.split()) not in normalized_text:
                 fail(f"{path.relative_to(ROOT)} must contain guardrail {needle!r}")
         metadata = metadata_path.read_text(encoding="utf-8")
         expected = REQUIRED_SKILL_INTERFACE[skill]

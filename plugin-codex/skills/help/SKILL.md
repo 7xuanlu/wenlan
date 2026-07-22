@@ -18,6 +18,7 @@ Wenlan for Codex
   /brief [topic]  load session status, identity, preferences, and memories
   /capture <x>    save one durable memory
   /recall <q>     search local memory
+  /lint [deep|repair] [scope]   diagnose, or resolve all findings safely
   /distill [t]    synthesize or refresh source-backed pages
   /pages [q]      list or open distilled pages in the OS editor
   /curate <s>     review pending captures or revisions (s = captures|revisions)

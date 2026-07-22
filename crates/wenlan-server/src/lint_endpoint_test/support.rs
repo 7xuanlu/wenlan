@@ -21,6 +21,7 @@ pub(super) struct Fixture {
     pub(super) app: crate::router::AppRouter,
     pub(super) db: Arc<MemoryDB>,
     pub(super) lint_events: LintEventSpy,
+    pub(super) maintenance_coordinator: crate::maintenance_coordinator::MaintenanceCoordinator,
     pub(super) root: tempfile::TempDir,
 }
 
@@ -78,11 +79,14 @@ impl Fixture {
             ..Default::default()
         };
         configure(&mut state);
+        state.maintenance_coordinator.finish_recovery();
+        let maintenance_coordinator = state.maintenance_coordinator.clone();
         let app = crate::router::build_router(Arc::new(RwLock::new(state)));
         Self {
             app,
             db,
             lint_events,
+            maintenance_coordinator,
             root,
         }
     }

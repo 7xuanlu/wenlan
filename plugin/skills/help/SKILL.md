@@ -24,6 +24,7 @@ Wenlan plugin — daily verbs
   /brief        load identity + topic context (start of session)
   /capture <x>  save one durable memory in flow
   /recall <q>   search local memory
+  /lint [deep|repair] [scope]   diagnose, or resolve all findings safely
   /distill [t]  synthesize pages from clusters (scoped to current repo)
   /pages [q]    browse + open distilled pages (wenlan pages)
   /curate <surface>   deep audit (surface = captures|revisions); /brief handles daily

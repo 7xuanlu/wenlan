@@ -6,11 +6,9 @@
 //! mapping) stays in sync with the origin-types wire shapes and
 //! post_write capability signatures.
 //!
-//! create_page integration is deferred: it requires a memory seeded via
-//! /api/memory/store (FastEmbed) before the hallucination guard can run,
-//! which adds significant setup cost. The post_write::create_page unit
-//! tests in origin-core already cover the logic; the HTTP shim is smoke-
-//! tested via the manual smoke test. See task notes for rationale.
+//! Authored create-page coverage uses its supported zero-source path, while
+//! distilled fixtures seed their source memories directly. This keeps route
+//! validation and error mapping covered without a separate TCP server.
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
@@ -50,6 +48,11 @@ impl WritableKnowledgeConfig {
             previous,
             _tmp: tmp,
         }
+    }
+
+    /// The vault the routes project into while this guard is alive.
+    fn pages_dir(&self) -> std::path::PathBuf {
+        self._tmp.path().join("pages")
     }
 }
 
@@ -348,6 +351,182 @@ async fn json_put(
     (status, val)
 }
 
+fn reserved_marker_cases() -> Vec<(&'static str, String)> {
+    use wenlan_core::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+
+    vec![
+        (
+            "start-only",
+            format!("before\n{SOURCES_BLOCK_START}\nafter"),
+        ),
+        ("end-only", format!("before\n{SOURCES_BLOCK_END}\nafter")),
+        (
+            "paired",
+            format!("before\n{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}\nafter"),
+        ),
+        (
+            "duplicate",
+            format!("{SOURCES_BLOCK_START}\n{SOURCES_BLOCK_START}"),
+        ),
+        (
+            "fenced",
+            format!("```markdown\n{SOURCES_BLOCK_START}\n```\nordinary prose"),
+        ),
+    ]
+}
+
+fn knowledge_snapshot(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    fn visit(root: &std::path::Path, current: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
+        let mut entries = std::fs::read_dir(current)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let relative = path.strip_prefix(root).unwrap().to_string_lossy();
+            if path.is_dir() {
+                out.push((format!("{relative}/"), Vec::new()));
+                visit(root, &path, out);
+            } else {
+                out.push((relative.into_owned(), std::fs::read(path).unwrap()));
+            }
+        }
+    }
+
+    let mut snapshot = Vec::new();
+    visit(root, root, &mut snapshot);
+    snapshot
+}
+
+#[tokio::test]
+async fn authored_create_rejects_reserved_markers_before_projection_or_db_mutation() {
+    let _guard = data_dir_lock().lock().await;
+    let config = WritableKnowledgeConfig::new();
+    let (app, db, _dir) = test_app_with_db().await;
+    let projection_before = knowledge_snapshot(&config.pages_dir());
+
+    for (case, content) in reserved_marker_cases() {
+        let (status, body) = json_post(
+            &app,
+            "/api/pages",
+            Some("test-agent"),
+            serde_json::json!({
+                "title": format!("Rejected {case}"),
+                "content": content,
+                "source_memory_ids": [],
+                "creation_kind": "authored"
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{case} must map to HTTP 422; body: {body}"
+        );
+        assert!(
+            db.list_pages("active", 100, 0).await.unwrap().is_empty(),
+            "{case} must not create a DB page"
+        );
+        assert_eq!(
+            knowledge_snapshot(&config.pages_dir()),
+            projection_before,
+            "{case} must be rejected before projection mutation"
+        );
+    }
+}
+
+/// A refresh that does not land must leave no projection claiming a version
+/// ahead of the DB.
+///
+/// The route writes md *before* the gate runs and rolled back only on `Err`.
+/// But a gated or no-op write returns `Ok`, so the agent's md — already stamped
+/// `version + 1` — stayed in the vault. That is not a cosmetic leak: the page
+/// watcher ingests any md whose `origin_version` is >= the DB version as an
+/// `fs_edit` (`sources/page_watcher.rs:154`), so a stranded projection is
+/// re-ingested AS A HUMAN WRITE on the next tick — laundering content the gate
+/// just refused straight back past the gate and flipping `user_edited`.
+///
+/// Driven here through the deterministic no-op path (identical content and
+/// sources => `WriteOutcome::Unchanged`, `post_write.rs:1602`). The gated race
+/// that makes this dangerous needs a human edit interleaved between the route's
+/// ownership read and the gate's CAS; that window is reachable only through
+/// post_write's `#[cfg(test)]` `PRE_WRITE_GATE`, which this crate cannot see.
+/// The route-local invariant is the same either way: no write, no projection.
+#[tokio::test]
+async fn refresh_that_does_not_write_leaves_no_projection_ahead_of_db() {
+    let _guard = data_dir_lock().lock().await;
+    let config = WritableKnowledgeConfig::new();
+    let (app, db, _dir) = test_app_with_db().await;
+    let mem_id = "mem_route_refresh_noop";
+    let source_content = "Borrow checking rejects aliasing a value while it is mutably borrowed";
+    db.upsert_documents(vec![RawDocument {
+        source: "memory".to_string(),
+        source_id: mem_id.to_string(),
+        title: "Borrow checking source".to_string(),
+        content: source_content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        source_agent: Some("test".to_string()),
+        confirmed: Some(true),
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+
+    let page_id =
+        create_distilled_page_fixture(&db, "Borrow Checking", source_content, &[mem_id]).await;
+
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    assert!(
+        !wenlan_core::post_write::page_is_human_owned(&before),
+        "precondition: the page must be machine-owned, or the route returns at its \
+         early ownership gate and never reaches the md write this test is about"
+    );
+
+    // Identical content AND identical source set — the gate reports Unchanged
+    // and writes nothing, so nothing may be left behind in the vault either.
+    let (status, body) = json_put(
+        &app,
+        &format!("/api/pages/{page_id}"),
+        serde_json::json!({
+            "content": source_content,
+            "source_memory_ids": [mem_id]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(
+        after.version, before.version,
+        "precondition: a no-op refresh must not bump the DB version"
+    );
+
+    for entry in std::fs::read_dir(config.pages_dir()).unwrap().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let stamp = text.lines().find_map(|line| {
+            line.strip_prefix("origin_version:")
+                .and_then(|v| v.trim().trim_matches('"').parse::<i64>().ok())
+        });
+        if let Some(stamp) = stamp {
+            assert!(
+                stamp <= after.version,
+                "projection {:?} claims origin_version {} but the DB is at {} — the \
+                 watcher would re-ingest this as a human edit",
+                path.file_name(),
+                stamp,
+                after.version
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn refresh_page_user_edited_page_stages_revision_card_without_overwrite() {
     let _guard = data_dir_lock().lock().await;
@@ -469,6 +648,89 @@ async fn refresh_page_machine_owned_page_goes_through_page_write_changelog() {
         has_agent_refresh_entry,
         "HTTP refresh must route through PageWrite changelog, got {changelog}"
     );
+}
+
+#[tokio::test]
+async fn refresh_rejects_reserved_markers_before_card_page_or_projection_mutation() {
+    let _guard = data_dir_lock().lock().await;
+    let config = WritableKnowledgeConfig::new();
+    let (app, db, _dir) = test_app_with_db().await;
+    let mem_id = "mem_route_reserved_refresh";
+    let source_content =
+        "Rust async refresh content stays grounded in its source memory and exact source bytes";
+    db.upsert_documents(vec![RawDocument {
+        source: "memory".to_string(),
+        source_id: mem_id.to_string(),
+        title: "Reserved refresh source".to_string(),
+        content: source_content.to_string(),
+        last_modified: chrono::Utc::now().timestamp(),
+        memory_type: Some("fact".to_string()),
+        source_agent: Some("test".to_string()),
+        confirmed: Some(true),
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+
+    let authored_id =
+        create_authored_page_fixture(&db, "Human-owned exact source", source_content).await;
+    let distilled_id =
+        create_distilled_page_fixture(&db, "Machine-owned exact source", source_content, &[mem_id])
+            .await;
+    let projection_before = knowledge_snapshot(&config.pages_dir());
+    let pending_before = db.list_pending_revisions(100).await.unwrap();
+
+    for (ownership, page_id) in [("human", authored_id), ("machine", distilled_id)] {
+        let page_before = db.get_page(&page_id).await.unwrap().unwrap();
+        let history_before = db.list_page_history(&page_id, 100).await.unwrap();
+
+        for (case, marker_content) in reserved_marker_cases() {
+            let content = format!("{source_content}\n\n{marker_content}");
+            let (status, body) = json_put(
+                &app,
+                &format!("/api/pages/{page_id}"),
+                serde_json::json!({
+                    "content": content,
+                    "source_memory_ids": [mem_id]
+                }),
+            )
+            .await;
+
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{ownership}-owned {case} must map to HTTP 422; body: {body}"
+            );
+            let page_after = db.get_page(&page_id).await.unwrap().unwrap();
+            assert_eq!(
+                page_after.content, page_before.content,
+                "{ownership} {case}"
+            );
+            assert_eq!(
+                page_after.version, page_before.version,
+                "{ownership} {case}"
+            );
+            assert_eq!(
+                page_after.source_memory_ids, page_before.source_memory_ids,
+                "{ownership} {case}"
+            );
+            assert_eq!(
+                db.list_page_history(&page_id, 100).await.unwrap(),
+                history_before,
+                "{ownership} {case} must not append page history"
+            );
+            assert_eq!(
+                db.list_pending_revisions(100).await.unwrap().len(),
+                pending_before.len(),
+                "{ownership} {case} must not stage a revision card"
+            );
+            assert_eq!(
+                knowledge_snapshot(&config.pages_dir()),
+                projection_before,
+                "{ownership} {case} must not mutate projection files"
+            );
+        }
+    }
 }
 
 /// Non-existent source_id uses the same static 404 as a scope mismatch.

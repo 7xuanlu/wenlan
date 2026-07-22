@@ -3,6 +3,98 @@
 
 mod cmd_backfill;
 
+struct DaemonDataLock {
+    _file: std::fs::File,
+}
+
+impl DaemonDataLock {
+    fn acquire(root: &std::path::Path, require_existing: bool) -> anyhow::Result<Self> {
+        use sha2::Digest as _;
+
+        let absolute_root = if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|error| anyhow::anyhow!("resolve current directory: {error}"))?
+                .join(root)
+        };
+        if require_existing && !absolute_root.is_dir() {
+            anyhow::bail!(
+                "repair-only startup requires an existing Wenlan data root: {}",
+                root.display()
+            );
+        }
+        if absolute_root.exists() && !absolute_root.is_dir() {
+            anyhow::bail!("Wenlan data root is not a directory: {}", root.display());
+        }
+
+        let canonical_root = if absolute_root.is_dir() {
+            std::fs::canonicalize(&absolute_root).map_err(|error| {
+                anyhow::anyhow!("resolve Wenlan data root {}: {error}", root.display())
+            })?
+        } else {
+            let parent = absolute_root.parent().ok_or_else(|| {
+                anyhow::anyhow!("Wenlan data root has no parent: {}", root.display())
+            })?;
+            std::fs::create_dir_all(parent).map_err(|error| {
+                anyhow::anyhow!(
+                    "create Wenlan data-root parent {}: {error}",
+                    parent.display()
+                )
+            })?;
+            let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+                anyhow::anyhow!(
+                    "resolve Wenlan data-root parent {}: {error}",
+                    parent.display()
+                )
+            })?;
+            canonical_parent.join(absolute_root.file_name().ok_or_else(|| {
+                anyhow::anyhow!("Wenlan data root has no name: {}", root.display())
+            })?)
+        };
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"wenlan-daemon-data-root-lock-v1\0");
+        #[cfg(windows)]
+        hasher.update(canonical_root.to_string_lossy().to_lowercase().as_bytes());
+        #[cfg(not(windows))]
+        hasher.update(canonical_root.as_os_str().as_encoded_bytes());
+        let lock_key = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        // Keep operational lock state in the canonical root's stable parent,
+        // not in process-dependent TMPDIR and not inside the data being
+        // verified. Lock files are intentionally never unlinked: removing one
+        // can split contenders across two inodes.
+        let lock_path = canonical_root
+            .parent()
+            .ok_or_else(|| {
+                anyhow::anyhow!("Wenlan data root has no lock parent: {}", root.display())
+            })?
+            .join(format!(".wenlan-daemon-{lock_key}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "open Wenlan data-root lock {}: {error}",
+                    lock_path.display()
+                )
+            })?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+            anyhow::anyhow!(
+                "Wenlan data root {} is already owned by another process: {error}",
+                canonical_root.display()
+            )
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
 /// Resolve the bind address. Honors the `WENLAN_BIND_ADDR` env var when set
 /// (e.g. inside Docker where the daemon must listen on `0.0.0.0`). Falls back
 /// to the localhost-only address used by the macOS/native install path.
@@ -10,6 +102,126 @@ fn resolve_bind_addr(port: u16) -> String {
     wenlan_core::env_compat::var_compat("WENLAN_BIND_ADDR")
         .and_then(|v| v.into_string().ok())
         .unwrap_or_else(|| format!("127.0.0.1:{}", port))
+}
+
+fn resolve_startup_bind_addr(port: u16, startup_repair_claimed: bool) -> String {
+    if startup_repair_claimed {
+        format!("127.0.0.1:{port}")
+    } else {
+        resolve_bind_addr(port)
+    }
+}
+
+fn resolve_startup_port(configured_port: u16, startup_repair_claimed: bool) -> anyhow::Result<u16> {
+    if startup_repair_claimed && configured_port != 7878 {
+        anyhow::bail!("repair-only startup requires canonical port 7878");
+    }
+    Ok(configured_port)
+}
+
+fn startup_projection_writes_allowed(repair_recovery_pending: bool) -> bool {
+    !repair_recovery_pending
+}
+
+#[derive(Debug, Clone)]
+struct StartupRepairClaim {
+    manifest_id: String,
+    manifest_digest: wenlan_types::repair::RepairDigest,
+}
+
+impl StartupRepairClaim {
+    fn try_new(
+        manifest_id: Option<String>,
+        manifest_digest: Option<String>,
+    ) -> anyhow::Result<Option<Self>> {
+        match (manifest_id, manifest_digest) {
+            (None, None) => Ok(None),
+            (Some(manifest_id), Some(manifest_digest)) => {
+                let manifest_digest = wenlan_types::repair::RepairDigest::parse(&manifest_digest)
+                    .map_err(|error| {
+                    anyhow::anyhow!("invalid startup repair digest: {error}")
+                })?;
+                Ok(Some(Self {
+                    manifest_id,
+                    manifest_digest,
+                }))
+            }
+            _ => anyhow::bail!(
+                "startup repair requires both --repair-manifest-id and --repair-manifest-digest"
+            ),
+        }
+    }
+
+    fn manifest_id(&self) -> &str {
+        &self.manifest_id
+    }
+
+    fn apply_request(&self) -> anyhow::Result<wenlan_types::repair::ApplyRepairRequest> {
+        let approval = format!(
+            "apply repair {} {}",
+            self.manifest_id,
+            self.manifest_digest.as_str()
+        );
+        wenlan_types::repair::ApplyRepairRequest::try_new(
+            self.manifest_id.clone(),
+            self.manifest_digest.clone(),
+            approval,
+        )
+        .map_err(|error| anyhow::anyhow!("invalid startup repair claim: {error}"))
+    }
+}
+
+fn validate_startup_repair_claim(
+    store: &wenlan_core::repair::RepairArtifactStore,
+    claim: &StartupRepairClaim,
+) -> anyhow::Result<()> {
+    let manifest = store
+        .load_manifest(claim.manifest_id())
+        .map_err(|error| anyhow::anyhow!("load startup repair manifest: {error}"))?;
+    if manifest.manifest_digest() != &claim.manifest_digest {
+        anyhow::bail!("startup repair manifest digest mismatch");
+    }
+    Ok(())
+}
+
+fn stored_repair_apply_request(
+    store: &wenlan_core::repair::RepairArtifactStore,
+    manifest_id: &str,
+) -> anyhow::Result<wenlan_types::repair::ApplyRepairRequest> {
+    let manifest = store
+        .load_manifest(manifest_id)
+        .map_err(|error| anyhow::anyhow!("load pending repair manifest: {error}"))?;
+    let digest = manifest.manifest_digest().clone();
+    let approval = format!("apply repair {manifest_id} {}", digest.as_str());
+    wenlan_types::repair::ApplyRepairRequest::try_new(manifest_id.to_string(), digest, approval)
+        .map_err(|error| anyhow::anyhow!("invalid pending repair authority: {error}"))
+}
+
+fn select_startup_repair_fence(
+    pending_manifest_ids: &[String],
+    claim: Option<&StartupRepairClaim>,
+) -> anyhow::Result<Option<String>> {
+    let mut manifest_ids = std::collections::BTreeSet::new();
+    manifest_ids.extend(pending_manifest_ids.iter().cloned());
+    if let Some(claim) = claim {
+        manifest_ids.insert(claim.manifest_id().to_string());
+    }
+    match manifest_ids.len() {
+        0 => Ok(None),
+        1 => Ok(manifest_ids.into_iter().next()),
+        _ => anyhow::bail!(
+            "multiple pending repairs require operator resolution before startup: {}",
+            manifest_ids.into_iter().collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+fn optional_runtime_workers_allowed(startup_repair_claimed: bool) -> bool {
+    !startup_repair_claimed
+}
+
+fn existing_daemon_may_satisfy_startup(startup_repair_claimed: bool) -> bool {
+    !startup_repair_claimed
 }
 
 #[cfg(test)]
@@ -36,6 +248,249 @@ mod bind_addr_tests {
         std::env::set_var("WENLAN_BIND_ADDR", "0.0.0.0:9090");
         assert_eq!(resolve_bind_addr(7878), "0.0.0.0:9090");
         std::env::remove_var("WENLAN_BIND_ADDR");
+    }
+
+    #[test]
+    fn applied_unverified_repair_blocks_startup_projection_writers() {
+        assert!(!startup_projection_writes_allowed(true));
+        assert!(startup_projection_writes_allowed(false));
+    }
+
+    #[test]
+    fn startup_repair_claim_requires_the_complete_exact_pair() {
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        assert!(
+            Cli::try_parse_from(["wenlan-server", "--repair-manifest-id", manifest_id,]).is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "wenlan-server",
+            "--repair-manifest-digest",
+            &"a".repeat(64),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn startup_repair_claim_validates_the_stored_manifest_digest() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let manifest_dir = root.path().join(manifest_id);
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join("manifest.json"),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/manifest.json"),
+        )
+        .unwrap();
+        let store = wenlan_core::repair::RepairArtifactStore::new(root.path().to_path_buf());
+        let claim = StartupRepairClaim::try_new(
+            Some(manifest_id.to_string()),
+            Some("6d79617ffac084a9668025d2a870aa569b5381ea62513c4fa57d9f1a1620bf34".to_string()),
+        )
+        .unwrap()
+        .unwrap();
+
+        validate_startup_repair_claim(&store, &claim).unwrap();
+        let wrong =
+            StartupRepairClaim::try_new(Some(manifest_id.to_string()), Some("a".repeat(64)))
+                .unwrap()
+                .unwrap();
+        assert!(validate_startup_repair_claim(&store, &wrong).is_err());
+    }
+
+    #[test]
+    fn startup_repair_claim_selects_one_fence_and_rejects_a_different_pending_repair() {
+        let claim = StartupRepairClaim::try_new(
+            Some("repair_550e8400-e29b-41d4-a716-446655440000".to_string()),
+            Some("a".repeat(64)),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            select_startup_repair_fence(&[], Some(&claim)).unwrap(),
+            Some(claim.manifest_id().to_string())
+        );
+        assert_eq!(
+            select_startup_repair_fence(&[claim.manifest_id().to_string()], Some(&claim)).unwrap(),
+            Some(claim.manifest_id().to_string())
+        );
+        assert!(select_startup_repair_fence(&["repair_other".to_string()], Some(&claim)).is_err());
+    }
+
+    #[test]
+    fn startup_repair_claim_constructs_the_exact_approved_apply() {
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let digest = "a".repeat(64);
+        let claim =
+            StartupRepairClaim::try_new(Some(manifest_id.to_string()), Some(digest.clone()))
+                .unwrap()
+                .unwrap();
+
+        let request = claim.apply_request().unwrap();
+        assert_eq!(request.manifest_id(), manifest_id);
+        assert_eq!(request.approved_manifest_digest().as_str(), digest);
+        assert_eq!(
+            request.approval(),
+            format!("apply repair {manifest_id} {digest}")
+        );
+    }
+
+    #[test]
+    fn stored_pending_repair_reconstructs_exact_startup_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let manifest_dir = root.path().join(manifest_id);
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join("manifest.json"),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/manifest.json"),
+        )
+        .unwrap();
+        let store = wenlan_core::repair::RepairArtifactStore::new(root.path().to_path_buf());
+
+        let request = stored_repair_apply_request(&store, manifest_id).unwrap();
+        assert_eq!(request.manifest_id(), manifest_id);
+        assert_eq!(
+            request.approved_manifest_digest().as_str(),
+            "6d79617ffac084a9668025d2a870aa569b5381ea62513c4fa57d9f1a1620bf34"
+        );
+        assert_eq!(
+            request.approval(),
+            format!(
+                "apply repair {manifest_id} {}",
+                request.approved_manifest_digest().as_str()
+            )
+        );
+    }
+
+    #[test]
+    fn startup_repair_claim_disables_optional_runtime_workers() {
+        assert!(!optional_runtime_workers_allowed(true));
+        assert!(optional_runtime_workers_allowed(false));
+    }
+
+    #[test]
+    fn startup_repair_claim_cannot_succeed_via_an_existing_daemon() {
+        assert!(!existing_daemon_may_satisfy_startup(true));
+        assert!(existing_daemon_may_satisfy_startup(false));
+    }
+
+    #[test]
+    fn startup_repair_claim_forces_loopback_bind() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var("WENLAN_BIND_ADDR", "0.0.0.0:9090");
+        assert_eq!(resolve_startup_bind_addr(7878, true), "127.0.0.1:7878");
+        assert_eq!(resolve_startup_bind_addr(7878, false), "0.0.0.0:9090");
+        std::env::remove_var("WENLAN_BIND_ADDR");
+    }
+
+    #[test]
+    fn startup_repair_claim_requires_the_canonical_daemon_port() {
+        assert_eq!(resolve_startup_port(7878, true).unwrap(), 7878);
+        assert!(resolve_startup_port(7879, true).is_err());
+        assert_eq!(resolve_startup_port(7879, false).unwrap(), 7879);
+    }
+
+    #[test]
+    fn data_root_lock_excludes_a_second_daemon_for_the_same_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("wenlan");
+        let first = DaemonDataLock::acquire(&root, false).unwrap();
+
+        assert!(
+            !root.exists(),
+            "normal lock acquisition must not create the data root"
+        );
+        assert!(DaemonDataLock::acquire(&root, false).is_err());
+        drop(first);
+        DaemonDataLock::acquire(&root, false)
+            .expect("dropping the owner releases the data-root lock");
+    }
+
+    #[test]
+    fn repair_data_root_lock_refuses_to_create_a_missing_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("missing-wenlan");
+
+        assert!(DaemonDataLock::acquire(&root, true).is_err());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn normal_data_root_lock_does_not_suppress_legacy_migration() {
+        let parent = tempfile::tempdir().unwrap();
+        let legacy = parent.path().join("origin");
+        let root = parent.path().join("wenlan");
+        std::fs::create_dir_all(legacy.join("memorydb")).unwrap();
+        std::fs::write(legacy.join("memorydb/origin_memory.db"), b"legacy-db").unwrap();
+
+        let _lock = DaemonDataLock::acquire(&root, false).unwrap();
+        assert!(!root.exists());
+        assert_eq!(
+            wenlan_core::migrate_rename::migrate_dir(&legacy, &root).unwrap(),
+            wenlan_core::migrate_rename::MigrationOutcome::Migrated
+        );
+        assert_eq!(
+            std::fs::read(root.join("memorydb/origin_memory.db")).unwrap(),
+            b"legacy-db"
+        );
+    }
+
+    #[test]
+    fn data_root_lock_child_process_holds_lock() {
+        let Some(root) = std::env::var_os("WENLAN_DATA_LOCK_CHILD_ROOT") else {
+            return;
+        };
+        let ready =
+            std::path::PathBuf::from(std::env::var_os("WENLAN_DATA_LOCK_CHILD_READY").unwrap());
+        let release =
+            std::path::PathBuf::from(std::env::var_os("WENLAN_DATA_LOCK_CHILD_RELEASE").unwrap());
+        let _lock = DaemonDataLock::acquire(std::path::Path::new(&root), true).unwrap();
+        std::fs::write(&ready, b"ready").unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !release.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(release.exists(), "parent did not release child lock test");
+    }
+
+    #[test]
+    fn data_root_lock_excludes_another_process_with_a_different_temp_dir() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("wenlan");
+        let child_tmp = parent.path().join("other-tmp");
+        let ready = parent.path().join("child-ready");
+        let release = parent.path().join("child-release");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&child_tmp).unwrap();
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "bind_addr_tests::data_root_lock_child_process_holds_lock",
+                "--nocapture",
+            ])
+            .env("WENLAN_DATA_LOCK_CHILD_ROOT", &root)
+            .env("WENLAN_DATA_LOCK_CHILD_READY", &ready)
+            .env("WENLAN_DATA_LOCK_CHILD_RELEASE", &release)
+            .env("TMPDIR", &child_tmp)
+            .env("TMP", &child_tmp)
+            .env("TEMP", &child_tmp)
+            .spawn()
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("lock-holder child exited early with {status}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ready.exists(), "lock-holder child did not become ready");
+        assert!(DaemonDataLock::acquire(&root, true).is_err());
+
+        std::fs::write(&release, b"release").unwrap();
+        assert!(child.wait().unwrap().success());
     }
 }
 
@@ -74,6 +529,14 @@ struct Cli {
     /// daemon alongside the main one. Also honored via `WENLAN_PORT` env.
     #[arg(long, global = true)]
     port: Option<u16>,
+
+    /// Internal repair-only startup claim. Both exact fields are required.
+    #[arg(long, global = true, hide = true, requires = "repair_manifest_digest")]
+    repair_manifest_id: Option<String>,
+
+    /// Approved digest for the exact repair-only startup claim.
+    #[arg(long, global = true, hide = true, requires = "repair_manifest_id")]
+    repair_manifest_digest: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -87,7 +550,8 @@ enum Command {
     },
 }
 
-async fn run_daemon() -> anyhow::Result<()> {
+async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow::Result<()> {
+    let startup_repair_claimed = startup_repair_claim.is_some();
     // Logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -99,20 +563,28 @@ async fn run_daemon() -> anyhow::Result<()> {
     tracing::info!("wenlan-server v{}", wenlan_core::version());
 
     // Port (clap `--port`/`WENLAN_PORT` → env var set by main(); read here)
-    let port: u16 = wenlan_core::env_compat::var_compat("WENLAN_PORT")
+    let configured_port: u16 = wenlan_core::env_compat::var_compat("WENLAN_PORT")
         .and_then(|v| v.into_string().ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(7878);
+    let port = resolve_startup_port(configured_port, startup_repair_claimed)?;
 
     // Bind BEFORE touching the data dir. Losing the port race must be free:
     // under launchd KeepAlive, a retry loop that first runs full MemoryDB init
     // (schema/FTS writes + embedder load) hammers the live daemon's SQLite
     // file every ~10s — enough lock/CPU pressure to wedge the daemon that
     // actually owns the port.
-    let addr = resolve_bind_addr(port);
+    let addr = resolve_startup_bind_addr(port, startup_repair_claimed);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
+            if !existing_daemon_may_satisfy_startup(startup_repair_claimed) {
+                return Err(anyhow::anyhow!(
+                    "repair-only daemon failed to acquire {}: {}",
+                    addr,
+                    e
+                ));
+            }
             // Check if existing daemon is healthy
             tracing::warn!("Failed to bind {}: {}", addr, e);
             let url = format!("http://127.0.0.1:{}/api/health", port);
@@ -153,17 +625,6 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     };
 
-    // One-time origin -> wenlan data migration (default locations only). Runs here,
-    // before the DB opens, so the daemon is the sole writer. No-op once migrated.
-    if wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR").is_none() {
-        if let Some(dl) = dirs::data_local_dir() {
-            wenlan_core::migrate_rename::migrate_and_log(&dl.join("origin"), &dl.join("wenlan"));
-        }
-    }
-    if let Some(home) = dirs::home_dir() {
-        wenlan_core::migrate_rename::migrate_and_log(&home.join(".origin"), &home.join(".wenlan"));
-    }
-
     // Data directory. `WENLAN_DATA_DIR` (set by `--data-dir` flag) overrides the
     // default, enabling isolated dev/demo runs (e.g. `--data-dir /tmp/wenlan-demo`).
     let wenlan_root = wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR")
@@ -175,40 +636,112 @@ async fn run_daemon() -> anyhow::Result<()> {
         });
     let data_dir = wenlan_root.join("memorydb");
     tracing::info!("Wenlan data root: {}", wenlan_root.display());
+    let _data_root_lock = DaemonDataLock::acquire(&wenlan_root, startup_repair_claimed)?;
 
-    // Build state
+    let repair_store = wenlan_core::repair::RepairArtifactStore::new(wenlan_root.join("repairs"));
+    if let Some(claim) = startup_repair_claim.as_ref() {
+        validate_startup_repair_claim(&repair_store, claim)?;
+        tracing::warn!(
+            manifest_id = claim.manifest_id(),
+            "validated exact repair-only startup claim before opening the database"
+        );
+    }
+
+    // Inspect durable repair state before opening the database. A prepared
+    // exact claim and any applied-unverified receipt must identify the same
+    // manifest; otherwise startup fails without touching canonical data.
+    let pending_repairs = repair_store
+        .pending_verification_manifest_ids()
+        .map_err(|error| anyhow::anyhow!("inspect durable repair state: {error}"))?;
+    let startup_repair_fence =
+        select_startup_repair_fence(&pending_repairs, startup_repair_claim.as_ref())?;
+    let repair_recovery_pending = startup_repair_fence.is_some();
+
+    // One-time origin -> wenlan migration is an ordinary startup write. Run it
+    // only after durable repair inspection has proved no repair fence exists.
+    if !repair_recovery_pending && wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR").is_none()
+    {
+        if let Some(dl) = dirs::data_local_dir() {
+            wenlan_core::migrate_rename::migrate_and_log(&dl.join("origin"), &dl.join("wenlan"));
+        }
+    }
+    if !repair_recovery_pending {
+        if let Some(home) = dirs::home_dir() {
+            wenlan_core::migrate_rename::migrate_and_log(
+                &home.join(".origin"),
+                &home.join(".wenlan"),
+            );
+        }
+    }
+
+    // Build state and restore the process-local fence while recovery is still
+    // sealed. No background acquisition can start before `finish_recovery`.
     let mut server_state = ServerState::new();
-
-    // Init MemoryDB
-    let emitter: Arc<dyn wenlan_core::events::EventEmitter> = Arc::new(wenlan_core::NoopEmitter);
-    tracing::info!("Initializing MemoryDB at {}", data_dir.display());
-    let db = wenlan_core::db::MemoryDB::new(&data_dir, emitter).await?;
+    server_state.optional_runtime_workers_suspended = repair_recovery_pending;
+    server_state.repair_root = Some(repair_store.root().to_path_buf());
+    let startup_repair_authority = match startup_repair_claim.as_ref() {
+        Some(claim) => Some(claim.apply_request()?),
+        None => startup_repair_fence
+            .as_deref()
+            .map(|manifest_id| stored_repair_apply_request(&repair_store, manifest_id))
+            .transpose()?,
+    };
+    if let Some(request) = startup_repair_authority {
+        let manifest_id = request.manifest_id().to_string();
+        server_state
+            .maintenance_coordinator
+            .rearm_approved_repair(request)
+            .map_err(|error| anyhow::anyhow!("restore exact repair writer fence: {error}"))?;
+        tracing::warn!(
+            manifest_id,
+            prepared_claim = startup_repair_claimed,
+            "restored exact repair authority before startup writers"
+        );
+    }
+    // Repair mode refuses schema drift and skips every ordinary constructor
+    // side effect (schema/migrations/profile bootstrap/embedder load). Normal
+    // startup retains the existing fully initialized path.
+    let db = if repair_recovery_pending {
+        tracing::warn!("Opening current database in side-effect-free repair mode");
+        wenlan_core::db::MemoryDB::open_for_repair(&data_dir).await?
+    } else {
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::NoopEmitter);
+        tracing::info!("Initializing MemoryDB at {}", data_dir.display());
+        wenlan_core::db::MemoryDB::new(&data_dir, emitter).await?
+    };
     let db_arc = Arc::new(db);
     server_state.db = Some(db_arc.clone());
 
     // Run migration-55 backfill (event_date regex Pass A + memory_entities Pass B)
     // before the HTTP listener binds so no ingest races the backfill. Idempotent.
-    tracing::info!(
-        "Running first-boot data backfill (event dates + knowledge-graph links); \
-         this can take a moment on large databases…"
-    );
-    let m55 = db_arc.run_migration_55().await.map_err(|e| {
-        anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
-    })?;
-    tracing::info!(
-        "First-boot backfill complete: scanned {} memories for dates, inserted {} entity links",
-        m55.event_dates_scanned,
-        m55.entity_links_inserted
-    );
+    if repair_recovery_pending {
+        tracing::warn!("skipping first-boot data backfill until repair verification completes");
+    } else {
+        tracing::info!(
+            "Running first-boot data backfill (event dates + knowledge-graph links); \
+             this can take a moment on large databases…"
+        );
+        let m55 = db_arc.run_migration_55().await.map_err(|e| {
+            anyhow::anyhow!("running migration 55 (event_date + memory_entities backfill): {e}")
+        })?;
+        tracing::info!(
+            "First-boot backfill complete: scanned {} memories for dates, inserted {} entity links",
+            m55.event_dates_scanned,
+            m55.entity_links_inserted
+        );
+    }
 
     // Requeue any document-enrichment rows left `in_progress` by a previous run
     // (a crash / restart mid-enrichment). Their per-chunk checkpoint is
     // preserved, so the scheduler resumes them from where they stopped rather
     // than re-analyzing from scratch — restart-from-checkpoint, no manual step.
-    match db_arc.reset_in_progress_documents().await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!("[doc-enrich] requeued {n} in-progress document(s) for resume"),
-        Err(e) => tracing::warn!("[doc-enrich] reset_in_progress_documents failed: {e}"),
+    if !repair_recovery_pending {
+        match db_arc.reset_in_progress_documents().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("[doc-enrich] requeued {n} in-progress document(s) for resume"),
+            Err(e) => tracing::warn!("[doc-enrich] reset_in_progress_documents failed: {e}"),
+        }
     }
 
     // Consolidate user-facing assets under ~/.wenlan/.
@@ -219,144 +752,149 @@ async fn run_daemon() -> anyhow::Result<()> {
     // - Migrate legacy ~/Origin/knowledge/ md files into ~/.wenlan/pages/ if
     //   the new dir is empty. Never deletes the old dir; user can clean up
     //   manually after verifying.
-    if let Some(home) = dirs::home_dir() {
-        let wenlan_dot = home.join(".wenlan");
-        for sub in ["pages", "sessions", "sessions/_status"] {
-            if let Err(e) = std::fs::create_dir_all(wenlan_dot.join(sub)) {
-                tracing::warn!("[wenlan-dir] create {} failed: {}", sub, e);
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
+        if let Some(home) = dirs::home_dir() {
+            let wenlan_dot = home.join(".wenlan");
+            for sub in ["pages", "sessions", "sessions/_status"] {
+                if let Err(e) = std::fs::create_dir_all(wenlan_dot.join(sub)) {
+                    tracing::warn!("[wenlan-dir] create {} failed: {}", sub, e);
+                }
             }
-        }
 
-        let db_link = wenlan_dot.join("db");
-        let link_target_already_correct = std::fs::read_link(&db_link)
-            .map(|t| t == data_dir)
-            .unwrap_or(false);
-        if !link_target_already_correct && !db_link.exists() {
-            #[cfg(unix)]
-            if let Err(e) = std::os::unix::fs::symlink(&data_dir, &db_link) {
-                tracing::warn!(
-                    "[wenlan-dir] symlink {} -> {} failed: {}",
-                    db_link.display(),
-                    data_dir.display(),
-                    e
-                );
+            let db_link = wenlan_dot.join("db");
+            let link_target_already_correct = std::fs::read_link(&db_link)
+                .map(|t| t == data_dir)
+                .unwrap_or(false);
+            if !link_target_already_correct && !db_link.exists() {
+                #[cfg(unix)]
+                if let Err(e) = std::os::unix::fs::symlink(&data_dir, &db_link) {
+                    tracing::warn!(
+                        "[wenlan-dir] symlink {} -> {} failed: {}",
+                        db_link.display(),
+                        data_dir.display(),
+                        e
+                    );
+                }
+                #[cfg(windows)]
+                {
+                    tracing::info!(
+                        "Database at {} (no shortcut created; Windows symlinks require admin).",
+                        data_dir.display()
+                    );
+                }
             }
-            #[cfg(windows)]
+
+            let legacy_pages = home.join("Origin/knowledge");
+            let new_pages = wenlan_dot.join("pages");
+            let legacy_has_md = std::fs::read_dir(&legacy_pages)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+                })
+                .unwrap_or(false);
+            let new_is_empty = std::fs::read_dir(&new_pages)
+                .map(|entries| {
+                    !entries
+                        .filter_map(|e| e.ok())
+                        .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+                })
+                .unwrap_or(true);
+            if startup_projection_writes_allowed(repair_recovery_pending)
+                && legacy_has_md
+                && new_is_empty
             {
                 tracing::info!(
-                    "Database at {} (no shortcut created; Windows symlinks require admin).",
-                    data_dir.display()
+                    "[migrate] copying md files from {} to {}",
+                    legacy_pages.display(),
+                    new_pages.display()
                 );
-            }
-        }
-
-        let legacy_pages = home.join("Origin/knowledge");
-        let new_pages = wenlan_dot.join("pages");
-        let legacy_has_md = std::fs::read_dir(&legacy_pages)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
-            })
-            .unwrap_or(false);
-        let new_is_empty = std::fs::read_dir(&new_pages)
-            .map(|entries| {
-                !entries
-                    .filter_map(|e| e.ok())
-                    .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
-            })
-            .unwrap_or(true);
-        if legacy_has_md && new_is_empty {
-            tracing::info!(
-                "[migrate] copying md files from {} to {}",
-                legacy_pages.display(),
-                new_pages.display()
-            );
-            if let Ok(entries) = std::fs::read_dir(&legacy_pages) {
-                let mut copied = 0usize;
-                for entry in entries.filter_map(|e| e.ok()) {
-                    let src = entry.path();
-                    if src.extension().and_then(|s| s.to_str()) != Some("md") {
-                        continue;
-                    }
-                    if let Some(name) = src.file_name() {
-                        let dst = new_pages.join(name);
-                        if dst.exists() {
+                if let Ok(entries) = std::fs::read_dir(&legacy_pages) {
+                    let mut copied = 0usize;
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let src = entry.path();
+                        if src.extension().and_then(|s| s.to_str()) != Some("md") {
                             continue;
                         }
-                        match std::fs::copy(&src, &dst) {
-                            Ok(_) => copied += 1,
-                            Err(e) => tracing::warn!(
-                                "[migrate] copy {} -> {} failed: {}",
-                                src.display(),
-                                dst.display(),
-                                e
-                            ),
+                        if let Some(name) = src.file_name() {
+                            let dst = new_pages.join(name);
+                            if dst.exists() {
+                                continue;
+                            }
+                            match std::fs::copy(&src, &dst) {
+                                Ok(_) => copied += 1,
+                                Err(e) => tracing::warn!(
+                                    "[migrate] copy {} -> {} failed: {}",
+                                    src.display(),
+                                    dst.display(),
+                                    e
+                                ),
+                            }
                         }
                     }
+                    tracing::info!("[migrate] copied {} md files from legacy path", copied);
                 }
-                tracing::info!("[migrate] copied {} md files from legacy path", copied);
             }
-        }
 
-        // Initialize ~/.wenlan/ as a git repo so users get version history
-        // of pages + sessions for free. Defensive — silent skip if git is
-        // missing or any step fails. Skills (/handoff, /distill, /forget)
-        // commit per logical batch; daemon only does the initial bring-up
-        // here.
-        let dot_git = wenlan_dot.join(".git");
-        let git_available = std::process::Command::new("git")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !dot_git.exists() && git_available {
-            let gitignore = wenlan_dot.join(".gitignore");
-            if !gitignore.exists() {
-                // No trailing slash on `db` / `bin` — those entries are
-                // symlinks in the consolidated layout, and pattern `db/`
-                // would only match real directories.
-                let _ = std::fs::write(
-                    &gitignore,
-                    "db\nbin\nlogs/\nsessions/_status/handoff-*.json\n",
-                );
-            }
-            let run = |args: &[&str]| {
-                std::process::Command::new("git")
-                    .args(args)
-                    .current_dir(&wenlan_dot)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .ok()
-                    .filter(|s| s.success())
-            };
-            if run(&["init", "--quiet"]).is_some() {
-                let _ = run(&[
-                    "-c",
-                    "user.name=Wenlan",
-                    "-c",
-                    "user.email=daemon@origin.local",
-                    "commit",
-                    "--allow-empty",
-                    "--quiet",
-                    "-m",
-                    "Wenlan initialized",
-                ]);
-                let _ = run(&["add", "-A"]);
-                let _ = run(&[
-                    "-c",
-                    "user.name=Wenlan",
-                    "-c",
-                    "user.email=daemon@origin.local",
-                    "commit",
-                    "--quiet",
-                    "-m",
-                    "backfill: initial pages from DB",
-                ]);
-                tracing::info!("[wenlan-dir] git init complete at {}", wenlan_dot.display());
+            // Initialize ~/.wenlan/ as a git repo so users get version history
+            // of pages + sessions for free. Defensive — silent skip if git is
+            // missing or any step fails. Skills (/handoff, /distill, /forget)
+            // commit per logical batch; daemon only does the initial bring-up
+            // here.
+            let dot_git = wenlan_dot.join(".git");
+            let git_available = std::process::Command::new("git")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !dot_git.exists() && git_available {
+                let gitignore = wenlan_dot.join(".gitignore");
+                if !gitignore.exists() {
+                    // No trailing slash on `db` / `bin` — those entries are
+                    // symlinks in the consolidated layout, and pattern `db/`
+                    // would only match real directories.
+                    let _ = std::fs::write(
+                        &gitignore,
+                        "db\nbin\nlogs/\nsessions/_status/handoff-*.json\n",
+                    );
+                }
+                let run = |args: &[&str]| {
+                    std::process::Command::new("git")
+                        .args(args)
+                        .current_dir(&wenlan_dot)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .ok()
+                        .filter(|s| s.success())
+                };
+                if run(&["init", "--quiet"]).is_some() {
+                    let _ = run(&[
+                        "-c",
+                        "user.name=Wenlan",
+                        "-c",
+                        "user.email=daemon@origin.local",
+                        "commit",
+                        "--allow-empty",
+                        "--quiet",
+                        "-m",
+                        "Wenlan initialized",
+                    ]);
+                    let _ = run(&["add", "-A"]);
+                    let _ = run(&[
+                        "-c",
+                        "user.name=Wenlan",
+                        "-c",
+                        "user.email=daemon@origin.local",
+                        "commit",
+                        "--quiet",
+                        "-m",
+                        "backfill: initial pages from DB",
+                    ]);
+                    tracing::info!("[wenlan-dir] git init complete at {}", wenlan_dot.display());
+                }
             }
         }
     }
@@ -390,7 +928,10 @@ async fn run_daemon() -> anyhow::Result<()> {
                 })
                 .unwrap_or(false);
 
-        if !already_attempted && !has_md_files {
+        if startup_projection_writes_allowed(repair_recovery_pending)
+            && !already_attempted
+            && !has_md_files
+        {
             match db_arc.list_pages("active", 10_000, 0).await {
                 Ok(pages) if !pages.is_empty() => {
                     tracing::info!(
@@ -445,6 +986,62 @@ async fn run_daemon() -> anyhow::Result<()> {
         }
     }
 
+    // Startup reconcile: repair the markdown projection from the DB.
+    //
+    // `write_page` renames a temp file over the target without an fsync — that
+    // buys readers atomicity, not crash durability. So a crash can leave a
+    // page's file missing, holding the previous version's bytes, or
+    // zero-length, plus `.tmp` orphans from a write that died mid-rename.
+    // This is the pass that makes "the md is a repairable projection" true.
+    //
+    // Runs synchronously, before `axum::serve`, for the same reason the
+    // backfill above does: no HTTP write and no scheduler tick can race the
+    // repair, so the pass needs no locking. The listener is already bound
+    // (see the bind-first block up top), so a slow pass on a large corpus
+    // delays serving, never the port handoff.
+    //
+    // ponytail: same 10k page ceiling as the backfill, and one pass reads
+    // every projected file. If a corpus ever outgrows that, page the scan or
+    // move it behind the listener — do NOT background it naively, since a
+    // concurrent page write would race the repair.
+    {
+        let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
+        if knowledge_path.exists() {
+            match db_arc.list_pages("active", 10_000, 0).await {
+                Ok(pages) => {
+                    let projection = wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(
+                        knowledge_path.clone(),
+                        &db_arc,
+                    );
+                    match projection.reconcile(&pages) {
+                        Ok(stats)
+                            if stats.rewritten > 0
+                                || stats.temp_files_removed > 0
+                                || stats.errors > 0 =>
+                        {
+                            tracing::info!(
+                                "[reconcile] projection repaired: {} checked, {} rewritten, \
+                                 {} temp leftover(s) swept, {} failed",
+                                stats.checked,
+                                stats.rewritten,
+                                stats.temp_files_removed,
+                                stats.errors
+                            );
+                        }
+                        Ok(stats) => {
+                            tracing::debug!(
+                                "[reconcile] {} page(s) checked, all clean",
+                                stats.checked
+                            );
+                        }
+                        Err(e) => tracing::warn!("[reconcile] pass failed: {e}"),
+                    }
+                }
+                Err(e) => tracing::warn!("[reconcile] list_pages failed: {e}"),
+            }
+        }
+    }
+
     // Load intelligence config
     server_state.prompts = wenlan_core::prompts::PromptRegistry::load(
         &wenlan_core::prompts::PromptRegistry::override_dir(),
@@ -456,39 +1053,41 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Load API LLM providers if configured
     let config = wenlan_core::config::load_config();
-    if let Some(ref key) = config.anthropic_api_key {
-        if !key.is_empty() {
-            let routine_model = config
-                .routine_model
-                .clone()
-                .unwrap_or_else(|| wenlan_core::llm_provider::DEFAULT_ROUTINE_MODEL.to_string());
-            let provider = wenlan_core::llm_provider::ApiProvider::new(key.clone(), routine_model);
-            server_state.api_llm = Some(Arc::new(provider));
-            tracing::info!("API LLM provider initialized (routine)");
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
+        if let Some(ref key) = config.anthropic_api_key {
+            if !key.is_empty() {
+                let routine_model = config.routine_model.clone().unwrap_or_else(|| {
+                    wenlan_core::llm_provider::DEFAULT_ROUTINE_MODEL.to_string()
+                });
+                let provider =
+                    wenlan_core::llm_provider::ApiProvider::new(key.clone(), routine_model);
+                server_state.api_llm = Some(Arc::new(provider));
+                tracing::info!("API LLM provider initialized (routine)");
 
-            let synthesis_model = config
-                .synthesis_model
-                .clone()
-                .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
-            let provider =
-                wenlan_core::llm_provider::ApiProvider::new(key.clone(), synthesis_model);
-            server_state.synthesis_llm = Some(Arc::new(provider));
-            tracing::info!("Synthesis LLM provider initialized");
+                let synthesis_model = config
+                    .synthesis_model
+                    .clone()
+                    .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+                let provider =
+                    wenlan_core::llm_provider::ApiProvider::new(key.clone(), synthesis_model);
+                server_state.synthesis_llm = Some(Arc::new(provider));
+                tracing::info!("Synthesis LLM provider initialized");
+            }
         }
-    }
 
-    // Load external LLM provider if configured
-    if let (Some(ref endpoint), Some(ref model)) =
-        (&config.external_llm_endpoint, &config.external_llm_model)
-    {
-        if !endpoint.is_empty() && !model.is_empty() {
-            let provider = wenlan_core::llm_provider::OpenAICompatibleProvider::new_with_key(
-                endpoint.clone(),
-                model.clone(),
-                config.external_llm_api_key.clone(),
-            );
-            server_state.external_llm = Some(Arc::new(provider));
-            tracing::info!("External LLM provider initialized from config");
+        // Load external LLM provider if configured
+        if let (Some(ref endpoint), Some(ref model)) =
+            (&config.external_llm_endpoint, &config.external_llm_model)
+        {
+            if !endpoint.is_empty() && !model.is_empty() {
+                let provider = wenlan_core::llm_provider::OpenAICompatibleProvider::new_with_key(
+                    endpoint.clone(),
+                    model.clone(),
+                    config.external_llm_api_key.clone(),
+                );
+                server_state.external_llm = Some(Arc::new(provider));
+                tracing::info!("External LLM provider initialized from config");
+            }
         }
     }
 
@@ -500,7 +1099,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // failure is non-fatal (the affected path falls back to embedding+FTS ordering).
     let reranker_cache_dir = wenlan_core::db::resolve_fastembed_cache_dir(&data_dir);
     let mut deep_bgebase_pending = false;
-    {
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
         use wenlan_core::reranker::{RerankerMode, RerankerPick};
         use wenlan_types::responses::RerankerStatus;
         let mode = wenlan_core::reranker::reranker_mode_resolved(&config);
@@ -611,8 +1210,8 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // Import any legacy tag data from the pre-PR-B2 spaces.db file.
-    if let Some(ref db_arc) = server_state.db {
-        match wenlan_core::spaces::import_legacy_tags(db_arc).await {
+    if !repair_recovery_pending {
+        match wenlan_core::spaces::import_legacy_tags(&db_arc).await {
             Ok(n) if n > 0 => {
                 tracing::info!("[startup] imported {} legacy tag triples from spaces.db", n)
             }
@@ -634,11 +1233,16 @@ async fn run_daemon() -> anyhow::Result<()> {
     {
         let db_for_batcher = db_arc.clone();
         let gate_for_batcher = server_state.quality_gate.clone();
+        let maintenance_for_batcher = server_state.maintenance_coordinator.clone();
         let process: ingest_batcher::BatchProcessFn = Arc::new(
             move |items: Vec<(wenlan_core::sources::RawDocument, usize)>| {
                 let db = db_for_batcher.clone();
                 let gate = gate_for_batcher.clone();
-                Box::pin(async move { ingest_batch_process(db, gate, items).await })
+                let maintenance = maintenance_for_batcher.clone();
+                Box::pin(async move {
+                    let _maintenance_guard = maintenance.begin_background().await;
+                    ingest_batch_process(db, gate, items).await
+                })
             },
         );
         server_state.ingest_batcher = Some(ingest_batcher::IngestBatcher::spawn(
@@ -647,12 +1251,14 @@ async fn run_daemon() -> anyhow::Result<()> {
         ));
     }
 
+    server_state.maintenance_coordinator.finish_recovery();
+
     let shared: SharedState = Arc::new(RwLock::new(server_state));
 
     // full mode: load the heavy deep bge-base in the background so startup never
     // blocks on the ~1.1GB download (council fix #3). rerank=true uses plain hybrid
     // until this completes; deep status flips to Active/Failed when the load resolves.
-    if deep_bgebase_pending {
+    if optional_runtime_workers_allowed(repair_recovery_pending) && deep_bgebase_pending {
         let shared_for_deep = shared.clone();
         let cache = reranker_cache_dir.clone();
         tokio::spawn(async move {
@@ -701,7 +1307,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Initialize on-device LLM in the background if a model is already cached.
     // This intentionally does NOT trigger a download — users opt in explicitly
     // via the settings UI (POST /api/on-device-model/download).
-    {
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
         let shared_for_llm = shared.clone();
         let on_device_id = config.on_device_model.clone();
         tokio::spawn(async move {
@@ -759,15 +1365,21 @@ async fn run_daemon() -> anyhow::Result<()> {
     // context of a Tokio 1.x runtime" — exactly what killed the worker on
     // 2026-04-16. Capture a `Handle` here (we are inside `#[tokio::main]`)
     // and use `handle.spawn(...)` from the closure instead.
-    {
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
         let db_for_ready = db_arc.clone();
+        let maintenance_for_ready = {
+            let state = shared.read().await;
+            state.maintenance_coordinator.clone()
+        };
         let emitter_for_ready: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
         let handle = tokio::runtime::Handle::current();
         let hook: wenlan_core::llm_provider::ReadinessHook = Arc::new(move || {
             let db = db_for_ready.clone();
             let emitter = emitter_for_ready.clone();
+            let maintenance = maintenance_for_ready.clone();
             handle.spawn(async move {
+                let _maintenance_guard = maintenance.begin_background().await;
                 let ev = wenlan_core::onboarding::MilestoneEvaluator::new(&db, emitter);
                 if let Err(e) = ev.check_after_llm_ready().await {
                     tracing::warn!(?e, "onboarding: check_after_llm_ready failed");
@@ -779,7 +1391,7 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Spawn the event-driven steep scheduler.
     // See docs/superpowers/specs/2026-04-12-event-driven-steep-triggers-design.md
-    {
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
         let write_signal = {
             let s = shared.read().await;
             s.write_signal.clone()
@@ -787,7 +1399,9 @@ async fn run_daemon() -> anyhow::Result<()> {
         scheduler::spawn_scheduler(shared.clone(), write_signal);
     }
 
-    if wenlan_core::db::entity_sweep_enabled() {
+    if repair_recovery_pending {
+        tracing::warn!("repair-only startup: optional runtime workers are disabled");
+    } else if wenlan_core::db::entity_sweep_enabled() {
         tracing::info!(
             "Background entity-enrichment sweep is ON: it backfills knowledge-graph \
              links over existing memories via your configured LLM. Set \
@@ -798,7 +1412,11 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     // Build router
-    let app = router::build_router(shared);
+    let app = if repair_recovery_pending {
+        router::build_repair_router(shared)
+    } else {
+        router::build_router(shared)
+    };
 
     // Advertise the bound port before accepting requests.
     // `addr` may be `127.0.0.1:0`; `local_addr()` gives the real ephemeral port.
@@ -937,6 +1555,14 @@ async fn ingest_batch_process(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let startup_repair_claim = StartupRepairClaim::try_new(
+        cli.repair_manifest_id.clone(),
+        cli.repair_manifest_digest.clone(),
+    )?;
+
+    if cli.command.is_some() && startup_repair_claim.is_some() {
+        anyhow::bail!("startup repair claim is only valid when running the daemon");
+    }
 
     // Propagate flags through env vars so both wenlan-server's own path logic
     // and wenlan-core's config loader (`wenlan_core::config::config_path`) see
@@ -950,6 +1576,6 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Some(Command::BackfillStalePages { dry_run }) => cmd_backfill::run(dry_run).await,
-        None => run_daemon().await,
+        None => run_daemon(startup_repair_claim).await,
     }
 }

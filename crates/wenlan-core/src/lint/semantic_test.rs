@@ -480,7 +480,7 @@ async fn candidate_generator_failure_is_incomplete() {
 }
 
 #[tokio::test]
-async fn candidate_truncation_is_incomplete_not_clean() {
+async fn candidate_truncation_completes_after_bounded_adjudication() {
     let (db, _dir) = test_db().await;
     let conn = db.conn.lock().await;
     conn.execute_batch(
@@ -512,19 +512,17 @@ async fn candidate_truncation_is_incomplete_not_clean() {
     assert_reason(
         &report,
         LintSemanticCheckId::MemoryEntityLinks,
-        LintOutcome::FailedToRun,
-        LintReasonCode::SemanticPopulationIncomplete,
+        LintOutcome::NotRunPrerequisite,
+        LintReasonCode::SemanticAgentAdjudicationRequired,
     );
 
     let submission = submission_for(work, None, false);
     let submitted = submit(&db, submission, None).await;
     let result = check(&submitted, LintSemanticCheckId::MemoryEntityLinks);
-    assert_reason(
-        &submitted,
-        LintSemanticCheckId::MemoryEntityLinks,
-        LintOutcome::FailedToRun,
-        LintReasonCode::SemanticPopulationIncomplete,
-    );
+    assert_eq!(result.outcome(), LintOutcome::Pass);
+    assert_eq!(result.coverage().denominator(), 8);
+    assert_eq!(result.coverage().evaluated(), 6);
+    assert!(result.coverage().truncated());
     assert_eq!(
         metric_value(result, LintMetricCode::SemanticJudgedRecords),
         Some(&LintMetricValue::Count { value: 6 })
@@ -697,6 +695,54 @@ async fn temporal_evolution_and_related_page_can_be_cleared_without_fabricating_
 }
 
 #[tokio::test]
+async fn verdict_counterevidence_accepts_any_record_authorized_for_the_candidate() {
+    let (db, _dir) = fixture().await;
+    let prepared = prepare(&db, None).await;
+    let work = prepared.agent_work().unwrap();
+    let selected = work
+        .candidates()
+        .first()
+        .expect("fixture has semantic candidates");
+    let selected_record = *selected
+        .evidence_refs()
+        .first()
+        .expect("candidate has evidence");
+    let selected_candidate = selected.reference();
+    let selected_check = selected.check_id();
+    let verdicts = work
+        .candidates()
+        .iter()
+        .map(|candidate| {
+            LintAgentVerdict::try_new(
+                candidate.reference(),
+                LintSemanticDecision::Pass,
+                None,
+                candidate.reason_code(),
+                9000,
+                if candidate.reference() == selected_candidate {
+                    vec![selected_record]
+                } else {
+                    vec![]
+                },
+            )
+            .unwrap()
+        })
+        .collect();
+    let submission = LintAgentSubmission::try_new(work.work_digest().clone(), verdicts).unwrap();
+
+    let report = submit(&db, submission, None).await;
+
+    assert_eq!(check(&report, selected_check).outcome(), LintOutcome::Pass);
+    assert_eq!(
+        metric_value(
+            check(&report, selected_check),
+            LintMetricCode::SemanticAgentSubmissions
+        ),
+        Some(&LintMetricValue::Count { value: 1 })
+    );
+}
+
+#[tokio::test]
 async fn stale_work_is_rejected_and_general_never_calls_a_model() {
     let (db, _dir) = fixture().await;
     let stale = LintAgentSubmission::try_new(LintDigest::from_u64(99), vec![]).unwrap();
@@ -799,7 +845,7 @@ async fn work_digest_binds_scope_and_records_outside_the_packet() {
 }
 
 #[tokio::test]
-async fn zero_heuristic_candidates_do_not_claim_semantic_cleanliness() {
+async fn zero_heuristic_candidates_are_clean_after_full_candidate_generation() {
     let (db, _dir) = test_db().await;
     db.conn
         .lock()
@@ -815,11 +861,21 @@ async fn zero_heuristic_candidates_do_not_claim_semantic_cleanliness() {
         .await
         .unwrap();
     let report = prepare(&db, None).await;
-    assert_reason(
-        &report,
-        LintSemanticCheckId::MemoryContradiction,
-        LintOutcome::NotRunPrerequisite,
-        LintReasonCode::InsufficientSemanticEvidence,
+    assert_eq!(
+        check(&report, LintSemanticCheckId::MemoryContradiction).outcome(),
+        LintOutcome::Pass
+    );
+}
+
+#[tokio::test]
+async fn empty_semantic_population_is_clean() {
+    let (db, _dir) = test_db().await;
+
+    let report = prepare(&db, None).await;
+
+    assert_eq!(
+        check(&report, LintSemanticCheckId::RetrievalQuality).outcome(),
+        LintOutcome::Pass
     );
 }
 
