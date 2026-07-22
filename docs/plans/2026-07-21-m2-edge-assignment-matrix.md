@@ -50,7 +50,7 @@ endpoint (the page for page-incident edges; the source entity for `relates`).
 | `page_evidence` (source_kind=`memory`) | `cites` | page → memory | `evidence` | false | NULL | (`cites`, page_id, locator) |
 | `page_evidence` (source_kind=`external_url`/`external_file`) | `cites` | page → external | `evidence` | false | NULL (external) | (`cites`, page_id, locator) |
 | `page_links` (target resolved) | `links` | page → page | `synthesis` | false | NULL | (`links`, source_page_id, label_key) |
-| `pages.citations` blob (per entry) | `cites` | page → memory | `synthesis` | false | NULL | (`cites`, page_id, cited_id) |
+| `pages.citations` blob (per entry) | `cites` | page → memory \| external | `synthesis` | false | NULL | (`cites`, page_id, cited_id) |
 
 `lineage` records the *immediate author* and is display/audit only in M2
 (grounded is the load-bearing bit; all M2 edges are non-voting). Choices:
@@ -74,7 +74,11 @@ unknown counts", each backfilled row is classified deterministically:
   - `relations` with a dangling endpoint (from/to entity absent),
   - `page_links` with `target_page_id IS NULL` (orphan wikilink — no page→page
     edge exists yet),
-  - `pages.citations` entries that don't parse / don't resolve to a memory.
+  - `pages.citations` entries that don't parse, resolve to a memory in a
+    different space, or carry an unknown `source_kind`. (A `memory` entry
+    resolving same-space → `synthesis`; an `external_url`/`external_file` entry
+    → `synthesis` with a fence-exempt external destination — both classifiable,
+    NOT `legacy`.)
 
 Counts land in the durable `edges_migration_state` row (`report_json`) and are
 cited in the PR body.
@@ -103,15 +107,38 @@ user-visible change) or the single-transaction atomicity proof. Resolution
   memory/entity not yet normalized) → the edge is written as `lineage='legacy'`
   (fence-exempt), grounded=false. **The edge is always written in the same
   transaction** → atomicity holds, the legacy write is never blocked, and the
-  shadow stays faithful. Two *fenced* endpoints in different non-NULL spaces is
-  always rejected.
+  shadow stays faithful.
+- **Two *fenced* endpoints in different non-NULL spaces — phase-scoped rule (PR-1 shadow exception, M3 enforcement gate).**
+  A pair the fence *would* reject is **not** rejected during the PR-1 shadow
+  phase: the live dual-write **downgrades it to `lineage='legacy'`** (fence-exempt)
+  so the shared legacy write is never rolled back (full rationale in "Open design
+  question" below — Option B, shipped). This is the deliberate shadow-phase
+  behavior, not the literal-matrix "always rejected". Strict rejection /
+  reclassification to the typed lineage is deferred to the **M3 reader-cutover
+  gate**: when a reader begins trusting `edges`, that cutover MUST (a) re-derive
+  these downgraded rows against normalized `memories`/`entities` spaces, and
+  (b) enforce the fence on live typed writes (reject, or route cross-space pairs
+  to review) rather than silently downgrading. Until that gate, "always rejected"
+  reads as "downgraded to `legacy` in shadow, enforced at cutover".
+- The fence is enforced by **two triggers with an identical body** —
+  `edges_space_fence` (AFTER INSERT) and `edges_space_fence_update`
+  (AFTER UPDATE, additionally guarded on `NEW.valid_until IS NULL` so a
+  soft-invalidate is never blocked). The UPDATE twin re-validates a
+  `dual_write_edge` reactivation / lineage-precedence / space-reconciliation
+  upsert, so a reactivated edge cannot resurrect a typed row against an endpoint
+  that has since moved cross-space.
 
-A pre-migration audit (`audit_legacy_cross_space_links`) reports, per store, how
-many legacy links are same-space / cross-space / NULL-space **before** the fence
-binds; those counts are in the PR body. If the audit surfaced a *new-write* path
-minting genuine cross-space fenced links the fence would newly reject, that is
-the goal prompt's stop condition — the audit result is reported rather than
-guessed around.
+A pre-migration audit (`audit_legacy_cross_space_links`) reports same-space /
+cross-space / NULL-space counts for **all five legacy stores** — `relations`,
+`page_links`, `page_sources`, memory-kind `page_evidence`, and memory-kind
+`pages.citations` (the `external_*` entries of the latter two are fence-EXEMPT,
+so they cannot be cross-space in the fence's sense and are not tallied) —
+**before** the fence binds; those counts are in the PR body. Each store resolves
+the cited memory's space DETERMINISTICALLY (the single distinct non-NULL space
+every chunk agrees on, else NULL), never a `LIMIT 1` pick over conflicting
+chunks. If the audit surfaced a *new-write* path minting genuine cross-space
+fenced links the fence would newly reject, that is the goal prompt's stop
+condition — the audit result is reported rather than guessed around.
 
 ## Retry identity / idempotency
 
@@ -127,25 +154,60 @@ same `edge_id`; `INSERT … ON CONFLICT(edge_id) DO NOTHING` (backfill) /
 §6.1 retry-identity guarantee, at the edge grain. Every edge still carries its
 `operation_id` for audit/receipt linkage.
 
-### Shared edge_id lineage precedence (evidence > synthesis)
+### Shared edge_id lineage precedence (total, order-independent)
 
 One content-addressed `edge_id` can be produced by more than one legacy store
-for the same `(page, memory)` fact: `page_evidence` (and `page_sources`) →
-`evidence`, a `pages.citations` entry → `synthesis`. The resolved `lineage` is
-**deterministic and order-independent**: `evidence` outranks `synthesis`.
+for the same fact: `page_evidence` / `page_sources` → `evidence`, a
+`pages.citations` entry → `synthesis`. This holds for BOTH destinations —
+`(page, memory)` AND `(page, external)` — because a `pages.citations`
+external-URI entry is now `synthesis` (matrix row 6, fence-exempt destination),
+not `legacy`; writing it `legacy` made the shared external edge order-dependent
+(round-2 item #2). The resolved `lineage` is **deterministic and
+order-independent** under a TOTAL conflict rule over all four lineages:
 
-- **Backfill** already yields this: migration 81 runs `page_sources` /
-  `page_evidence` (→ `evidence`) *before* `page_citations` (→ `synthesis`), and
+- `legacy` (a cross-space downgrade) always wins — a genuinely cross-space
+  reassertion of any pair reconciles the shadow row to `legacy`.
+- `evidence` outranks `synthesis`.
+- otherwise the fresh (`excluded`) typed value is adopted — an `assertion` /
+  `synthesis` reactivation, or a `legacy`→typed same-space upgrade.
+
+- **Backfill** already yields the `evidence` > `synthesis` case: migration 81
+  runs `page_sources` / `page_evidence` before `page_citations`, and
   `insert_backfilled_edge` is `ON CONFLICT DO NOTHING`, so the first (evidence)
   writer wins.
-- **Live** dual-write's `ON CONFLICT DO UPDATE` upgrades `synthesis`→`evidence`
-  (and never downgrades), so a live edge and its backfilled twin agree
-  regardless of which store's write fired first.
+- **Live** dual-write's `ON CONFLICT DO UPDATE` applies the total rule above and
+  reconciles `space = excluded.space`, so a live edge and its backfilled twin
+  agree regardless of which store's write fired first, and a reactivation adopts
+  the CURRENT classification rather than a stale one.
 
-This is fence-safe because, for a given `edge_id`, every writer resolves the
-identical page/memory spaces: `evidence`/`synthesis` occur only same-space (the
-fence already passed at insert), `legacy` only cross-space, so the precedence
-never crosses the `legacy` boundary and the row stays fence-valid.
+Fence-safe: `evidence`/`synthesis` occur only same-space (or fence-exempt
+external), `legacy` only cross-space, and the AFTER UPDATE fence twin
+re-validates every active-and-typed reconciliation, so the row stays
+fence-valid.
+
+### Ownership / re-derivation of shared edges (PR-1 conservative, M3 gate)
+
+Because one `edge_id` is content-addressed and shared across stores, removal
+from ONE legacy store cannot safely retract the shared edge without a refcount /
+derivation record (another store may still back it). PR-1 takes the conservative
+side deliberately, and it is invisible in the shadow phase (reads are 100%
+legacy):
+
+- `dual_write_page_citations` does **not** invalidate citations dropped from a
+  re-written blob — `page_evidence`/`page_sources` may still back the same
+  `edge_id`. So a dropped-but-still-backed edge is never wrongly retracted; a
+  dropped-and-unbacked edge may linger **active** in the shadow (harmless while
+  reads are legacy).
+- `cleanup_orphaned_page_sources` **does** invalidate the shared edge, but only
+  for links whose **destination memory no longer exists** (its orphan predicate
+  is `NOT EXISTS (SELECT 1 FROM memories …)`). Every store citing a deleted
+  memory is equally dangling, so this retracts no surviving store's support.
+
+Full re-derivation on single-store removal (a refcount or per-store derivation
+record) is the **M3 reader-cutover gate**, not a PR-1 fix: when a reader begins
+trusting `edges`, the cutover MUST reconcile lingering-active and multi-backed
+edges. Until then the shadow's conservative "never wrongly retract" is correct
+and cheap.
 
 ## Open design question (M2 PR-1 review): cross-space live typed writes
 
