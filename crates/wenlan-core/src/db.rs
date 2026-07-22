@@ -8856,33 +8856,67 @@ impl MemoryDB {
         Ok(report)
     }
 
-    /// §6.9 pre-migration online backup. Uses `VACUUM INTO` -- the WAL-safe
-    /// SQLite online-snapshot path: a raw file copy is unsound while a WAL is
-    /// live, whereas `VACUUM INTO` writes a fresh, fully-checkpointed,
-    /// internally-consistent database in a single statement against the live
-    /// connection. Verifies the snapshot by opening it independently and
-    /// running `PRAGMA integrity_check`, and returns a receipt (page counts +
-    /// integrity result). Recovery is simply opening the produced file as a
-    /// `MemoryDB` (`MemoryDB::new` / `open_for_repair`) -- proven by the
-    /// restore-drill test.
+    /// §6.9 pre-migration online backup. A raw file copy is unsound while a WAL
+    /// is live, so this first folds the WAL back into the main database and
+    /// truncates it (`PRAGMA wal_checkpoint(TRUNCATE)`) under the connection
+    /// mutex -- the daemon is the single writer, so no frame can land between
+    /// the checkpoint and the copy -- then PHYSICALLY copies the main database
+    /// file. A byte copy (unlike `VACUUM INTO`) preserves the libSQL DiskANN
+    /// vector-index shadow tables exactly; VACUUM reorders their rows and the
+    /// snapshot then fails `PRAGMA integrity_check` with "row not in PRIMARY KEY
+    /// order for libsql_vector_meta_shadow" (observed on a seeded DB whose source
+    /// integrity_check is `ok`). Verifies the snapshot by opening it
+    /// independently and running `integrity_check`, and returns a receipt (page
+    /// counts + integrity result). Recovery is opening the produced file as a
+    /// `MemoryDB` (`open_for_repair`) -- proven by the restore-drill test.
     pub async fn online_backup(
         &self,
         dest: &std::path::Path,
     ) -> Result<BackupReceipt, WenlanError> {
-        // VACUUM INTO refuses to write to an existing file.
-        if dest.exists() {
-            std::fs::remove_file(dest)
-                .map_err(|e| WenlanError::VectorDb(format!("online_backup rm dest: {e}")))?;
+        // Start from a clean destination -- a stale main file or WAL/SHM sidecar
+        // would make the fresh copy inconsistent.
+        let sidecar = |suffix: &str| {
+            let mut s = dest.as_os_str().to_os_string();
+            s.push(suffix);
+            std::path::PathBuf::from(s)
+        };
+        for p in [dest.to_path_buf(), sidecar("-wal"), sidecar("-shm")] {
+            if p.exists() {
+                std::fs::remove_file(&p)
+                    .map_err(|e| WenlanError::VectorDb(format!("online_backup rm dest: {e}")))?;
+            }
         }
         let dest_str = dest.to_string_lossy().to_string();
-        // VACUUM INTO's target-filename argument's bound-parameter support is
-        // version-dependent; a single-quote-escaped literal is portable.
-        let escaped = dest_str.replace('\'', "''");
+
         let source_pages = {
             let conn = self.conn.lock().await;
-            conn.execute(&format!("VACUUM INTO '{escaped}'"), ())
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("online_backup vacuum: {e}")))?;
+            // Fold the WAL into the main db and truncate it, so the single main
+            // file is a complete, consistent image to copy. The pragma returns a
+            // `(busy, log, checkpointed)` row (hence `query`, not `execute`); a
+            // nonzero `busy` means a reader blocked the fold and the copy would
+            // miss WAL frames -- fail loud rather than snapshot a torn image.
+            {
+                let mut rows = conn
+                    .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("online_backup checkpoint: {e}")))?;
+                let busy = match rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("online_backup checkpoint row: {e}"))
+                })? {
+                    Some(row) => row.get::<i64>(0).unwrap_or(1),
+                    None => 1,
+                };
+                if busy != 0 {
+                    return Err(WenlanError::VectorDb(
+                        "online_backup checkpoint busy: WAL not fully folded".to_string(),
+                    ));
+                }
+            }
+            let source_path = Self::main_db_path(&conn).await?;
+            // ponytail: synchronous copy while holding the conn mutex -- fine for
+            // an admin backup on the single-writer daemon; nothing can interleave.
+            std::fs::copy(&source_path, dest)
+                .map_err(|e| WenlanError::VectorDb(format!("online_backup copy: {e}")))?;
             Self::pragma_i64(&conn, "PRAGMA page_count").await?
         };
 
@@ -8916,6 +8950,35 @@ impl MemoryDB {
             integrity_ok,
             created_at: chrono::Utc::now().timestamp(),
         })
+    }
+
+    /// The filesystem path of the `main` attached database (for the physical
+    /// backup copy). `MemoryDB` keeps no path field, so this reads it back from
+    /// the live connection. Errors if the main db is not file-backed.
+    async fn main_db_path(conn: &libsql::Connection) -> Result<std::path::PathBuf, WenlanError> {
+        let mut rows = conn
+            .query("PRAGMA database_list", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("database_list: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("database_list row: {e}")))?
+        {
+            let name: String = row.get(1).unwrap_or_default();
+            if name == "main" {
+                let file: String = row.get(2).unwrap_or_default();
+                if file.is_empty() {
+                    return Err(WenlanError::VectorDb(
+                        "online_backup: main database is not file-backed".to_string(),
+                    ));
+                }
+                return Ok(std::path::PathBuf::from(file));
+            }
+        }
+        Err(WenlanError::VectorDb(
+            "online_backup: no main database in database_list".to_string(),
+        ))
     }
 
     /// Read a single-row, single-column integer PRAGMA (e.g. `page_count`).
@@ -62346,6 +62409,10 @@ pub(crate) mod tests {
             "the snapshot must pass integrity_check"
         );
         assert!(receipt.backup_pages > 0, "the snapshot must be non-empty");
+        assert_eq!(
+            receipt.source_pages, receipt.backup_pages,
+            "a physical copy must have the same page count as the source"
+        );
 
         // Destroy the original: the backup must be independent of it.
         {
