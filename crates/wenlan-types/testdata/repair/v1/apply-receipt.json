@@ -1,0 +1,24 @@
+{
+  "receipt_schema_version": 1,
+  "manifest_id": "repair_550e8400-e29b-41d4-a716-446655440000",
+  "manifest_digest": "6d79617ffac084a9668025d2a870aa569b5381ea62513c4fa57d9f1a1620bf34",
+  "applied_at": 1721000001,
+  "before_target_receipt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "after_target_receipt": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "non_target_before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "non_target_after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "actual_effects": {
+    "owner": {
+      "kind": "memory",
+      "source_id": "mem_target",
+      "scope": {
+        "kind": "uncategorized"
+      }
+    },
+    "fields": [
+      "memory_type"
+    ]
+  },
+  "writer": "reclassify_memory",
+  "receipt_digest": "2c0107e820d5b6425effe0177d4a676835fe2b2bd11f7f69ee437d04ea085169"
+}

@@ -33,7 +33,7 @@ pub async fn handle_list_refinements(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(q): Query<ListRefinementsQuery>,
 ) -> Result<Json<ListRefinementsResponse>, ServerError> {
-    let limit = q.limit.unwrap_or(50).min(500);
+    let limit = q.limit.unwrap_or(500).min(500);
 
     let db = {
         let s = state.read().await;
@@ -52,7 +52,6 @@ pub async fn handle_list_refinements(
             Some(a) => &p.action == a,
             None => true,
         })
-        .take(limit)
         .filter_map(|p| {
             let action = match parse_action(&p.action) {
                 Some(a) => a,
@@ -65,15 +64,25 @@ pub async fn handle_list_refinements(
                     return None;
                 }
             };
+            let payload =
+                parse_payload_for_proposal(&p.id, &p.source_ids, p.payload.as_deref(), &p.action);
+            if matches!(action, ProposalAction::LintRepairReview) && payload.is_none() {
+                tracing::warn!(
+                    proposal_id = %p.id,
+                    "refinery: skipping malformed lint repair review payload"
+                );
+                return None;
+            }
             Some(RefinementProposalSummary {
                 action,
-                payload: parse_payload(p.payload.as_deref(), &p.action),
+                payload,
                 id: p.id,
                 source_ids: p.source_ids,
                 confidence: p.confidence,
                 created_at: p.created_at,
             })
         })
+        .take(limit)
         .collect();
 
     Ok(Json(ListRefinementsResponse { proposals }))
@@ -132,6 +141,8 @@ fn parse_action(s: &str) -> Option<ProposalAction> {
         "page_merge" => Some(ProposalAction::PageMerge),
         "cross_space_discovery" => Some(ProposalAction::CrossSpaceDiscovery),
         "page_keep_or_archive" => Some(ProposalAction::PageKeepOrArchive),
+        "lint_repair_review" => Some(ProposalAction::LintRepairReview),
+        "vocab_promote" => Some(ProposalAction::VocabPromote),
         _ => None,
     }
 }
@@ -172,6 +183,10 @@ fn parse_payload(payload: Option<&str>, action: &str) -> Option<RefinementPayloa
                 name_hint: payload.map(|s| s.to_string()),
             });
         }
+        "vocab_promote" => {
+            let raw = payload?;
+            return serde_json::from_str::<RefinementPayload>(raw).ok();
+        }
         _ => {}
     }
 
@@ -183,6 +198,18 @@ fn parse_payload(payload: Option<&str>, action: &str) -> Option<RefinementPayloa
         serde_json::Value::String(action.to_string()),
     );
     serde_json::from_value(serde_json::Value::Object(tagged)).ok()
+}
+
+fn parse_payload_for_proposal(
+    id: &str,
+    source_ids: &[String],
+    payload: Option<&str>,
+    action: &str,
+) -> Option<RefinementPayload> {
+    if action == "lint_repair_review" {
+        return wenlan_core::db::validate_lint_review_contract(id, source_ids, payload?).ok();
+    }
+    parse_payload(payload, action)
 }
 
 #[cfg(test)]
@@ -283,6 +310,103 @@ mod parse_payload_tests {
             }
             _ => panic!("expected PageKeepOrArchive"),
         }
+    }
+
+    #[test]
+    fn parses_lint_repair_review_action_and_payload() {
+        assert_eq!(
+            parse_action("lint_repair_review"),
+            Some(ProposalAction::LintRepairReview)
+        );
+
+        let occurrence = wenlan_types::repair::RepairDigest::parse(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        let source_ids = vec!["page-a".to_string()];
+        let owner_binding_digest = wenlan_types::repair::RepairDigest::parse(
+            "9564fbd4194ceeb40ff8305b376a6263acb872733009ce606dfd896d1c747d25",
+        )
+        .unwrap();
+        let raw = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": occurrence,
+            "owner_binding_digest": owner_binding_digest,
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": ["Find the canonical page"]
+        })
+        .to_string();
+        let parsed = parse_payload_for_proposal(
+            "lint_review_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &source_ids,
+            Some(&raw),
+            "lint_repair_review",
+        )
+        .unwrap();
+        match parsed {
+            RefinementPayload::LintRepairReview {
+                check_id,
+                owner_binding_digest,
+                choices,
+                suggested_research_queries,
+                ..
+            } => {
+                assert_eq!(check_id, "pages.links.orphan_labels");
+                assert_eq!(
+                    owner_binding_digest.as_str(),
+                    "9564fbd4194ceeb40ff8305b376a6263acb872733009ce606dfd896d1c747d25"
+                );
+                assert_eq!(choices, vec!["keep", "retarget", "remove"]);
+                assert_eq!(suggested_research_queries, vec!["Find the canonical page"]);
+            }
+            _ => panic!("expected LintRepairReview"),
+        }
+    }
+
+    #[test]
+    fn lint_repair_review_payload_must_bind_id_and_source_owners_before_surfacing() {
+        let occurrence = wenlan_types::repair::RepairDigest::parse(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        let bound_source_ids = vec!["page-a".to_string()];
+        let raw = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": occurrence,
+            "owner_binding_digest":
+                "9564fbd4194ceeb40ff8305b376a6263acb872733009ce606dfd896d1c747d25",
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": []
+        })
+        .to_string();
+
+        assert!(parse_payload_for_proposal(
+            "lint_review_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            &bound_source_ids,
+            Some(&raw),
+            "lint_repair_review",
+        )
+        .is_none());
+        assert!(parse_payload_for_proposal(
+            "lint_review_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &["page-b".to_string()],
+            Some(&raw),
+            "lint_repair_review",
+        )
+        .is_none());
+        assert!(parse_payload_for_proposal(
+            "lint_review_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &bound_source_ids,
+            Some(
+                r#"{"action":"lint_repair_review","occurrence_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+            ),
+            "lint_repair_review",
+        )
+        .is_none());
     }
 
     #[test]

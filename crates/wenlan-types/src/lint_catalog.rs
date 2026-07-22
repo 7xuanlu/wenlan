@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::agent::LintSemanticFinding;
-use super::contract::LintOpaqueId;
+use super::contract::{LintOpaqueDigest, LintOpaqueId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +199,9 @@ pub enum LintEvidenceRef {
     OpaqueId {
         opaque_id: LintOpaqueId,
     },
+    OpaqueDigest {
+        opaque_digest: LintOpaqueDigest,
+    },
     ReasonCode {
         reason_code: LintReasonCode,
     },
@@ -214,7 +217,9 @@ impl LintEvidenceRef {
         match self {
             Self::OpaqueId { opaque_id } => Some(*opaque_id),
             Self::SemanticFinding { finding } => Some(finding.candidate_id()),
-            Self::ReasonCode { .. } | Self::SafeRootRelativePath { .. } => None,
+            Self::OpaqueDigest { .. }
+            | Self::ReasonCode { .. }
+            | Self::SafeRootRelativePath { .. } => None,
         }
     }
 }

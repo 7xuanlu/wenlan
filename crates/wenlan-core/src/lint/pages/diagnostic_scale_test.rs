@@ -77,6 +77,8 @@ async fn generate_fixture(root: &Path) {
                creation_kind TEXT NOT NULL,
                review_status TEXT NOT NULL,
                workspace TEXT,
+               space TEXT,
+               source_memory_ids TEXT,
                citations TEXT
              );
              CREATE INDEX idx_pages_status ON pages(status);
@@ -200,11 +202,14 @@ async fn run_fixture(root: &Path) {
         wenlan_types::lint::LintProfile::General,
     );
     let results = super::run(&context, true).await;
+    let failed_checks = results
+        .iter()
+        .filter(|result| result.outcome() == LintOutcome::FailedToRun)
+        .map(|result| result.check_id())
+        .collect::<Vec<_>>();
     assert!(
-        results
-            .iter()
-            .all(|result| result.outcome() != LintOutcome::FailedToRun),
-        "production Page group must execute every check"
+        failed_checks.is_empty(),
+        "production Page group must execute every check; failed checks: {failed_checks:?}"
     );
     assert!(results.iter().all(|result| {
         result.coverage().evidence_cap() == LINT_MAX_EVIDENCE_PER_CHECK

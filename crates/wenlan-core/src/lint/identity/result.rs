@@ -1,16 +1,15 @@
 use crate::lint::context::{LintContext, PopulationBasis, PopulationLedgerError};
 use wenlan_types::lint::{
     LintApplicability, LintCheckResult, LintCheckResultInput, LintContractError, LintCoverage,
-    LintEvidenceRef, LintMetric, LintOpaqueId, LintOutcome, LintPrecondition,
-    LintRecommendationCode, LintSeverity, LintSummaryCode, LintValidationMethod,
-    LINT_MAX_EVIDENCE_PER_CHECK,
+    LintEvidenceRef, LintMetric, LintOutcome, LintPrecondition, LintRecommendationCode,
+    LintSeverity, LintSummaryCode, LintValidationMethod, LINT_MAX_EVIDENCE_PER_CHECK,
 };
 
 pub(super) struct Assessment {
     pub(super) id: &'static str,
     pub(super) population: u64,
     pub(super) affected: u64,
-    pub(super) evidence_positions: Vec<usize>,
+    pub(super) evidence: Vec<LintEvidenceRef>,
     pub(super) severity: LintSeverity,
     pub(super) basis: PopulationBasis,
     pub(super) metrics: Vec<LintMetric>,
@@ -39,12 +38,7 @@ pub(super) fn finish(
     let evidence = if context.scope().filter().is_selected() && basis == PopulationBasis::Global {
         Vec::new()
     } else {
-        assessment
-            .evidence_positions
-            .iter()
-            .filter_map(|position| LintOpaqueId::from_sorted_position(*position))
-            .map(|opaque_id| LintEvidenceRef::OpaqueId { opaque_id })
-            .collect()
+        assessment.evidence
     };
     let result = LintCheckResult::try_new(LintCheckResultInput {
         check_id: assessment.id.to_string(),

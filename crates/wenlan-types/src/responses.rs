@@ -4,6 +4,7 @@
 use crate::entities::{Entity, EntitySearchResult};
 use crate::memory::{IndexedFileInfo, MemoryItem, MemoryStats, SearchResult};
 use crate::pages::Page;
+use crate::repair::RepairDigest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -432,6 +433,9 @@ pub struct ConfigResponse {
     /// `"external"`, or absent/null when unpinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synthesis_source: Option<String>,
+    /// Whether the proactive Page-Map suggestion phase is enabled. Default true.
+    #[serde(default)]
+    pub page_map_auto_suggest: bool,
 }
 
 // ===== On-device model =====
@@ -488,6 +492,12 @@ pub struct PageWriteResponse {
     pub revision_card_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub gated: bool,
+}
+
+/// Page draft create, update, and publish response envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageDraftResponse {
+    pub page: Page,
 }
 
 // ===== Memory detail =====
@@ -692,6 +702,14 @@ pub enum ProposalAction {
     PageMerge,
     CrossSpaceDiscovery,
     PageKeepOrArchive,
+    LintRepairReview,
+    VocabPromote,
+    /// ponytail: deserialize-only catch-all. Lets a stale client decode a
+    /// newer daemon's action tag instead of failing the whole list. NEVER
+    /// constructed or serialized by the daemon (it only ever holds real
+    /// variants), so serialize-of-Unknown never happens in practice.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -747,6 +765,20 @@ pub enum RefinementPayload {
         source_count: usize,
         allowed_actions: Vec<RefinementCardAction>,
     },
+    LintRepairReview {
+        check_id: String,
+        occurrence_digest: RepairDigest,
+        owner_binding_digest: RepairDigest,
+        issue: String,
+        choices: Vec<String>,
+        suggested_research_queries: Vec<String>,
+    },
+    VocabPromote {
+        kind: String,
+        old_value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -799,6 +831,7 @@ mod refinement_wire_tests {
                 "\"page_keep_or_archive\"",
                 ProposalAction::PageKeepOrArchive,
             ),
+            ("\"vocab_promote\"", ProposalAction::VocabPromote),
         ];
         for (json, expected) in cases {
             let parsed: ProposalAction = serde_json::from_str(json).unwrap();
@@ -806,6 +839,29 @@ mod refinement_wire_tests {
             let back = serde_json::to_string(&expected).unwrap();
             assert_eq!(back, json, "serialize {expected:?}");
         }
+    }
+
+    #[test]
+    fn vocab_promote_payload_round_trips() {
+        let p = RefinementPayload::VocabPromote {
+            kind: "relation".into(),
+            old_value: "design_inspiration".into(),
+            category: None,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: RefinementPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+        assert!(json.contains("\"action\":\"vocab_promote\""));
+    }
+
+    #[test]
+    fn proposal_action_unknown_future_variant_deserializes() {
+        // A stale client must decode a NEWER daemon's action tag to Unknown,
+        // never error the whole ListRefinementsResponse.
+        let parsed: ProposalAction = serde_json::from_str("\"future_unshipped_action\"").unwrap();
+        assert_eq!(parsed, ProposalAction::Unknown);
+        let parsed2: ProposalAction = serde_json::from_str("\"totally_new_action\"").unwrap();
+        assert_eq!(parsed2, ProposalAction::Unknown);
     }
 
     #[test]

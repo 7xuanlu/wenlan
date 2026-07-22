@@ -617,7 +617,7 @@ impl Builder {
         let record_ids = self
             .records
             .iter()
-            .map(|record| digest_id(&record.key))
+            .map(|record| super::semantic_record_key_digest(&record.key))
             .collect::<Vec<_>>();
         let mut digest = Sha256::new();
         digest.update(b"wenlan-lint-semantic-candidates-v2");
@@ -846,7 +846,13 @@ async fn load_pages(context: &LintContext<'_, '_>) -> Result<Vec<Page>, ()> {
             id: row.get(0).map_err(|_| ())?,
             content_tokens: content_tokens(&content),
             content,
-            workspace: row.get(2).map_err(|_| ())?,
+            // M1: pages store the reserved scope sentinel id; translate it back
+            // to None here (as row_to_page does) so uncategorized pages compare
+            // symmetric with uncategorized memories (space = NULL) in same_scope.
+            workspace: row
+                .get::<Option<String>>(2)
+                .map_err(|_| ())?
+                .filter(|s| s != crate::db::UNFILED_SPACE_ID),
             creation_kind: row.get(3).map_err(|_| ())?,
             review_status: row.get(4).map_err(|_| ())?,
         });
@@ -1208,13 +1214,6 @@ fn digest_optional(digest: &mut Sha256, value: Option<&str>) {
 fn digest_value(digest: &mut Sha256, value: &[u8]) {
     digest.update((value.len() as u64).to_le_bytes());
     digest.update(value);
-}
-
-fn digest_id(key: &str) -> LintDigest {
-    let digest: [u8; 32] = Sha256::digest(key.as_bytes()).into();
-    LintDigest::from_u64(u64::from_le_bytes(
-        digest[..8].try_into().expect("digest prefix"),
-    ))
 }
 
 #[cfg(test)]

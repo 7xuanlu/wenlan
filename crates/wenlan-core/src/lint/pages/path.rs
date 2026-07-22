@@ -19,7 +19,7 @@ impl NormalizedTarget {
         Self(path.replace('\\', "/"))
     }
 
-    pub(super) fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

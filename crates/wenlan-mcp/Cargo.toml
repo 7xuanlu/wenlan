@@ -41,6 +41,7 @@ http = "1"
 tokio-util = "0.7"
 dirs = "6"
 semver = "1"
+sha2 = { workspace = true }
 wenlan-types = { workspace = true }
 
 [dev-dependencies]

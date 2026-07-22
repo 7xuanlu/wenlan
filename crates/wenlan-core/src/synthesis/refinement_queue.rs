@@ -81,6 +81,8 @@ pub async fn resolve_proposal(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: crate::post_write::WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
@@ -184,6 +186,11 @@ pub async fn apply_refinement_with_decision(
                 "action 'dedup_merge' has no accept path (deprecated stale-v1 variant)".into(),
             ));
         }
+        "lint_repair_review" => {
+            return Err(WenlanError::Validation(
+                "action 'lint_repair_review' requires a choice-specific repair flow".into(),
+            ));
+        }
         "page_merge" => {
             let survivor_id = prop.source_ids.first().cloned().ok_or_else(|| {
                 WenlanError::Validation("page_merge missing source_ids[0]".into())
@@ -217,6 +224,19 @@ pub async fn apply_refinement_with_decision(
                 ));
             }
         },
+        "vocab_promote" => {
+            let payload = prop
+                .payload
+                .as_deref()
+                .ok_or_else(|| WenlanError::Validation("vocab_promote missing payload".into()))?;
+            let v: serde_json::Value = serde_json::from_str(payload)
+                .map_err(|e| WenlanError::Validation(format!("vocab_promote payload: {e}")))?;
+            let kind = v["kind"].as_str().unwrap_or_default();
+            let old_value = v["old_value"].as_str().unwrap_or_default();
+            let category = v["category"].as_str();
+            db.promote_vocabulary_canonical(kind, old_value, category)
+                .await?;
+        }
         other => {
             return Err(WenlanError::Validation(format!("unknown action: {other}")));
         }
@@ -331,7 +351,11 @@ pub(crate) async fn process_refinement_queue(
     let pending = db.get_pending_refinements().await?;
     let mut processed = 0usize;
 
-    for proposal in pending.iter().take(tuning.max_proposals_per_steep) {
+    for proposal in pending
+        .iter()
+        .filter(|proposal| proposal.status == "pending")
+        .take(tuning.max_proposals_per_steep)
+    {
         match proposal.action.as_str() {
             "dedup_merge" => {
                 // Stale v1 proposal — dismiss (distillation handles merges now)
@@ -818,6 +842,24 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn apply_refinement_vocab_promote_adds_canonical() {
+        let (db, _tmp) = test_db().await;
+        // A dirty relation type exists in the queue as a promote candidate.
+        db.insert_vocab_promote_proposal("relation", "design_inspiration", None)
+            .await
+            .unwrap();
+        let id = crate::db::MemoryDB::vocab_proposal_fingerprint("relation", "design_inspiration");
+        apply_refinement(&db, &id, "test").await.unwrap();
+        // It is now canonical: resolve returns itself.
+        assert_eq!(
+            db.resolve_relation_type("design_inspiration")
+                .await
+                .unwrap(),
+            Some("design_inspiration".into())
+        );
     }
 
     #[tokio::test]
@@ -1488,6 +1530,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_lint_repair_review_requires_choice_specific_repair_flow() {
+        let (db, _tmp) = test_db().await;
+        let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let id = format!("lint_review_{digest}");
+        let payload = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": digest,
+            "owner_binding_digest": crate::repair::lint_review_owner_binding_digest(
+                &wenlan_types::repair::RepairDigest::parse(digest).unwrap(),
+                &["page-a".to_string()],
+            )
+            .unwrap(),
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": [],
+        })
+        .to_string();
+        db.insert_lint_review_if_absent(&id, &["page-a".into()], &payload)
+            .await
+            .unwrap();
+
+        let err = apply_refinement(&db, &id, "test-agent").await.unwrap_err();
+        let crate::error::WenlanError::Validation(message) = err else {
+            panic!("expected Validation");
+        };
+        assert_eq!(
+            message,
+            "action 'lint_repair_review' requires a choice-specific repair flow"
+        );
+        assert_eq!(
+            db.get_refinement_proposal(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "awaiting_review"
+        );
+    }
+
+    #[tokio::test]
     async fn apply_refinement_unknown_action_returns_422() {
         let (db, _tmp) = test_db().await;
         db.insert_refinement_proposal("ref_uk_1", "future_action_xyz", &["a".into()], None, 0.5)
@@ -1651,6 +1734,71 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(prop.status, "awaiting_review");
+    }
+
+    #[tokio::test]
+    async fn awaiting_review_backlog_does_not_starve_pending_proposals() {
+        let (db, _tmp) = test_db().await;
+        for index in 0..11 {
+            let digest = format!("{:064x}", index + 1);
+            let payload = serde_json::json!({
+                "action": "lint_repair_review",
+                "check_id": "pages.links.orphan_labels",
+                "occurrence_digest": digest,
+                "owner_binding_digest": crate::repair::lint_review_owner_binding_digest(
+                    &wenlan_types::repair::RepairDigest::parse(&digest).unwrap(),
+                    &["page-a".to_string()],
+                )
+                .unwrap(),
+                "issue": "Review the ambiguous target.",
+                "choices": ["keep", "retarget", "remove"],
+                "suggested_research_queries": [],
+            })
+            .to_string();
+            db.insert_lint_review_if_absent(
+                &format!("lint_review_{digest}"),
+                &["page-a".into()],
+                &payload,
+            )
+            .await
+            .unwrap();
+        }
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "UPDATE refinement_queue
+                    SET created_at='2023-11-14 22:13:20'
+                  WHERE action='lint_repair_review'",
+                libsql::params::Params::None,
+            )
+            .await
+            .unwrap();
+        db.insert_refinement_proposal(
+            "later-pending",
+            "entity_merge",
+            &["a".into(), "b".into()],
+            None,
+            0.87,
+        )
+        .await
+        .unwrap();
+
+        let tuning = crate::tuning::RefineryConfig::default();
+        let prompts = crate::prompts::PromptRegistry::default();
+        let processed = process_refinement_queue(&db, None, &prompts, &tuning)
+            .await
+            .unwrap();
+
+        assert_eq!(processed, 1);
+        assert_eq!(
+            db.get_refinement_proposal("later-pending")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "awaiting_review"
+        );
     }
 
     #[tokio::test]

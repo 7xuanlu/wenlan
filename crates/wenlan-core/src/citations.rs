@@ -496,7 +496,11 @@ pub async fn run_citation_backfill_tick(
                         .await;
                 let existing_sources: Vec<&str> =
                     page.source_memory_ids.iter().map(String::as_str).collect();
-                let _ = db
+                // CAS on the version this annotation was generated from: the LLM
+                // call above is slow, and a human edit landing in that window
+                // must win. Losing the CAS drops the annotation rather than
+                // overwriting the edit — the next sweep regenerates it.
+                match db
                     .try_update_page_content_with_changelog(
                         &page_id,
                         &body,
@@ -505,8 +509,18 @@ pub async fn run_citation_backfill_tick(
                         false,
                         &changelog,
                         Some(&json),
+                        Some(page.version),
+                        None,
                     )
-                    .await;
+                    .await
+                {
+                    Ok(false) => log::info!(
+                        "[citation_backfill] {page_id} changed under v{}; discarding annotation",
+                        page.version
+                    ),
+                    Ok(true) => {}
+                    Err(e) => log::warn!("[citation_backfill] {page_id} write failed: {e}"),
+                }
                 let _ = db.set_app_metadata(&attempt_key(&page_id), "0").await;
             }
         } else {
@@ -870,8 +884,8 @@ mod tests {
     async fn backfill_happy_path_preserves_source_memory_ids() {
         // Regression: the annotate-success path must not clobber
         // `source_memory_ids` with an empty array (it broke
-        // `recompile_single_page` / `max_source_trust_tier` / page-growth
-        // append, which all read the page's linked sources back).
+        // page refresh / `max_source_trust_tier` / page-growth append, which
+        // all read the page's linked sources back).
         let (db, _dir) = crate::db::tests::test_db().await;
         let now = chrono::Utc::now().to_rfc3339();
         db.insert_page(

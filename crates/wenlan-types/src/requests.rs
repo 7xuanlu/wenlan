@@ -260,6 +260,148 @@ pub struct CreateConceptRequest {
     pub workspace: Option<String>,
 }
 
+/// First durable snapshot for a human-authored Page draft.
+///
+/// The client only sends this request once either `title` or `content` is
+/// meaningful. Both fields default to empty so title-first and body-first
+/// writing flows share one wire shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatePageDraftRequest {
+    /// Stable client-generated id used to make an ambiguous create retry safe.
+    pub draft_id: String,
+    pub title: String,
+    pub content: String,
+    pub space: Option<String>,
+    space_provided: bool,
+}
+
+impl CreatePageDraftRequest {
+    /// Build a request with an explicit `space` value.
+    ///
+    /// Passing `None` serializes as `"space": null`.
+    pub fn new(draft_id: String, title: String, content: String, space: Option<String>) -> Self {
+        Self {
+            draft_id,
+            title,
+            content,
+            space,
+            space_provided: true,
+        }
+    }
+
+    /// Build a request that omits `space`, allowing the server to inherit the
+    /// `X-Wenlan-Space` request header.
+    pub fn new_inheriting_header_space(draft_id: String, title: String, content: String) -> Self {
+        Self {
+            draft_id,
+            title,
+            content,
+            space: None,
+            space_provided: false,
+        }
+    }
+
+    /// Whether the JSON body contained a `space` key.
+    ///
+    /// This distinguishes an omitted key (inherit the request header) from an
+    /// explicit `null` (clear the header-provided Space).
+    pub fn space_was_provided(&self) -> bool {
+        self.space_provided
+    }
+}
+
+impl Serialize for CreatePageDraftRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let field_count = if self.space_provided { 4 } else { 3 };
+        let mut state = serializer.serialize_struct("CreatePageDraftRequest", field_count)?;
+        state.serialize_field("draft_id", &self.draft_id)?;
+        state.serialize_field("title", &self.title)?;
+        state.serialize_field("content", &self.content)?;
+        if self.space_provided {
+            state.serialize_field("space", &self.space)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CreatePageDraftRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            draft_id: String,
+            #[serde(default)]
+            title: String,
+            #[serde(default)]
+            content: String,
+            #[serde(default, deserialize_with = "double_option")]
+            space: Option<Option<String>>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let (space_provided, space) = match wire.space {
+            Some(space) => (true, space),
+            None => (false, None),
+        };
+        Ok(Self {
+            draft_id: wire.draft_id,
+            title: wire.title,
+            content: wire.content,
+            space,
+            space_provided,
+        })
+    }
+}
+
+/// Complete replacement snapshot for an existing Page draft.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct UpdatePageDraftRequest {
+    pub expected_version: i64,
+    pub title: String,
+    pub content: String,
+    pub space: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for UpdatePageDraftRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            expected_version: i64,
+            title: String,
+            content: String,
+            #[serde(default, deserialize_with = "double_option")]
+            space: Option<Option<String>>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let space = wire
+            .space
+            .ok_or_else(|| serde::de::Error::missing_field("space"))?;
+        Ok(Self {
+            expected_version: wire.expected_version,
+            title: wire.title,
+            content: wire.content,
+            space,
+        })
+    }
+}
+
+/// Optimistic-concurrency body shared by draft publish and discard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageDraftVersionRequest {
+    pub expected_version: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AcceptRefinementRequest {
@@ -331,7 +473,7 @@ pub struct AddSourceRequest {
 // ===== Config =====
 
 /// Distinguishes an omitted JSON field (outer None) from an explicit `null`
-/// (Some(None)). Used for tri-state secret updates.
+/// (Some(None)). Used for presence-sensitive wire fields.
 fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: serde::Deserialize<'de>,
@@ -386,6 +528,10 @@ pub struct UpdateConfigRequest {
     /// `""` = clear; validated by the config route.
     #[serde(default)]
     pub synthesis_source: Option<String>,
+    /// Gates the proactive Page-Map suggestion phase in the scheduler. Omitted =
+    /// preserve stored value; present = set. Never gates the explicit improve route.
+    #[serde(default)]
+    pub page_map_auto_suggest: Option<bool>,
 }
 
 // ===== Chunks / indexed files =====
@@ -496,6 +642,27 @@ pub struct UpdatePageRequest {
     /// always populated by `post_write::update_page`.
     #[serde(default)]
     pub source_memory_ids: Vec<String>,
+    /// Optimistic-concurrency guard for the M0 write gate. `Some(v)` lands the
+    /// write only while the stored page is still at version `v`; a mismatch is
+    /// refused instead of overwriting whatever landed in between.
+    ///
+    /// Omitted by legacy clients, in which case the server guards on the version
+    /// it loaded to make the ownership decision — so the decision and the write
+    /// always describe the same row.
+    #[serde(default)]
+    pub expected_version: Option<i64>,
+    /// Retry identity. Sent together, `caller_id` and `operation_id` make the
+    /// write replayable: the same pair with the same request replays the
+    /// stored response instead of writing again, and the same pair with a
+    /// different request is a conflict. This is what turns "the response was
+    /// lost, the client retried" into a no-op rather than a second version.
+    ///
+    /// Either one alone is ignored — an operation id is only meaningful
+    /// within the caller that minted it.
+    #[serde(default)]
+    pub caller_id: Option<String>,
+    #[serde(default)]
+    pub operation_id: Option<String>,
 }
 
 /// Body for `PUT /api/pages/{id}` — agent-side refresh of a stale page.

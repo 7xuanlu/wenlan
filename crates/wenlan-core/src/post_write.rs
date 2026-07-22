@@ -7,8 +7,12 @@
 
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
-use std::{collections::HashSet, path::Path, str::FromStr};
+use std::{collections::HashSet, fmt::Write as _, path::Path, str::FromStr};
 use wenlan_types::{
+    repair::{
+        RepairDigest, RepairManifest, RepairMutation, RepairRollbackPayloadV2, RepairTarget,
+        RepairWriter,
+    },
     requests::{
         AddObservationRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
         UpdatePageRequest,
@@ -16,7 +20,7 @@ use wenlan_types::{
     MemoryType, RawDocument,
 };
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WriteResult {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27,6 +31,47 @@ pub struct WriteResult {
     pub revision_card_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub gated: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub acknowledged: bool,
+    /// Why the write did or did not land. `wrote` says whether the page moved;
+    /// this says why not, which is what a caller needs to answer the user.
+    ///
+    /// Branch on this, never on `warnings` — the strings are for humans reading
+    /// logs and will get reworded.
+    #[serde(default)]
+    pub outcome: WriteOutcome,
+}
+
+/// The distinguishable ends of a page write.
+///
+/// Without this, every unsuccessful write looked the same to a caller: "content
+/// was already correct" and "somebody else holds the page" both arrived as
+/// `wrote: false` and an empty warning list. The manual-edit route guessed
+/// conflict for both and told users their routine no-op save had been
+/// overwritten by someone else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteOutcome {
+    /// The page was updated.
+    ///
+    /// Default because the only `WriteResult`s that predate this field are the
+    /// ones stored in idempotency receipts, and a receipt is only ever written
+    /// inside a transaction that committed — so a receipt without an outcome
+    /// describes a write that landed.
+    #[default]
+    Wrote,
+    /// The page already said what the caller asked for, or the caller asked to
+    /// write only if stale and it wasn't. Nothing to do, and nothing wrong.
+    Unchanged,
+    /// The caller declared an `expected_version` that no longer matches. Its
+    /// content was computed against a version that has moved on.
+    Refused,
+    /// The page kept moving and the write lost every CAS attempt. The caller's
+    /// content was discarded.
+    Contended,
+    /// A machine write to a human-owned page, preserved as a revision card
+    /// rather than applied. See `revision_card_id`.
+    Gated,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +80,1598 @@ pub struct MemoryUpdate<'a> {
     pub space: Option<Option<&'a str>>,
     pub confirm: bool,
     pub memory_type: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepairWriteProof {
+    before_target_receipt: RepairDigest,
+    after_target_receipt: RepairDigest,
+    non_target_before: RepairDigest,
+    non_target_after: RepairDigest,
+    post_apply_db_digest: RepairDigest,
+}
+
+impl RepairWriteProof {
+    pub fn before_target_receipt(&self) -> &RepairDigest {
+        &self.before_target_receipt
+    }
+
+    pub fn after_target_receipt(&self) -> &RepairDigest {
+        &self.after_target_receipt
+    }
+
+    pub fn non_target_before(&self) -> &RepairDigest {
+        &self.non_target_before
+    }
+
+    pub fn non_target_after(&self) -> &RepairDigest {
+        &self.non_target_after
+    }
+
+    pub fn post_apply_db_digest(&self) -> &RepairDigest {
+        &self.post_apply_db_digest
+    }
+}
+
+fn recovery_required_after_rollback_failure(
+    error: &WenlanError,
+    rollback_error: impl std::fmt::Display,
+) -> WenlanError {
+    log::error!("repair outcome is uncertain after {error}; rollback failed: {rollback_error}");
+    WenlanError::Conflict("repair_apply_recovery_required".to_string())
+}
+
+async fn rollback_repair_transaction(
+    connection: &libsql::Connection,
+    error: &WenlanError,
+    force_failure: bool,
+) -> Result<(), WenlanError> {
+    if force_failure {
+        return Err(recovery_required_after_rollback_failure(
+            error,
+            "forced rollback failure",
+        ));
+    }
+    connection
+        .execute("ROLLBACK", ())
+        .await
+        .map(|_| ())
+        .map_err(|rollback_error| recovery_required_after_rollback_failure(error, rollback_error))
+}
+
+struct ReclassifyMemoryCasInput<'a> {
+    source_id: &'a str,
+    expected_receipt: &'a RepairDigest,
+    expected_space: Option<&'a str>,
+    review_binding: Option<&'a wenlan_types::repair::RepairReviewBinding>,
+    after_memory_type: MemoryType,
+    force_rollback_failure: bool,
+}
+
+pub async fn reclassify_memory_cas<F>(
+    db: &MemoryDB,
+    source_id: &str,
+    expected_receipt: &RepairDigest,
+    expected_space: Option<&str>,
+    review_binding: Option<&wenlan_types::repair::RepairReviewBinding>,
+    after_memory_type: MemoryType,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    reclassify_memory_cas_inner(
+        db,
+        ReclassifyMemoryCasInput {
+            source_id,
+            expected_receipt,
+            expected_space,
+            review_binding,
+            after_memory_type,
+            force_rollback_failure: false,
+        },
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn reclassify_memory_cas_with_forced_rollback_failure<F>(
+    db: &MemoryDB,
+    source_id: &str,
+    expected_receipt: &RepairDigest,
+    expected_space: Option<&str>,
+    review_binding: Option<&wenlan_types::repair::RepairReviewBinding>,
+    after_memory_type: MemoryType,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    reclassify_memory_cas_inner(
+        db,
+        ReclassifyMemoryCasInput {
+            source_id,
+            expected_receipt,
+            expected_space,
+            review_binding,
+            after_memory_type,
+            force_rollback_failure: true,
+        },
+        before_commit,
+    )
+    .await
+}
+
+async fn reclassify_memory_cas_inner<F>(
+    db: &MemoryDB,
+    input: ReclassifyMemoryCasInput<'_>,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let ReclassifyMemoryCasInput {
+        source_id,
+        expected_receipt,
+        expected_space,
+        review_binding,
+        after_memory_type,
+        force_rollback_failure,
+    } = input;
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let result = async {
+        crate::repair::validate_target_space_on_connection(&conn, source_id, expected_space)
+            .await?;
+        if let Some(review_binding) = review_binding {
+            crate::repair::validate_reclassification_review_on_connection(
+                &conn,
+                review_binding,
+                source_id,
+            )
+            .await?;
+        }
+        let (before_target_receipt, target_rows) =
+            crate::repair::target_receipt_on_connection(&conn, source_id).await?;
+        if &before_target_receipt != expected_receipt {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let non_target_before = crate::repair::effect_guard_receipt(conn.total_changes());
+        let affected = conn
+            .execute(
+                "UPDATE memories SET memory_type=?1
+                 WHERE source='memory' AND source_id=?2",
+                libsql::params![after_memory_type.to_string(), source_id],
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair reclassify: {error}")))?;
+        if affected != target_rows {
+            return Err(WenlanError::VectorDb(
+                "repair_target_row_count_changed".to_string(),
+            ));
+        }
+        let (after_target_receipt, after_rows) =
+            crate::repair::target_receipt_on_connection(&conn, source_id).await?;
+        if after_rows != target_rows || after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let normalized_total_changes = conn
+            .total_changes()
+            .checked_sub(target_rows)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        let non_target_after = crate::repair::effect_guard_receipt(normalized_total_changes);
+        if non_target_after != non_target_before {
+            return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
+        }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            post_apply_db_digest,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
+            rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = before_commit(&proof) {
+        rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+        return Err(error);
+    }
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let commit_error = WenlanError::VectorDb(format!("repair commit failed: {error}"));
+        rollback_repair_transaction(&conn, &commit_error, force_rollback_failure).await?;
+        return Err(commit_error);
+    }
+    Ok(proof)
+}
+
+pub(crate) async fn complete_entity_extraction_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    complete_entity_extraction_cas_inner(db, manifest, rollback, false, before_commit).await
+}
+
+#[cfg(test)]
+pub(crate) async fn complete_entity_extraction_cas_with_forced_rollback_failure<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    complete_entity_extraction_cas_inner(db, manifest, rollback, true, before_commit).await
+}
+
+async fn complete_entity_extraction_cas_inner<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    force_rollback_failure: bool,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let (
+        memory_id,
+        entity_ids,
+        scope,
+        enrichment_status,
+        enrichment_error,
+        enrichment_attempts,
+        enrichment_updated_at,
+    ) = match (manifest.target(), manifest.mutation(), rollback) {
+        (
+            RepairTarget::MemoryEntityExtraction {
+                memory_id,
+                entity_ids,
+                scope,
+                ..
+            },
+            RepairMutation::CompleteEntityExtraction {
+                entity_ids: mutation_entity_ids,
+            },
+            RepairRollbackPayloadV2::CompleteEntityExtraction {
+                memory_id: rollback_memory_id,
+                enrichment_status,
+                enrichment_error,
+                enrichment_attempts,
+                enrichment_updated_at,
+                ..
+            },
+        ) if manifest.writer() == RepairWriter::CompleteEntityExtraction
+            && memory_id == rollback_memory_id
+            && entity_ids == mutation_entity_ids =>
+        {
+            (
+                memory_id,
+                entity_ids,
+                scope,
+                enrichment_status,
+                enrichment_error,
+                *enrichment_attempts,
+                *enrichment_updated_at,
+            )
+        }
+        _ => {
+            return Err(WenlanError::Validation(
+                "entity extraction repair target/writer/mutation mismatch".to_string(),
+            ))
+        }
+    };
+    if enrichment_status != "failed" {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    let review_binding = manifest.source().review_binding().ok_or_else(|| {
+        WenlanError::Validation("entity extraction repair review binding missing".to_string())
+    })?;
+    let expected_owner_ids = [memory_id.clone()];
+    if review_binding.owner_ids() != expected_owner_ids {
+        return Err(WenlanError::Validation(
+            "entity extraction repair review binding mismatch".to_string(),
+        ));
+    }
+
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let result = async {
+        crate::repair::validate_target_space_on_connection(&conn, memory_id, scope.space()).await?;
+        crate::repair::validate_selected_entities_on_connection(&conn, entity_ids, scope.space())
+            .await?;
+        let occurrence = crate::repair::validate_complete_entity_extraction_review_on_connection(
+            &conn,
+            review_binding.review_id(),
+            review_binding.owner_ids(),
+        )
+        .await?;
+        if &occurrence != review_binding.occurrence_digest() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before =
+            crate::repair::capture_complete_entity_extraction_on_connection(&conn, memory_id)
+                .await?;
+        if &before != rollback {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before_target_receipt = crate::repair::complete_entity_extraction_receipt(&before)?;
+        if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let non_target_before = crate::repair::effect_guard_receipt(conn.total_changes());
+        let mut inserted = 0_u64;
+        for entity_id in entity_ids {
+            inserted = inserted.saturating_add(
+                conn.execute(
+                    "INSERT INTO memory_entities(memory_id,entity_id)
+                     SELECT ?1,?2
+                      WHERE EXISTS(
+                            SELECT 1 FROM entities
+                             WHERE id=?2
+                               AND ((?3 IS NULL AND space IS NULL) OR space=?3))
+                        AND NOT EXISTS(
+                            SELECT 1 FROM memory_entities
+                             WHERE memory_id=?1 AND entity_id=?2)",
+                    libsql::params![
+                        memory_id.clone(),
+                        entity_id.clone(),
+                        scope.space().map(str::to_string)
+                    ],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!(
+                        "repair complete entity extraction link: {error}"
+                    ))
+                })?,
+            );
+        }
+        let updated = conn
+            .execute(
+                "UPDATE enrichment_steps SET status='ok',error=NULL
+                 WHERE source_id=?1 AND step_name='entity_extract'
+                   AND status=?2 AND error IS ?3 AND attempts=?4 AND updated_at=?5",
+                libsql::params![
+                    memory_id.clone(),
+                    enrichment_status.clone(),
+                    enrichment_error.clone(),
+                    enrichment_attempts,
+                    enrichment_updated_at
+                ],
+            )
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair complete entity extraction step: {error}"))
+            })?;
+        if updated != 1 {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let after =
+            crate::repair::capture_complete_entity_extraction_on_connection(&conn, memory_id)
+                .await?;
+        let RepairRollbackPayloadV2::CompleteEntityExtraction {
+            before_entity_ids: after_entity_ids,
+            ..
+        } = &after
+        else {
+            unreachable!("complete entity extraction capture returns aggregate payload")
+        };
+        if entity_ids
+            .iter()
+            .any(|entity_id| after_entity_ids.binary_search(entity_id).is_err())
+        {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let after_target_receipt = crate::repair::complete_entity_extraction_receipt(&after)?;
+        if after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let allowed_changes = inserted.saturating_add(updated);
+        let normalized_total_changes = conn
+            .total_changes()
+            .checked_sub(allowed_changes)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        let non_target_after = crate::repair::effect_guard_receipt(normalized_total_changes);
+        if non_target_after != non_target_before {
+            return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
+        }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            post_apply_db_digest,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
+            rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = before_commit(&proof) {
+        rollback_repair_transaction(&conn, &error, force_rollback_failure).await?;
+        return Err(error);
+    }
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let commit_error = WenlanError::VectorDb(format!("repair commit failed: {error}"));
+        rollback_repair_transaction(&conn, &commit_error, force_rollback_failure).await?;
+        return Err(commit_error);
+    }
+    Ok(proof)
+}
+
+pub(crate) async fn rename_page_title_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    page_root: &Path,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    rename_page_title_cas_inner(db, manifest, rollback, page_root, || Ok(()), before_commit).await
+}
+
+#[cfg(test)]
+pub(crate) async fn rename_page_title_cas_with_projection_write_hook<F, G>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    page_root: &Path,
+    after_target_write: G,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+    G: FnOnce() -> Result<(), WenlanError>,
+{
+    rename_page_title_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        after_target_write,
+        before_commit,
+    )
+    .await
+}
+
+async fn rename_page_title_cas_inner<F, G>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &RepairRollbackPayloadV2,
+    page_root: &Path,
+    after_target_write: G,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+    G: FnOnce() -> Result<(), WenlanError>,
+{
+    let (page_id, scope, before_title, after_title, after_embedding_hex) =
+        match (manifest.target(), manifest.mutation(), rollback) {
+            (
+                RepairTarget::PageProjection { page_id, scope },
+                RepairMutation::RenamePageTitle {
+                    before_title,
+                    after_title,
+                    after_embedding_hex,
+                },
+                RepairRollbackPayloadV2::RenamePageTitle {
+                    page_id: rollback_page_id,
+                    ..
+                },
+            ) if manifest.writer() == RepairWriter::RenamePageTitle
+                && page_id == rollback_page_id =>
+            {
+                (
+                    page_id,
+                    scope,
+                    before_title,
+                    after_title,
+                    after_embedding_hex,
+                )
+            }
+            _ => {
+                return Err(WenlanError::Validation(
+                    "page title repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+    let review_binding = manifest.source().review_binding().ok_or_else(|| {
+        WenlanError::Validation("page title repair review binding missing".to_string())
+    })?;
+    if review_binding.owner_ids().len() != 1
+        || review_binding.owner_ids()[0].as_str() != page_id.as_str()
+    {
+        return Err(WenlanError::Validation(
+            "page title repair review binding mismatch".to_string(),
+        ));
+    }
+    let embedding_sql = decode_page_title_embedding(after_embedding_hex)?;
+    let session = crate::export::knowledge::KnowledgeProjectionWrite::begin_owned_repair_session(
+        page_root.to_path_buf(),
+        db,
+    )?;
+    let projection = session.locked();
+    let excluded_paths = crate::repair::rename_page_title_excluded_paths(rollback)?;
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let mut projection_written = false;
+    let result = async {
+        let mut target_rows = conn
+            .query(
+                "SELECT title,version,status,space
+                   FROM pages WHERE id=?1 LIMIT 2",
+                libsql::params![page_id.as_str()],
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair page title target: {error}")))?;
+        let target = target_rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair page title target row: {error}"))
+            })?
+            .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?;
+        let current_title = target.get::<String>(0).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current title: {error}"))
+        })?;
+        let current_version = target.get::<i64>(1).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current version: {error}"))
+        })?;
+        let current_status = target.get::<String>(2).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current status: {error}"))
+        })?;
+        let current_scope = target.get::<Option<String>>(3).map_err(|error| {
+            WenlanError::VectorDb(format!("repair page title current scope: {error}"))
+        })?;
+        if target_rows
+            .next()
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair page title duplicate target: {error}"))
+            })?
+            .is_some()
+            || current_title != *before_title
+            || current_version != manifest.expected_state().version().unwrap_or_default()
+            || current_status != "active"
+            || current_scope.as_deref() != scope.space()
+        {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        drop(target_rows);
+        crate::repair::validate_rename_page_title_collision_on_connection(
+            &conn,
+            page_id,
+            before_title,
+            after_title,
+            scope.space(),
+        )
+        .await?;
+        let occurrence = crate::repair::validate_rename_page_title_review_on_connection(
+            &conn,
+            review_binding.review_id(),
+            page_id,
+        )
+        .await?;
+        if &occurrence != review_binding.occurrence_digest() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before =
+            crate::repair::capture_rename_page_title_on_connection(&conn, &projection, page_id)
+                .await?;
+        if &before != rollback {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let before_target_receipt = crate::repair::rename_page_title_receipt(&before)?;
+        if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let database_changes_before_target = conn.total_changes();
+        let stored_database_guard = crate::repair::effect_guard_receipt(0);
+        let before_scan = projection.scan_page_root_controlled(
+            true,
+            &crate::lint::pages::fs::PageScanControl::with_timeout(std::time::Duration::from_secs(
+                30,
+            )),
+        )?;
+        let non_target_before = crate::repair::rename_page_title_non_target_receipt(
+            &stored_database_guard,
+            before_scan.non_target_digest(&excluded_paths),
+            &before,
+        )?;
+
+        let affected = conn
+            .execute(
+                "UPDATE pages
+                    SET title=?1,version=version+1,embedding=vector32(?2)
+                  WHERE id=?3 AND status='active' AND version=?4 AND title=?5
+                    AND space=COALESCE(?6,'00000000-0000-4000-8000-000000000001')
+                    AND NOT EXISTS(
+                        SELECT 1 FROM pages collision
+                         WHERE collision.status='active' AND collision.id<>?3
+                           AND collision.space=COALESCE(?6,'00000000-0000-4000-8000-000000000001')
+                           AND lower(collision.title)=lower(?1))",
+                libsql::params![
+                    after_title.as_str(),
+                    embedding_sql,
+                    page_id.as_str(),
+                    current_version,
+                    before_title.as_str(),
+                    scope.space().map(str::to_string)
+                ],
+            )
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("repair page title update: {error}")))?;
+        if affected != 1 {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        // The canonical Page UPDATE fires the Page FTS maintenance triggers.
+        // Treat that statement's complete observed delta as the target write,
+        // then require every later proof/projection step to remain DB-read-only.
+        let database_changes_after_target = conn.total_changes();
+        let target_change_delta = database_changes_after_target
+            .checked_sub(database_changes_before_target)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        if target_change_delta < affected {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let page = page_on_connection(&conn, page_id).await?;
+        if page.title != *after_title || page.version != current_version + 1 {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        projection_written = true;
+        projection.write_page_with_after_target_write(&page, after_target_write)?;
+
+        let after =
+            crate::repair::capture_rename_page_title_on_connection(&conn, &projection, page_id)
+                .await?;
+        let after_target_receipt = crate::repair::rename_page_title_receipt(&after)?;
+        if after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        if conn.total_changes() != database_changes_after_target {
+            return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+        }
+        let after_scan = projection.scan_page_root_controlled(
+            true,
+            &crate::lint::pages::fs::PageScanControl::with_timeout(std::time::Duration::from_secs(
+                30,
+            )),
+        )?;
+        let non_target_after = crate::repair::rename_page_title_non_target_receipt(
+            &stored_database_guard,
+            after_scan.non_target_digest(&excluded_paths),
+            &after,
+        )?;
+        if non_target_after != non_target_before {
+            return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+        }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            post_apply_db_digest,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
+            let projection_error = if projection_written {
+                restore_rename_projection(&projection, rollback).err()
+            } else {
+                None
+            };
+            let rollback_error = conn.execute("ROLLBACK", ()).await.err();
+            return match (projection_error, rollback_error) {
+                (None, None) => Err(error),
+                _ => Err(WenlanError::Conflict(
+                    "repair_apply_recovery_required".to_string(),
+                )),
+            };
+        }
+    };
+    if let Err(error) = before_commit(&proof) {
+        let projection_error = restore_rename_projection(&projection, rollback).err();
+        let rollback_error = conn.execute("ROLLBACK", ()).await.err();
+        return match (projection_error, rollback_error) {
+            (None, None) => Err(error),
+            _ => Err(WenlanError::Conflict(
+                "repair_apply_recovery_required".to_string(),
+            )),
+        };
+    }
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let projection_error = restore_rename_projection(&projection, rollback).err();
+        let rollback_error = conn.execute("ROLLBACK", ()).await.err();
+        return if projection_error.is_none() && rollback_error.is_none() {
+            Err(WenlanError::VectorDb(format!(
+                "repair commit failed: {error}"
+            )))
+        } else {
+            Err(WenlanError::Conflict(
+                "repair_apply_recovery_required".to_string(),
+            ))
+        };
+    }
+    Ok(proof)
+}
+
+fn restore_rename_projection(
+    projection: &crate::export::knowledge::LockedRepairProjection<'_>,
+    rollback: &RepairRollbackPayloadV2,
+) -> Result<(), WenlanError> {
+    let RepairRollbackPayloadV2::RenamePageTitle {
+        projection_target_path,
+        projection_entries,
+        ..
+    } = rollback
+    else {
+        return Err(WenlanError::Validation(
+            "repair_rollback_writer_mismatch".to_string(),
+        ));
+    };
+    projection.restore_rename_page_projection(projection_target_path, projection_entries)
+}
+
+fn decode_page_title_embedding(value: &str) -> Result<String, WenlanError> {
+    const EMBEDDING_HEX_LEN: usize = 768 * std::mem::size_of::<f32>() * 2;
+    if value.len() != EMBEDDING_HEX_LEN
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return Err(WenlanError::Validation(
+            "repair_page_embedding_invalid".to_string(),
+        ));
+    }
+    let bytes = hex::decode(value)
+        .map_err(|_| WenlanError::Validation("repair_page_embedding_invalid".to_string()))?;
+    let mut encoded = String::with_capacity(768 * 12);
+    encoded.push('[');
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let float = f32::from_le_bytes(chunk.try_into().expect("four-byte chunks"));
+        if !float.is_finite() {
+            return Err(WenlanError::Validation(
+                "repair_page_embedding_invalid".to_string(),
+            ));
+        }
+        if index > 0 {
+            encoded.push(',');
+        }
+        write!(&mut encoded, "{float}")
+            .map_err(|error| WenlanError::Validation(error.to_string()))?;
+    }
+    encoded.push(']');
+    Ok(encoded)
+}
+
+pub(crate) async fn page_on_connection(
+    connection: &libsql::Connection,
+    page_id: &str,
+) -> Result<crate::pages::Page, WenlanError> {
+    let mut rows = connection
+        .query(
+            "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version,
+                    status, created_at, last_compiled, last_modified,
+                    COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0),
+                    COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'),
+                    COALESCE(review_status, 'confirmed'), workspace, citations
+               FROM pages WHERE id=?1 LIMIT 2",
+            libsql::params![page_id],
+        )
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair page title read: {error}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair page title row: {error}")))?
+        .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?;
+    let page = MemoryDB::row_to_page(&row)?;
+    if rows
+        .next()
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair page title rows: {error}")))?
+        .is_some()
+    {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    Ok(page)
+}
+
+pub async fn apply_deterministic_repair_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    prior_verified_tag_targets: &[RepairTarget],
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    if matches!(
+        manifest.writer(),
+        RepairWriter::ReclassifyMemory | RepairWriter::RegeneratePageProjection
+    ) {
+        return Err(WenlanError::Validation(
+            "deterministic database writer mismatch".to_string(),
+        ));
+    }
+    let conn = db.conn.lock().await;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair begin: {error}")))?;
+    let result = async {
+        crate::repair::validate_tag_record_set_on_connection(
+            &conn,
+            manifest,
+            prior_verified_tag_targets,
+            false,
+        )
+        .await?;
+        let (before_target_receipt, _) =
+            crate::repair::repair_target_receipt_on_connection(&conn, manifest.target()).await?;
+        if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let non_target_before = crate::repair::effect_guard_receipt(conn.total_changes());
+        let affected = match (manifest.target(), manifest.writer(), manifest.mutation()) {
+            (
+                RepairTarget::Memory { source_id, .. },
+                RepairWriter::NormalizeMemorySourceAgent,
+                RepairMutation::NormalizeMemorySourceAgent {
+                    before_source_agent,
+                },
+            ) => conn
+                .execute(
+                    "UPDATE memories SET source_agent=NULL
+                     WHERE source='memory' AND source_id=?1
+                       AND source_agent=?2 AND TRIM(source_agent)=''",
+                    libsql::params![source_id.clone(), before_source_agent.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair normalize source agent: {error}"))
+                })?,
+            (
+                RepairTarget::Memory { source_id, .. },
+                RepairWriter::ClearMemorySupersedes,
+                RepairMutation::ClearMemorySupersedes { before_supersedes },
+            ) if source_id == before_supersedes => conn
+                .execute(
+                    "UPDATE memories SET supersedes=NULL
+                     WHERE source='memory' AND source_id=?1 AND supersedes=?1",
+                    libsql::params![source_id.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair clear supersedes: {error}"))
+                })?,
+            (
+                RepairTarget::Memory { source_id, .. },
+                RepairWriter::UnstageOrphanRevision,
+                RepairMutation::UnstageOrphanRevision,
+            ) => conn
+                .execute(
+                    "UPDATE memories SET pending_revision=0
+                     WHERE source='memory' AND source_id=?1
+                       AND pending_revision=1 AND supersedes IS NULL",
+                    libsql::params![source_id.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair unstage orphan revision: {error}"))
+                })?,
+            (
+                RepairTarget::Tag {
+                    source,
+                    source_id,
+                    tag,
+                    ..
+                },
+                RepairWriter::DeleteTagRow,
+                RepairMutation::DeleteTagRow {
+                    source: mutation_source,
+                    source_id: mutation_source_id,
+                    tag: mutation_tag,
+                },
+            ) if source == mutation_source
+                && source_id == mutation_source_id
+                && tag == mutation_tag =>
+            {
+                conn.execute(
+                    "DELETE FROM document_tags
+                     WHERE source=?1 AND source_id=?2 AND tag=?3
+                       AND (TRIM(tag)='' OR source NOT IN ('memory','page')
+                         OR (source='memory' AND NOT EXISTS(
+                            SELECT 1 FROM memories m WHERE m.source_id=document_tags.source_id))
+                         OR (source='page' AND NOT EXISTS(
+                            SELECT 1 FROM pages p WHERE p.id=document_tags.source_id)))",
+                    libsql::params![source.clone(), source_id.clone(), tag.clone()],
+                )
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("repair delete tag row: {error}")))?
+            }
+            (
+                RepairTarget::MemoryEntityLink {
+                    memory_id,
+                    entity_id,
+                    ..
+                },
+                RepairWriter::DeleteMemoryEntityLink,
+                RepairMutation::DeleteMemoryEntityLink {
+                    memory_id: mutation_memory_id,
+                    entity_id: mutation_entity_id,
+                },
+            ) if memory_id == mutation_memory_id && entity_id == mutation_entity_id => conn
+                .execute(
+                    "DELETE FROM memory_entities
+                     WHERE memory_id=?1 AND entity_id=?2
+                       AND (NOT EXISTS(
+                            SELECT 1 FROM memories m WHERE m.source_id=memory_entities.memory_id)
+                         OR NOT EXISTS(
+                            SELECT 1 FROM entities e WHERE e.id=memory_entities.entity_id))",
+                    libsql::params![memory_id.clone(), entity_id.clone()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair delete memory entity link: {error}"))
+                })?,
+            (
+                RepairTarget::PageLink {
+                    source_page_id,
+                    label_key,
+                    scope,
+                },
+                RepairWriter::BindPageLink,
+                RepairMutation::BindPageLink {
+                    before_target_page_id: None,
+                    after_target_page_id,
+                },
+            ) => {
+                let mut target_rows = conn
+                    .query(
+                        "SELECT id FROM pages
+                         WHERE LOWER(title)=LOWER(?1) AND status='active'
+                           AND space=COALESCE(?2,'00000000-0000-4000-8000-000000000001')
+                         ORDER BY id LIMIT 2",
+                        libsql::params![label_key.clone(), scope.space()],
+                    )
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!("repair page link target: {error}"))
+                    })?;
+                let first = target_rows
+                    .next()
+                    .await
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+                    .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?
+                    .get::<String>(0)
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+                if first != *after_target_page_id
+                    || target_rows
+                        .next()
+                        .await
+                        .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+                        .is_some()
+                {
+                    return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+                }
+                drop(target_rows);
+                conn.execute(
+                    "UPDATE page_links SET target_page_id=?1
+                     WHERE source_page_id=?2 AND label_key=?3 AND target_page_id IS NULL",
+                    libsql::params![
+                        after_target_page_id.clone(),
+                        source_page_id.clone(),
+                        label_key.clone()
+                    ],
+                )
+                .await
+                .map_err(|error| WenlanError::VectorDb(format!("repair bind page link: {error}")))?
+            }
+            (
+                RepairTarget::Page { page_id, scope },
+                RepairWriter::ArchiveEmptySourcePage,
+                RepairMutation::ArchiveEmptySourcePage {
+                    before_status,
+                    after_status,
+                },
+            ) if before_status == "active" && after_status == "archived" => {
+                let expected_version = manifest.expected_state().version().ok_or_else(|| {
+                    WenlanError::Validation("repair page version missing".to_string())
+                })?;
+                let mut content_rows = conn
+                    .query(
+                        "SELECT content FROM pages WHERE id=?1 AND version=?2",
+                        libsql::params![page_id.clone(), expected_version],
+                    )
+                    .await
+                    .map_err(|error| {
+                        WenlanError::VectorDb(format!(
+                            "repair read empty source page content: {error}"
+                        ))
+                    })?;
+                let content = content_rows
+                    .next()
+                    .await
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?
+                    .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?
+                    .get::<String>(0)
+                    .map_err(|error| WenlanError::VectorDb(error.to_string()))?;
+                drop(content_rows);
+                if !content.trim().is_empty() {
+                    return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+                }
+                conn.execute(
+                    "UPDATE pages SET status='archived'
+                     WHERE id=?1 AND version=?2 AND status='active'
+                       AND creation_kind='source' AND review_status='unconfirmed'
+                       AND COALESCE(user_edited,0)=0
+                       AND json_valid(source_memory_ids)
+                       AND json_type(source_memory_ids)='array'
+                       AND json_array_length(source_memory_ids)=0
+                       AND space=COALESCE(?3,'00000000-0000-4000-8000-000000000001')
+                       AND NOT EXISTS(
+                            SELECT 1 FROM page_sources ps WHERE ps.page_id=pages.id)
+                       AND NOT EXISTS(
+                            SELECT 1 FROM page_evidence pe WHERE pe.page_id=pages.id)",
+                    libsql::params![page_id.clone(), expected_version, scope.space()],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("repair archive empty source page: {error}"))
+                })?
+            }
+            _ => {
+                return Err(WenlanError::Validation(
+                    "deterministic repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+        if affected == 0 {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let (after_target_receipt, _) =
+            crate::repair::repair_target_receipt_on_connection(&conn, manifest.target()).await?;
+        if after_target_receipt == before_target_receipt {
+            return Err(WenlanError::VectorDb(
+                "repair_target_write_unproven".to_string(),
+            ));
+        }
+        let normalized_total_changes = conn
+            .total_changes()
+            .checked_sub(affected)
+            .ok_or_else(|| WenlanError::VectorDb("repair_effect_counter_underflow".to_string()))?;
+        let non_target_after = crate::repair::effect_guard_receipt(normalized_total_changes);
+        if non_target_after != non_target_before {
+            return Err(WenlanError::VectorDb("repair_effect_escape".to_string()));
+        }
+        let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+        Ok(RepairWriteProof {
+            before_target_receipt,
+            after_target_receipt,
+            non_target_before,
+            non_target_after,
+            post_apply_db_digest,
+        })
+    }
+    .await;
+
+    let proof = match result {
+        Ok(proof) => proof,
+        Err(error) => {
+            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                return Err(WenlanError::VectorDb(format!(
+                    "{error}; repair rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
+        }
+    };
+    if let Err(error) = before_commit(&proof) {
+        if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+            return Err(WenlanError::VectorDb(format!(
+                "{error}; repair rollback failed: {rollback_error}"
+            )));
+        }
+        return Err(error);
+    }
+    if let Err(error) = conn.execute("COMMIT", ()).await {
+        let _ = conn.execute("ROLLBACK", ()).await;
+        return Err(WenlanError::VectorDb(format!(
+            "repair commit failed: {error}"
+        )));
+    }
+    Ok(proof)
+}
+
+pub(crate) async fn regenerate_page_projection_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let (page_id, expected_scope, database_version) =
+        match (manifest.target(), manifest.writer(), manifest.mutation()) {
+            (
+                RepairTarget::PageProjection { page_id, scope },
+                RepairWriter::RegeneratePageProjection,
+                RepairMutation::RegeneratePageProjection { database_version },
+            ) => (page_id.as_str(), scope.space(), *database_version),
+            _ => {
+                return Err(WenlanError::Validation(
+                    "page projection repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+    let page = db
+        .get_page(page_id)
+        .await?
+        .ok_or_else(|| WenlanError::Conflict("repair_target_stale".to_string()))?;
+    if page.version != database_version
+        || page.workspace.as_deref().or(page.space.as_deref()) != expected_scope
+    {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    let paths = crate::repair::projection_rollback_paths(rollback)?;
+    let target_path = crate::repair::page_projection_target_path(rollback)?;
+    let conn = db.conn.lock().await;
+    let page_row = crate::repair::projection_page_row_on_connection(&conn, page_id).await?;
+    let post_apply_db_digest = crate::repair::database_content_digest(&conn).await?;
+    crate::export::knowledge::KnowledgeProjectionWrite::with_repair_lock(
+        page_root.to_path_buf(),
+        db,
+        |write| {
+            let before = crate::repair::capture_page_projection_from_row(
+                page_root,
+                page_id,
+                page_row.clone(),
+                &paths,
+                &rollback.table,
+            )?;
+            let before_target_receipt = crate::repair::target_receipt(&before)?;
+            if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let scan_control = crate::lint::pages::fs::PageScanControl::with_timeout(
+                std::time::Duration::from_secs(30),
+            );
+            let before_scan =
+                crate::lint::pages::fs::scan_page_root_controlled(page_root, true, &scan_control)
+                    .map_err(|error| {
+                    WenlanError::Validation(format!("repair projection scan: {error}"))
+                })?;
+            if !crate::lint::pages::state_checks::projection_target_is_exclusive_page_markdown(
+                &before_scan,
+                page_id,
+                &target_path,
+            ) {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let non_target_before = crate::repair::page_projection_non_target_receipt(
+                before_scan.non_target_digest(&paths),
+                &before,
+            )?;
+
+            let result = (|| {
+                write.write_page(&page)?;
+                let after_scan = crate::lint::pages::fs::scan_page_root_controlled(
+                    page_root,
+                    true,
+                    &crate::lint::pages::fs::PageScanControl::with_timeout(
+                        std::time::Duration::from_secs(30),
+                    ),
+                )
+                .map_err(|error| {
+                    WenlanError::Validation(format!("repair projection scan: {error}"))
+                })?;
+                let after = crate::repair::capture_page_projection_from_row(
+                    page_root,
+                    page_id,
+                    page_row.clone(),
+                    &paths,
+                    &rollback.table,
+                )?;
+                let non_target_after = crate::repair::page_projection_non_target_receipt(
+                    after_scan.non_target_digest(&paths),
+                    &after,
+                )?;
+                if non_target_after != non_target_before {
+                    return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+                }
+                Ok((non_target_after, after))
+            })();
+            let (non_target_after, after) = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    return match crate::repair::restore_page_projection_snapshot(page_root, &before)
+                    {
+                        Ok(()) => Err(error),
+                        Err(rollback_error) => Err(WenlanError::VectorDb(format!(
+                            "{error}; repair projection rollback failed: {rollback_error}"
+                        ))),
+                    };
+                }
+            };
+            let completion = (|| {
+                let after_target_receipt = crate::repair::target_receipt(&after)?;
+                if after_target_receipt == before_target_receipt {
+                    return Err(WenlanError::VectorDb(
+                        "repair_target_write_unproven".to_string(),
+                    ));
+                }
+                let proof = RepairWriteProof {
+                    before_target_receipt,
+                    after_target_receipt,
+                    non_target_before,
+                    non_target_after,
+                    post_apply_db_digest: post_apply_db_digest.clone(),
+                };
+                before_commit(&proof)?;
+                Ok(proof)
+            })();
+            match completion {
+                Ok(proof) => Ok(proof),
+                Err(error) => {
+                    match crate::repair::restore_page_projection_snapshot(page_root, &before) {
+                        Ok(()) => Err(error),
+                        Err(rollback_error) => Err(WenlanError::VectorDb(format!(
+                            "{error}; repair projection rollback failed: {rollback_error}"
+                        ))),
+                    }
+                }
+            }
+        },
+    )
+}
+
+#[cfg(test)]
+pub(crate) async fn quarantine_stale_page_projection_cas<F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_with_apply_journal(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        |_| Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+pub(crate) async fn quarantine_stale_page_projection_cas_with_apply_journal<J, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    persist_apply_journal: J,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    J: FnOnce(&crate::repair::StoredRollbackArtifact) -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        || Ok(()),
+        || Ok(()),
+        || Ok(()),
+        persist_apply_journal,
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn quarantine_stale_page_projection_cas_with_before_pin<B, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_pin: B,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    B: FnOnce() -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        before_pin,
+        || Ok(()),
+        || Ok(()),
+        |_| Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn quarantine_stale_page_projection_cas_with_after_pin<A, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    after_pin: A,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    A: FnOnce() -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        || Ok(()),
+        after_pin,
+        || Ok(()),
+        |_| Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn quarantine_stale_page_projection_cas_with_before_source_stage<S, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_source_stage: S,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    S: FnOnce() -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    quarantine_stale_page_projection_cas_inner(
+        db,
+        manifest,
+        rollback,
+        page_root,
+        || Ok(()),
+        || Ok(()),
+        before_source_stage,
+        |_| Ok(()),
+        before_commit,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn quarantine_stale_page_projection_cas_inner<B, A, S, J, F>(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    rollback: &crate::repair::StoredRollbackArtifact,
+    page_root: &Path,
+    before_pin: B,
+    after_pin: A,
+    before_source_stage: S,
+    persist_apply_journal: J,
+    before_commit: F,
+) -> Result<RepairWriteProof, WenlanError>
+where
+    B: FnOnce() -> Result<(), WenlanError>,
+    A: FnOnce() -> Result<(), WenlanError>,
+    S: FnOnce() -> Result<(), WenlanError>,
+    J: FnOnce(&crate::repair::StoredRollbackArtifact) -> Result<(), WenlanError>,
+    F: FnOnce(&RepairWriteProof) -> Result<(), WenlanError>,
+{
+    let (page_id, source_path, quarantine_path) =
+        match (manifest.target(), manifest.writer(), manifest.mutation()) {
+            (
+                RepairTarget::PageProjection {
+                    page_id,
+                    scope: wenlan_types::repair::RepairScope::Global,
+                },
+                RepairWriter::QuarantineStalePageProjection,
+                RepairMutation::QuarantineStalePageProjection {
+                    source_path,
+                    quarantine_path,
+                },
+            ) => (
+                page_id.as_str(),
+                source_path.as_str(),
+                quarantine_path.as_str(),
+            ),
+            _ => {
+                return Err(WenlanError::Validation(
+                    "stale page projection repair target/writer/mutation mismatch".to_string(),
+                ))
+            }
+        };
+    let (captured_source, captured_quarantine) =
+        crate::repair::stale_page_projection_paths(rollback)?;
+    if captured_source != source_path || captured_quarantine != quarantine_path {
+        return Err(WenlanError::Validation(
+            "repair_projection_rollback_invalid".to_string(),
+        ));
+    }
+    let connection = db.conn.lock().await;
+    let mut owner = connection
+        .query(
+            "SELECT 1 FROM pages WHERE id=?1 LIMIT 1",
+            libsql::params![page_id],
+        )
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair projection owner CAS: {error}")))?;
+    if owner
+        .next()
+        .await
+        .map_err(|error| WenlanError::VectorDb(format!("repair projection owner CAS: {error}")))?
+        .is_some()
+    {
+        return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+    }
+    drop(owner);
+    let post_apply_db_digest = crate::repair::database_content_digest(&connection).await?;
+    crate::export::knowledge::KnowledgeProjectionWrite::with_repair_lock(
+        page_root.to_path_buf(),
+        db,
+        |write| {
+            let before = write.capture_stale_page_projection_current(
+                page_id,
+                source_path,
+                quarantine_path,
+            )?;
+            let before_target_receipt = crate::repair::target_receipt(&before)?;
+            if &before_target_receipt != manifest.expected_state().canonical_receipt() {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let excluded = std::collections::BTreeSet::from([
+                ".wenlan".to_string(),
+                ".wenlan/state.json".to_string(),
+                ".wenlan/orphaned".to_string(),
+                source_path.to_string(),
+                quarantine_path.to_string(),
+            ]);
+            let scan = write.scan_page_root_controlled(
+                true,
+                &crate::lint::pages::fs::PageScanControl::with_timeout(
+                    std::time::Duration::from_secs(30),
+                ),
+            )?;
+            if !matches!(
+                crate::lint::pages::state_checks::stale_projection_ownership(&scan, page_id),
+                crate::lint::pages::state_checks::StaleProjectionOwnership::Exact {
+                    source_path: ref source,
+                    quarantine_path: ref quarantine,
+                } if source == source_path && quarantine == quarantine_path
+            ) {
+                return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+            }
+            let non_target_before = crate::repair::page_projection_non_target_receipt(
+                scan.non_target_digest(&excluded),
+                &before,
+            )?;
+            before_pin()?;
+            persist_apply_journal(&before)?;
+            let mut pinned = write.pin_stale_page_projection(
+                page_id,
+                source_path,
+                quarantine_path,
+                &before,
+                manifest.manifest_id(),
+            )?;
+            let result = (|| {
+                #[cfg(test)]
+                pinned.quarantine_with_hooks(after_pin, before_source_stage)?;
+                #[cfg(not(test))]
+                {
+                    let _ = (after_pin, before_source_stage);
+                    pinned.quarantine()?;
+                }
+                let after_scan = write.scan_page_root_controlled(
+                    true,
+                    &crate::lint::pages::fs::PageScanControl::with_timeout(
+                        std::time::Duration::from_secs(30),
+                    ),
+                )?;
+                let after = write.capture_stale_page_projection_current(
+                    page_id,
+                    source_path,
+                    quarantine_path,
+                )?;
+                let non_target_after = crate::repair::page_projection_non_target_receipt(
+                    after_scan.non_target_digest(&excluded),
+                    &after,
+                )?;
+                if non_target_after != non_target_before {
+                    return Err(WenlanError::Conflict("repair_effect_escape".to_string()));
+                }
+                let after_target_receipt = crate::repair::target_receipt(&after)?;
+                if after_target_receipt == before_target_receipt {
+                    return Err(WenlanError::VectorDb(
+                        "repair_target_write_unproven".to_string(),
+                    ));
+                }
+                let proof = RepairWriteProof {
+                    before_target_receipt,
+                    after_target_receipt,
+                    non_target_before,
+                    non_target_after,
+                    post_apply_db_digest,
+                };
+                before_commit(&proof)?;
+                Ok(proof)
+            })();
+            match result {
+                Ok(proof) => Ok(proof),
+                Err(error) if !pinned.mutation_started() => Err(error),
+                Err(error) => match pinned.restore_snapshot(&before) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(WenlanError::VectorDb(format!(
+                        "{error}; stale projection rollback failed: {rollback_error}"
+                    ))),
+                },
+            }
+        },
+    )
 }
 
 pub async fn update_memory(
@@ -88,6 +1725,7 @@ pub enum PageWrite<'a> {
         req: UpdatePageRequest,
         edited_by: &'a str,
         require_stale: bool,
+        expected_source_revision: Option<i64>,
         knowledge_path: Option<&'a Path>,
         citations: Option<(String, String)>,
     },
@@ -137,6 +1775,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             req,
             edited_by,
             require_stale,
+            expected_source_revision,
             knowledge_path,
             citations,
         } => {
@@ -146,6 +1785,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 req,
                 edited_by,
                 require_stale,
+                expected_source_revision,
                 knowledge_path,
                 citations,
             )
@@ -188,6 +1828,7 @@ async fn replace_source_page_impl(
             "source Page replacement requires title, content, and source ids".into(),
         ));
     }
+    let content = crate::export::provenance::validate_canonical_page_content(content)?;
     let current = db
         .get_page(page_id)
         .await?
@@ -197,6 +1838,38 @@ async fn replace_source_page_impl(
             "source Page {page_id} is not machine-owned"
         )));
     }
+
+    // Nothing to write: this enrichment recomputed exactly what the page
+    // already says. Mirrors the same early return on the Update path, and
+    // matters more here — a document whose analysis LLM is unreachable rebuilds
+    // a byte-identical stub body on every retry, and without this each retry
+    // would bump the version and append another identical history row.
+    //
+    // Canonical storage is exact source, so compare the validated incoming
+    // representation directly with the stored representation.
+    let stored_sources: HashSet<&str> = current
+        .source_memory_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let incoming_sources: HashSet<&str> = source_memory_ids.iter().map(String::as_str).collect();
+    if current.title == title
+        && current.summary.as_deref() == summary
+        && current.content == content
+        && stored_sources == incoming_sources
+    {
+        return Ok(WriteResult {
+            id: page_id.to_string(),
+            attached_to: None,
+            warnings: Vec::new(),
+            wrote: false,
+            revision_card_id: None,
+            gated: false,
+            acknowledged: false,
+            outcome: WriteOutcome::Unchanged,
+        });
+    }
+
     let source_refs: Vec<&str> = source_memory_ids.iter().map(String::as_str).collect();
     if !db
         .replace_source_page(page_id, title, summary, content, &source_refs, agent)
@@ -220,6 +1893,8 @@ async fn replace_source_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
@@ -241,6 +1916,8 @@ async fn attach_page_sources_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
@@ -311,6 +1988,8 @@ pub async fn create_entity(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            outcome: WriteOutcome::Unchanged,
+            acknowledged: false,
         });
     }
 
@@ -325,6 +2004,8 @@ pub async fn create_entity(
             wrote: false,
             revision_card_id: None,
             gated: false,
+            outcome: WriteOutcome::Unchanged,
+            acknowledged: false,
         });
     }
 
@@ -344,6 +2025,8 @@ pub async fn create_entity(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                outcome: WriteOutcome::Unchanged,
+                acknowledged: false,
             });
         }
     }
@@ -362,6 +2045,8 @@ pub async fn create_entity(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                outcome: WriteOutcome::Unchanged,
+                acknowledged: false,
             });
         }
     }
@@ -452,6 +2137,8 @@ pub async fn create_entity(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
@@ -497,6 +2184,8 @@ pub async fn create_relation(
                 wrote: false,
                 revision_card_id: None,
                 gated: false,
+                outcome: WriteOutcome::Unchanged,
+                acknowledged: false,
             });
         }
     }
@@ -599,6 +2288,8 @@ pub async fn create_relation(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
@@ -661,6 +2352,8 @@ pub async fn add_observation(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
@@ -785,6 +2478,7 @@ async fn create_page_impl(
             "page content must not be empty".into(),
         ));
     }
+    crate::export::provenance::validate_canonical_page_content(&req.content)?;
     let creation_kind = req.creation_kind.as_deref().unwrap_or("distilled");
     if creation_kind == "distilled" && req.source_memory_ids.is_empty() {
         return Err(WenlanError::Validation(
@@ -945,7 +2639,7 @@ async fn create_page_impl(
                 );
             }
         }
-        return Err(WenlanError::VectorDb(e.to_string()));
+        return Err(e);
     }
     drop(projection);
 
@@ -995,36 +2689,118 @@ async fn create_page_impl(
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
-/// PageWrite `edited_by` values that bypass the hallucination guard. Incremental
-/// updates can push aggregate cosine sim below 0.6; the HTTP/MCP
-/// `agent_refresh` route historically accepted agent-provided refreshes without
-/// this guard, so routing it through PageWrite preserves that behavior.
-fn skip_hallucination_guard(edited_by: &str) -> bool {
-    matches!(
-        edited_by,
-        "distill" | "re_distill" | "page_growth" | "refinery_merge" | "agent_refresh"
-    )
+/// A daemon pipeline stage that rewrites page prose with an LLM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineStage<'a> {
+    Distill,
+    ReDistill,
+    PageGrowth,
+    RefineryMerge,
+    /// A writer string the gate does not recognize, carried verbatim.
+    ///
+    /// Two kinds of string land here. Legitimate ones: `edited_by` values that
+    /// reach `page_history` without passing this gate (`create` and
+    /// `migration_78` are SQL literals in db.rs; `citation_backfill` and
+    /// `revision_accept` write via the db layer). Illegitimate ones: a typo in
+    /// a caller's literal. The gate cannot tell them apart, so both get the
+    /// conservative answer — see `Writer::is_machine`.
+    Unknown(&'a str),
 }
 
-/// True iff edited_by names an LLM-rewrite path checked by the shrink-guard.
-/// Inverse-intent twin of skip_hallucination_guard -- same match arms.
-/// Do NOT merge: skip_hallucination_guard skips; is_llm_rewrite enables.
-fn is_llm_rewrite(edited_by: &str) -> bool {
-    matches!(
-        edited_by,
-        "distill" | "re_distill" | "page_growth" | "refinery_merge"
-    )
+/// Who is writing a page, as the spec's `human | agent | pipeline(stage)`.
+///
+/// This is a **lens over the persisted string, not a replacement for it**.
+/// Every page write records provenance as text in `pages.changelog` and
+/// `page_history.edited_by`, and those bytes are already in users' databases,
+/// so `as_str` round-trips the exact literal that was classified.
+///
+/// Its job is to put the write gate's three authority questions in one place
+/// with one vocabulary. They used to be three independent `matches!` lists over
+/// `&str`, which could drift apart silently and had no name for the fallthrough
+/// case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Writer<'a> {
+    /// A person edited the page directly — in the app editor, or in the vault
+    /// on disk. The only identity that may overwrite a human-owned page.
+    Human(&'a str),
+    /// An agent asked for a faithful re-synth of a page it already owns.
+    Agent(&'a str),
+    /// A daemon pipeline stage.
+    Pipeline(PipelineStage<'a>),
+}
+
+impl<'a> Writer<'a> {
+    /// Total over every `&str` — there is no failure mode, only `Unknown`.
+    pub fn classify(edited_by: &'a str) -> Self {
+        match edited_by {
+            "manual_edit" | "fs_edit" => Writer::Human(edited_by),
+            "agent_refresh" => Writer::Agent(edited_by),
+            "distill" => Writer::Pipeline(PipelineStage::Distill),
+            "re_distill" => Writer::Pipeline(PipelineStage::ReDistill),
+            "page_growth" => Writer::Pipeline(PipelineStage::PageGrowth),
+            "refinery_merge" => Writer::Pipeline(PipelineStage::RefineryMerge),
+            other => Writer::Pipeline(PipelineStage::Unknown(other)),
+        }
+    }
+
+    /// The persisted `edited_by` literal, byte-identical to what was classified.
+    pub fn as_str(&self) -> &'a str {
+        match self {
+            Writer::Human(s) | Writer::Agent(s) => s,
+            Writer::Pipeline(stage) => match stage {
+                PipelineStage::Distill => "distill",
+                PipelineStage::ReDistill => "re_distill",
+                PipelineStage::PageGrowth => "page_growth",
+                PipelineStage::RefineryMerge => "refinery_merge",
+                PipelineStage::Unknown(s) => s,
+            },
+        }
+    }
+
+    /// Everything that is not a human. **Unknown counts as machine on purpose**:
+    /// that is the fail-safe direction, because a machine write to a
+    /// human-owned page is staged as a revision card rather than overwriting
+    /// the human's prose. Trusting an unrecognized string as human would let it
+    /// clobber that prose instead.
+    fn is_machine(&self) -> bool {
+        !matches!(self, Writer::Human(_))
+    }
+
+    /// Writers that bypass the hallucination guard. Incremental updates can push
+    /// aggregate cosine sim below 0.6; the HTTP/MCP `agent_refresh` route
+    /// historically accepted agent-provided refreshes without this guard, so
+    /// routing it through PageWrite preserves that behavior.
+    ///
+    /// This is `is_llm_rewrite` plus `Agent` — the two used to be parallel
+    /// `matches!` lists whose only difference was the `agent_refresh` arm, with
+    /// a comment warning not to merge them. Here the difference is structural.
+    fn skips_hallucination_guard(&self) -> bool {
+        matches!(self, Writer::Agent(_)) || self.is_llm_rewrite()
+    }
+
+    /// A recognized LLM-rewrite stage, checked by the shrink-guard. `Unknown` is
+    /// excluded: the shrink-guard rejects a write outright, so an unrecognized
+    /// writer must not be able to opt itself into being rejected.
+    fn is_llm_rewrite(&self) -> bool {
+        matches!(
+            self,
+            Writer::Pipeline(
+                PipelineStage::Distill
+                    | PipelineStage::ReDistill
+                    | PipelineStage::PageGrowth
+                    | PipelineStage::RefineryMerge
+            )
+        )
+    }
 }
 
 pub fn page_is_human_owned(page: &crate::pages::Page) -> bool {
     page.user_edited || page.creation_kind == "authored"
-}
-
-fn is_machine_page_write(edited_by: &str) -> bool {
-    !matches!(edited_by, "manual_edit" | "fs_edit")
 }
 
 /// Stage a machine write to a human-owned page as a pending revision card
@@ -1041,6 +2817,8 @@ pub async fn stage_page_revision_card(
     source_memory_ids: &[String],
     edited_by: &str,
 ) -> Result<WriteResult, WenlanError> {
+    crate::export::provenance::validate_canonical_page_content(content)?;
+
     let revision_card_id = format!(
         "mem_{}",
         uuid::Uuid::new_v4()
@@ -1104,6 +2882,8 @@ pub async fn stage_page_revision_card(
         wrote: false,
         revision_card_id: Some(revision_card_id),
         gated: true,
+        outcome: WriteOutcome::Gated,
+        acknowledged: false,
     })
 }
 
@@ -1126,10 +2906,12 @@ pub(crate) fn merge_shrink_threshold() -> Option<f64> {
 /// - `true`  — CAS: only writes when `stale_reason IS NOT NULL` (refinery callers).
 ///   Returns `Ok(WriteResult { warnings: vec![] })` without writing when not stale.
 ///
-/// Hallucination guard runs only for `edited_by ∈ {manual_edit, api}`.
-/// Daemon-internal callers (`distill`, `re_distill`, `page_growth`,
-/// `refinery_merge`) skip it — incremental updates may push aggregate cosine
-/// sim below 0.6 and would silently drop legitimate writes.
+/// Hallucination guard runs for human writers (`manual_edit`, `fs_edit`) and
+/// for any writer the gate does not recognize. `agent_refresh` and the LLM
+/// rewrite stages (`distill`, `re_distill`, `page_growth`, `refinery_merge`)
+/// skip it — incremental updates may push aggregate cosine sim below 0.6 and
+/// would silently drop legitimate writes. See `Writer::skips_hallucination_guard`,
+/// which is the single source of truth; `WRITER_TABLE` pins it per writer.
 ///
 /// `citations`: `Some((citations_json, stats_summary))` when the caller has
 /// freshly verified [N] markers against a numbered source list for this
@@ -1154,11 +2936,115 @@ pub async fn update_page(
             req,
             edited_by,
             require_stale,
+            expected_source_revision: None,
             knowledge_path,
             citations,
         },
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn update_page_at_source_revision(
+    db: &MemoryDB,
+    page_id: &str,
+    req: UpdatePageRequest,
+    edited_by: &str,
+    require_stale: bool,
+    expected_source_revision: i64,
+    knowledge_path: Option<&Path>,
+    citations: Option<(String, String)>,
+) -> Result<WriteResult, WenlanError> {
+    page_write(
+        db,
+        PageWrite::Update {
+            page_id,
+            req,
+            edited_by,
+            require_stale,
+            expected_source_revision: Some(expected_source_revision),
+            knowledge_path,
+            citations,
+        },
+    )
+    .await
+}
+
+/// Test-only seam. A test installs a `(parked, go)` handshake here and
+/// `update_page_impl` uses it once, *after* deciding ownership and *before*
+/// writing — i.e. in the exact window a competing edit has to land in. It
+/// announces that it is parked, then blocks until released, so the test can
+/// land a full competing write in between with no ordering guesswork.
+///
+/// This is the only way to deterministically exercise the version CAS: with no
+/// interleaving edit, a guarded write and an unguarded one behave identically.
+///
+/// One-shot (`take`), so the retry attempt after a CAS miss runs unblocked.
+/// Compiled out entirely in non-test builds.
+#[cfg(test)]
+type PreWriteGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[cfg(test)]
+pub(crate) static PRE_WRITE_GATE: std::sync::Mutex<Option<PreWriteGate>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+async fn pre_write_pause() {
+    let gate = PRE_WRITE_GATE.lock().unwrap().take();
+    if let Some((parked, go)) = gate {
+        let _ = parked.send(());
+        let _ = go.await;
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+async fn pre_write_pause() {}
+
+#[allow(clippy::too_many_arguments)]
+/// The advisory line a successful page update returns. Shared between the
+/// receipt and the return value so a replay hands back exactly what the
+/// original call did, rather than a lookalike rebuilt at replay time.
+fn write_warnings(delta_summary: &Option<String>, from: i64, to: i64) -> Vec<String> {
+    match delta_summary {
+        Some(summary) => vec![format!("v{from} → v{to}: {summary}")],
+        None => vec![],
+    }
+}
+
+/// Fingerprint of a page write, used to tell an honest retry (same request,
+/// replay the stored response) from an operation id being reused for a
+/// different write (a conflict).
+///
+/// Covers everything that decides what the write does: which page, the body,
+/// the sources, who is writing, and the version precondition. Field lengths
+/// are hashed alongside the values so two different requests cannot collide by
+/// shifting a boundary — `["ab","c"]` and `["a","bc"]` must not agree.
+fn page_write_digest(page_id: &str, req: &UpdatePageRequest, edited_by: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut field = |bytes: &[u8]| {
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    };
+    field(page_id.as_bytes());
+    field(req.content.as_bytes());
+    field(edited_by.as_bytes());
+    field(&(req.source_memory_ids.len() as u64).to_le_bytes());
+    for sid in &req.source_memory_ids {
+        field(sid.as_bytes());
+    }
+    match req.expected_version {
+        Some(v) => {
+            field(b"v");
+            field(&v.to_le_bytes());
+        }
+        None => field(b"-"),
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1168,6 +3054,7 @@ async fn update_page_impl(
     req: UpdatePageRequest,
     edited_by: &str,
     require_stale: bool,
+    expected_source_revision: Option<i64>,
     knowledge_path: Option<&Path>,
     citations: Option<(String, String)>,
 ) -> Result<WriteResult, WenlanError> {
@@ -1177,7 +3064,12 @@ async fn update_page_impl(
             "page content must not be empty".into(),
         ));
     }
-    if req.source_memory_ids.is_empty() {
+    // A machine write must carry provenance. A human write need not: an
+    // authored page is legitimately born with zero sources (create_page
+    // allows exactly that), so demanding one here would reject every later
+    // human edit of that page — in the app and in the vault alike.
+    let writer = Writer::classify(edited_by);
+    if req.source_memory_ids.is_empty() && writer.is_machine() {
         return Err(WenlanError::Validation(
             "page must cite at least one source memory".into(),
         ));
@@ -1189,7 +3081,7 @@ async fn update_page_impl(
     // memories.
 
     // ── Conditional hallucination guard ────────────────────────────────────
-    if !skip_hallucination_guard(edited_by) {
+    if !writer.skips_hallucination_guard() {
         let passed =
             crate::kg_quality::hallucination_guard(db, &req.content, &req.source_memory_ids)
                 .await?;
@@ -1200,136 +3092,338 @@ async fn update_page_impl(
         }
     }
 
-    // ── Load current page for delta computation ─────────────────────────────
-    let current = db
-        .get_page(page_id)
-        .await?
-        .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
-    if is_machine_page_write(edited_by) && page_is_human_owned(&current) {
-        return stage_page_revision_card(
-            db,
-            &current,
-            &req.content,
-            &req.source_memory_ids,
-            edited_by,
-        )
-        .await;
-    }
-    let current_version = current.version;
-    let new_version = current_version + 1;
-
-    // Shrink-guard (T17): opt-in via WENLAN_MERGE_SHRINK_GUARD=<f64>.
-    // OFF by default: unset/unparseable = None = zero regression.
-    // Only fires for LLM-rewrite edited_by; human edits are never blocked.
-    // Placed AFTER current page load (needs old body), BEFORE early-return.
-    // NOT inside the skip_hallucination_guard block: that skips page_growth/re_distill.
-    if is_llm_rewrite(edited_by) {
-        if let Some(threshold) = merge_shrink_threshold() {
-            if !crate::retrieval::integrity::body_shrink_ok(
-                &current.content,
-                &req.content,
-                threshold,
-            ) {
-                log::warn!(
-                    "[update_page] shrink-guard rejected {edited_by} on {page_id}: new body ({} chars) < {}% of old ({} chars)",
-                    req.content.chars().count(),
-                    (threshold * 100.0) as u32,
-                    current.content.chars().count(),
-                );
-                return Err(WenlanError::Validation(format!(
-                    "page body shrank below {:.0}% of original (shrink-guard); update rejected",
-                    threshold * 100.0
+    // ── Retry identity ──────────────────────────────────────────────────────
+    // A caller that sends both ids gets exactly-once semantics. The same pair
+    // with the same request replays the recorded response without writing
+    // again; the same pair with a different request is refused rather than
+    // quietly becoming a second version. Either id alone is ignored — an
+    // operation id only means anything within the caller that minted it.
+    let retry = match (req.caller_id.as_deref(), req.operation_id.as_deref()) {
+        (Some(caller), Some(operation)) if !caller.is_empty() && !operation.is_empty() => Some((
+            caller.to_string(),
+            operation.to_string(),
+            page_write_digest(page_id, &req, edited_by),
+        )),
+        _ => None,
+    };
+    if let Some((caller, operation, digest)) = retry.as_ref() {
+        if let Some(stored) = db.get_operation_receipt(caller, operation).await? {
+            if stored.request_digest != *digest {
+                return Err(WenlanError::Conflict(format!(
+                    "operation id '{operation}' was already used by '{caller}' for a \
+                     different page write"
                 )));
             }
+            log::debug!("[update_page] {page_id}: replaying receipt for {caller}/{operation}");
+            return serde_json::from_str::<WriteResult>(&stored.response).map_err(|e| {
+                WenlanError::VectorDb(format!(
+                    "receipt for {caller}/{operation} is unreadable: {e}"
+                ))
+            });
         }
     }
 
+    // Preserve receipt replay/collision precedence, then reject daemon-owned
+    // projection delimiters before ownership gating, revision-card staging, or
+    // any canonical page/projection mutation.
+    crate::export::provenance::validate_canonical_page_content(&req.content)?;
+
     let source_refs: Vec<&str> = req.source_memory_ids.iter().map(|s| s.as_str()).collect();
-
-    // ── Build changelog entry ───────────────────────────────────────────────
-    let delta_summary = crate::db::compute_page_delta_summary(
-        &current.content,
-        &current.source_memory_ids,
-        &req.content,
-        &source_refs,
-        edited_by,
-    );
-
-    // Compute added sources for the changelog entry
-    let old_set: std::collections::HashSet<&str> = current
-        .source_memory_ids
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-    let new_set: std::collections::HashSet<&str> = source_refs.iter().copied().collect();
-
-    // Early return: identical content and identical source set — nothing to write.
-    if delta_summary.is_none() && old_set == new_set {
-        return Ok(WriteResult {
-            id: page_id.to_string(),
-            attached_to: None,
-            warnings: vec![],
-            wrote: false,
-            revision_card_id: None,
-            gated: false,
-        });
-    }
-
-    let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
-    added_sources.sort_unstable();
-    let added_sources_json = serde_json::Value::Array(
-        added_sources
-            .iter()
-            .map(|s| serde_json::Value::String(s.to_string()))
-            .collect(),
-    );
-
-    let mut entry = serde_json::json!({
-        "version": new_version,
-        "at": chrono::Utc::now().timestamp(),
-        "edited_by": edited_by,
-        "delta_summary": delta_summary,
-        "incoming_source_ids": added_sources_json,
-    });
-    if let Some((_, ref stats_summary)) = citations {
-        entry["citations_summary"] = serde_json::Value::String(stats_summary.clone());
-    }
-
-    // Read existing changelog and append the new entry
-    let existing_cl = db.get_page_changelog(page_id).await?;
-    const DEFAULT_CHANGELOG_CAP: usize = 20;
-    let new_changelog =
-        crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
-
-    // ── Apply DB update ─────────────────────────────────────────────────────
     let projection = knowledge_path.map(|path| {
         crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
     });
-    // citations: None -> resets `citations` to '[]' (no fresh citation source
-    // for this write; a stale claim-map must not survive a content change).
-    let wrote = db
-        .try_update_page_content_with_changelog(
-            page_id,
-            &req.content,
-            &source_refs,
-            edited_by,
-            require_stale,
-            &new_changelog,
-            citations.as_ref().map(|(json, _)| json.as_str()),
-        )
-        .await?;
 
-    if !wrote {
-        // CAS skipped — page was not stale; return empty warnings (no-op)
-        return Ok(WriteResult {
-            id: page_id.to_string(),
-            attached_to: None,
-            warnings: vec![],
-            wrote: false,
-            revision_card_id: None,
-            gated: false,
-        });
-    }
+    // ── Load, decide ownership, and write under one version CAS ─────────────
+    // The ownership decision is made from a loaded row, and the write CASes on
+    // *that row's* version — so the row we decided from is provably the row we
+    // wrote. An edit landing in the gap fails the CAS instead of being
+    // clobbered, and we reload and re-decide rather than forcing the write
+    // through: a page that became human-owned in the gap gets a revision card.
+    //
+    // Bounded because each retry only re-runs on a version that actually moved;
+    // a caller losing three races in a row is a write storm, not a lost update,
+    // and yielding is the safe answer.
+    const MAX_CAS_ATTEMPTS: usize = 3;
+    let no_op = |outcome: WriteOutcome, warnings: Vec<String>| WriteResult {
+        id: page_id.to_string(),
+        attached_to: None,
+        warnings,
+        wrote: false,
+        revision_card_id: None,
+        gated: false,
+        outcome,
+        acknowledged: false,
+    };
+
+    let (delta_summary, current_version, new_version) = 'cas: {
+        for attempt in 1..=MAX_CAS_ATTEMPTS {
+            let current = db.get_page(page_id).await?.ok_or_else(|| {
+                WenlanError::Validation(format!("page '{page_id}' does not exist"))
+            })?;
+
+            // `require_stale` asks "write only if this page is stale". A page
+            // that is not stale is the answer to that question, not a lost
+            // write — and it must short-circuit *here*, before the unchanged
+            // early-return below, which would otherwise acknowledge a compile
+            // against a page that was never stale to begin with.
+            if require_stale && current.stale_reason.is_none() {
+                return Ok(no_op(WriteOutcome::Unchanged, vec![]));
+            }
+
+            let current_version = current.version;
+            let new_version = current_version + 1;
+
+            // A caller-supplied `expected_version` is a precondition, not a retry
+            // hint: once it stops matching, the write is refused outright rather
+            // than re-aimed at a row the caller never saw.
+            //
+            // This has to come BEFORE the ownership gate, not after. Staging a
+            // card first would take content the agent computed against an old
+            // base and bind it to the version we just loaded — so accepting that
+            // card silently reverts whatever the human wrote in between. Refusing
+            // first drops no agent work either: the caller re-reads the fresh
+            // content and stages a better card against it.
+            if let Some(expected) = req.expected_version {
+                if expected != current_version {
+                    log::debug!(
+                        "[update_page] {page_id}: expected_version {expected} != current {current_version}; refusing write"
+                    );
+                    return Ok(no_op(
+                        WriteOutcome::Refused,
+                        vec![format!(
+                            "page moved to v{current_version} (expected v{expected}); write refused"
+                        )],
+                    ));
+                }
+            }
+
+            // Ownership gate, re-evaluated on every attempt. Inside the CAS loop
+            // it is no longer advisory: whatever it decided is what the write
+            // guards on.
+            //
+            // ponytail: staging is a durable write with a fresh id and records no
+            // receipt, so a client retrying an operation whose first attempt was
+            // gated stages one duplicate card per retry — "same pair replays" does
+            // not hold on this branch. Harmless today (resolution takes the latest
+            // card) and it costs a receipt write on a path that ends in human
+            // review; fix when cards get deduped, not before.
+            if writer.is_machine() && page_is_human_owned(&current) {
+                let mut result = stage_page_revision_card(
+                    db,
+                    &current,
+                    &req.content,
+                    &req.source_memory_ids,
+                    edited_by,
+                )
+                .await?;
+                // A gated compile still consumed the staleness it was dispatched
+                // for: the work landed as a revision card awaiting review, so the
+                // page must not be re-compiled on the next sweep. Clearing at the
+                // source revision keeps that safe — a source that moved since
+                // dispatch leaves the page stale.
+                if result.gated && require_stale {
+                    result.acknowledged = db
+                        .clear_page_staleness_at_source_revision(
+                            page_id,
+                            current.version,
+                            expected_source_revision,
+                        )
+                        .await?;
+                }
+                return Ok(result);
+            }
+
+            // Shrink-guard (T17): opt-in via WENLAN_MERGE_SHRINK_GUARD=<f64>.
+            // OFF by default: unset/unparseable = None = zero regression.
+            // Only fires for LLM-rewrite edited_by; human edits are never blocked.
+            // Placed AFTER current page load (needs old body), BEFORE early-return.
+            // NOT inside the skips_hallucination_guard block: that skips page_growth/re_distill.
+            if writer.is_llm_rewrite() {
+                if let Some(threshold) = merge_shrink_threshold() {
+                    if !crate::retrieval::integrity::body_shrink_ok(
+                        &current.content,
+                        &req.content,
+                        threshold,
+                    ) {
+                        log::warn!(
+                            "[update_page] shrink-guard rejected {edited_by} on {page_id}: new body ({} chars) < {}% of old ({} chars)",
+                            req.content.chars().count(),
+                            (threshold * 100.0) as u32,
+                            current.content.chars().count(),
+                        );
+                        return Err(WenlanError::Validation(format!(
+                            "page body shrank below {:.0}% of original (shrink-guard); update rejected",
+                            threshold * 100.0
+                        )));
+                    }
+                }
+            }
+
+            // ── Build changelog entry ───────────────────────────────────────
+            let delta_summary = crate::db::compute_page_delta_summary(
+                &current.content,
+                &current.source_memory_ids,
+                &req.content,
+                &source_refs,
+                edited_by,
+            );
+
+            // Compute added sources for the changelog entry
+            let old_set: std::collections::HashSet<&str> = current
+                .source_memory_ids
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            let new_set: std::collections::HashSet<&str> = source_refs.iter().copied().collect();
+
+            // Early return: identical content and identical source set — nothing to write.
+            // A stale page that recompiles to the byte-identical body still had its
+            // compile done, so acknowledge it; otherwise the sweep re-dispatches the
+            // same no-op work forever.
+            if delta_summary.is_none() && old_set == new_set {
+                let acknowledged = if require_stale {
+                    db.acknowledge_page_compile(page_id, current_version, expected_source_revision)
+                        .await?
+                } else {
+                    false
+                };
+                return Ok(WriteResult {
+                    acknowledged,
+                    ..no_op(WriteOutcome::Unchanged, vec![])
+                });
+            }
+
+            let mut added_sources: Vec<&str> = new_set.difference(&old_set).copied().collect();
+            added_sources.sort_unstable();
+            let added_sources_json = serde_json::Value::Array(
+                added_sources
+                    .iter()
+                    .map(|s| serde_json::Value::String(s.to_string()))
+                    .collect(),
+            );
+
+            let mut entry = serde_json::json!({
+                "version": new_version,
+                "at": chrono::Utc::now().timestamp(),
+                "edited_by": edited_by,
+                "delta_summary": delta_summary,
+                "incoming_source_ids": added_sources_json,
+            });
+            if let Some((_, ref stats_summary)) = citations {
+                entry["citations_summary"] = serde_json::Value::String(stats_summary.clone());
+            }
+
+            // Read existing changelog and append the new entry
+            let existing_cl = db.get_page_changelog(page_id).await?;
+            const DEFAULT_CHANGELOG_CAP: usize = 20;
+            let new_changelog =
+                crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
+
+            // ── Apply DB update ─────────────────────────────────────────────
+            // The receipt records the response this call is about to return,
+            // so a replay hands back the identical envelope rather than a
+            // reconstruction. It commits inside the write's own transaction.
+            let receipt_response = match retry {
+                Some(_) => Some(serde_json::to_string(&WriteResult {
+                    id: page_id.to_string(),
+                    attached_to: None,
+                    warnings: write_warnings(&delta_summary, current_version, new_version),
+                    wrote: true,
+                    revision_card_id: None,
+                    gated: false,
+                    outcome: WriteOutcome::Wrote,
+                    acknowledged: false,
+                })?),
+                None => None,
+            };
+            let receipt = match (retry.as_ref(), receipt_response.as_deref()) {
+                (Some((caller, operation, digest)), Some(response)) => {
+                    Some(crate::db::OperationReceipt {
+                        caller_id: caller,
+                        operation_id: operation,
+                        request_digest: digest,
+                        response,
+                    })
+                }
+                _ => None,
+            };
+
+            pre_write_pause().await;
+            // citations: None -> resets `citations` to '[]' (no fresh citation source
+            // for this write; a stale claim-map must not survive a content change).
+            // The two CAS modes are mutually exclusive — the inner write refuses a
+            // call carrying both. A source-revision caller is guarded by the
+            // revision it compiled against, so it passes no expected_version.
+            let wrote = if let Some(source_revision) = expected_source_revision {
+                db.try_update_page_content_with_changelog_at_source_revision(
+                    page_id,
+                    &req.content,
+                    &source_refs,
+                    edited_by,
+                    require_stale,
+                    &new_changelog,
+                    citations.as_ref().map(|(json, _)| json.as_str()),
+                    source_revision,
+                    receipt,
+                )
+                .await?
+            } else {
+                db.try_update_page_content_with_changelog(
+                    page_id,
+                    &req.content,
+                    &source_refs,
+                    edited_by,
+                    require_stale,
+                    &new_changelog,
+                    citations.as_ref().map(|(json, _)| json.as_str()),
+                    Some(current_version),
+                    receipt,
+                )
+                .await?
+            };
+
+            if wrote {
+                break 'cas (delta_summary, current_version, new_version);
+            }
+
+            // Nothing was written. Two distinguishable causes share this branch:
+            // the `require_stale` gate (row untouched) and a version conflict
+            // (row moved under us). Only the latter is worth retrying.
+            //
+            // Losing every CAS attempt used to return a bare no-op — byte-identical
+            // to the "content is already what you asked for" return above. A caller
+            // whose work was thrown away under contention could not tell that apart
+            // from having had nothing to do, so it now says so.
+            //
+            // The `require_stale` skip stays silent on purpose: the caller asked to
+            // write only if the page was stale, and it wasn't. That is the answer to
+            // the question it asked, not a discarded write, and it is the common
+            // path on every re-distill sweep.
+            let landed_version = db.get_page(page_id).await?.map(|p| p.version);
+            if landed_version != Some(current_version) {
+                if attempt < MAX_CAS_ATTEMPTS {
+                    log::debug!(
+                        "[update_page] {page_id}: version moved {current_version} -> {landed_version:?} mid-write; reloading (attempt {attempt})"
+                    );
+                    continue;
+                }
+                log::warn!(
+                    "[update_page] {page_id}: gave up after {MAX_CAS_ATTEMPTS} attempts; page still moving"
+                );
+                return Ok(no_op(
+                    WriteOutcome::Contended,
+                    vec![format!(
+                        "page kept moving under this write ({MAX_CAS_ATTEMPTS} attempts); nothing was written"
+                    )],
+                ));
+            }
+            return Ok(no_op(WriteOutcome::Unchanged, vec![]));
+        }
+        // Unreachable: every path through the loop returns, continues, or breaks
+        // with a value. The compiler cannot prove that, so the block needs a
+        // tail value.
+        return Ok(no_op(WriteOutcome::Unchanged, vec![]));
+    };
 
     // ── md re-write ─────────────────────────────────────────────────────────
     if let Some(ref projection) = projection {
@@ -1341,19 +3435,15 @@ async fn update_page_impl(
     }
     drop(projection);
 
-    // ── Build warnings ──────────────────────────────────────────────────────
-    let warnings = match delta_summary {
-        Some(ref summary) => vec![format!("v{current_version} → v{new_version}: {summary}")],
-        None => vec![],
-    };
-
     Ok(WriteResult {
         id: page_id.to_string(),
         attached_to: None,
-        warnings,
+        warnings: write_warnings(&delta_summary, current_version, new_version),
         wrote: true,
         revision_card_id: None,
         gated: false,
+        outcome: WriteOutcome::Wrote,
+        acknowledged: false,
     })
 }
 
@@ -1442,6 +3532,13 @@ async fn resolve_page_revision_card(
     }))
 }
 
+// ponytail: a card records no base version, so accept writes its body over
+// whatever the page holds now. If the page moved after the card was staged, the
+// accepted body silently reverts that change. M0 closes this for writers that
+// declare a base (they are refused instead of carded); a writer that passed
+// `expected_version: None` can still stage a stale-based card. Closing it needs
+// the base version stored on the card and re-checked here — that is the M5
+// claim-revision problem, not M0's.
 async fn accept_page_revision_card(
     db: &MemoryDB,
     card: PageRevisionCard,
@@ -1629,6 +3726,19 @@ mod tests {
     use super::*;
     use crate::events::NoopEmitter;
     use std::sync::Arc;
+
+    #[test]
+    fn rollback_failure_is_a_typed_recovery_required_error() {
+        let error = recovery_required_after_rollback_failure(
+            &WenlanError::VectorDb("forced write failure".to_string()),
+            "forced rollback failure",
+        );
+
+        assert!(matches!(
+            error,
+            WenlanError::Conflict(message) if message == "repair_apply_recovery_required"
+        ));
+    }
 
     // Serialize env-var-sensitive tests to avoid races.
     // Uses tokio::sync::Mutex so the guard can safely span .await points.
@@ -2386,6 +4496,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_page_rejects_reserved_delimiter_before_projection_or_db_mutation() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+
+        let (db, _dir) = test_db().await;
+        let knowledge = tempfile::tempdir().unwrap();
+        let req = CreateConceptRequest {
+            title: "Rejected authored page".to_string(),
+            content: format!("before {SOURCES_BLOCK_START} after"),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: Vec::new(),
+            creation_kind: Some("authored".to_string()),
+            workspace: None,
+        };
+
+        let error = create_page(&db, req, "test", Some(knowledge.path()))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        assert!(db.list_pages("active", 10, 0).await.unwrap().is_empty());
+        assert!(
+            std::fs::read_dir(knowledge.path())
+                .unwrap()
+                .next()
+                .is_none(),
+            "validation must happen before projection creates any artifact"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_page_rejects_reserved_delimiter_before_distilled_dedup_attachment() {
+        use crate::export::provenance::SOURCES_BLOCK_END;
+
+        let (db, _dir) = test_db().await;
+        let existing_source = "mem-reserved-dedup-existing";
+        let candidate_source = "mem-reserved-dedup-candidate";
+        let grounded = "Rust workspace members share package metadata and one dependency lockfile";
+        seed_memory(&db, existing_source, grounded).await;
+        seed_memory(&db, candidate_source, grounded).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page_with_kind(
+            "page_reserved_dedup_existing",
+            "Rust Workspace",
+            None,
+            grounded,
+            None,
+            Some("work"),
+            &[existing_source],
+            &now,
+            "distilled",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+        let before = db
+            .get_page("page_reserved_dedup_existing")
+            .await
+            .unwrap()
+            .unwrap();
+        let evidence_before = db
+            .get_page_evidence("page_reserved_dedup_existing")
+            .await
+            .unwrap();
+        let history_before = db
+            .list_page_history("page_reserved_dedup_existing", 10)
+            .await
+            .unwrap();
+        let req = CreateConceptRequest {
+            title: "Rust Workspace".to_string(),
+            content: format!("{grounded}\n\n{SOURCES_BLOCK_END}"),
+            summary: None,
+            entity_id: None,
+            space: Some("work".to_string()),
+            source_memory_ids: vec![candidate_source.to_string()],
+            creation_kind: Some("distilled".to_string()),
+            workspace: Some("work".to_string()),
+        };
+
+        let error = create_page_with_tuning(&db, req, "test", None, 1, -1.0)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+        let after = db
+            .get_page("page_reserved_dedup_existing")
+            .await
+            .unwrap()
+            .unwrap();
+        let evidence_after = db
+            .get_page_evidence("page_reserved_dedup_existing")
+            .await
+            .unwrap();
+        let history_after = db
+            .list_page_history("page_reserved_dedup_existing", 10)
+            .await
+            .unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.source_memory_ids, before.source_memory_ids);
+        assert_eq!(after.stale_reason, before.stale_reason);
+        assert_eq!(evidence_after.len(), evidence_before.len());
+        assert_eq!(history_after.len(), history_before.len());
+    }
+
+    #[tokio::test]
     async fn create_page_borns_distilled_unconfirmed() {
         let (db, _dir) = test_db().await;
         let docs = [
@@ -2749,7 +4966,7 @@ mod tests {
         .await
         .unwrap();
         // Same content, but scoped to a DIFFERENT workspace ("personal") — the
-        // scoped matcher's `COALESCE(workspace, space) = ?` filter must exclude
+        // scoped matcher's `space = ?` filter (M1 honest columns) must exclude
         // the "work" page, so this mints a new page rather than attaching.
         let req = CreateConceptRequest {
             title: "Rust Workspace Operations".to_string(),
@@ -2820,6 +5037,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn page_write_attach_marks_page_source_updated() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem_attach_a", "first explicit source").await;
+        seed_memory(&db, "mem_attach_b", "second explicit source").await;
+        let page_id = seed_page(&db, "mem_attach_a", "first explicit source").await;
+
+        page_write(
+            &db,
+            PageWrite::Attach {
+                page_id: &page_id,
+                source_memory_ids: &["mem_attach_b".to_string()],
+                link_reason: "topic_overlap",
+                agent: "test",
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.get_page_stale_reason(&page_id).await.unwrap(),
+            Some("source_updated".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn update_page_round_trip() {
         let (db, _dir) = test_db().await;
         let mem_id = "mem-rpt-1";
@@ -2832,6 +5074,9 @@ mod tests {
         let req2 = UpdatePageRequest {
             content: content_v2.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let r2 = update_page(&db, &page_id, req2, "re_distill", false, None, None)
             .await
@@ -2843,6 +5088,9 @@ mod tests {
         let req3 = UpdatePageRequest {
             content: content_v3.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let r3 = update_page(&db, &page_id, req3, "re_distill", false, None, None)
             .await
@@ -2874,6 +5122,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Rust is a systems language with memory safety and performance".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
@@ -2884,6 +5135,208 @@ mod tests {
         assert_eq!(page.version, 1, "version should not change when CAS skips");
         assert!(!result.wrote, "wrote must be false when CAS skips");
         assert!(result.warnings.is_empty(), "no warnings on CAS skip");
+    }
+
+    #[tokio::test]
+    async fn refresh_revision_cas_preserves_source_attached_during_synthesis() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem-refresh-a", "first source").await;
+        seed_memory(&db, "mem-refresh-b", "second source").await;
+        let page_id = seed_page(&db, "mem-refresh-a", "first source").await;
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+
+        page_write(
+            &db,
+            PageWrite::Attach {
+                page_id: &page_id,
+                source_memory_ids: &["mem-refresh-b".to_string()],
+                link_reason: "attached_during_synthesis",
+                agent: "test",
+            },
+        )
+        .await
+        .unwrap();
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "compiled from only the first source".to_string(),
+                source_memory_ids: vec!["mem-refresh-a".to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote);
+        assert!(!result.acknowledged);
+        assert_eq!(
+            db.get_page_sources(&page_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["mem-refresh-a".to_string(), "mem-refresh-b".to_string()]
+                .into_iter()
+                .collect()
+        );
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, 1);
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+    }
+
+    #[tokio::test]
+    async fn identical_refresh_cannot_acknowledge_a_new_source_revision() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem-ack-a", "first source").await;
+        seed_memory(&db, "mem-ack-b", "second source").await;
+        let page_id = seed_page(&db, "mem-ack-a", "first source").await;
+        db.set_page_stale(&page_id, "source_updated").await.unwrap();
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+        db.link_page_source(&page_id, "mem-ack-b", "attached_during_synthesis")
+            .await
+            .unwrap();
+
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "first source".to_string(),
+                source_memory_ids: vec!["mem-ack-a".to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote);
+        assert!(!result.acknowledged);
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(page.sources_updated_count, 1);
+        assert_eq!(
+            db.get_page_source_revision(&page_id).await.unwrap(),
+            expected_revision + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_revision_cas_rejects_sources_updated_count_aba() {
+        let (db, _dir) = test_db().await;
+        seed_memory(&db, "mem-aba-a", "first source").await;
+        seed_memory(&db, "mem-aba-b", "second source").await;
+        seed_memory(&db, "mem-aba-c", "third source").await;
+        let page_id = seed_page(&db, "mem-aba-a", "first source").await;
+
+        db.link_page_source(&page_id, "mem-aba-b", "first_pending_attach")
+            .await
+            .unwrap();
+        let stale_snapshot = db.get_page(&page_id).await.unwrap().unwrap();
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+        assert_eq!(stale_snapshot.sources_updated_count, 1);
+
+        assert!(db
+            .acknowledge_page_compile(&page_id, stale_snapshot.version, Some(expected_revision))
+            .await
+            .unwrap());
+        db.link_page_source(&page_id, "mem-aba-c", "attached_after_ack")
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_page(&page_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .sources_updated_count,
+            1
+        );
+
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "compiled without the third source".to_string(),
+                source_memory_ids: vec!["mem-aba-a".to_string(), "mem-aba-b".to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote);
+        assert_eq!(
+            db.get_page_sources(&page_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "mem-aba-a".to_string(),
+                "mem-aba-b".to_string(),
+                "mem-aba-c".to_string(),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_identical_refresh_acknowledges_compile_without_retry() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-identical";
+        let content = "Rust ownership keeps references memory safe";
+        seed_memory(&db, mem_id, content).await;
+        let page_id = seed_page(&db, mem_id, content).await;
+        db.set_page_stale(&page_id, "source_updated").await.unwrap();
+        let before = db.get_page(&page_id).await.unwrap().unwrap();
+
+        let result = update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: content.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            "re_distill",
+            true,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let after = db.get_page(&page_id).await.unwrap().unwrap();
+
+        assert!(!result.wrote);
+        assert!(result.acknowledged);
+        assert_eq!(after.version, before.version);
+        assert!(after.stale_reason.is_none());
+        assert!(after.last_compiled >= before.last_compiled);
     }
 
     #[tokio::test]
@@ -2902,6 +5355,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", true, None, None)
             .await
@@ -2909,6 +5365,11 @@ mod tests {
 
         let page = db.get_page(&page_id).await.unwrap().unwrap();
         assert_eq!(page.version, 2, "version should bump on CAS write");
+        assert!(
+            page.stale_reason.is_none(),
+            "successful CAS clears staleness"
+        );
+        assert_eq!(page.sources_updated_count, 0);
         assert!(result.wrote, "wrote must be true on CAS write");
         assert!(
             !result.warnings.is_empty(),
@@ -2928,6 +5389,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "manual_edit", false, None, None).await;
         assert!(
@@ -2948,6 +5412,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Pasta carbonara needs eggs pancetta and pecorino romano cheese".to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         // Should succeed without hallucination check
         update_page(&db, &page_id, req, "re_distill", false, None, None)
@@ -2971,6 +5438,9 @@ mod tests {
                 "Rust is a systems language with memory safety features, ownership and borrowing"
                     .to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         update_page(&db, &page_id, req, "fs_edit", false, None, None)
             .await
@@ -3008,6 +5478,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: "Rust is a systems language with memory safety (user edited)".to_string(),
             source_memory_ids: vec![ghost_source.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         update_page(&db, page_id, req, "fs_edit", false, None, None)
             .await
@@ -3028,6 +5501,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: new_content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
@@ -3060,6 +5536,9 @@ mod tests {
                 content: "Rust is a systems language with ownership model and borrow checker"
                     .to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "re_distill",
             false,
@@ -3091,6 +5570,9 @@ mod tests {
                     "Rust is a systems language with ownership model, borrow checker, and lifetimes"
                         .to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "re_distill",
             false,
@@ -3130,6 +5612,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: content.to_string(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "re_distill", false, None, None)
             .await
@@ -3176,9 +5661,13 @@ mod tests {
                 req: UpdatePageRequest {
                     content: human_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "fs_edit",
                 require_stale: false,
+                expected_source_revision: None,
                 knowledge_path: None,
                 citations: None,
             },
@@ -3201,9 +5690,13 @@ mod tests {
                 req: UpdatePageRequest {
                     content: machine_content.to_string(),
                     source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
                 },
                 edited_by: "re_distill",
                 require_stale: false,
+                expected_source_revision: None,
                 knowledge_path: None,
                 citations: None,
             },
@@ -3305,6 +5798,145 @@ mod tests {
         assert_eq!(structured["source_memory_ids"], serde_json::json!([mem_id]));
     }
 
+    #[tokio::test]
+    async fn page_write_update_rejects_reserved_delimiter_before_revision_staging() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-pagewrite-reserved-staging";
+        let source_content = "Rust ownership keeps memory safety rules explicit in systems code";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_pagewrite_reserved_staging";
+        db.insert_page_with_kind(
+            page_id,
+            "Rust Ownership",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+            "authored",
+            "confirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+        let history_before = db.list_page_history(page_id, 10).await.unwrap();
+        assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+
+        let error = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: format!("{source_content}\n\n{SOURCES_BLOCK_START}"),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(before.version),
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                expected_source_revision: None,
+                knowledge_path: None,
+                citations: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, WenlanError::Validation(_)));
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        let history_after = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.source_memory_ids, before.source_memory_ids);
+        assert_eq!(history_after, history_before);
+        assert!(
+            db.list_pending_revisions(10).await.unwrap().is_empty(),
+            "rejected source must not survive as a pending revision card"
+        );
+    }
+
+    #[tokio::test]
+    async fn gated_refresh_does_not_clear_a_newer_source_revision() {
+        let (db, _dir) = test_db().await;
+        for (source_id, content) in [
+            (
+                "mem-gated-revision-a",
+                "Rust ownership keeps memory safety rules explicit in systems code",
+            ),
+            (
+                "mem-gated-revision-b",
+                "Borrow checking rejects invalid aliasing before runtime",
+            ),
+        ] {
+            seed_memory(&db, source_id, content).await;
+        }
+        let page_id = seed_page(
+            &db,
+            "mem-gated-revision-a",
+            "Rust ownership keeps memory safety rules explicit in systems code",
+        )
+        .await;
+        update_page(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "Human-owned notes about Rust ownership and memory safety".to_string(),
+                source_memory_ids: vec!["mem-gated-revision-a".to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            "fs_edit",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db.set_page_stale(&page_id, "source_updated").await.unwrap();
+        let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+
+        db.link_page_source(
+            &page_id,
+            "mem-gated-revision-b",
+            "attached_during_synthesis",
+        )
+        .await
+        .unwrap();
+        let result = update_page_at_source_revision(
+            &db,
+            &page_id,
+            UpdatePageRequest {
+                content: "Machine proposal based on the old source snapshot".to_string(),
+                source_memory_ids: vec!["mem-gated-revision-a".to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            "re_distill",
+            true,
+            expected_revision,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.gated);
+        assert!(!result.acknowledged);
+        let page = db.get_page(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(page.sources_updated_count, 1);
+    }
+
     // ── accept_pending_revision ──────────────────────────────────────────────
 
     async fn seed_pending_revision(db: &MemoryDB, target: &str, revision: &str) {
@@ -3322,6 +5954,1007 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    /// M0 write gate: a content write whose `expected_version` no longer matches
+    /// the stored row must not land. Without the guard, a writer that loaded v1
+    /// and decided its ownership branch there overwrites whatever landed at v2.
+    #[tokio::test]
+    async fn page_write_update_with_stale_expected_version_does_not_clobber() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-stale";
+        let source_content = "Version guards keep concurrent page writers from losing updates";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_cas_stale";
+        db.insert_page(
+            page_id,
+            "Version Guards",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let loaded = db.get_page(page_id).await.unwrap().unwrap();
+        let stale_version = loaded.version;
+
+        // A concurrent writer lands first, advancing the stored version.
+        let winner_content =
+            "Version guards keep concurrent page writers from losing updates, landed first";
+        page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: winner_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(stale_version),
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+                expected_source_revision: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let after_winner = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            after_winner.version > stale_version,
+            "precondition: the first writer advanced the page version"
+        );
+
+        // The writer still holding the pre-write version must be refused.
+        let result = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "Stale writer body that must never land".to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(stale_version),
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+                expected_source_revision: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !result.wrote,
+            "a write carrying a stale expected_version must report wrote=false"
+        );
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, winner_content,
+            "the stale writer must not overwrite the content that landed first"
+        );
+        assert_eq!(
+            after.version, after_winner.version,
+            "a refused write must not bump the page version"
+        );
+    }
+
+    /// Every page write appends exactly one immutable `page_history` row, and
+    /// the snapshot it stores is the body at *that* version — so a page's
+    /// evolution is reconstructable rather than inferred.
+    ///
+    /// Mutation check: drop the history INSERT from `try_update_page_content`
+    /// and the version sequence collapses to `[1]`; store the pre-write body
+    /// instead of the post-write one and the content assertions invert.
+    #[tokio::test]
+    async fn page_write_records_one_history_row_per_version() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-history";
+        let source_content = "Every version of a page is recorded as its own history row";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_history_seq";
+        db.insert_page(
+            page_id,
+            "History",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // Creation is itself a version: the timeline is never empty.
+        let at_create = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(
+            at_create.len(),
+            1,
+            "a newly created page must already have its v1 history row"
+        );
+        assert_eq!(at_create[0].content, source_content);
+
+        let v2 =
+            "Every version of a page is recorded as its own history row, appended in the write";
+        let v3 = "Every version of a page is recorded as its own history row, appended in the write transaction";
+        for body in [v2, v3] {
+            let result = page_write(
+                &db,
+                PageWrite::Update {
+                    page_id,
+                    req: UpdatePageRequest {
+                        content: body.to_string(),
+                        source_memory_ids: vec![mem_id.to_string()],
+                        expected_version: None,
+                        caller_id: None,
+                        operation_id: None,
+                    },
+                    edited_by: "re_distill",
+                    require_stale: false,
+                    knowledge_path: None,
+                    citations: None,
+                    expected_source_revision: None,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(result.wrote, "each update must land");
+        }
+
+        let history = db.list_page_history(page_id, 10).await.unwrap();
+        let versions: Vec<i64> = history.iter().map(|h| h.version).collect();
+        assert_eq!(
+            versions,
+            vec![3, 2, 1],
+            "one row per version, newest first, no gaps and no duplicates"
+        );
+
+        // Each row holds the body *at* its version, not the body it replaced.
+        assert_eq!(history[0].content, v3);
+        assert_eq!(history[1].content, v2);
+        assert_eq!(history[2].content, source_content);
+        assert_eq!(history[0].edited_by, "re_distill");
+        assert_eq!(history[2].edited_by, "create");
+
+        // The history head must agree with the page itself — that is the whole
+        // point of writing them in one transaction.
+        let page = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, history[0].version);
+        assert_eq!(page.content, history[0].content);
+    }
+
+    /// Seed the `creation_kind='source'` page that a re-enriched document
+    /// replaces, and return `(page_id, memory_id, body)`.
+    async fn seed_source_page(db: &MemoryDB, page_id: &'static str) -> (&'static str, String) {
+        let mem_id = "mem-source-page";
+        let body = "A source page is the machine-owned projection of one ingested document";
+        seed_memory(db, mem_id, body).await;
+        let req = CreateConceptRequest {
+            title: "Ingested Document".to_string(),
+            content: body.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None,
+            source_memory_ids: vec![mem_id.to_string()],
+            creation_kind: Some("source".to_string()),
+            workspace: None,
+        };
+        page_write(
+            db,
+            PageWrite::Create {
+                page_id: Some(page_id),
+                req,
+                agent: "doc-enrich",
+                knowledge_path: None,
+                page_min_cluster_size: 1,
+                page_match_threshold: 0.0,
+                citations_json: None,
+            },
+        )
+        .await
+        .unwrap();
+        (mem_id, body.to_string())
+    }
+
+    /// `ReplaceSource` is a page write like any other: re-enriching a document
+    /// bumps the page version, so it must leave the same immutable `page_history`
+    /// row behind. Without this the M0-B invariant — one durable row per page
+    /// version — is simply false for every source page in the corpus.
+    ///
+    /// Mutation check: drop the history INSERT from `replace_source_page` and the
+    /// version sequence collapses to `[1]`.
+    #[tokio::test]
+    async fn replace_source_page_records_history_row_for_new_version() {
+        let (db, _dir) = test_db().await;
+        let page_id = "page_source_history";
+        let (mem_id, v1) = seed_source_page(&db, page_id).await;
+
+        let at_create = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(
+            at_create.len(),
+            1,
+            "a freshly created source page must already have its v1 history row"
+        );
+
+        let v2 = "\u{feff}\r\n  A source page keeps exact source  \r\n\r\n";
+        assert_ne!(
+            v2.trim_end(),
+            v2,
+            "positive control: trimming must change this fixture"
+        );
+        let result = page_write(
+            &db,
+            PageWrite::ReplaceSource {
+                page_id,
+                title: "Ingested Document",
+                summary: Some("the second enrichment"),
+                content: v2,
+                source_memory_ids: &[mem_id.to_string()],
+                agent: "doc-enrich",
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.wrote, "replacing a source page must land");
+
+        let history = db.list_page_history(page_id, 10).await.unwrap();
+        let versions: Vec<i64> = history.iter().map(|h| h.version).collect();
+        assert_eq!(
+            versions,
+            vec![2, 1],
+            "a source-page replacement must append one history row for the version it created"
+        );
+        assert_eq!(
+            history[0].content, v2,
+            "the row holds the body at its version"
+        );
+        assert_eq!(history[1].content, v1);
+        assert_eq!(history[0].edited_by, "doc-enrich");
+
+        // The head of the history must agree with the page — the reason both are
+        // written in one transaction.
+        let page = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(page.version, history[0].version);
+        assert_eq!(page.content, history[0].content);
+    }
+
+    /// A re-enrichment that recomputes the body it already wrote must not
+    /// become a second version.
+    ///
+    /// This is not hypothetical: when the analysis LLM is unreachable,
+    /// `document_enrichment` writes a deterministic stub page and pauses for
+    /// retry, and every retry rebuilds the same stub from the same stored
+    /// chunks. Without this guard that document's page version climbs once per
+    /// retry forever — and now that a version also appends a `page_history`
+    /// row, it would grow an uncapped history of byte-identical snapshots.
+    ///
+    /// Mutation check: drop the unchanged-guard and the version reaches 3.
+    #[tokio::test]
+    async fn replace_source_page_with_identical_content_writes_no_new_version() {
+        let (db, _dir) = test_db().await;
+        let page_id = "page_source_unchanged";
+        let (mem_id, _v1) = seed_source_page(&db, page_id).await;
+        let sources = [mem_id.to_string()];
+
+        let body = "\u{feff}\r\n  A source page retry stays byte-identical  \t\r\n\r\n";
+        let replace = |content: &'static str| {
+            page_write(
+                &db,
+                PageWrite::ReplaceSource {
+                    page_id,
+                    title: "Ingested Document",
+                    summary: Some("stub"),
+                    content,
+                    source_memory_ids: &sources,
+                    agent: "doc-enrich",
+                },
+            )
+        };
+
+        let first = replace(body).await.unwrap();
+        assert!(first.wrote, "the first enrichment must land");
+        let after_first = db.get_page(page_id).await.unwrap().unwrap();
+
+        let retry = replace(body).await.unwrap();
+        assert!(
+            !retry.wrote,
+            "recomputing the same body must not be reported as a write"
+        );
+        assert_eq!(
+            retry.outcome,
+            WriteOutcome::Unchanged,
+            "a no-op retry is Unchanged, not a conflict and not a write"
+        );
+
+        let after_retry = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_retry.version, after_first.version,
+            "an identical replacement must not bump the version"
+        );
+        let versions: Vec<i64> = db
+            .list_page_history(page_id, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|h| h.version)
+            .collect();
+        assert_eq!(
+            versions,
+            vec![2, 1],
+            "no version means no history row — the retry appends nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_source_page_rejects_reserved_delimiters_without_mutation() {
+        use crate::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+
+        let (db, _dir) = test_db().await;
+        let page_id = "page_source_reserved";
+        let (mem_id, _v1) = seed_source_page(&db, page_id).await;
+        let sources = [mem_id.to_string()];
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+        let history_before = db.list_page_history(page_id, 10).await.unwrap();
+        let source_ids_before: HashSet<_> = db
+            .get_page_sources(page_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|source| source.memory_source_id)
+            .collect();
+        let cases = [
+            format!("before {SOURCES_BLOCK_START} after"),
+            format!("before {SOURCES_BLOCK_END} after"),
+            format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+            format!(
+                "{SOURCES_BLOCK_START}\none\n{SOURCES_BLOCK_END}\n\
+                 {SOURCES_BLOCK_START}\ntwo\n{SOURCES_BLOCK_END}"
+            ),
+            format!("```md\n{SOURCES_BLOCK_START}\n```\nkept prose"),
+        ];
+
+        for content in cases {
+            let error = page_write(
+                &db,
+                PageWrite::ReplaceSource {
+                    page_id,
+                    title: "Changed title",
+                    summary: Some("Changed summary"),
+                    content: &content,
+                    source_memory_ids: &sources,
+                    agent: "doc-enrich",
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, WenlanError::Validation(_)));
+
+            let after = db.get_page(page_id).await.unwrap().unwrap();
+            let history_after = db.list_page_history(page_id, 10).await.unwrap();
+            let source_ids_after: HashSet<_> = db
+                .get_page_sources(page_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|source| source.memory_source_id)
+                .collect();
+            assert_eq!(after.title, before.title);
+            assert_eq!(after.summary, before.summary);
+            assert_eq!(after.content, before.content);
+            assert_eq!(after.version, before.version);
+            assert_eq!(history_after.len(), history_before.len());
+            assert_eq!(source_ids_after, source_ids_before);
+        }
+    }
+
+    /// Seed a page and return `(db, tempdir, page_id, memory_id)` for the
+    /// retry-receipt tests below.
+    async fn receipt_fixture(
+        page_id: &'static str,
+    ) -> (MemoryDB, tempfile::TempDir, &'static str, &'static str) {
+        let (db, dir) = test_db().await;
+        let mem_id = "mem-receipt";
+        let body = "A retried write must not become a second version of the page";
+        seed_memory(&db, mem_id, body).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(page_id, "Receipts", None, body, None, None, &[mem_id], &now)
+            .await
+            .unwrap();
+        (db, dir, page_id, mem_id)
+    }
+
+    fn retry_req(content: &str, mem_id: &str, operation_id: &str) -> UpdatePageRequest {
+        UpdatePageRequest {
+            content: content.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: Some("app".to_string()),
+            operation_id: Some(operation_id.to_string()),
+        }
+    }
+
+    /// The lost-response case: the client never saw the reply and sent the very
+    /// same write again. It must get the original response back and the page
+    /// must be untouched — one version, one history row, not two.
+    #[tokio::test]
+    async fn page_write_same_operation_id_replays_instead_of_writing_again() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_replay").await;
+        let body = "A retried write must not become a second version of the page, ever";
+
+        let first = update_page(
+            &db,
+            page_id,
+            retry_req(body, mem_id, "op-1"),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(first.wrote);
+        let after_first = db.get_page(page_id).await.unwrap().unwrap();
+
+        let replay = update_page(
+            &db,
+            page_id,
+            retry_req(body, mem_id, "op-1"),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_string(&replay).unwrap(),
+            serde_json::to_string(&first).unwrap(),
+            "a replay returns the recorded response verbatim"
+        );
+        let after_replay = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_replay.version, after_first.version,
+            "the replay must not bump the version"
+        );
+        let versions: Vec<i64> = db
+            .list_page_history(page_id, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|h| h.version)
+            .collect();
+        assert_eq!(
+            versions,
+            vec![2, 1],
+            "the replay must not append a second history row"
+        );
+    }
+
+    /// The same operation id carrying a *different* write is not a retry — it
+    /// is an id being reused. Replaying the old response would tell the caller
+    /// their new text was saved when it never was, so refuse instead.
+    #[tokio::test]
+    async fn page_write_same_operation_id_with_different_body_is_a_conflict() {
+        use crate::export::provenance::SOURCES_BLOCK_START;
+
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_conflict").await;
+
+        update_page(
+            &db,
+            page_id,
+            retry_req(
+                "A retried write must not become a second version of the page, ever",
+                mem_id,
+                "op-1",
+            ),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let after_first = db.get_page(page_id).await.unwrap().unwrap();
+        let changed_body = format!(
+            "A retried write must not become a second version of the page — \
+             different text\n\n{SOURCES_BLOCK_START}"
+        );
+
+        let err = update_page(
+            &db,
+            page_id,
+            retry_req(&changed_body, mem_id, "op-1"),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .expect_err("reusing an operation id for a different write must be refused");
+        assert!(
+            matches!(err, WenlanError::Conflict(_)),
+            "receipt collision must win before canonical-content validation; got {err:?}"
+        );
+
+        let unchanged = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(unchanged.content, after_first.content);
+        assert_eq!(unchanged.version, after_first.version);
+    }
+
+    /// A distinct operation id from the same caller is a distinct write and
+    /// must land normally — the receipt table must not become a write blocker.
+    #[tokio::test]
+    async fn page_write_different_operation_id_writes_normally() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_distinct").await;
+
+        for (op, body) in [
+            (
+                "op-1",
+                "A retried write must not become a second version of the page, once",
+            ),
+            (
+                "op-2",
+                "A retried write must not become a second version of the page, twice",
+            ),
+        ] {
+            let r = update_page(
+                &db,
+                page_id,
+                retry_req(body, mem_id, op),
+                "re_distill",
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(r.wrote, "operation {op} must land");
+        }
+
+        let versions: Vec<i64> = db
+            .list_page_history(page_id, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|h| h.version)
+            .collect();
+        assert_eq!(versions, vec![3, 2, 1]);
+    }
+
+    /// A write refused by the version precondition must leave no receipt, or
+    /// the caller's next honest attempt would replay a response for a write
+    /// that never happened. (This pins the refusal path only — the refusal
+    /// returns before the receipt is ever written. The transaction claim is
+    /// pinned by `page_write_crash_before_commit_leaves_no_receipt`.)
+    #[tokio::test]
+    async fn page_write_refused_by_cas_records_no_receipt() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_rollback").await;
+        let current = db.get_page(page_id).await.unwrap().unwrap();
+
+        let mut req = retry_req(
+            "A retried write must not become a second version of the page, refused",
+            mem_id,
+            "op-doomed",
+        );
+        req.expected_version = Some(current.version + 99);
+
+        let result = update_page(&db, page_id, req, "re_distill", false, None, None)
+            .await
+            .unwrap();
+        assert!(!result.wrote, "precondition: the write must be refused");
+
+        assert!(
+            db.get_operation_receipt("app", "op-doomed")
+                .await
+                .unwrap()
+                .is_none(),
+            "a refused write must leave no receipt behind"
+        );
+    }
+
+    /// The crash window: the page row, the history row, and the receipt are all
+    /// staged, and the process dies before COMMIT. Nothing may survive — least
+    /// of all the receipt, which would answer the caller's retry with "already
+    /// done" about a version that does not exist. This is the only test that
+    /// can tell an in-transaction receipt from an after-COMMIT one.
+    #[tokio::test]
+    async fn page_write_crash_before_commit_leaves_no_receipt() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_crash").await;
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+
+        *crate::db::FAIL_BEFORE_COMMIT.lock().unwrap() = Some(page_id.to_string());
+        let result = update_page(
+            &db,
+            page_id,
+            retry_req(
+                "A retried write must not become a second version of the page, crashed",
+                mem_id,
+                "op-crash",
+            ),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "precondition: the injected fault must abort the write; got {result:?}"
+        );
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            (after.content, after.version),
+            (before.content, before.version),
+            "the aborted write must have rolled back entirely"
+        );
+        assert!(
+            db.get_operation_receipt("app", "op-crash")
+                .await
+                .unwrap()
+                .is_none(),
+            "a receipt must not outlive the transaction that wrote it"
+        );
+
+        // The retry now behaves as if the first attempt never happened.
+        let retry = update_page(
+            &db,
+            page_id,
+            retry_req(
+                "A retried write must not become a second version of the page, crashed",
+                mem_id,
+                "op-crash",
+            ),
+            "re_distill",
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            retry.wrote,
+            "after a rolled-back attempt the same operation id must still be usable"
+        );
+    }
+
+    /// One id without the other is not a retry identity, and must not silently
+    /// behave like one — otherwise two callers could collide on "op-1".
+    #[tokio::test]
+    async fn page_write_partial_retry_identity_is_ignored() {
+        let (db, _dir, page_id, mem_id) = receipt_fixture("page_receipt_partial").await;
+
+        let mut req = retry_req(
+            "A retried write must not become a second version of the page, partial",
+            mem_id,
+            "op-partial",
+        );
+        req.caller_id = None;
+
+        update_page(&db, page_id, req, "re_distill", false, None, None)
+            .await
+            .unwrap();
+
+        assert!(
+            db.get_operation_receipt("", "op-partial")
+                .await
+                .unwrap()
+                .is_none(),
+            "an operation id with no caller must not be recorded"
+        );
+    }
+
+    /// A write that loses the CAS must leave no trace: no version bump and no
+    /// history row. Otherwise the timeline would record edits that never
+    /// happened, which is worse than no timeline at all.
+    #[tokio::test]
+    async fn page_write_refused_by_cas_appends_no_history_row() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-history-refused";
+        let source_content = "A refused write must not appear in the page timeline";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_history_refused";
+        db.insert_page(
+            page_id,
+            "Refused",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+        let stale_version = db.get_page(page_id).await.unwrap().unwrap().version;
+
+        let result = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "A refused write must not appear in the page timeline at all"
+                        .to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(stale_version + 5),
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+                expected_source_revision: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.wrote, "precondition: the write must be refused");
+        let history = db.list_page_history(page_id, 10).await.unwrap();
+        assert_eq!(
+            history.len(),
+            1,
+            "a refused write must not append a history row"
+        );
+        assert_eq!(history[0].version, stale_version);
+    }
+
+    /// The load-bearing test for the M0 write gate: an edit that lands *inside*
+    /// the window between the ownership decision and the write must not be
+    /// clobbered.
+    ///
+    /// This is the only test here that fails when `Some(current_version)` is
+    /// dropped from the write — with no interleaving, a guarded write and an
+    /// unguarded one are byte-identical. Mutation check: pass `None` as the
+    /// guard and this test overwrites the human edit and reports v3.
+    #[tokio::test]
+    async fn page_write_update_edit_landing_mid_write_is_not_clobbered() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-interleave";
+        let source_content = "A write must land on the row its ownership decision was made from";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_cas_interleave";
+        db.insert_page(
+            page_id,
+            "Interleaved Write",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+        let start_version = db.get_page(page_id).await.unwrap().unwrap().version;
+
+        // Arm the seam: the machine write below parks after deciding ownership
+        // (page is still machine-owned) and before writing.
+        let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel();
+        *PRE_WRITE_GATE.lock().unwrap() = Some((parked_tx, go_rx));
+
+        // Close to the seeded source: `fs_edit` is not exempt from the
+        // hallucination guard, so an unrelated body would be rejected before
+        // ever reaching the write this test is about.
+        let human_content =
+            "A write must land on the row its ownership decision was made from, typed by hand";
+        let machine_write = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "Machine body computed from the pre-edit row".to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: None,
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+                expected_source_revision: None,
+            },
+        );
+
+        // Runs to completion while the machine write is parked — a genuine
+        // interleaving, not a simulated one.
+        let human_edit = async {
+            parked_rx
+                .await
+                .expect("machine write must reach the pre-write gate");
+            let result = page_write(
+                &db,
+                PageWrite::Update {
+                    page_id,
+                    req: UpdatePageRequest {
+                        content: human_content.to_string(),
+                        source_memory_ids: vec![mem_id.to_string()],
+                        expected_version: None,
+                        caller_id: None,
+                        operation_id: None,
+                    },
+                    edited_by: "fs_edit",
+                    require_stale: false,
+                    knowledge_path: None,
+                    citations: None,
+                    expected_source_revision: None,
+                },
+            )
+            .await
+            .unwrap();
+            // Only now release the parked machine write, so it resumes against a
+            // page that has definitively moved.
+            go_tx.send(()).expect("machine write must still be parked");
+            result
+        };
+
+        let (machine_result, human_result) = tokio::join!(machine_write, human_edit);
+        let machine_result = machine_result.unwrap();
+
+        assert!(human_result.wrote, "the human edit itself must land");
+        assert!(
+            !machine_result.wrote,
+            "the machine write lost the CAS and must not report a write"
+        );
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, human_content,
+            "the edit that landed mid-write must survive"
+        );
+        assert_eq!(
+            after.version,
+            start_version + 1,
+            "only the human edit bumped the version; the losing write must not have applied"
+        );
+        assert!(
+            machine_result.revision_card_id.is_some(),
+            "on reload the page is human-owned, so the machine body is preserved as a card"
+        );
+    }
+
+    /// A machine writer that DECLARED the version it read (`expected_version`)
+    /// and lost the race to a human edit is refused outright — it does not get a
+    /// revision card.
+    ///
+    /// This reverses what this test asserted when M0-C landed. Carding looked
+    /// like the conservative choice ("never drop agent work"), but a card is not
+    /// inert: `accept_page_revision_card` re-reads the page and writes the card's
+    /// body over whatever it finds, without checking the base that body was
+    /// computed from. So a card staged from a stale base silently reverts the
+    /// human edit the moment someone accepts it — the exact loss M0 exists to
+    /// prevent, just deferred to accept time. Refusing drops no agent work
+    /// either: the caller sees the conflict, re-reads, and stages a card against
+    /// the real content.
+    ///
+    /// Only writers that declare a base get this. A machine write with
+    /// `expected_version: None` never told us what it read, so a card is still
+    /// the best available answer — see
+    /// `page_write_update_edit_landing_mid_write_is_not_clobbered`, which is
+    /// unaffected by this and still stages one.
+    #[tokio::test]
+    async fn page_write_update_stale_version_on_human_owned_page_is_refused() {
+        let (db, _dir) = test_db().await;
+        let mem_id = "mem-cas-owned";
+        let source_content = "Ownership is re-decided against the row the write lands on";
+        seed_memory(&db, mem_id, source_content).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let page_id = "page_cas_owned";
+        db.insert_page(
+            page_id,
+            "Ownership Recheck",
+            None,
+            source_content,
+            None,
+            None,
+            &[mem_id],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        // The machine writer's view of the world: machine-owned, at this version.
+        let machine_view = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            !machine_view.user_edited,
+            "precondition: page starts machine-owned"
+        );
+
+        // A human edit lands underneath it, taking ownership and bumping version.
+        let human_content = "Ownership is re-decided against the row the write lands on, by hand";
+        page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: human_content.to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(machine_view.version),
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "fs_edit",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+                expected_source_revision: None,
+            },
+        )
+        .await
+        .unwrap();
+        let owned = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(
+            owned.user_edited,
+            "precondition: the human edit took ownership"
+        );
+
+        let pending_before = db.list_pending_revisions(10).await.unwrap().len();
+
+        // The machine writer proceeds from its stale view.
+        let result = page_write(
+            &db,
+            PageWrite::Update {
+                page_id,
+                req: UpdatePageRequest {
+                    content: "Machine body that must never overwrite the human edit".to_string(),
+                    source_memory_ids: vec![mem_id.to_string()],
+                    expected_version: Some(machine_view.version),
+                    caller_id: None,
+                    operation_id: None,
+                },
+                edited_by: "re_distill",
+                require_stale: false,
+                knowledge_path: None,
+                citations: None,
+                expected_source_revision: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !result.wrote,
+            "machine write must not land on a human-owned page"
+        );
+        assert!(
+            result.warnings.iter().any(|w| w.contains("write refused")),
+            "the caller must be told its write was refused, not handed a silent no-op; got {:?}",
+            result.warnings
+        );
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.content, human_content,
+            "human prose must survive the losing machine write"
+        );
+        assert_eq!(
+            after.version, owned.version,
+            "the refused machine write must not bump the version"
+        );
+        let pending_after = db.list_pending_revisions(10).await.unwrap().len();
+        assert_eq!(
+            pending_after, pending_before,
+            "a declared-base conflict is refused outright; staging a card here would \
+             let accept-time silently revert the human edit"
+        );
     }
 
     #[tokio::test]
@@ -3356,6 +6989,9 @@ mod tests {
             UpdatePageRequest {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -3583,6 +7219,9 @@ mod tests {
             UpdatePageRequest {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -3614,6 +7253,9 @@ mod tests {
             UpdatePageRequest {
                 content: newer_human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -3674,6 +7316,9 @@ mod tests {
             UpdatePageRequest {
                 content: human_content.to_string(),
                 source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
             },
             "fs_edit",
             false,
@@ -4065,6 +7710,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: short_body,
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "distill", false, None, None).await;
         assert!(
@@ -4098,6 +7746,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: long_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "page_growth", false, None, None).await;
         assert!(result.is_ok(), "shrink-guard must allow growing body");
@@ -4121,6 +7772,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: tiny_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         let result = update_page(&db, &page_id, req, "distill", false, None, None)
             .await
@@ -4149,6 +7803,9 @@ mod tests {
         let req = UpdatePageRequest {
             content: tiny_body.clone(),
             source_memory_ids: vec![mem_id.to_string()],
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
         };
         // manual_edit bypasses hallucination guard AND is NOT an LLM rewrite
         // so shrink-guard must NOT fire even though the body shrinks drastically
@@ -4204,18 +7861,125 @@ mod tests {
 
     #[test]
     fn is_llm_rewrite_distill_true() {
-        assert!(is_llm_rewrite("distill"));
-        assert!(is_llm_rewrite("re_distill"));
-        assert!(is_llm_rewrite("page_growth"));
-        assert!(is_llm_rewrite("refinery_merge"));
+        assert!(Writer::classify("distill").is_llm_rewrite());
+        assert!(Writer::classify("re_distill").is_llm_rewrite());
+        assert!(Writer::classify("page_growth").is_llm_rewrite());
+        assert!(Writer::classify("refinery_merge").is_llm_rewrite());
     }
 
     #[test]
     fn is_llm_rewrite_user_false() {
-        assert!(!is_llm_rewrite("user"));
-        assert!(!is_llm_rewrite("manual_edit"));
-        assert!(!is_llm_rewrite("fs_edit"));
-        assert!(!is_llm_rewrite("api"));
-        assert!(!is_llm_rewrite(""));
+        assert!(!Writer::classify("user").is_llm_rewrite());
+        assert!(!Writer::classify("manual_edit").is_llm_rewrite());
+        assert!(!Writer::classify("fs_edit").is_llm_rewrite());
+        assert!(!Writer::classify("api").is_llm_rewrite());
+        assert!(!Writer::classify("").is_llm_rewrite());
+    }
+
+    // ── Writer classification ───────────────────────────────────────────────
+
+    /// Every `edited_by` value this build persists, paired with the three
+    /// authority answers the write gate derives from it. This table is the
+    /// characterization pin: it is exactly what the string helpers
+    /// (`is_machine_page_write` / `skip_hallucination_guard` /
+    /// `is_llm_rewrite`) returned before `Writer` replaced them, so a drift in
+    /// any single classification fails here rather than silently changing who
+    /// wins an ownership decision inside the CAS.
+    const WRITER_TABLE: &[(&str, bool, bool, bool)] = &[
+        // edited_by            machine  skips_guard  llm_rewrite
+        ("manual_edit", false, false, false),
+        ("fs_edit", false, false, false),
+        ("distill", true, true, true),
+        ("re_distill", true, true, true),
+        ("page_growth", true, true, true),
+        ("refinery_merge", true, true, true),
+        ("agent_refresh", true, true, false),
+        // Persisted in `page_history.edited_by` / `pages.changelog` but never
+        // routed through the write gate today — these paths write via the db
+        // layer (db.rs `create`/`migration_78`, citations.rs, revision accept).
+        // Unrecognized by the classifier, and unrecognized means machine.
+        ("create", true, false, false),
+        ("revision_accept", true, false, false),
+        ("citation_backfill", true, false, false),
+        ("migration_78", true, false, false),
+    ];
+
+    #[test]
+    fn writer_table_pins_gate_classification() {
+        for &(edited_by, machine, skips_guard, llm_rewrite) in WRITER_TABLE {
+            let w = Writer::classify(edited_by);
+            assert_eq!(w.is_machine(), machine, "is_machine for {edited_by:?}");
+            assert_eq!(
+                w.skips_hallucination_guard(),
+                skips_guard,
+                "skips_hallucination_guard for {edited_by:?}"
+            );
+            assert_eq!(
+                w.is_llm_rewrite(),
+                llm_rewrite,
+                "is_llm_rewrite for {edited_by:?}"
+            );
+        }
+    }
+
+    /// The persisted-string contract: these bytes are already in users'
+    /// databases, so classification must never rewrite them.
+    #[test]
+    fn writer_round_trips_persisted_string() {
+        for &(edited_by, ..) in WRITER_TABLE {
+            assert_eq!(
+                Writer::classify(edited_by).as_str(),
+                edited_by,
+                "round-trip for {edited_by:?}"
+            );
+        }
+        // Unrecognized strings round-trip too — the type is a lens over the
+        // string, not a replacement for it.
+        for odd in ["manual_edt", "", "Distill", "totally_new_stage"] {
+            assert_eq!(
+                Writer::classify(odd).as_str(),
+                odd,
+                "round-trip for {odd:?}"
+            );
+        }
+    }
+
+    /// The bug this type exists to bound: an unrecognized writer string used to
+    /// fall through `!matches!(..)` into "machine" with no diagnostic. That
+    /// direction is preserved deliberately — machine is the fail-safe answer,
+    /// because a machine write to a human-owned page is staged as a revision
+    /// card instead of overwriting the human's prose.
+    #[test]
+    fn unknown_writer_is_machine_and_guarded() {
+        let typo = Writer::classify("manual_edt");
+        assert!(
+            typo.is_machine(),
+            "a typo'd human writer must not be trusted"
+        );
+        assert!(
+            !typo.skips_hallucination_guard(),
+            "an unknown writer must not skip the hallucination guard"
+        );
+        assert!(!typo.is_llm_rewrite());
+        assert!(matches!(typo, Writer::Pipeline(PipelineStage::Unknown(_))));
+    }
+
+    #[test]
+    fn known_writers_are_not_unknown() {
+        for &(edited_by, ..) in WRITER_TABLE {
+            let is_unknown = matches!(
+                Writer::classify(edited_by),
+                Writer::Pipeline(PipelineStage::Unknown(_))
+            );
+            // Only the four db-layer writers are outside the gate's vocabulary.
+            let expected_unknown = matches!(
+                edited_by,
+                "create" | "revision_accept" | "citation_backfill" | "migration_78"
+            );
+            assert_eq!(
+                is_unknown, expected_unknown,
+                "unknown-ness of {edited_by:?}"
+            );
+        }
     }
 }

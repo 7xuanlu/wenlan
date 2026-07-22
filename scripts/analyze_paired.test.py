@@ -11,7 +11,7 @@ Locks the decision-gating statistics with hand-computed reference values:
 The analyzer is a manual L7 tool (not in cargo CI), so this is its safety net.
 Pure stdlib. Run before trusting a paired report:
 
-    python3 test_analyze_paired.py
+    python3 scripts/analyze_paired.test.py
 """
 import analyze_paired as a
 

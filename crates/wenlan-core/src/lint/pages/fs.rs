@@ -4,6 +4,7 @@ use super::frontmatter::Frontmatter;
 use super::path::{self, collect_path_issue};
 use super::state::{self, parse_raw_state};
 use super::traversal::{collect_entries, open_root};
+use cap_std::fs::Dir;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -13,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(super) const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
-pub(super) const STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 pub(super) const DEEP_PAGE_BODY_MAX_BYTES: u64 = 4 * 1024 * 1024;
 pub(super) const DEEP_PAGE_TREE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -210,6 +211,23 @@ impl PageScan {
         digest.finalize().into()
     }
 
+    pub(crate) fn non_target_digest(&self, excluded_paths: &BTreeSet<String>) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"wenlan-page-non-target-v1");
+        for entry in &self.entries {
+            if entry.kind == EntryKind::Directory || excluded_paths.contains(&entry.path) {
+                continue;
+            }
+            digest.update(entry.path.as_bytes());
+            digest.update([entry.kind as u8, entry.scope as u8]);
+            digest.update(entry.length.to_le_bytes());
+            digest.update(entry.modified_ns.to_le_bytes());
+            digest.update(entry.prefix_digest);
+            digest.update(entry.body_digest.unwrap_or([0; 32]));
+        }
+        digest.finalize().into()
+    }
+
     pub fn verify_unchanged(&self, root: &Path) -> Result<PageFsReceipt, PageFsError> {
         self.verify_unchanged_with_control(root, &PageScanControl::unbounded())
     }
@@ -273,13 +291,30 @@ fn scan_page_root_internal(
 ) -> Result<PageScan, PageFsError> {
     control.check()?;
     let root = open_root(root)?;
+    scan_page_root_capability_internal(&root, include_body_digests, control)
+}
+
+pub(crate) fn scan_page_root_capability_controlled(
+    root: &Dir,
+    include_body_digests: bool,
+    control: &PageScanControl,
+) -> Result<PageScan, PageFsError> {
+    control.check()?;
+    scan_page_root_capability_internal(root, include_body_digests, control)
+}
+
+fn scan_page_root_capability_internal(
+    root: &Dir,
+    include_body_digests: bool,
+    control: &PageScanControl,
+) -> Result<PageScan, PageFsError> {
     let mut entries = Vec::new();
     let mut state_bytes = None;
     let mut manifest_bytes = None;
     let mut manifest_too_large = false;
     let mut body_bytes_remaining = DEEP_PAGE_TREE_MAX_BYTES;
     collect_entries(
-        &root,
+        root,
         &mut entries,
         &mut state_bytes,
         &mut manifest_bytes,
@@ -384,6 +419,13 @@ fn tree_digest(entries: &[PageEntry]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"wenlan-page-tree-v1");
     for entry in entries {
+        // The exact projection lock/temp controls are omitted during
+        // traversal. Creating them still changes their parent directory's
+        // mtime, so omit only the `.wenlan` directory metadata as well; its
+        // visible children (including state.json) remain independently hashed.
+        if entry.path == ".wenlan" && entry.kind == EntryKind::Directory {
+            continue;
+        }
         digest.update(entry.path.as_bytes());
         digest.update([entry.kind as u8, entry.scope as u8]);
         digest.update(entry.length.to_le_bytes());

@@ -7,6 +7,7 @@
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
+use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
@@ -15,6 +16,19 @@ use wenlan_core::events::NoopEmitter;
 use wenlan_core::sources::RawDocument;
 use wenlan_server::router::{build_router, AppRouter};
 use wenlan_server::state::ServerState;
+
+fn owner_binding_digest(digest: &str, source_ids: &[String]) -> String {
+    Sha256::digest(
+        serde_json::to_vec(&serde_json::json!({
+            "occurrence_digest": digest,
+            "source_ids": source_ids,
+        }))
+        .unwrap(),
+    )
+    .iter()
+    .map(|byte| format!("{byte:02x}"))
+    .collect()
+}
 
 async fn test_app() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>) {
     let dir = tempfile::tempdir().unwrap();
@@ -144,6 +158,138 @@ async fn list_queue_decodes_typed_payload() {
     assert_eq!(payload_val["action"], "entity_merge");
     assert_eq!(payload_val["existing_id"], "e1");
     assert_eq!(payload_val["new_id"], "e2");
+}
+
+#[tokio::test]
+async fn list_queue_surfaces_typed_lint_repair_review() {
+    let (app, _tmp, db) = test_app().await;
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let source_ids = vec!["page-a".to_string(), "page-b".to_string()];
+    let payload = serde_json::json!({
+        "action": "lint_repair_review",
+        "check_id": "pages.links.orphan_labels",
+        "occurrence_digest": digest,
+        "owner_binding_digest": owner_binding_digest(digest, &source_ids),
+        "issue": "Review the ambiguous target.",
+        "choices": ["keep", "retarget", "remove"],
+        "suggested_research_queries": ["Find the canonical page"],
+    })
+    .to_string();
+    assert!(db
+        .insert_lint_review_if_absent(
+            "lint_review_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &source_ids,
+            &payload,
+        )
+        .await
+        .unwrap());
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/refinery/queue?action=lint_repair_review")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = read_body_json(resp).await;
+    let proposals = body["proposals"].as_array().unwrap();
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0]["action"], "lint_repair_review");
+    assert_eq!(proposals[0]["payload"]["action"], "lint_repair_review");
+    assert_eq!(
+        proposals[0]["payload"]["check_id"],
+        "pages.links.orphan_labels"
+    );
+    assert_eq!(
+        proposals[0]["payload"]["choices"],
+        serde_json::json!(["keep", "retarget", "remove"])
+    );
+}
+
+#[tokio::test]
+async fn list_queue_default_does_not_hide_lint_review_backlog() {
+    let (app, _tmp, db) = test_app().await;
+    for index in 0..81 {
+        let digest = format!("{:064x}", index + 1);
+        let source_ids = vec!["page-a".to_string()];
+        let payload = serde_json::json!({
+            "action": "lint_repair_review",
+            "check_id": "pages.links.orphan_labels",
+            "occurrence_digest": digest,
+            "owner_binding_digest": owner_binding_digest(&digest, &source_ids),
+            "issue": "Review the ambiguous target.",
+            "choices": ["keep", "retarget", "remove"],
+            "suggested_research_queries": [],
+        })
+        .to_string();
+        assert!(db
+            .insert_lint_review_if_absent(&format!("lint_review_{digest}"), &source_ids, &payload,)
+            .await
+            .unwrap());
+    }
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/refinery/queue?action=lint_repair_review")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = read_body_json(resp).await;
+    assert_eq!(body["proposals"].as_array().unwrap().len(), 81);
+}
+
+#[tokio::test]
+async fn list_queue_skips_malformed_lint_repair_review_instead_of_returning_null_payload() {
+    let (app, tmp, db) = test_app().await;
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let id = format!("lint_review_{digest}");
+    let source_ids = vec!["page-a".to_string()];
+    let payload = serde_json::json!({
+        "action": "lint_repair_review",
+        "check_id": "pages.links.orphan_labels",
+        "occurrence_digest": digest,
+        "owner_binding_digest": owner_binding_digest(digest, &source_ids),
+        "issue": "Review the ambiguous target.",
+        "choices": ["keep", "retarget", "remove"],
+        "suggested_research_queries": [],
+    })
+    .to_string();
+    assert!(db
+        .insert_lint_review_if_absent(&id, &source_ids, &payload)
+        .await
+        .unwrap());
+
+    let db_file = tmp.path().join("origin_memory.db");
+    let raw_db = libsql::Builder::new_local(db_file.to_str().unwrap())
+        .build()
+        .await
+        .unwrap();
+    raw_db
+        .connect()
+        .unwrap()
+        .execute(
+            "UPDATE refinement_queue SET payload=?1 WHERE id=?2",
+            libsql::params![
+                r#"{"action":"lint_repair_review","occurrence_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+                id
+            ],
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/refinery/queue?action=lint_repair_review")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = read_body_json(resp).await;
+    assert!(body["proposals"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -494,6 +640,50 @@ async fn accept_returns_422_for_suggest_entity() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn accept_lint_repair_review_returns_choice_specific_422() {
+    let (app, _tmp, db) = test_app().await;
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let id = format!("lint_review_{digest}");
+    let source_ids = vec!["page-a".to_string()];
+    let payload = serde_json::json!({
+        "action": "lint_repair_review",
+        "check_id": "pages.links.orphan_labels",
+        "occurrence_digest": digest,
+        "owner_binding_digest": owner_binding_digest(digest, &source_ids),
+        "issue": "Review the ambiguous target.",
+        "choices": ["keep", "retarget", "remove"],
+        "suggested_research_queries": [],
+    })
+    .to_string();
+    db.insert_lint_review_if_absent(&id, &source_ids, &payload)
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/refinery/queue/{id}/accept"))
+        .header("x-agent-name", "test-agent")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let body = read_body_json(resp).await;
+    assert_eq!(
+        body["error"],
+        "action 'lint_repair_review' requires a choice-specific repair flow"
+    );
+    assert_eq!(
+        db.get_refinement_proposal(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "awaiting_review"
+    );
 }
 
 #[tokio::test]

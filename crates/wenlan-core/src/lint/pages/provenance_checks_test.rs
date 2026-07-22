@@ -438,6 +438,65 @@ async fn matching_evidence_cannot_mask_missing_logical_or_row_id_owner() {
     assert_eq!(result.evidence().len(), 2);
 }
 
+#[tokio::test]
+async fn uncategorized_scope_finds_unfiled_page_and_excludes_registered() {
+    let (db, _tmp) = test_db().await;
+    let conn = db._db.connect().unwrap();
+    insert_memory(&conn, "mem-unfiled", "mem-unfiled", "memory", None).await;
+    insert_memory(&conn, "mem-alpha", "mem-alpha", "memory", None).await;
+    insert_page(
+        &conn,
+        "page-unfiled",
+        crate::db::UNFILED_SPACE_ID,
+        Some("[]"),
+    )
+    .await;
+    insert_page(&conn, "page-CANARY-alpha", "alpha", Some("[]")).await;
+    for (page, locator) in [
+        ("page-unfiled", "mem-unfiled"),
+        ("page-CANARY-alpha", "mem-alpha"),
+    ] {
+        conn.execute(
+            "INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES (?1, ?2, 1, 'test')",
+            libsql::params![page, locator],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO page_evidence (page_id, source_kind, locator, linked_at, link_reason) VALUES (?1, 'memory', ?2, 1, 'test')",
+            libsql::params![page, locator],
+        )
+        .await
+        .unwrap();
+    }
+
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let scope = AppliedScope::uncategorized();
+    let clock = LintClock::fixed();
+    let gate = ExecutionGate::new(CancellationToken::new());
+    let context = LintContext::new(
+        &snapshot,
+        &scope,
+        None,
+        &clock,
+        &gate,
+        wenlan_types::lint::LintProfile::General,
+    );
+    // Shape-C regression guard: `workspace IS NULL` was permanently dead
+    // after migration 80's NOT NULL stamp, so a revert here would make both
+    // checks vacuously empty rather than actually excluding page-CANARY-alpha.
+    let records = load_sources(&context).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].locator, "mem-unfiled");
+
+    let citations = load_and_assess_citations(&context)
+        .await
+        .unwrap()
+        .result(CITATION_PARTITIONS_ID, 0)
+        .unwrap();
+    assert_eq!(citations.coverage().denominator(), 1);
+}
+
 fn metric(result: &LintCheckResult, code: LintMetricCode) -> u64 {
     result
         .metrics()

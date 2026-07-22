@@ -3,8 +3,13 @@ mod identity;
 mod version;
 
 use self::assessment::{Assessment, Level};
+pub(crate) use self::identity::projection_target_is_exclusive_page_markdown;
 use self::identity::{evaluate_identity, evaluate_state};
+pub(crate) use self::identity::{
+    normalize_id, stale_projection_ownership, StaleProjectionOwnership,
+};
 use self::version::evaluate_versions;
+pub(crate) use self::version::{projection_version_mismatches, ProjectionVersionMismatch};
 use super::fs::PageScan;
 use super::state::RawStateKind;
 use crate::lint::context::{LintContext, PopulationBasis, ScopeFilter};
@@ -20,10 +25,10 @@ pub(crate) const IDENTITY_ID: &str = "pages.projection.identity";
 pub(crate) const VERSION_ALIGNMENT_ID: &str = "pages.projection.version_alignment";
 
 #[derive(Debug, Clone)]
-struct DbPage {
-    id: String,
-    status: String,
-    version: i64,
+pub(crate) struct DbPage {
+    pub(crate) id: String,
+    pub(crate) status: String,
+    pub(crate) version: i64,
 }
 
 pub(crate) async fn run(context: &LintContext<'_, '_>) -> Vec<LintCheckResult> {
@@ -103,7 +108,7 @@ async fn load_pages(context: &LintContext<'_, '_>) -> Result<Vec<DbPage>, ()> {
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
         ScopeFilter::Uncategorized => (
-            "SELECT id, status, version FROM pages WHERE workspace IS NULL ORDER BY id",
+            "SELECT id, status, version FROM pages WHERE workspace = '00000000-0000-4000-8000-000000000001' ORDER BY id",
             libsql::params::Params::None,
         ),
     };

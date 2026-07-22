@@ -1,0 +1,17 @@
+{
+  "format_version": 1,
+  "table": "memories",
+  "source_id": "mem_target",
+  "columns": [
+    "id",
+    "source_id",
+    "memory_type"
+  ],
+  "rows": [
+    [
+      "'chunk_1'",
+      "'mem_target'",
+      "'fact'"
+    ]
+  ]
+}
