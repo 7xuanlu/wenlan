@@ -7960,10 +7960,44 @@ impl MemoryDB {
             // page in space A cannot mint a `cites`->external edge stamped
             // space B. (An earlier WHEN clause disabled the whole trigger body
             // for `cites`->external, skipping the source check too.)
+            // Two triggers with the IDENTICAL body: one AFTER INSERT (first
+            // write) and one AFTER UPDATE (reactivation / lineage-precedence /
+            // space reconciliation via `dual_write_edge`'s ON CONFLICT DO
+            // UPDATE). The UPDATE twin additionally guards on
+            // `NEW.valid_until IS NULL` so a SOFT-INVALIDATE (which sets
+            // valid_until on an edge whose endpoint may since have moved) is
+            // never blocked -- only an update that keeps the edge ACTIVE and
+            // typed is re-fenced. Without the UPDATE twin a reactivation could
+            // resurrect a typed row against a now-cross-space endpoint.
             conn.execute_batch(
                 "CREATE TRIGGER IF NOT EXISTS edges_space_fence
                  AFTER INSERT ON edges
                  WHEN NEW.lineage != 'legacy'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'edges_space_fence: cross-space edge rejected')
+                     WHERE (
+                         CASE NEW.src_kind
+                             WHEN 'page' THEN (SELECT space FROM pages WHERE id = NEW.src_id)
+                             WHEN 'memory' THEN (SELECT space FROM memories WHERE source_id = NEW.src_id)
+                             WHEN 'entity' THEN (SELECT space FROM entities WHERE id = NEW.src_id)
+                             ELSE NULL
+                         END
+                     ) IS NOT NEW.space
+                     OR (
+                         NOT (NEW.edge_type = 'cites' AND NEW.dst_kind = 'external')
+                         AND (
+                             CASE NEW.dst_kind
+                                 WHEN 'page' THEN (SELECT space FROM pages WHERE id = NEW.dst_id)
+                                 WHEN 'memory' THEN (SELECT space FROM memories WHERE source_id = NEW.dst_id)
+                                 WHEN 'entity' THEN (SELECT space FROM entities WHERE id = NEW.dst_id)
+                                 ELSE NULL
+                             END
+                         ) IS NOT NEW.space
+                     );
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS edges_space_fence_update
+                 AFTER UPDATE ON edges
+                 WHEN NEW.lineage != 'legacy' AND NEW.valid_until IS NULL
                  BEGIN
                      SELECT RAISE(ABORT, 'edges_space_fence: cross-space edge rejected')
                      WHERE (
@@ -8128,39 +8162,53 @@ impl MemoryDB {
             discriminator,
         );
         let now = chrono::Utc::now().timestamp();
-        // ON CONFLICT resolves two things deterministically, so the shadow
-        // edge is independent of dual-write CALL ORDER:
+        // ON CONFLICT resolves the shadow edge independent of dual-write CALL
+        // ORDER, reconciling three things a re-write can change:
         //   1. Reactivation -- a soft-invalidated edge (`valid_until` set) is
         //      un-retracted (the "delete a link then add it back" case).
-        //   2. Lineage precedence -- one content-addressed `edge_id` can be
-        //      dual-written by several legacy stores for the same (page,
-        //      memory) fact: `page_evidence` writes `evidence`, a
-        //      `pages.citations` entry writes `synthesis`. Without a rule the
-        //      lineage would be whichever store happened to write first (the
-        //      old `DO UPDATE` never touched `lineage`). We pin
-        //      `evidence` > `synthesis` -- the same precedence the migration-81
-        //      backfill already yields by running `page_sources`/`page_evidence`
-        //      before `page_citations` (`DO NOTHING`, first writer wins), so a
-        //      live edge and its backfilled twin agree.
-        // This is FENCE-SAFE: for a given `edge_id` every writer resolves the
-        // identical page/memory spaces, so they agree same-space vs cross-space
-        // -- `evidence`/`synthesis` occur only same-space (fence already passed
-        // at insert), `legacy` only cross-space; the CASE therefore only ever
-        // moves `synthesis`->`evidence` within one space and never crosses the
-        // `legacy` boundary, so the row stays fence-valid (and the fence is an
-        // AFTER INSERT trigger that does not re-fire on this UPDATE regardless).
+        //   2. Space -- `space` is adopted from the fresh write (`excluded`).
+        //      An endpoint can move between spaces (a memory re-spaced, a page
+        //      renamed), so a reactivated/re-written edge must carry the CURRENT
+        //      space, not the space frozen at first insert -- otherwise the
+        //      space fence would validate against stale coordinates. The AFTER
+        //      UPDATE fence (below) re-checks endpoints against this new space.
+        //   3. Lineage -- one content-addressed `edge_id` can be dual-written
+        //      by several legacy stores for the same fact (`page_evidence`/
+        //      `page_sources` -> `evidence`; a `pages.citations` entry ->
+        //      `synthesis`), and a reactivation can arrive with a fresh
+        //      classification (e.g. its memory moved cross-space, so the caller
+        //      now passes `legacy`). The CASE is a TOTAL rule over all four
+        //      lineages: `legacy` (a cross-space downgrade) always wins;
+        //      `evidence` outranks `synthesis` (the precedence the migration-81
+        //      backfill already yields by ordering `page_sources`/`page_evidence`
+        //      before `page_citations`); otherwise the fresh (`excluded`) typed
+        //      value is adopted (assertion/synthesis reactivation, or a
+        //      legacy->typed same-space upgrade). So a live edge and its
+        //      backfilled twin agree regardless of which store wrote first.
+        // FENCE-SAFE: the AFTER UPDATE twin of the space fence re-validates any
+        // update that keeps the edge active and typed, so a reactivation that
+        // reconciles to a cross-space typed row is rejected here just as the
+        // AFTER INSERT fence rejects it on first write (an earlier version only
+        // fenced INSERTs, letting a stale-space reactivation slip through).
         conn.execute(
             "INSERT INTO edges (edge_id, src_id, src_kind, dst_id, dst_kind, edge_type, lineage, grounded, root_id, space, weight, payload, provenance, operation_id, created_at, superseded_by, valid_until)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, ?8, NULL, NULL, NULL, ?9, ?10, NULL, NULL)
              ON CONFLICT(edge_id) DO UPDATE SET
                  valid_until = NULL,
                  superseded_by = NULL,
+                 space = excluded.space,
                  lineage = CASE
-                     WHEN excluded.lineage = 'evidence' AND edges.lineage = 'synthesis' THEN 'evidence'
-                     ELSE edges.lineage
+                     WHEN excluded.lineage = 'legacy' THEN 'legacy'
+                     WHEN excluded.lineage = 'evidence' THEN 'evidence'
+                     WHEN edges.lineage = 'evidence' AND excluded.lineage = 'synthesis' THEN 'evidence'
+                     ELSE excluded.lineage
                  END
-             WHERE valid_until IS NOT NULL
-                OR (excluded.lineage = 'evidence' AND edges.lineage = 'synthesis')",
+             WHERE edges.valid_until IS NOT NULL
+                OR edges.space IS NOT excluded.space
+                OR (excluded.lineage = 'evidence' AND edges.lineage != 'evidence')
+                OR (excluded.lineage = 'legacy' AND edges.lineage != 'legacy')
+                OR (excluded.lineage = 'synthesis' AND edges.lineage NOT IN ('evidence', 'synthesis'))
+                OR (excluded.lineage = 'assertion' AND edges.lineage != 'assertion')",
             libsql::params![
                 edge_id.clone(),
                 src_id.to_string(),
@@ -8198,22 +8246,41 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Look up a memory's space by `source_id`, for the page_evidence
-    /// dual-write's memory-kind space check (the fence trigger does not
-    /// exempt `cites`->`memory` edges, unlike `cites`->`external`).
+    /// Resolve a memory's space by `source_id` for the `cites`->`memory`
+    /// dual-write's space check (the fence does not exempt `cites`->`memory`,
+    /// unlike `cites`->`external`). A `source_id`'s chunks are stamped one
+    /// space together in normal operation (`update_memory_space_opt` mutates
+    /// every chunk of a `source_id`; ingest stamps one space per document),
+    /// but nothing at the SCHEMA enforces it -- so this resolves
+    /// DETERMINISTICALLY rather than trusting a `LIMIT 1` coin flip over
+    /// possibly-conflicting chunks: `Some(space)` only when every chunk agrees
+    /// on one non-NULL space, else `None` (no rows, any NULL-space chunk, or
+    /// chunks in conflicting spaces). `None` routes the caller to
+    /// `lineage='legacy'` (fence-exempt), so an ambiguous `source_id` can never
+    /// mint a typed cross-space edge off an indeterminate pick.
     async fn resolve_memory_space(
         conn: &libsql::Connection,
         source_id: &str,
     ) -> Result<Option<String>, libsql::Error> {
         let mut rows = conn
             .query(
-                "SELECT space FROM memories WHERE source_id = ?1 LIMIT 1",
+                "SELECT COUNT(*), COUNT(space), COUNT(DISTINCT space), MIN(space) \
+                 FROM memories WHERE source_id = ?1",
                 libsql::params![source_id],
             )
             .await?;
-        match rows.next().await? {
-            Some(row) => Ok(row.get(0).unwrap_or(None)),
-            None => Ok(None),
+        let Some(row) = rows.next().await? else {
+            return Ok(None);
+        };
+        let total: i64 = row.get(0).unwrap_or(0);
+        let non_null: i64 = row.get(1).unwrap_or(0);
+        let distinct: i64 = row.get(2).unwrap_or(0);
+        // Exactly one distinct, non-NULL space across every chunk resolves;
+        // zero rows / any NULL-space chunk / conflicting spaces resolve to None.
+        if total > 0 && non_null == total && distinct == 1 {
+            Ok(row.get(3).unwrap_or(None))
+        } else {
+            Ok(None)
         }
     }
 
@@ -8257,38 +8324,36 @@ impl MemoryDB {
         };
 
         for citation in citations {
-            if citation.source_kind == "memory" {
-                let resolves = Self::resolve_memory_space(conn, &citation.locator).await?
-                    == Some(space.clone());
-                let lineage = if resolves { "synthesis" } else { "legacy" };
-                Self::dual_write_edge(
-                    conn,
-                    "cites",
-                    "page",
-                    page_id,
-                    "memory",
-                    &citation.locator,
-                    &citation.locator,
-                    lineage,
-                    &space,
-                    None,
-                )
-                .await?;
-            } else {
-                Self::dual_write_edge(
-                    conn,
-                    "cites",
-                    "page",
-                    page_id,
-                    "external",
-                    &citation.locator,
-                    &citation.locator,
-                    "legacy",
-                    &space,
-                    None,
-                )
-                .await?;
-            }
+            let (dst_kind, lineage) = match citation.source_kind.as_str() {
+                "memory" => {
+                    let resolves = Self::resolve_memory_space(conn, &citation.locator).await?
+                        == Some(space.clone());
+                    ("memory", if resolves { "synthesis" } else { "legacy" })
+                }
+                // A distiller-authored citation to an external URI is
+                // `synthesis` (matrix row 6), NOT `legacy`: its external
+                // destination is fence-exempt, so there is no cross-space
+                // reason to downgrade. Writing `legacy` would collide with
+                // `page_evidence`'s `evidence` on the same external edge_id and
+                // make the resolved lineage order-dependent (round-2 item #2).
+                // Unknown/unresolved kinds can't classify a real destination
+                // and stay `legacy`.
+                "external_url" | "external_file" => ("external", "synthesis"),
+                _ => ("external", "legacy"),
+            };
+            Self::dual_write_edge(
+                conn,
+                "cites",
+                "page",
+                page_id,
+                dst_kind,
+                &citation.locator,
+                &citation.locator,
+                lineage,
+                &space,
+                None,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -8358,20 +8423,20 @@ impl MemoryDB {
 
     /// `page_sources` → `cites` edges (matrix row 2). `page_id` FK cascades
     /// to `pages`, so `pages.space` is always present (NOT NULL since M1). The
-    /// cited memory's space is resolved by a scalar subquery: a `source_id`'s
-    /// space is single-valued by construction (`update_memory_space_opt`
-    /// mutates every chunk of a `source_id` together; ingest stamps one space
-    /// per document), so `LIMIT 1` is deterministic -- the same resolution the
-    /// live fence trigger and `resolve_memory_space` use. A memory in a
+    /// cited memory's space is resolved DETERMINISTICALLY by a scalar subquery
+    /// that returns the single distinct non-NULL space shared by every chunk
+    /// of the `source_id`, else NULL when chunks are absent / NULL-spaced /
+    /// conflicting (never a `LIMIT 1` pick over disagreeing chunks) -- the same
+    /// rule `resolve_memory_space` applies on the live path, so the backfilled
+    /// shadow and a live dual-write of the same row agree. A memory in a
     /// DIFFERENT space (the `cross_space_discovery` feature mints exactly this
-    /// shape -- a page in one space citing memories in another) or an absent
-    /// memory downgrades to `lineage='legacy'`, mirroring
+    /// shape -- a page in one space citing memories in another) or an absent /
+    /// ambiguous memory downgrades to `lineage='legacy'`, mirroring
     /// `backfill_edges_from_page_evidence`. Without this, a cross-space
     /// page_sources row would backfill as a non-legacy `evidence` edge that
     /// the live fence does NOT exempt (only `cites`->`external` is), so the
-    /// backfilled shadow and the live dual-write of the same row would
-    /// disagree, and the backfilled non-legacy cross-space edge would persist
-    /// because the backfill predates the fence.
+    /// backfilled non-legacy cross-space edge would persist because the
+    /// backfill predates the fence.
     async fn backfill_edges_from_page_sources(
         conn: &libsql::Connection,
     ) -> Result<EdgeBackfillCounts, WenlanError> {
@@ -8379,7 +8444,9 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT ps.page_id, ps.memory_source_id, p.space, \
-                        (SELECT m.space FROM memories m WHERE m.source_id = ps.memory_source_id LIMIT 1) \
+                        (SELECT CASE WHEN COUNT(*) > 0 AND COUNT(m.space) = COUNT(*) AND COUNT(DISTINCT m.space) = 1 \
+                                     THEN MIN(m.space) ELSE NULL END \
+                           FROM memories m WHERE m.source_id = ps.memory_source_id) \
                  FROM page_sources ps JOIN pages p ON p.id = ps.page_id",
                 (),
             )
@@ -8438,18 +8505,22 @@ impl MemoryDB {
         //
         // A `LEFT JOIN memories` here fans out: a memory has one row PER CHUNK
         // sharing its `source_id`, so an N-chunk memory would yield N rows for
-        // one `page_evidence` row -- N identical classifications (space is
-        // single-valued per `source_id`; see `resolve_memory_space`) that
-        // inflate `classifiable`/`unknown_inserted` N-fold in the migration
-        // report while `insert_backfilled_edge`'s `ON CONFLICT DO NOTHING`
-        // still lands one edge. The scalar subquery + `LIMIT 1` yields exactly
-        // one row per `page_evidence` row, so the report counts one citation
-        // as one. For an external locator the subquery finds no memory and
-        // returns NULL, which the `external_*` branches never read.
+        // one `page_evidence` row -- N classifications that inflate
+        // `classifiable`/`unknown_inserted` N-fold in the migration report
+        // while `insert_backfilled_edge`'s `ON CONFLICT DO NOTHING` still lands
+        // one edge. The scalar subquery collapses each `page_evidence` row to
+        // exactly one memory-space value, resolved DETERMINISTICALLY (the single
+        // distinct non-NULL space every chunk agrees on, else NULL for
+        // absent/conflicting chunks -- never a `LIMIT 1` pick), matching
+        // `resolve_memory_space` on the live path. For an external locator the
+        // subquery finds no memory and returns NULL, which the `external_*`
+        // branches never read.
         let mut rows = conn
             .query(
                 "SELECT pe.page_id, pe.source_kind, pe.locator, p.space, \
-                        (SELECT m.space FROM memories m WHERE m.source_id = pe.locator LIMIT 1) \
+                        (SELECT CASE WHEN COUNT(*) > 0 AND COUNT(m.space) = COUNT(*) AND COUNT(DISTINCT m.space) = 1 \
+                                     THEN MIN(m.space) ELSE NULL END \
+                           FROM memories m WHERE m.source_id = pe.locator) \
                  FROM page_evidence pe \
                  JOIN pages p ON p.id = pe.page_id",
                 (),
@@ -8595,54 +8666,55 @@ impl MemoryDB {
                 continue;
             };
             for citation in citations {
-                if citation.source_kind == "memory" {
-                    // Same-space check, not just existence: the fence
-                    // trigger does not exempt `cites`->`memory` edges, so a
-                    // citation resolving to a memory in a different space
-                    // must downgrade to `legacy` (mirrors
-                    // `backfill_edges_from_page_evidence`'s memory-kind fix).
-                    let resolves = Self::resolve_memory_space(conn, &citation.locator)
-                        .await
-                        .map_err(|e| {
-                            WenlanError::VectorDb(format!("m81 citations resolve: {e}"))
-                        })?
-                        == Some(space.clone());
-                    let lineage = if resolves {
+                let (dst_kind, lineage) = match citation.source_kind.as_str() {
+                    "memory" => {
+                        // Same-space check, not just existence: the fence does
+                        // not exempt `cites`->`memory`, so a citation resolving
+                        // to a memory in a different space downgrades to
+                        // `legacy` (mirrors `backfill_edges_from_page_evidence`).
+                        let resolves = Self::resolve_memory_space(conn, &citation.locator)
+                            .await
+                            .map_err(|e| {
+                                WenlanError::VectorDb(format!("m81 citations resolve: {e}"))
+                            })?
+                            == Some(space.clone());
+                        if resolves {
+                            counts.classifiable += 1;
+                            ("memory", "synthesis")
+                        } else {
+                            counts.unknown_inserted += 1;
+                            ("memory", "legacy")
+                        }
+                    }
+                    // A distiller-authored external-URI citation is `synthesis`
+                    // (matrix row 6, fence-exempt destination), agreeing with
+                    // the live `dual_write_page_citations` classification and
+                    // resolving to `evidence` under the `evidence`>`synthesis`
+                    // precedence when `page_evidence` also backs the same
+                    // external edge_id -- writing `legacy` here made that shared
+                    // edge order-dependent (round-2 item #2).
+                    "external_url" | "external_file" => {
                         counts.classifiable += 1;
-                        "synthesis"
-                    } else {
+                        ("external", "synthesis")
+                    }
+                    _ => {
                         counts.unknown_inserted += 1;
-                        "legacy"
-                    };
-                    Self::insert_backfilled_edge(
-                        conn,
-                        "cites",
-                        "page",
-                        &page_id,
-                        "memory",
-                        &citation.locator,
-                        &citation.locator,
-                        lineage,
-                        &space,
-                        "pages.citations",
-                    )
-                    .await?;
-                } else {
-                    counts.unknown_inserted += 1;
-                    Self::insert_backfilled_edge(
-                        conn,
-                        "cites",
-                        "page",
-                        &page_id,
-                        "external",
-                        &citation.locator,
-                        &citation.locator,
-                        "legacy",
-                        &space,
-                        "pages.citations",
-                    )
-                    .await?;
-                }
+                        ("external", "legacy")
+                    }
+                };
+                Self::insert_backfilled_edge(
+                    conn,
+                    "cites",
+                    "page",
+                    &page_id,
+                    dst_kind,
+                    &citation.locator,
+                    &citation.locator,
+                    lineage,
+                    &space,
+                    "pages.citations",
+                )
+                .await?;
             }
         }
         Ok(counts)
@@ -8704,9 +8776,76 @@ impl MemoryDB {
         )
         .await?;
 
+        // The remaining three legacy stores the matrix claims coverage for.
+        // Each resolves the cited memory's space DETERMINISTICALLY (the single
+        // distinct non-NULL space every chunk agrees on, else NULL) via the
+        // same subquery the backfill/live paths use -- no `LIMIT 1` fanout --
+        // so the tally counts one citation as one link. `page_evidence` and
+        // `pages.citations` are tallied for their MEMORY-kind entries only:
+        // their `external_*` entries are fence-EXEMPT (external destination),
+        // so they cannot be cross-space in the fence's sense.
+        let mem_space_subquery = "SELECT CASE WHEN COUNT(*) > 0 AND COUNT(m.space) = COUNT(*) \
+                                              AND COUNT(DISTINCT m.space) = 1 \
+                                         THEN MIN(m.space) ELSE NULL END FROM memories m";
+
+        let page_sources = tally(
+            conn,
+            &format!(
+                "SELECT \
+                    SUM(CASE WHEN msp IS NOT NULL AND msp = pspace THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN msp IS NOT NULL AND msp != pspace THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN msp IS NULL THEN 1 ELSE 0 END) \
+                 FROM ( \
+                    SELECT p.space AS pspace, \
+                           ({mem_space_subquery} WHERE m.source_id = ps.memory_source_id) AS msp \
+                    FROM page_sources ps JOIN pages p ON p.id = ps.page_id \
+                 )"
+            ),
+        )
+        .await?;
+
+        let page_evidence = tally(
+            conn,
+            &format!(
+                "SELECT \
+                    SUM(CASE WHEN msp IS NOT NULL AND msp = pspace THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN msp IS NOT NULL AND msp != pspace THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN msp IS NULL THEN 1 ELSE 0 END) \
+                 FROM ( \
+                    SELECT p.space AS pspace, \
+                           ({mem_space_subquery} WHERE m.source_id = pe.locator) AS msp \
+                    FROM page_evidence pe JOIN pages p ON p.id = pe.page_id \
+                    WHERE pe.source_kind = 'memory' \
+                 )"
+            ),
+        )
+        .await?;
+
+        let pages_citations = tally(
+            conn,
+            &format!(
+                "SELECT \
+                    SUM(CASE WHEN msp IS NOT NULL AND msp = pspace THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN msp IS NOT NULL AND msp != pspace THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN msp IS NULL THEN 1 ELSE 0 END) \
+                 FROM ( \
+                    SELECT p.space AS pspace, \
+                           ({mem_space_subquery} WHERE m.source_id = json_extract(c.value, '$.locator')) AS msp \
+                    FROM pages p, \
+                         json_each(CASE WHEN json_valid(p.citations) AND json_type(p.citations) = 'array' \
+                                        THEN p.citations ELSE '[]' END) c \
+                    WHERE json_extract(c.value, '$.source_kind') = 'memory' \
+                 )"
+            ),
+        )
+        .await?;
+
         Ok(serde_json::json!({
             "relations": relations,
             "page_links": page_links,
+            "page_sources": page_sources,
+            "page_evidence": page_evidence,
+            "pages_citations": pages_citations,
         }))
     }
 
@@ -8720,13 +8859,16 @@ impl MemoryDB {
     /// inserted or found an existing row -- proven by
     /// `acquire_provenance_root_two_writers_converge_on_same_root`.
     ///
-    /// `independence_group_id` resolution (Q6 decision C): a fresh
-    /// LSH band lookup against `provenance_root_minhash_bands` adopts an
-    /// existing near-dup group when one is found, else mints a new group id.
-    /// This work happens before the INSERT unconditionally (never
-    /// check-then-insert), so on the conflict path it is simply discarded --
-    /// the existing row's group is untouched, matching `grounded`/`root_id`/
-    /// `lineage` immutability elsewhere in the spec.
+    /// `independence_group_id` resolution (Q6 decision C), in precedence
+    /// order: an LSH band lookup against `provenance_root_minhash_bands`
+    /// adopts an existing near-dup group when one is found; else the base
+    /// independence-signal key (source / agent-turn / import-batch); else the
+    /// independence is un-establishable and the call ROUTES TO HUMAN REVIEW
+    /// (returns `Err`) per Q6 B.4 -- it never mints a random group (that would
+    /// silently inflate independent-support counts). This work happens before
+    /// the INSERT unconditionally (never check-then-insert), so on the conflict
+    /// path it is simply discarded -- the existing row's group is untouched,
+    /// matching `grounded`/`root_id`/`lineage` immutability elsewhere in the spec.
     ///
     /// ponytail: band-match only, no exact-Jaccard re-verification pass (the
     /// entity_minhash cascade re-fetches the candidate's `name` to confirm;
@@ -8774,9 +8916,25 @@ impl MemoryDB {
                 .await?
                 .into_iter()
                 .next();
-            let group_id = overlay_match
+            let group_id = match overlay_match
                 .or_else(|| crate::provenance::base_independence_key(signals))
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            {
+                Some(id) => id,
+                // Q6 B.4: un-establishable independence (no near-dup overlay
+                // AND no source/turn/batch signal) routes to human review,
+                // NEVER auto-genesis. Minting a fresh UUID group here would
+                // silently manufacture a distinct independence group and
+                // inflate independent-support counts (round-2 item #6). Fail
+                // loud instead -- the inner block's Err rolls the txn back.
+                None => {
+                    return Err(WenlanError::VectorDb(
+                        "acquire_provenance_root: independence un-establishable (no near-dup, no \
+                         source/turn/batch signal); routing to human review per Q6 B.4 rather than \
+                         auto-generating a group"
+                            .to_string(),
+                    ));
+                }
+            };
 
             let root_id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().timestamp();
@@ -27205,15 +27363,18 @@ impl MemoryDB {
         // CALLER to have opened a transaction. On an autocommit connection the
         // `page_evidence` INSERT below would commit before the edge INSERT, so
         // a fence-rejected or otherwise failing edge write could not roll the
-        // legacy write back. Assert the invariant so any caller that forgets a
-        // `BEGIN` fails loudly in tests rather than silently splitting the two
+        // legacy write back. Enforce this at RUNTIME (not `debug_assert!`,
+        // which compiles out of release) so a caller that forgets a `BEGIN`
+        // fails loudly in every build rather than silently splitting the two
         // writes across commits.
-        debug_assert!(
-            !conn.is_autocommit(),
-            "insert_resolved_page_evidence must run inside a caller-opened transaction \
-             (single-transaction dual-write); autocommit would commit the page_evidence write \
-             before the edge write, breaking atomicity"
-        );
+        if conn.is_autocommit() {
+            return Err(libsql::Error::Misuse(
+                "insert_resolved_page_evidence must run inside a caller-opened transaction \
+                 (single-transaction dual-write); an autocommit connection would commit the \
+                 page_evidence write before the edge write, breaking atomicity"
+                    .to_string(),
+            ));
+        }
         let mut space_rows = conn
             .query(
                 "SELECT space FROM pages WHERE id = ?1",
@@ -61816,7 +61977,10 @@ pub(crate) mod tests {
             edge_row(&conn, "cites", "page_c", "https://example.com/z")
                 .await
                 .unwrap();
-        assert_eq!(ext_lineage, "legacy");
+        // A distiller-authored external-URI citation is `synthesis` (matrix
+        // row 6, fence-exempt destination), not `legacy` -- see the round-2
+        // item #2 fix in `dual_write_page_citations`.
+        assert_eq!(ext_lineage, "synthesis");
         assert_eq!(ext_grounded, 0);
     }
 
@@ -62089,6 +62253,342 @@ pub(crate) mod tests {
         assert_eq!(
             ps_count, 0,
             "the page_sources write must roll back too -- single-transaction dual-write"
+        );
+    }
+
+    // ---- Round-2 rework: M2 PR-1 edge dual-write hardening ----
+
+    #[tokio::test]
+    async fn resolve_memory_space_conflicting_chunks_resolve_to_none() {
+        // Item 1: a source_id spanning two distinct spaces must resolve to
+        // None (deterministic), not an arbitrary `LIMIT 1` pick. None routes
+        // the caller to lineage='legacy' (fence-exempt), so an ambiguous
+        // source can never mint a typed cross-space edge.
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "src_conflict", "chunk zero", "space_a").await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                    last_modified, chunk_type, source_agent, space, confidence, confirmed, \
+                    memory_type, pending_revision) \
+                 VALUES ('src_conflict-1', 'chunk one', 'memory', 'src_conflict', 'test', 1, \
+                    1712707200, 'text', NULL, 'space_b', 1.0, 0, 'fact', 0)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let conn = db.conn.lock().await;
+        let resolved = MemoryDB::resolve_memory_space(&conn, "src_conflict")
+            .await
+            .unwrap();
+        assert_eq!(
+            resolved, None,
+            "a source_id spanning two spaces must resolve to None, not a LIMIT-1 coin flip"
+        );
+    }
+
+    #[tokio::test]
+    async fn dual_write_page_citations_external_uses_synthesis_not_legacy() {
+        // Item 2c: a pages.citations external_url/external_file entry is
+        // synthesis-authored (the distiller wrote it) and its external
+        // destination is fence-exempt, so it carries lineage='synthesis'
+        // (matrix row 6), NOT 'legacy'. Writing 'legacy' collides with
+        // page_evidence's 'evidence' for the same external edge_id and makes
+        // the resolved lineage order-dependent.
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        insert_raw_page_for_m81_test(&conn, "page_ext", "space_a").await;
+        let citations = r#"[{"occurrence":1,"marker":1,"source_kind":"external_url","locator":"https://example.com/a","score":0.0,"status":"unverified","scope":"paragraph"}]"#;
+        MemoryDB::dual_write_page_citations(&conn, "page_ext", Some(citations))
+            .await
+            .unwrap();
+        let (lineage, _, _) = edge_row(&conn, "cites", "page_ext", "https://example.com/a")
+            .await
+            .expect("external citation edge must exist");
+        assert_eq!(
+            lineage, "synthesis",
+            "a pages.citations external_url entry must be synthesis (fence-exempt), not legacy"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_external_citation_edge_lineage_is_order_independent() {
+        // Item 2c: page_evidence external (evidence) and pages.citations
+        // external_url (synthesis, after the fix) share one content-addressed
+        // edge_id; the resolved lineage must be 'evidence' regardless of order.
+        let loc = "https://example.com/shared";
+        let citations = format!(
+            r#"[{{"occurrence":1,"marker":1,"source_kind":"external_url","locator":"{loc}","score":0.0,"status":"unverified","scope":"paragraph"}}]"#
+        );
+        // Order A: citation (synthesis) first, then page_evidence (evidence).
+        {
+            let (db, _dir) = test_db().await;
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_a", "space_a").await;
+            MemoryDB::dual_write_page_citations(&conn, "page_a", Some(&citations))
+                .await
+                .unwrap();
+            MemoryDB::dual_write_edge(
+                &conn, "cites", "page", "page_a", "external", loc, loc, "evidence", "space_a", None,
+            )
+            .await
+            .unwrap();
+            let (lineage, _, _) = edge_row(&conn, "cites", "page_a", loc).await.unwrap();
+            assert_eq!(
+                lineage, "evidence",
+                "evidence must win when synthesis wrote first"
+            );
+        }
+        // Order B: page_evidence (evidence) first, then citation (synthesis).
+        {
+            let (db, _dir) = test_db().await;
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_b", "space_a").await;
+            MemoryDB::dual_write_edge(
+                &conn, "cites", "page", "page_b", "external", loc, loc, "evidence", "space_a", None,
+            )
+            .await
+            .unwrap();
+            let citations_b = citations.clone();
+            MemoryDB::dual_write_page_citations(&conn, "page_b", Some(&citations_b))
+                .await
+                .unwrap();
+            let (lineage, _, _) = edge_row(&conn, "cites", "page_b", loc).await.unwrap();
+            assert_eq!(
+                lineage, "evidence",
+                "evidence must not be downgraded when synthesis writes after"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dual_write_edge_reactivation_adopts_fresh_lineage() {
+        // Item 4: reactivating a soft-invalidated edge must adopt the fresh
+        // classification, not resurrect a stale lineage. An edge written
+        // 'evidence' (same-space), invalidated, then reasserted after its
+        // memory moved cross-space (caller passes 'legacy') must come back
+        // 'legacy', not stale 'evidence'.
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_r", "content", "space_a").await;
+        let conn = db.conn.lock().await;
+        insert_raw_page_for_m81_test(&conn, "page_r", "space_a").await;
+        let edge_id = MemoryDB::dual_write_edge(
+            &conn, "cites", "page", "page_r", "memory", "mem_r", "mem_r", "evidence", "space_a",
+            None,
+        )
+        .await
+        .unwrap();
+        MemoryDB::dual_write_invalidate_edge(&conn, &edge_id, None)
+            .await
+            .unwrap();
+        // The memory moved cross-space, so the caller now classifies 'legacy'.
+        conn.execute(
+            "UPDATE memories SET space = 'space_b' WHERE source_id = 'mem_r'",
+            (),
+        )
+        .await
+        .unwrap();
+        MemoryDB::dual_write_edge(
+            &conn, "cites", "page", "page_r", "memory", "mem_r", "mem_r", "legacy", "space_a", None,
+        )
+        .await
+        .unwrap();
+        let (lineage, _, _) = edge_row(&conn, "cites", "page_r", "mem_r").await.unwrap();
+        assert_eq!(
+            lineage, "legacy",
+            "reactivation must adopt fresh 'legacy', not stale 'evidence'"
+        );
+        let valid_until: Option<i64> = {
+            let mut rows = conn
+                .query(
+                    "SELECT valid_until FROM edges WHERE edge_id = ?1",
+                    libsql::params![edge_id.clone()],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(valid_until, None, "reactivation must clear valid_until");
+    }
+
+    #[tokio::test]
+    async fn edges_after_update_fence_rejects_cross_space_reactivation() {
+        // Item 4: the fence must validate UPDATEs, not only INSERTs. A buggy
+        // caller that reactivates a typed edge whose endpoint has moved to a
+        // different space must be rejected by the AFTER UPDATE fence.
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_f", "content", "space_a").await;
+        let conn = db.conn.lock().await;
+        insert_raw_page_for_m81_test(&conn, "page_f", "space_a").await;
+        let edge_id = MemoryDB::dual_write_edge(
+            &conn, "cites", "page", "page_f", "memory", "mem_f", "mem_f", "evidence", "space_a",
+            None,
+        )
+        .await
+        .unwrap();
+        MemoryDB::dual_write_invalidate_edge(&conn, &edge_id, None)
+            .await
+            .unwrap();
+        conn.execute(
+            "UPDATE memories SET space = 'space_b' WHERE source_id = 'mem_f'",
+            (),
+        )
+        .await
+        .unwrap();
+        // Buggy reassert: keeps evidence/space_a though the memory is now cross-space.
+        let result = MemoryDB::dual_write_edge(
+            &conn, "cites", "page", "page_f", "memory", "mem_f", "mem_f", "evidence", "space_a",
+            None,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "AFTER UPDATE fence must reject reactivating a typed edge whose dst is now cross-space"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_legacy_cross_space_links_covers_all_five_stores() {
+        // Item 5: the pre-migration cross-space audit must report every store
+        // the matrix claims coverage for, not just relations + page_links, and
+        // tally a cross-space page_source correctly.
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_ps", "content", "space_b").await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_ps", "space_a").await;
+            conn.execute(
+                "INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason) \
+                 VALUES ('page_ps', 'mem_ps', 1, 'test')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let conn = db.conn.lock().await;
+        let audit = MemoryDB::audit_legacy_cross_space_links(&conn)
+            .await
+            .unwrap();
+        for store in [
+            "relations",
+            "page_links",
+            "page_sources",
+            "page_evidence",
+            "pages_citations",
+        ] {
+            assert!(
+                audit.get(store).is_some(),
+                "cross-space audit must include store {store}: {audit}"
+            );
+        }
+        assert_eq!(
+            audit["page_sources"]["cross_space"],
+            serde_json::json!(1),
+            "a page in space_a citing a memory in space_b is one cross-space page_source: {audit}"
+        );
+    }
+
+    #[tokio::test]
+    async fn acquire_provenance_root_unestablishable_independence_routes_to_review() {
+        // Item 6: with no near-dup and no source/turn/batch signal, the
+        // contract (Q6 B.4) routes to human review -- it must NOT auto-genesis
+        // a random active group.
+        let (db, _dir) = test_db().await;
+        let signals = crate::provenance::IndependenceSignals {
+            source_identity: None,
+            agent_turn: None,
+            import_batch: None,
+        };
+        let result = db
+            .acquire_provenance_root("generated", "some ungrounded content", &signals)
+            .await;
+        assert!(
+            result.is_err(),
+            "unestablishable independence must fail loud (route to review), not auto-genesis"
+        );
+        let conn = db.conn.lock().await;
+        let count: i64 = {
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM provenance_roots", ())
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(
+            count, 0,
+            "no root row may be minted when independence is unestablishable"
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_resolved_page_evidence_rejects_autocommit_connection() {
+        // Item 3: the single-transaction dual-write invariant must be enforced
+        // in RELEASE too (debug_assert! compiles out). Calling on an autocommit
+        // connection must return an error, not silently split the writes.
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        insert_raw_page_for_m81_test(&conn, "page_ac", "space_a").await;
+        let result =
+            MemoryDB::insert_resolved_page_evidence(&conn, "page_ac", &["mem_ac"], 1, "test").await;
+        assert!(
+            result.is_err(),
+            "must reject an autocommit connection (release-enforced, not debug_assert)"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphaned_page_sources_rolls_back_edge_invalidate_on_failure() {
+        // Item 3: cleanup owns its BEGIN/COMMIT, so a mid-transaction fault
+        // rolls back the edge soft-invalidate together with the legacy delete
+        // -- not two independent autocommit writes.
+        let edge_id = crate::provenance::compute_edge_id(
+            "cites", "page", "page_cl", "memory", "ghost", "ghost",
+        );
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_cl", "space_a").await;
+            conn.execute(
+                "INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason) \
+                 VALUES ('page_cl', 'ghost', 1, 'test')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute("BEGIN", ()).await.unwrap();
+            MemoryDB::dual_write_edge(
+                &conn, "cites", "page", "page_cl", "memory", "ghost", "ghost", "legacy", "space_a",
+                None,
+            )
+            .await
+            .unwrap();
+            conn.execute("COMMIT", ()).await.unwrap();
+            conn.execute(
+                "CREATE TRIGGER test_abort_pages_update BEFORE UPDATE ON pages \
+                 BEGIN SELECT RAISE(ABORT, 'test: pages update blocked'); END",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let result = db.cleanup_orphaned_page_sources().await;
+        assert!(result.is_err(), "the injected fault must fail the cleanup");
+        let conn = db.conn.lock().await;
+        let valid_until: Option<i64> = {
+            let mut rows = conn
+                .query(
+                    "SELECT valid_until FROM edges WHERE edge_id = ?1",
+                    libsql::params![edge_id],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(
+            valid_until, None,
+            "the edge invalidate must roll back with the legacy delete (single transaction)"
         );
     }
 }
