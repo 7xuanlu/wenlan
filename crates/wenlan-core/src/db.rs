@@ -533,7 +533,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 80;
+pub const SCHEMA_VERSION: u32 = 81;
 
 /// Reserved id AND name of the uncategorized-page sentinel space (M1 honest
 /// columns). Uncategorized pages store this value in `pages.space`/`workspace`
@@ -7465,6 +7465,19 @@ impl MemoryDB {
             if version < 80 {
                 self.migrate_80_page_scope_fold().await?;
             }
+
+            // Migration 81 (M2 PR-1 "unified edges", stage a+b): expand
+            // schema with `edges` (spec v3 §2, one typed store replacing
+            // `relations`/`page_sources`/`page_evidence`/`pages.citations`/
+            // `page_links`) and `provenance_roots` (spec v3 §1). Backfills
+            // the five legacy stores into `edges` once, then creates the
+            // NULL-safe space-fence trigger so it only binds on writes AFTER
+            // the backfill. Extracted (like 73/74/80) -- see
+            // migrate_81_unified_edges and
+            // docs/plans/2026-07-21-m2-edge-assignment-matrix.md.
+            if version < 81 {
+                self.migrate_81_unified_edges().await?;
+            }
         }
 
         Ok(())
@@ -7810,6 +7823,960 @@ impl MemoryDB {
             ));
         }
         Ok(())
+    }
+
+    // Migration 81 (M2 PR-1 "unified edges"). Spec v3 §2 replaces five
+    // legacy edge/link stores (`relations`, `page_sources`, `page_evidence`,
+    // the `pages.citations` JSON blob, `page_links`) with one typed `edges`
+    // table; §1 adds `provenance_roots`, the content-addressed identity
+    // substrate `edges.root_id` will reference once M3+ roots the corpus.
+    //
+    // Legacy honesty (spec §2): M2 has no span-validation pipeline, so every
+    // edge this migration writes is honestly `grounded = 0` -- a real
+    // computed function that returns false for all M2 inputs, not a stub.
+    // `root_id` is NULL on every M2 edge; corpus-wide root attachment is
+    // explicitly deferred (M3+/M6, per the goal prompt's stop-and-confirm on
+    // "confidently rooting the full memory corpus"). `provenance_roots`
+    // itself is built and tested here (`acquire_provenance_root`), proven by
+    // a direct two-writer convergence test, not by corpus attachment.
+    //
+    // Ordering matters: the backfill INSERTs run BEFORE `edges_space_fence`
+    // exists, so they never trip it (AFTER INSERT triggers only fire on
+    // inserts issued after CREATE TRIGGER runs) -- "backfill shadows predate
+    // the fence". A killed-and-rerun migration stays replay-safe without a
+    // ledger: `edges.edge_id` is content-addressed and every insert is
+    // `ON CONFLICT(edge_id) DO NOTHING`, so a resumed backfill re-attempts
+    // identical inserts that either land once or no-op forever after --
+    // no partial-apply state to track. See the full per-store
+    // lineage/edge_type table and fence-exemption rationale in
+    // docs/plans/2026-07-21-m2-edge-assignment-matrix.md.
+    //
+    // ponytail: one BEGIN/COMMIT for the whole backfill, not M1's
+    // rowid-batched multi-transaction dance -- `edges` is a brand-new empty
+    // table with no concurrent readers depending on it yet (unlike M1's
+    // in-place NOT NULL fold of the live `pages` table), so the lock-duration
+    // risk that motivated M1's batching doesn't apply here. Add batching if a
+    // real corpus makes single-transaction backfill measurably slow.
+    //
+    // Bulk-insert/trigger benchmark (M2 index contract, spec v3 §2), measured
+    // 2026-07-21 on this machine: 10,000 live dual-writes through
+    // `create_relation` (relations INSERT + `edges_space_fence`-gated edges
+    // INSERT, one BEGIN/COMMIT each) = 3.88s (387.8µs/row). See
+    // `m81_bulk_insert_trigger_benchmark` (`#[ignore]`, manual-only).
+    async fn migrate_81_unified_edges(&self) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 begin: {e}")))?;
+
+        let result: Result<(), WenlanError> = async {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS provenance_roots (
+                    root_id TEXT PRIMARY KEY,
+                    identity_version INTEGER NOT NULL,
+                    identity_digest TEXT NOT NULL,
+                    root_kind TEXT NOT NULL CHECK(root_kind IN ('document_ingest','human_capture','human_edit_delta','generated')),
+                    independence_group_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('ingesting','active','failed')) DEFAULT 'active',
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(identity_version, identity_digest)
+                );
+                CREATE TABLE IF NOT EXISTS provenance_root_minhash_bands (
+                    band_key INTEGER NOT NULL,
+                    root_id TEXT NOT NULL REFERENCES provenance_roots(root_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_provenance_root_minhash_band
+                    ON provenance_root_minhash_bands(band_key);
+                CREATE TABLE IF NOT EXISTS edges (
+                    edge_id TEXT PRIMARY KEY,
+                    src_id TEXT NOT NULL,
+                    src_kind TEXT NOT NULL CHECK(src_kind IN ('page','memory','entity','external')),
+                    dst_id TEXT NOT NULL,
+                    dst_kind TEXT NOT NULL CHECK(dst_kind IN ('page','memory','entity','external')),
+                    edge_type TEXT NOT NULL CHECK(edge_type IN ('mentions','relates','cites','supports','links')),
+                    lineage TEXT NOT NULL CHECK(lineage IN ('assertion','evidence','synthesis','legacy')),
+                    grounded INTEGER NOT NULL CHECK(grounded IN (0,1)),
+                    root_id TEXT REFERENCES provenance_roots(root_id),
+                    space TEXT NOT NULL,
+                    weight REAL,
+                    payload TEXT,
+                    provenance TEXT,
+                    operation_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    superseded_by TEXT REFERENCES edges(edge_id),
+                    valid_until INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_kind, src_id);
+                CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_kind, dst_id);
+                CREATE INDEX IF NOT EXISTS idx_edges_root ON edges(root_id) WHERE root_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_edges_operation ON edges(operation_id) WHERE operation_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_edges_superseded ON edges(superseded_by) WHERE superseded_by IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_edges_active_grounded_space_type
+                    ON edges(space, edge_type) WHERE valid_until IS NULL AND grounded = 1;
+                CREATE TABLE IF NOT EXISTS edges_migration_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    stage TEXT NOT NULL,
+                    cursor TEXT,
+                    batch_checksum TEXT,
+                    epoch INTEGER NOT NULL DEFAULT 1,
+                    completed_at INTEGER,
+                    report_json TEXT
+                );",
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 DDL: {e}")))?;
+
+            let relations = Self::backfill_edges_from_relations(&conn).await?;
+            let page_sources = Self::backfill_edges_from_page_sources(&conn).await?;
+            let page_evidence = Self::backfill_edges_from_page_evidence(&conn).await?;
+            let page_links = Self::backfill_edges_from_page_links(&conn).await?;
+            let citations = Self::backfill_edges_from_page_citations(&conn).await?;
+            let audit = Self::audit_legacy_cross_space_links(&conn).await?;
+
+            let report = serde_json::json!({
+                "relations": relations.to_json(),
+                "page_sources": page_sources.to_json(),
+                "page_evidence": page_evidence.to_json(),
+                "page_links": page_links.to_json(),
+                "pages_citations": citations.to_json(),
+                "cross_space_audit": audit,
+            });
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "INSERT INTO edges_migration_state (id, stage, cursor, batch_checksum, epoch, completed_at, report_json)
+                 VALUES (1, 'backfilled', NULL, NULL, 1, ?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET stage='backfilled', completed_at=?1, report_json=?2",
+                libsql::params![now, report.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 migration state: {e}")))?;
+
+            // Fence created AFTER every backfill INSERT above -- see the
+            // "ordering matters" note on this function's doc comment. Sole
+            // exemption (besides `lineage='legacy'`): `cites` to an external
+            // URI, which has no space to check (spec §2).
+            conn.execute_batch(
+                "CREATE TRIGGER IF NOT EXISTS edges_space_fence
+                 AFTER INSERT ON edges
+                 WHEN NEW.lineage != 'legacy' AND NOT (NEW.edge_type = 'cites' AND NEW.dst_kind = 'external')
+                 BEGIN
+                     SELECT RAISE(ABORT, 'edges_space_fence: cross-space edge rejected')
+                     WHERE (
+                         CASE NEW.src_kind
+                             WHEN 'page' THEN (SELECT space FROM pages WHERE id = NEW.src_id)
+                             WHEN 'memory' THEN (SELECT space FROM memories WHERE source_id = NEW.src_id)
+                             WHEN 'entity' THEN (SELECT space FROM entities WHERE id = NEW.src_id)
+                             ELSE NULL
+                         END
+                     ) IS NOT NEW.space
+                     OR (
+                         CASE NEW.dst_kind
+                             WHEN 'page' THEN (SELECT space FROM pages WHERE id = NEW.dst_id)
+                             WHEN 'memory' THEN (SELECT space FROM memories WHERE source_id = NEW.dst_id)
+                             WHEN 'entity' THEN (SELECT space FROM entities WHERE id = NEW.dst_id)
+                             ELSE NULL
+                         END
+                     ) IS NOT NEW.space;
+                 END;",
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 fence trigger: {e}")))?;
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m81 commit: {e}")))?;
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        }
+        drop(conn);
+
+        let conn = self.conn.lock().await;
+        conn.execute("PRAGMA user_version = 81", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 bump: {e}")))?;
+        log::info!("[migration] Migration 81 applied: unified edges + provenance_roots (M2 PR-1)");
+        Ok(())
+    }
+}
+
+/// Per-store backfill tally for the M2 PR-1 migration report (spec §2
+/// "legacy honesty": a report of classifiable vs unknown counts).
+/// `unknown_inserted` counts unknown rows still written as `lineage='legacy'`
+/// edges (real src/dst values, ambiguous provenance); `unknown_skipped`
+/// counts rows with no determinable destination at all (e.g. an orphan
+/// wikilink -- "no page→page edge exists yet") that never become an edges
+/// row.
+#[derive(Default)]
+struct EdgeBackfillCounts {
+    classifiable: u64,
+    unknown_inserted: u64,
+    unknown_skipped: u64,
+}
+
+impl EdgeBackfillCounts {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "classifiable": self.classifiable,
+            "unknown_inserted": self.unknown_inserted,
+            "unknown_skipped": self.unknown_skipped,
+        })
+    }
+}
+
+impl MemoryDB {
+    /// Insert one backfilled edge (`ON CONFLICT(edge_id) DO NOTHING` --
+    /// content-addressed retry identity, spec §6.1). `grounded=0`, `root_id`
+    /// NULL, `operation_id` NULL on every M2-backfilled row (legacy
+    /// honesty). `provenance` records which legacy store produced the row,
+    /// for audit.
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_backfilled_edge(
+        conn: &libsql::Connection,
+        edge_type: &str,
+        src_kind: &str,
+        src_id: &str,
+        dst_kind: &str,
+        dst_id: &str,
+        discriminator: &str,
+        lineage: &str,
+        space: &str,
+        backfilled_from: &str,
+    ) -> Result<(), WenlanError> {
+        let edge_id = crate::provenance::compute_edge_id(
+            edge_type,
+            src_kind,
+            src_id,
+            dst_kind,
+            dst_id,
+            discriminator,
+        );
+        let provenance = serde_json::json!({"backfilled_from": backfilled_from}).to_string();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO edges (edge_id, src_id, src_kind, dst_id, dst_kind, edge_type, lineage, grounded, root_id, space, weight, payload, provenance, operation_id, created_at, superseded_by, valid_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, ?8, NULL, NULL, ?9, NULL, ?10, NULL, NULL)
+             ON CONFLICT(edge_id) DO NOTHING",
+            libsql::params![
+                edge_id,
+                src_id.to_string(),
+                src_kind.to_string(),
+                dst_id.to_string(),
+                dst_kind.to_string(),
+                edge_type.to_string(),
+                lineage.to_string(),
+                space.to_string(),
+                provenance,
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("m81 insert edge ({edge_type}): {e}")))?;
+        Ok(())
+    }
+
+    /// Live dual-write counterpart to `insert_backfilled_edge` (M2 PR-1
+    /// stage b): mints, or retry-converges onto via content-addressed
+    /// `edge_id`, one edge row in the SAME transaction as the caller's
+    /// legacy-store write. Uses the identical `(edge_type, src_kind,
+    /// src_id, dst_kind, dst_id, discriminator)` inputs the migration-81
+    /// backfill uses for the same logical row, so a freshly-written edge
+    /// and a backfilled edge for the same fact converge on one `edge_id`
+    /// by construction. `ON CONFLICT` reactivates a previously
+    /// soft-invalidated edge (the "delete a link then add it back" case)
+    /// rather than leaving it stuck invalid. M2 PR-1 has no
+    /// span-validation pipeline, so every dual-written edge is honestly
+    /// `grounded=false`, `root_id=NULL` -- same legacy-honesty ceiling as
+    /// the backfill (spec v3 §2). Returns `libsql::Error` so callers whose
+    /// existing transaction block is already typed that way (the common
+    /// case in this file) can `.await?` it directly.
+    #[allow(clippy::too_many_arguments)]
+    async fn dual_write_edge(
+        conn: &libsql::Connection,
+        edge_type: &str,
+        src_kind: &str,
+        src_id: &str,
+        dst_kind: &str,
+        dst_id: &str,
+        discriminator: &str,
+        lineage: &str,
+        space: &str,
+        operation_id: Option<&str>,
+    ) -> Result<String, libsql::Error> {
+        let edge_id = crate::provenance::compute_edge_id(
+            edge_type,
+            src_kind,
+            src_id,
+            dst_kind,
+            dst_id,
+            discriminator,
+        );
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO edges (edge_id, src_id, src_kind, dst_id, dst_kind, edge_type, lineage, grounded, root_id, space, weight, payload, provenance, operation_id, created_at, superseded_by, valid_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, ?8, NULL, NULL, NULL, ?9, ?10, NULL, NULL)
+             ON CONFLICT(edge_id) DO UPDATE SET valid_until = NULL, superseded_by = NULL
+             WHERE valid_until IS NOT NULL",
+            libsql::params![
+                edge_id.clone(),
+                src_id.to_string(),
+                src_kind.to_string(),
+                dst_id.to_string(),
+                dst_kind.to_string(),
+                edge_type.to_string(),
+                lineage.to_string(),
+                space.to_string(),
+                operation_id.map(|s| s.to_string()),
+                now
+            ],
+        )
+        .await?;
+        Ok(edge_id)
+    }
+
+    /// Soft-invalidate a dual-written edge on legacy-store
+    /// deletion/supersession (spec v3 §2: "Deleting a memory/page/claim
+    /// retracts its incident active edges in the same transaction" --
+    /// append-only-with-soft-supersession, never a hard delete). A no-op
+    /// when no such edge exists (legacy data predating dual-write) or it
+    /// is already invalidated.
+    async fn dual_write_invalidate_edge(
+        conn: &libsql::Connection,
+        edge_id: &str,
+        superseded_by: Option<&str>,
+    ) -> Result<(), libsql::Error> {
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE edges SET valid_until = ?1, superseded_by = ?2 WHERE edge_id = ?3 AND valid_until IS NULL",
+            libsql::params![now, superseded_by.map(|s| s.to_string()), edge_id],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Look up a memory's space by `source_id`, for the page_evidence
+    /// dual-write's memory-kind space check (the fence trigger does not
+    /// exempt `cites`->`memory` edges, unlike `cites`->`external`).
+    async fn resolve_memory_space(
+        conn: &libsql::Connection,
+        source_id: &str,
+    ) -> Result<Option<String>, libsql::Error> {
+        let mut rows = conn
+            .query(
+                "SELECT space FROM memories WHERE source_id = ?1 LIMIT 1",
+                libsql::params![source_id],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(row.get(0).unwrap_or(None)),
+            None => Ok(None),
+        }
+    }
+
+    /// Dual-write (M2 PR-1) for a `pages.citations` blob write: reasserts
+    /// one `cites` edge per citation in the new blob, mirroring
+    /// `backfill_edges_from_page_citations`'s classification exactly. Does
+    /// NOT invalidate edges for citations that dropped out of the blob --
+    /// `page_evidence` can independently back the same (page, locator) pair
+    /// and computes the identical content-addressed edge_id, so blindly
+    /// invalidating "this store's" edges here risks retracting one still
+    /// backed by an active `page_evidence` row. Reads stay legacy in PR-1
+    /// (dual-write is shadow-only), so this conservative "never wrongly
+    /// retract" choice costs nothing today; re-derivation semantics are a
+    /// PR-2 (reader cutover) concern.
+    async fn dual_write_page_citations(
+        conn: &libsql::Connection,
+        page_id: &str,
+        citations_json: Option<&str>,
+    ) -> Result<(), libsql::Error> {
+        let Some(citations_json) = citations_json else {
+            return Ok(());
+        };
+        let Ok(citations) =
+            serde_json::from_str::<Vec<wenlan_types::pages::PageCitation>>(citations_json)
+        else {
+            return Ok(());
+        };
+        let mut space_rows = conn
+            .query(
+                "SELECT space FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await?;
+        let space: Option<String> = match space_rows.next().await? {
+            Some(row) => row.get(0).unwrap_or(None),
+            None => None,
+        };
+        drop(space_rows);
+        let Some(space) = space else {
+            return Ok(());
+        };
+
+        for citation in citations {
+            if citation.source_kind == "memory" {
+                let resolves = Self::resolve_memory_space(conn, &citation.locator).await?
+                    == Some(space.clone());
+                let lineage = if resolves { "synthesis" } else { "legacy" };
+                Self::dual_write_edge(
+                    conn,
+                    "cites",
+                    "page",
+                    page_id,
+                    "memory",
+                    &citation.locator,
+                    &citation.locator,
+                    lineage,
+                    &space,
+                    None,
+                )
+                .await?;
+            } else {
+                Self::dual_write_edge(
+                    conn,
+                    "cites",
+                    "page",
+                    page_id,
+                    "external",
+                    &citation.locator,
+                    &citation.locator,
+                    "legacy",
+                    &space,
+                    None,
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `relations` → `relates` edges (matrix row 1). entity→entity FK
+    /// cascades make a dangling endpoint unreachable via normal writes
+    /// (`crates/wenlan-core/src/lint/kg_test.rs` constructs one only by
+    /// disabling `PRAGMA foreign_keys`), so `unknown` is a defensive branch,
+    /// not a live case on this schema -- still counted per the matrix.
+    async fn backfill_edges_from_relations(
+        conn: &libsql::Connection,
+    ) -> Result<EdgeBackfillCounts, WenlanError> {
+        let mut counts = EdgeBackfillCounts::default();
+        let mut rows = conn
+            .query(
+                "SELECT r.from_entity, r.to_entity, r.relation_type, \
+                        fe.space, te.space \
+                 FROM relations r \
+                 LEFT JOIN entities fe ON fe.id = r.from_entity \
+                 LEFT JOIN entities te ON te.id = r.to_entity",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 select relations: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 relations row: {e}")))?
+        {
+            let from_entity: String = row.get(0).unwrap_or_default();
+            let to_entity: String = row.get(1).unwrap_or_default();
+            let relation_type: String = row.get(2).unwrap_or_default();
+            let from_space: Option<String> = row.get(3).unwrap_or(None);
+            let to_space: Option<String> = row.get(4).unwrap_or(None);
+
+            let (lineage, space) = match (&from_space, &to_space) {
+                (Some(fs), Some(ts)) if fs == ts => {
+                    counts.classifiable += 1;
+                    ("assertion", fs.clone())
+                }
+                _ => {
+                    counts.unknown_inserted += 1;
+                    (
+                        "legacy",
+                        from_space
+                            .or(to_space)
+                            .unwrap_or_else(|| UNFILED_SPACE_ID.to_string()),
+                    )
+                }
+            };
+            Self::insert_backfilled_edge(
+                conn,
+                "relates",
+                "entity",
+                &from_entity,
+                "entity",
+                &to_entity,
+                &relation_type,
+                lineage,
+                &space,
+                "relations",
+            )
+            .await?;
+        }
+        Ok(counts)
+    }
+
+    /// `page_sources` → `cites` edges (matrix row 2). `page_id` FK cascades
+    /// to `pages`, so every row is classifiable: `pages.space` is always
+    /// present (NOT NULL since M1).
+    async fn backfill_edges_from_page_sources(
+        conn: &libsql::Connection,
+    ) -> Result<EdgeBackfillCounts, WenlanError> {
+        let mut counts = EdgeBackfillCounts::default();
+        let mut rows = conn
+            .query(
+                "SELECT ps.page_id, ps.memory_source_id, p.space \
+                 FROM page_sources ps JOIN pages p ON p.id = ps.page_id",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 select page_sources: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 page_sources row: {e}")))?
+        {
+            let page_id: String = row.get(0).unwrap_or_default();
+            let memory_source_id: String = row.get(1).unwrap_or_default();
+            let space: String = row.get(2).unwrap_or_default();
+            counts.classifiable += 1;
+            Self::insert_backfilled_edge(
+                conn,
+                "cites",
+                "page",
+                &page_id,
+                "memory",
+                &memory_source_id,
+                &memory_source_id,
+                "evidence",
+                &space,
+                "page_sources",
+            )
+            .await?;
+        }
+        Ok(counts)
+    }
+
+    /// `page_evidence` → `cites` edges (matrix rows 3-4). `source_kind`
+    /// `memory`/`external_url`/`external_file` with a non-NULL `locator` are
+    /// classifiable; `authored` or a NULL locator can't resolve to a real
+    /// destination and are backfilled as `lineage='legacy'` (still a real
+    /// locator-shaped dst_id when one exists, else skipped).
+    async fn backfill_edges_from_page_evidence(
+        conn: &libsql::Connection,
+    ) -> Result<EdgeBackfillCounts, WenlanError> {
+        let mut counts = EdgeBackfillCounts::default();
+        // LEFT JOIN memories on the memory-kind locator so a memory-kind
+        // citation's classification can check space agreement -- a page in
+        // one space citing a memory in another is a real legacy shape (the
+        // old `page_evidence` schema never enforced same-space), and the
+        // fence trigger does NOT exempt `cites`->`memory` edges (only
+        // `cites`->`external` is space-exempt), so an unmatched space must
+        // downgrade to `legacy` or a live dual-write of the same row would
+        // be fence-rejected.
+        let mut rows = conn
+            .query(
+                "SELECT pe.page_id, pe.source_kind, pe.locator, p.space, m.space \
+                 FROM page_evidence pe \
+                 JOIN pages p ON p.id = pe.page_id \
+                 LEFT JOIN memories m ON m.source_id = pe.locator AND pe.source_kind = 'memory'",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 select page_evidence: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 page_evidence row: {e}")))?
+        {
+            let page_id: String = row.get(0).unwrap_or_default();
+            let source_kind: String = row.get(1).unwrap_or_default();
+            let locator: Option<String> = row.get(2).unwrap_or(None);
+            let space: String = row.get(3).unwrap_or_default();
+            let memory_space: Option<String> = row.get(4).unwrap_or(None);
+
+            let Some(locator) = locator else {
+                counts.unknown_skipped += 1;
+                continue;
+            };
+            let (dst_kind, classifiable) = match source_kind.as_str() {
+                "memory" => ("memory", memory_space.as_deref() == Some(space.as_str())),
+                "external_url" | "external_file" => ("external", true),
+                _ => ("external", false),
+            };
+            let lineage = if classifiable {
+                counts.classifiable += 1;
+                "evidence"
+            } else {
+                counts.unknown_inserted += 1;
+                "legacy"
+            };
+            Self::insert_backfilled_edge(
+                conn,
+                "cites",
+                "page",
+                &page_id,
+                dst_kind,
+                &locator,
+                &locator,
+                lineage,
+                &space,
+                "page_evidence",
+            )
+            .await?;
+        }
+        Ok(counts)
+    }
+
+    /// `page_links` → `links` edges (matrix row 5). A NULL `target_page_id`
+    /// (orphan wikilink) has no destination at all -- "no page→page edge
+    /// exists yet" -- so it is counted, never inserted.
+    async fn backfill_edges_from_page_links(
+        conn: &libsql::Connection,
+    ) -> Result<EdgeBackfillCounts, WenlanError> {
+        let mut counts = EdgeBackfillCounts::default();
+        let mut rows = conn
+            .query(
+                "SELECT pl.source_page_id, pl.target_page_id, pl.label_key, \
+                        sp.space, tp.space \
+                 FROM page_links pl \
+                 JOIN pages sp ON sp.id = pl.source_page_id \
+                 LEFT JOIN pages tp ON tp.id = pl.target_page_id",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 select page_links: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 page_links row: {e}")))?
+        {
+            let source_page_id: String = row.get(0).unwrap_or_default();
+            let target_page_id: Option<String> = row.get(1).unwrap_or(None);
+            let label_key: String = row.get(2).unwrap_or_default();
+            let src_space: String = row.get(3).unwrap_or_default();
+            let dst_space: Option<String> = row.get(4).unwrap_or(None);
+
+            let Some(target_page_id) = target_page_id else {
+                counts.unknown_skipped += 1;
+                continue;
+            };
+            let (lineage, space) = if dst_space.as_deref() == Some(src_space.as_str()) {
+                counts.classifiable += 1;
+                ("synthesis", src_space)
+            } else {
+                counts.unknown_inserted += 1;
+                ("legacy", src_space)
+            };
+            Self::insert_backfilled_edge(
+                conn,
+                "links",
+                "page",
+                &source_page_id,
+                "page",
+                &target_page_id,
+                &label_key,
+                lineage,
+                &space,
+                "page_links",
+            )
+            .await?;
+        }
+        Ok(counts)
+    }
+
+    /// `pages.citations` blob → `cites` edges (matrix row 6, `synthesis`
+    /// lineage -- distinct from `page_evidence`'s `evidence`). A page whose
+    /// `citations` column doesn't parse as `Vec<PageCitation>` contributes no
+    /// per-record data and is counted once as `unknown_skipped` for the
+    /// whole page. Content-addressing dedupes repeated `[N]` occurrences of
+    /// the same source onto one edge without an explicit unique-set pass.
+    async fn backfill_edges_from_page_citations(
+        conn: &libsql::Connection,
+    ) -> Result<EdgeBackfillCounts, WenlanError> {
+        let mut counts = EdgeBackfillCounts::default();
+        let mut rows = conn
+            .query(
+                "SELECT id, space, citations FROM pages WHERE citations IS NOT NULL",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 select pages citations: {e}")))?;
+        let mut pages: Vec<(String, String, String)> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m81 pages citations row: {e}")))?
+        {
+            let page_id: String = row.get(0).unwrap_or_default();
+            let space: String = row.get(1).unwrap_or_default();
+            let citations_json: String = row.get::<String>(2).unwrap_or_default();
+            pages.push((page_id, space, citations_json));
+        }
+        drop(rows);
+
+        for (page_id, space, citations_json) in pages {
+            let Ok(citations) =
+                serde_json::from_str::<Vec<wenlan_types::pages::PageCitation>>(&citations_json)
+            else {
+                counts.unknown_skipped += 1;
+                continue;
+            };
+            for citation in citations {
+                if citation.source_kind == "memory" {
+                    // Same-space check, not just existence: the fence
+                    // trigger does not exempt `cites`->`memory` edges, so a
+                    // citation resolving to a memory in a different space
+                    // must downgrade to `legacy` (mirrors
+                    // `backfill_edges_from_page_evidence`'s memory-kind fix).
+                    let resolves = Self::resolve_memory_space(conn, &citation.locator)
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("m81 citations resolve: {e}"))
+                        })?
+                        == Some(space.clone());
+                    let lineage = if resolves {
+                        counts.classifiable += 1;
+                        "synthesis"
+                    } else {
+                        counts.unknown_inserted += 1;
+                        "legacy"
+                    };
+                    Self::insert_backfilled_edge(
+                        conn,
+                        "cites",
+                        "page",
+                        &page_id,
+                        "memory",
+                        &citation.locator,
+                        &citation.locator,
+                        lineage,
+                        &space,
+                        "pages.citations",
+                    )
+                    .await?;
+                } else {
+                    counts.unknown_inserted += 1;
+                    Self::insert_backfilled_edge(
+                        conn,
+                        "cites",
+                        "page",
+                        &page_id,
+                        "external",
+                        &citation.locator,
+                        &citation.locator,
+                        "legacy",
+                        &space,
+                        "pages.citations",
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(counts)
+    }
+
+    /// Pre-migration audit (spec §2: "A pre-migration audit reports legacy
+    /// cross-space links"). Per store, how many links are same-space /
+    /// cross-space / NULL-space *before* the fence trigger binds -- read
+    /// straight from the legacy tables, independent of backfill outcome.
+    /// Reported, never gated on: if this surfaced a live path minting
+    /// genuine cross-space links the fence would newly reject, that's the
+    /// M2 goal prompt's stop condition, not something to guess around here.
+    async fn audit_legacy_cross_space_links(
+        conn: &libsql::Connection,
+    ) -> Result<serde_json::Value, WenlanError> {
+        async fn tally(
+            conn: &libsql::Connection,
+            sql: &str,
+        ) -> Result<serde_json::Value, WenlanError> {
+            let mut rows = conn
+                .query(sql, ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m81 audit: {e}")))?;
+            match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m81 audit row: {e}")))?
+            {
+                Some(row) => Ok(serde_json::json!({
+                    "same_space": row.get::<i64>(0).unwrap_or(0),
+                    "cross_space": row.get::<i64>(1).unwrap_or(0),
+                    "null_space": row.get::<i64>(2).unwrap_or(0),
+                })),
+                None => Ok(serde_json::json!({"same_space": 0, "cross_space": 0, "null_space": 0})),
+            }
+        }
+
+        let relations = tally(
+            conn,
+            "SELECT \
+                SUM(CASE WHEN fe.space IS NOT NULL AND fe.space = te.space THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN fe.space IS NOT NULL AND te.space IS NOT NULL AND fe.space != te.space THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN fe.space IS NULL OR te.space IS NULL THEN 1 ELSE 0 END) \
+             FROM relations r \
+             LEFT JOIN entities fe ON fe.id = r.from_entity \
+             LEFT JOIN entities te ON te.id = r.to_entity",
+        )
+        .await?;
+
+        let page_links = tally(
+            conn,
+            "SELECT \
+                SUM(CASE WHEN tp.space IS NOT NULL AND tp.space = sp.space THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN tp.space IS NOT NULL AND tp.space != sp.space THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN pl.target_page_id IS NULL THEN 1 ELSE 0 END) \
+             FROM page_links pl \
+             JOIN pages sp ON sp.id = pl.source_page_id \
+             LEFT JOIN pages tp ON tp.id = pl.target_page_id",
+        )
+        .await?;
+
+        Ok(serde_json::json!({
+            "relations": relations,
+            "page_links": page_links,
+        }))
+    }
+
+    /// Acquire (get-or-create) a `provenance_roots` row for `raw_content`,
+    /// per spec §1: "Root acquisition is `INSERT … ON CONFLICT … RETURNING
+    /// root_id` ... never check-then-insert (two concurrent imports of one
+    /// file must converge on one root at the database, not in application
+    /// code)." `DO UPDATE SET root_id = root_id` is a no-op update that
+    /// exists only to make `RETURNING` fire on the conflict branch too, so
+    /// this single statement returns the winning `root_id` whether it
+    /// inserted or found an existing row -- proven by
+    /// `acquire_provenance_root_two_writers_converge_on_same_root`.
+    ///
+    /// `independence_group_id` resolution (Q6 decision C): a fresh
+    /// LSH band lookup against `provenance_root_minhash_bands` adopts an
+    /// existing near-dup group when one is found, else mints a new group id.
+    /// This work happens before the INSERT unconditionally (never
+    /// check-then-insert), so on the conflict path it is simply discarded --
+    /// the existing row's group is untouched, matching `grounded`/`root_id`/
+    /// `lineage` immutability elsewhere in the spec.
+    ///
+    /// ponytail: band-match only, no exact-Jaccard re-verification pass (the
+    /// entity_minhash cascade re-fetches the candidate's `name` to confirm;
+    /// `provenance_roots` doesn't store raw/canonical content, only its
+    /// digest, so there is nothing to re-fetch). Lower stakes than entity
+    /// resolution -- independence grouping is a derived floor-counting
+    /// signal (M6), not identity -- so trusting LSH banding directly is a
+    /// reasonable ceiling; add content storage + re-verification if a real
+    /// corpus shows false-positive group merges matter.
+    pub async fn acquire_provenance_root(
+        &self,
+        root_kind: &str,
+        raw_content: &str,
+        signals: &crate::provenance::IndependenceSignals<'_>,
+    ) -> Result<String, WenlanError> {
+        let canonical = crate::provenance::canonicalize_content(raw_content);
+        let digest = crate::provenance::identity_digest(root_kind, raw_content);
+        let bands = crate::provenance::content_minhash_bands(&canonical);
+
+        let conn = self.conn.lock().await;
+        // Overlay match wins over the structural signal key -- a near-dup
+        // catches groups the structural signal alone would keep apart (e.g.
+        // two distinct import batches containing byte-similar content); the
+        // structural key is the fallback when no near-dup is found, and a
+        // fresh id is the last resort when neither signal establishes a group.
+        let overlay_match = Self::query_provenance_roots_by_band(&conn, &bands)
+            .await?
+            .into_iter()
+            .next();
+        let group_id = overlay_match
+            .or_else(|| crate::provenance::base_independence_key(signals))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        let mut rows = conn
+            .query(
+                "INSERT INTO provenance_roots (root_id, identity_version, identity_digest, root_kind, independence_group_id, status, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6)
+                 ON CONFLICT(identity_version, identity_digest) DO UPDATE SET root_id = root_id
+                 RETURNING root_id",
+                libsql::params![
+                    root_id.clone(),
+                    crate::provenance::IDENTITY_VERSION,
+                    digest,
+                    root_kind.to_string(),
+                    group_id,
+                    now
+                ],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("acquire_provenance_root: {e}")))?;
+        let winning_root_id: String = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("acquire_provenance_root row: {e}")))?
+            .ok_or_else(|| {
+                WenlanError::VectorDb(
+                    "acquire_provenance_root: INSERT..RETURNING produced no row".to_string(),
+                )
+            })?
+            .get(0)
+            .map_err(|e| WenlanError::VectorDb(format!("acquire_provenance_root col: {e}")))?;
+        drop(rows);
+
+        // Only index this root's own bands when it actually won (the
+        // conflict branch already has bands indexed from its own insert).
+        if winning_root_id == root_id {
+            for band in &bands {
+                conn.execute(
+                    "INSERT OR IGNORE INTO provenance_root_minhash_bands (band_key, root_id) VALUES (?1, ?2)",
+                    libsql::params![*band as i64, winning_root_id.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("provenance_root_minhash_bands: {e}")))?;
+            }
+        }
+
+        Ok(winning_root_id)
+    }
+
+    /// Return the distinct `independence_group_id`s of roots sharing at
+    /// least one of `band_keys` (LSH candidate lookup, mirrors
+    /// `query_entities_by_band` for `entity_minhash_bands`).
+    async fn query_provenance_roots_by_band(
+        conn: &libsql::Connection,
+        band_keys: &[u64],
+    ) -> Result<Vec<String>, WenlanError> {
+        if band_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (1..=band_keys.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT DISTINCT pr.independence_group_id \
+             FROM provenance_root_minhash_bands b \
+             JOIN provenance_roots pr ON pr.root_id = b.root_id \
+             WHERE b.band_key IN ({placeholders})"
+        );
+        let params: Vec<libsql::Value> = band_keys
+            .iter()
+            .map(|&k| libsql::Value::Integer(k as i64))
+            .collect();
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("query_provenance_roots_by_band: {e}")))?;
+        let mut groups = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("query_provenance_roots_by_band row: {e}"))
+        })? {
+            if let Ok(g) = row.get::<String>(0) {
+                groups.push(g);
+            }
+        }
+        Ok(groups)
     }
 
     async fn migrate_73_schema_collision_reconciliation(
@@ -14582,6 +15549,33 @@ impl MemoryDB {
                 }
                 drop(page_rows);
 
+                // Dual-write (M2 PR-1): capture which pages currently cite
+                // `old_source_id` (via either legacy store) before the
+                // remap below runs, so the corresponding edges can move
+                // too -- invalidate the old edge_id, reassert one for
+                // `new_source_id` per affected page.
+                let mut edge_affected_pages: Vec<String> = Vec::new();
+                {
+                    let mut rows = conn
+                        .query(
+                            "SELECT DISTINCT page_id FROM page_sources WHERE memory_source_id = ?1
+                             UNION
+                             SELECT DISTINCT page_id FROM page_evidence WHERE source_kind = 'memory' AND locator = ?1",
+                            libsql::params![old_source_id],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("rebind_source_id edge scan: {e}"))
+                        })?;
+                    while let Some(row) = rows.next().await.map_err(|e| {
+                        WenlanError::VectorDb(format!("rebind_source_id edge scan row: {e}"))
+                    })? {
+                        edge_affected_pages.push(row.get::<String>(0).map_err(|e| {
+                            WenlanError::VectorDb(format!("rebind_source_id edge scan id: {e}"))
+                        })?);
+                    }
+                }
+
                 conn.execute(
                     "INSERT OR IGNORE INTO page_sources
                          (page_id, memory_source_id, linked_at, link_reason)
@@ -14631,6 +15625,64 @@ impl MemoryDB {
                     .map_err(|e| {
                         WenlanError::VectorDb(format!("rebind_source_id page JSON update: {e}"))
                     })?;
+                }
+
+                // Dual-write (M2 PR-1), continued: move the edges.
+                let new_memory_space = Self::resolve_memory_space(&conn, new_source_id)
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("rebind_source_id new memory space: {e}"))
+                    })?;
+                for page_id in &edge_affected_pages {
+                    let old_edge_id = crate::provenance::compute_edge_id(
+                        "cites", "page", page_id, "memory", old_source_id, old_source_id,
+                    );
+                    Self::dual_write_invalidate_edge(&conn, &old_edge_id, None)
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("rebind_source_id edge invalidate: {e}"))
+                        })?;
+
+                    let mut space_rows = conn
+                        .query(
+                            "SELECT space FROM pages WHERE id = ?1",
+                            libsql::params![page_id.as_str()],
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("rebind_source_id page space: {e}"))
+                        })?;
+                    let page_space: Option<String> = match space_rows.next().await.map_err(|e| {
+                        WenlanError::VectorDb(format!("rebind_source_id page space row: {e}"))
+                    })? {
+                        Some(row) => row.get(0).unwrap_or(None),
+                        None => None,
+                    };
+                    drop(space_rows);
+                    if let Some(page_space) = page_space {
+                        let lineage = if new_memory_space.as_deref() == Some(page_space.as_str())
+                        {
+                            "evidence"
+                        } else {
+                            "legacy"
+                        };
+                        Self::dual_write_edge(
+                            &conn,
+                            "cites",
+                            "page",
+                            page_id,
+                            "memory",
+                            new_source_id,
+                            new_source_id,
+                            lineage,
+                            &page_space,
+                            None,
+                        )
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("rebind_source_id edge reassert: {e}"))
+                        })?;
+                    }
                 }
             }
 
@@ -17449,22 +18501,21 @@ impl MemoryDB {
             ));
         }
         let conn = self.conn.lock().await;
-
-        let mut rows = conn
-            .query(
-                "SELECT id, from_entity, to_entity, relation_type, source_agent, \
-                        confidence, explanation, source_memory_id, created_at \
-                 FROM relations WHERE id = ?1",
-                libsql::params![loser_id],
-            )
+        conn.execute("BEGIN", ())
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("supersede_relation select: {e}")))?;
+            .map_err(|e| WenlanError::VectorDb(format!("supersede_relation begin: {e}")))?;
 
-        let snapshot = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("supersede_relation row: {e}")))?
-            .map(|row| {
+        let exec = async {
+            let mut rows = conn
+                .query(
+                    "SELECT id, from_entity, to_entity, relation_type, source_agent, \
+                            confidence, explanation, source_memory_id, created_at \
+                     FROM relations WHERE id = ?1",
+                    libsql::params![loser_id],
+                )
+                .await?;
+
+            let snapshot = rows.next().await?.map(|row| {
                 serde_json::json!({
                     "id":               row.get::<String>(0).ok(),
                     "from_entity":      row.get::<String>(1).ok(),
@@ -17477,15 +18528,47 @@ impl MemoryDB {
                     "created_at":       row.get::<i64>(8).ok(),
                 })
             });
-        drop(rows);
+            drop(rows);
 
-        conn.execute(
-            "DELETE FROM relations WHERE id = ?1",
-            libsql::params![loser_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("supersede_relation: {e}")))?;
-        Ok(snapshot)
+            conn.execute(
+                "DELETE FROM relations WHERE id = ?1",
+                libsql::params![loser_id],
+            )
+            .await?;
+
+            // Dual-write (M2 PR-1): soft-invalidate the corresponding edge
+            // rather than hard-delete it (append-only-with-soft-supersession,
+            // spec v3 §2). Same-id computation as the live create_relation
+            // dual-write and the migration-81 relations backfill.
+            if let Some(snap) = &snapshot {
+                if let (Some(fe), Some(te), Some(rt)) = (
+                    snap["from_entity"].as_str(),
+                    snap["to_entity"].as_str(),
+                    snap["relation_type"].as_str(),
+                ) {
+                    let edge_id = crate::provenance::compute_edge_id(
+                        "relates", "entity", fe, "entity", te, rt,
+                    );
+                    Self::dual_write_invalidate_edge(&conn, &edge_id, None).await?;
+                }
+            }
+
+            Ok::<_, libsql::Error>(snapshot)
+        }
+        .await;
+
+        match exec {
+            Ok(snapshot) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("supersede_relation commit: {e}"))
+                })?;
+                Ok(snapshot)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(WenlanError::VectorDb(format!("supersede_relation: {e}")))
+            }
+        }
     }
 
     /// Set `pending_revision = 1` on all chunks matching `source_id`. Idempotent
@@ -17553,61 +18636,120 @@ impl MemoryDB {
         let now = chrono::Utc::now().timestamp();
 
         let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("create_relation begin: {e}")))?;
 
-        // Upsert: insert new or update existing if new confidence is higher.
-        let affected = conn.execute(
-            "INSERT INTO relations (id, from_entity, to_entity, relation_type, source_agent, confidence, explanation, source_memory_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(from_entity, to_entity, relation_type) DO UPDATE SET
-                 confidence = CASE
-                     WHEN EXCLUDED.confidence IS NOT NULL AND (confidence IS NULL OR EXCLUDED.confidence > confidence)
-                     THEN EXCLUDED.confidence ELSE confidence END,
-                 explanation = CASE
-                     WHEN EXCLUDED.confidence IS NOT NULL AND (confidence IS NULL OR EXCLUDED.confidence > confidence)
-                     THEN COALESCE(EXCLUDED.explanation, explanation) ELSE explanation END,
-                 source_memory_id = COALESCE(EXCLUDED.source_memory_id, source_memory_id)",
-            libsql::params![
-                id.clone(),
-                from_entity.to_string(),
-                to_entity.to_string(),
-                canonical.clone(),
-                source_agent.map(|s| libsql::Value::Text(s.to_string())).unwrap_or(libsql::Value::Null),
-                confidence.map(libsql::Value::Real).unwrap_or(libsql::Value::Null),
-                explanation.map(|s| libsql::Value::Text(s.to_string())).unwrap_or(libsql::Value::Null),
-                source_memory_id.map(|s| libsql::Value::Text(s.to_string())).unwrap_or(libsql::Value::Null),
-                now
-            ],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("create_relation: {}", e)))?;
+        let exec = async {
+            // Upsert: insert new or update existing if new confidence is higher.
+            let affected = conn.execute(
+                "INSERT INTO relations (id, from_entity, to_entity, relation_type, source_agent, confidence, explanation, source_memory_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(from_entity, to_entity, relation_type) DO UPDATE SET
+                     confidence = CASE
+                         WHEN EXCLUDED.confidence IS NOT NULL AND (confidence IS NULL OR EXCLUDED.confidence > confidence)
+                         THEN EXCLUDED.confidence ELSE confidence END,
+                     explanation = CASE
+                         WHEN EXCLUDED.confidence IS NOT NULL AND (confidence IS NULL OR EXCLUDED.confidence > confidence)
+                         THEN COALESCE(EXCLUDED.explanation, explanation) ELSE explanation END,
+                     source_memory_id = COALESCE(EXCLUDED.source_memory_id, source_memory_id)",
+                libsql::params![
+                    id.clone(),
+                    from_entity.to_string(),
+                    to_entity.to_string(),
+                    canonical.clone(),
+                    source_agent.map(|s| libsql::Value::Text(s.to_string())).unwrap_or(libsql::Value::Null),
+                    confidence.map(libsql::Value::Real).unwrap_or(libsql::Value::Null),
+                    explanation.map(|s| libsql::Value::Text(s.to_string())).unwrap_or(libsql::Value::Null),
+                    source_memory_id.map(|s| libsql::Value::Text(s.to_string())).unwrap_or(libsql::Value::Null),
+                    now
+                ],
+            )
+            .await?;
 
-        // Only increment vocabulary count for genuinely new relations.
-        if affected > 0 {
+            if affected == 0 {
+                return Ok::<Option<String>, libsql::Error>(None);
+            }
+
             // Check if this was an insert (the id we generated exists) vs an update.
             let mut rows = conn
                 .query(
                     "SELECT id FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
                     libsql::params![from_entity.to_string(), to_entity.to_string(), canonical.clone()],
                 )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("create_relation check: {}", e)))?;
-            let existing_id = match rows.next().await {
-                Ok(Some(row)) => row.get::<String>(0).unwrap_or(id.clone()),
-                _ => id.clone(),
+                .await?;
+            let existing_id = match rows.next().await? {
+                Some(row) => row.get::<String>(0).unwrap_or(id.clone()),
+                None => id.clone(),
             };
             drop(rows);
-            drop(conn);
 
-            // Only count new inserts (our generated id matches the stored id).
-            if existing_id == id {
-                self.increment_relation_type_count(&canonical).await.ok();
-            }
+            // Dual-write (M2 PR-1): mirror `backfill_edges_from_relations`'s
+            // classification exactly so a live-written edge and a backfilled
+            // edge for the same fact converge on the same edge_id.
+            let mut space_rows = conn
+                .query(
+                    "SELECT fe.space, te.space FROM entities fe, entities te WHERE fe.id = ?1 AND te.id = ?2",
+                    libsql::params![from_entity.to_string(), to_entity.to_string()],
+                )
+                .await?;
+            let (from_space, to_space): (Option<String>, Option<String>) =
+                match space_rows.next().await? {
+                    Some(row) => (row.get(0).unwrap_or(None), row.get(1).unwrap_or(None)),
+                    None => (None, None),
+                };
+            drop(space_rows);
+            let (lineage, space) = match (&from_space, &to_space) {
+                (Some(fs), Some(ts)) if fs == ts => ("assertion", fs.clone()),
+                _ => (
+                    "legacy",
+                    from_space
+                        .or(to_space)
+                        .unwrap_or_else(|| UNFILED_SPACE_ID.to_string()),
+                ),
+            };
+            Self::dual_write_edge(
+                &conn,
+                "relates",
+                "entity",
+                from_entity,
+                "entity",
+                to_entity,
+                &canonical,
+                lineage,
+                &space,
+                None,
+            )
+            .await?;
 
-            return Ok(existing_id);
+            Ok(Some(existing_id))
         }
+        .await;
 
-        drop(conn);
-        Ok(id)
+        match exec {
+            Ok(Some(existing_id)) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("create_relation commit: {e}")))?;
+                drop(conn);
+                // Only count new inserts (our generated id matches the stored id).
+                if existing_id == id {
+                    self.increment_relation_type_count(&canonical).await.ok();
+                }
+                Ok(existing_id)
+            }
+            Ok(None) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("create_relation commit: {e}")))?;
+                drop(conn);
+                Ok(id)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(WenlanError::VectorDb(format!("create_relation: {e}")))
+            }
+        }
     }
 
     pub async fn list_relations_between(
@@ -25947,14 +27089,53 @@ impl MemoryDB {
         linked_at: i64,
         link_reason: &str,
     ) -> Result<(), libsql::Error> {
+        // Dual-write (M2 PR-1): one SELECT for the page's space, then per
+        // source id mirror `backfill_edges_from_page_evidence`'s
+        // classification (memory/external_url/external_file -> evidence;
+        // anything else -> legacy) so a live-written edge converges on the
+        // same edge_id a backfill would produce for the same row. This is
+        // the ONE fix site for every `insert_resolved_page_evidence` caller,
+        // same rationale as `resolve_source_kinds`'s doc comment.
+        let mut space_rows = conn
+            .query(
+                "SELECT space FROM pages WHERE id = ?1",
+                libsql::params![page_id],
+            )
+            .await?;
+        let page_space: Option<String> = match space_rows.next().await? {
+            Some(row) => row.get(0).unwrap_or(None),
+            None => None,
+        };
+        drop(space_rows);
+
         for sid in source_ids {
             let source_kind = Self::resolve_one_source_kind(conn, sid).await?;
             conn.execute(
                 "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
                  VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
-                libsql::params![page_id, source_kind, *sid, linked_at, link_reason],
+                libsql::params![page_id, source_kind.clone(), *sid, linked_at, link_reason],
             )
             .await?;
+
+            if let Some(space) = &page_space {
+                let (dst_kind, classifiable) = match source_kind.as_str() {
+                    // A `memory` citation is only fence-safe when the memory
+                    // shares the page's space -- `cites`->`memory` is NOT
+                    // exempt from the space fence (only `cites`->`external`
+                    // is), mirroring `backfill_edges_from_page_evidence`.
+                    "memory" => (
+                        "memory",
+                        Self::resolve_memory_space(conn, sid).await? == Some(space.clone()),
+                    ),
+                    "external_url" | "external_file" => ("external", true),
+                    _ => ("external", false),
+                };
+                let lineage = if classifiable { "evidence" } else { "legacy" };
+                Self::dual_write_edge(
+                    conn, "cites", "page", page_id, dst_kind, sid, sid, lineage, space, None,
+                )
+                .await?;
+            }
         }
         Ok(())
     }
@@ -28085,11 +29266,26 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("replace_page_links begin: {e}")))?;
         let exec = async {
+            // Dual-write (M2 PR-1): invalidate every active `links` edge
+            // from this page up front; the loop below re-asserts (or
+            // reactivates, via `dual_write_edge`'s upsert) an edge for each
+            // link still present, so a link dropped from the new set stays
+            // invalidated and a link that survives round-trips back to
+            // active within this same transaction.
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "UPDATE edges SET valid_until = ?2, superseded_by = NULL \
+                 WHERE edge_type = 'links' AND src_id = ?1 AND valid_until IS NULL",
+                libsql::params![source_page_id, now],
+            )
+            .await?;
+
             conn.execute(
                 "DELETE FROM page_links WHERE source_page_id = ?1",
                 libsql::params![source_page_id],
             )
             .await?;
+            let mut src_space: Option<Option<String>> = None;
             for link in links {
                 let label_key = link.label.to_lowercase();
                 conn.execute(
@@ -28098,9 +29294,63 @@ impl MemoryDB {
                     libsql::params![
                         source_page_id,
                         link.target_page_id.clone(),
-                        label_key,
+                        label_key.clone(),
                         link.label.clone(),
                     ],
+                )
+                .await?;
+
+                let Some(target_page_id) = &link.target_page_id else {
+                    continue; // orphan wikilink: no destination, no edge (matrix row 5)
+                };
+                let space = match &src_space {
+                    Some(s) => s.clone(),
+                    None => {
+                        let mut rows = conn
+                            .query(
+                                "SELECT space FROM pages WHERE id = ?1",
+                                libsql::params![source_page_id],
+                            )
+                            .await?;
+                        let s: Option<String> = match rows.next().await? {
+                            Some(row) => row.get(0).unwrap_or(None),
+                            None => None,
+                        };
+                        drop(rows);
+                        src_space = Some(s.clone());
+                        s
+                    }
+                };
+                let Some(space) = space else {
+                    continue; // source page unresolvable: skip (shouldn't happen, FK-backed)
+                };
+                let mut dst_rows = conn
+                    .query(
+                        "SELECT space FROM pages WHERE id = ?1",
+                        libsql::params![target_page_id.clone()],
+                    )
+                    .await?;
+                let dst_space: Option<String> = match dst_rows.next().await? {
+                    Some(row) => row.get(0).unwrap_or(None),
+                    None => None,
+                };
+                drop(dst_rows);
+                let lineage = if dst_space.as_deref() == Some(space.as_str()) {
+                    "synthesis"
+                } else {
+                    "legacy"
+                };
+                Self::dual_write_edge(
+                    &conn,
+                    "links",
+                    "page",
+                    source_page_id,
+                    "page",
+                    target_page_id,
+                    &label_key,
+                    lineage,
+                    &space,
+                    None,
                 )
                 .await?;
             }
@@ -28994,13 +30244,31 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         Self::reject_page_draft_on_conn(&conn, page_id).await?;
-        conn.execute(
-            "UPDATE pages SET citations = ?1 WHERE id = ?2",
-            libsql::params![citations_json, page_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("set_page_citations: {e}")))?;
-        Ok(())
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("set_page_citations begin: {e}")))?;
+        let exec = async {
+            conn.execute(
+                "UPDATE pages SET citations = ?1 WHERE id = ?2",
+                libsql::params![citations_json, page_id],
+            )
+            .await?;
+            Self::dual_write_page_citations(&conn, page_id, citations_json).await?;
+            Ok::<_, libsql::Error>(())
+        }
+        .await;
+        match exec {
+            Ok(()) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("set_page_citations commit: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(WenlanError::VectorDb(format!("set_page_citations: {e}")))
+            }
+        }
     }
 
     /// Atomically write `citations` + `changelog` WITHOUT touching `content`,
@@ -29018,13 +30286,33 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         Self::reject_page_draft_on_conn(&conn, page_id).await?;
-        conn.execute(
-            "UPDATE pages SET citations = ?1, changelog = ?2 WHERE id = ?3",
-            libsql::params![citations_json, changelog_json, page_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("set_page_citations_with_changelog: {e}")))?;
-        Ok(())
+        conn.execute("BEGIN", ()).await.map_err(|e| {
+            WenlanError::VectorDb(format!("set_page_citations_with_changelog begin: {e}"))
+        })?;
+        let exec = async {
+            conn.execute(
+                "UPDATE pages SET citations = ?1, changelog = ?2 WHERE id = ?3",
+                libsql::params![citations_json, changelog_json, page_id],
+            )
+            .await?;
+            Self::dual_write_page_citations(&conn, page_id, citations_json).await?;
+            Ok::<_, libsql::Error>(())
+        }
+        .await;
+        match exec {
+            Ok(()) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("set_page_citations_with_changelog commit: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(WenlanError::VectorDb(format!(
+                    "set_page_citations_with_changelog: {e}"
+                )))
+            }
+        }
     }
 
     /// Test-only: overwrite a page's `citations` column directly, bypassing the
@@ -29058,12 +30346,63 @@ impl MemoryDB {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().await;
         Self::reject_page_draft_on_conn(&conn, page_id).await?;
-        conn.execute(
-            "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            libsql::params![page_id, source_kind, locator, title, now, link_reason],
-        ).await.map_err(|e| WenlanError::VectorDb(format!("link_page_evidence: {e}")))?;
-        Ok(())
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("link_page_evidence begin: {e}")))?;
+
+        let exec = async {
+            conn.execute(
+                "INSERT OR IGNORE INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                libsql::params![page_id, source_kind, locator, title, now, link_reason],
+            )
+            .await?;
+
+            // Dual-write (M2 PR-1): a NULL locator (e.g. `authored`) has no
+            // destination value -- no edge is minted, matching
+            // `backfill_edges_from_page_evidence`'s NULL-locator skip.
+            if let Some(locator) = locator {
+                let mut rows = conn
+                    .query("SELECT space FROM pages WHERE id = ?1", libsql::params![page_id])
+                    .await?;
+                let space: Option<String> = match rows.next().await? {
+                    Some(row) => row.get(0).unwrap_or(None),
+                    None => None,
+                };
+                drop(rows);
+                if let Some(space) = space {
+                    let (dst_kind, classifiable) = match source_kind {
+                        "memory" => (
+                            "memory",
+                            Self::resolve_memory_space(&conn, locator).await? == Some(space.clone()),
+                        ),
+                        "external_url" | "external_file" => ("external", true),
+                        _ => ("external", false),
+                    };
+                    let lineage = if classifiable { "evidence" } else { "legacy" };
+                    Self::dual_write_edge(
+                        &conn, "cites", "page", page_id, dst_kind, locator, locator, lineage,
+                        &space, None,
+                    )
+                    .await?;
+                }
+            }
+            Ok::<_, libsql::Error>(())
+        }
+        .await;
+
+        match exec {
+            Ok(()) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("link_page_evidence commit: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(WenlanError::VectorDb(format!("link_page_evidence: {e}")))
+            }
+        }
     }
 
     /// Stamp `last_distilled_at` on the given memories (keyed by `source_id`).
@@ -29342,6 +30681,26 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("cleanup_orphaned_page_evidence: {e}")))?;
+
+            // Dual-write (M2 PR-1): soft-invalidate the edges the two
+            // deletes above just orphaned. Both `page_sources` and
+            // `page_evidence` dual-write onto the identical content-addressed
+            // edge_id for the same (page, memory) pair, so one invalidation
+            // pass covers whichever store originally produced the edge.
+            for (page_id, removed_locators) in &affected_pages {
+                for locator in removed_locators {
+                    let edge_id = crate::provenance::compute_edge_id(
+                        "cites", "page", page_id, "memory", locator, locator,
+                    );
+                    Self::dual_write_invalidate_edge(&conn, &edge_id, None)
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!(
+                                "cleanup_orphaned_page_sources edge invalidate: {e}"
+                            ))
+                        })?;
+                }
+            }
 
             let now = chrono::Utc::now().to_rfc3339();
             let removed_count: usize = affected_pages.values().map(HashSet::len).sum();
@@ -49493,6 +50852,15 @@ pub(crate) mod tests {
             let conn = db.conn.lock().await;
 
             conn.execute("PRAGMA foreign_keys = OFF", ()).await.unwrap();
+            // legacy_alter_table: the RENAME below reparses every trigger in
+            // the schema to fix up table references, and briefly chokes on
+            // `edges_space_fence` (migration 81) since it names `pages` while
+            // the old `pages` is dropped and the new one isn't renamed in yet.
+            // The legacy behavior skips that dependent-object fixup, which
+            // this rename doesn't need (no trigger references `pages_pre49`).
+            conn.execute("PRAGMA legacy_alter_table = ON", ())
+                .await
+                .unwrap();
             // Migration 50 renamed pages.domain → pages.space; use the current
             // column name here so the table copy does not crash on post-50 DBs.
             // Recreate with an explicit schema (PRIMARY KEY on id) rather than
@@ -49527,6 +50895,9 @@ pub(crate) mod tests {
             )
             .await
             .expect("recreate pages without changelog should succeed");
+            conn.execute("PRAGMA legacy_alter_table = OFF", ())
+                .await
+                .unwrap();
             conn.execute("PRAGMA foreign_keys = ON", ()).await.unwrap();
 
             // Roll back to version 47 so migration 49 re-fires.
@@ -59364,5 +60735,917 @@ pub(crate) mod tests {
             err.to_string().contains("m80"),
             "error should identify migration 80: {err}"
         );
+    }
+
+    // -- M2 PR-1 migration 81: unified edges + provenance_roots --
+
+    async fn insert_raw_page_for_m81_test(conn: &libsql::Connection, id: &str, space: &str) {
+        conn.execute(
+            "INSERT INTO pages (id, title, content, created_at, last_compiled, last_modified, space, workspace) \
+             VALUES (?1, ?2, 'content', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', ?3, ?3)",
+            libsql::params![id, format!("title {id}"), space],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn seed_memory_with_source_id_and_space(
+        db: &MemoryDB,
+        source_id: &str,
+        content: &str,
+        space: &str,
+    ) {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                                    last_modified, chunk_type, source_agent, space, confidence, \
+                                    confirmed, memory_type, pending_revision) \
+             VALUES (?1, ?2, 'memory', ?3, 'test', 0, 1712707200, 'text', NULL, ?4, 1.0, 0, 'fact', 0)",
+            libsql::params![
+                source_id.to_string(),
+                content.to_string(),
+                source_id.to_string(),
+                space.to_string()
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Roll `user_version` back to 80 and re-run migrations so
+    /// `migrate_81_unified_edges` re-fires over rows inserted after the
+    /// initial `test_db()` migration pass -- mirrors the M1
+    /// relax-then-re-run pattern (`migration_80_fresh_and_upgraded_schema_agree`).
+    async fn rerun_migration_81(db: &MemoryDB) {
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 80", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 81 re-fires");
+    }
+
+    async fn edges_count(conn: &libsql::Connection) -> i64 {
+        let mut rows = conn.query("SELECT COUNT(*) FROM edges", ()).await.unwrap();
+        rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    async fn edge_row(
+        conn: &libsql::Connection,
+        edge_type: &str,
+        src_id: &str,
+        dst_id: &str,
+    ) -> Option<(String, i64, String)> {
+        // (lineage, grounded, space)
+        let mut rows = conn
+            .query(
+                "SELECT lineage, grounded, space FROM edges WHERE edge_type = ?1 AND src_id = ?2 AND dst_id = ?3",
+                libsql::params![edge_type, src_id, dst_id],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().map(|row| {
+            (
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+            )
+        })
+    }
+
+    #[tokio::test]
+    async fn migration_81_creates_edges_and_provenance_schema() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        for table in [
+            "edges",
+            "provenance_roots",
+            "provenance_root_minhash_bands",
+            "edges_migration_state",
+        ] {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    libsql::params![table],
+                )
+                .await
+                .unwrap();
+            let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(present, 1, "{table} table should exist after migration 81");
+        }
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='edges_space_fence'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "edges_space_fence trigger should exist");
+
+        let uv: i64 = {
+            let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
+    async fn migration_81_migration_state_row_records_report() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT stage, completed_at, report_json FROM edges_migration_state WHERE id = 1",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows
+            .next()
+            .await
+            .unwrap()
+            .expect("durable migration state row must exist");
+        let stage: String = row.get(0).unwrap();
+        let completed_at: Option<i64> = row.get(1).unwrap();
+        let report_json: String = row.get(2).unwrap();
+        assert_eq!(stage, "backfilled");
+        assert!(completed_at.is_some());
+        let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+        assert!(report.get("relations").is_some());
+        assert!(report.get("page_sources").is_some());
+        assert!(report.get("page_evidence").is_some());
+        assert!(report.get("page_links").is_some());
+        assert!(report.get("pages_citations").is_some());
+        assert!(report.get("cross_space_audit").is_some());
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_relations_same_space_as_assertion() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        rerun_migration_81(&db).await;
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, space) = edge_row(&conn, "relates", &e1, &e2).await.unwrap();
+        assert_eq!(lineage, "assertion");
+        assert_eq!(grounded, 0);
+        assert_eq!(space, "space_a");
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_relations_cross_space_as_legacy() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_b"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        rerun_migration_81(&db).await;
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, _space) = edge_row(&conn, "relates", &e1, &e2).await.unwrap();
+        assert_eq!(lineage, "legacy");
+        assert_eq!(grounded, 0);
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_page_sources_as_evidence() {
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_1", "source content", "space_a").await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            conn.execute(
+                "INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason) VALUES ('page_1', 'mem_1', 1712707200, 'distill')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        rerun_migration_81(&db).await;
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, space) = edge_row(&conn, "cites", "page_1", "mem_1").await.unwrap();
+        assert_eq!(lineage, "evidence");
+        assert_eq!(grounded, 0);
+        assert_eq!(space, "space_a");
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_page_evidence_external_url_as_evidence() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            conn.execute(
+                "INSERT INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason) \
+                 VALUES ('page_1', 'external_url', 'https://example.com/a', NULL, 1712707200, NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        rerun_migration_81(&db).await;
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, space) =
+            edge_row(&conn, "cites", "page_1", "https://example.com/a")
+                .await
+                .unwrap();
+        assert_eq!(lineage, "evidence");
+        assert_eq!(grounded, 0);
+        assert_eq!(space, "space_a");
+        let dst_kind: String = {
+            let mut rows = conn
+                .query(
+                    "SELECT dst_kind FROM edges WHERE edge_type='cites' AND src_id='page_1' AND dst_id='https://example.com/a'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(dst_kind, "external");
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_page_evidence_null_locator_is_skipped() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            conn.execute(
+                "INSERT INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason) \
+                 VALUES ('page_1', 'authored', NULL, 'An Author', 1712707200, NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let before = {
+            let conn = db.conn.lock().await;
+            edges_count(&conn).await
+        };
+        rerun_migration_81(&db).await;
+        let conn = db.conn.lock().await;
+        let after = edges_count(&conn).await;
+        assert_eq!(
+            before, after,
+            "a NULL-locator evidence row must not mint an edge"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_page_links_orphan_is_skipped_not_inserted() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            conn.execute(
+                "INSERT INTO page_links (source_page_id, target_page_id, label_key, label) VALUES ('page_1', NULL, 'missing-page', 'Missing Page')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let before = {
+            let conn = db.conn.lock().await;
+            edges_count(&conn).await
+        };
+        rerun_migration_81(&db).await;
+        let conn = db.conn.lock().await;
+        let after = edges_count(&conn).await;
+        assert_eq!(
+            before, after,
+            "an orphan wikilink has no destination -- no edge is minted"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_page_links_resolved_as_synthesis() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            insert_raw_page_for_m81_test(&conn, "page_2", "space_a").await;
+            conn.execute(
+                "INSERT INTO page_links (source_page_id, target_page_id, label_key, label) VALUES ('page_1', 'page_2', 'page-2', 'Page 2')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        rerun_migration_81(&db).await;
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, space) =
+            edge_row(&conn, "links", "page_1", "page_2").await.unwrap();
+        assert_eq!(lineage, "synthesis");
+        assert_eq!(grounded, 0);
+        assert_eq!(space, "space_a");
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_citations_memory_resolved_as_synthesis() {
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_cited", "cited content", "space_a").await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            let citations = serde_json::json!([{
+                "occurrence": 1, "marker": 1, "source_kind": "memory",
+                "locator": "mem_cited", "score": 0.9, "status": "verified", "scope": "sentence"
+            }]);
+            conn.execute(
+                "UPDATE pages SET citations = ?1 WHERE id = 'page_1'",
+                libsql::params![citations.to_string()],
+            )
+            .await
+            .unwrap();
+        }
+        rerun_migration_81(&db).await;
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, space) = edge_row(&conn, "cites", "page_1", "mem_cited")
+            .await
+            .unwrap();
+        assert_eq!(lineage, "synthesis");
+        assert_eq!(grounded, 0);
+        assert_eq!(space, "space_a");
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfills_citations_unresolved_source_kind_as_legacy() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            let citations = serde_json::json!([{
+                "occurrence": 1, "marker": 1, "source_kind": "external",
+                "locator": "https://example.com/x", "score": 0.9, "status": "verified", "scope": "sentence"
+            }]);
+            conn.execute(
+                "UPDATE pages SET citations = ?1 WHERE id = 'page_1'",
+                libsql::params![citations.to_string()],
+            )
+            .await
+            .unwrap();
+        }
+        rerun_migration_81(&db).await;
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, _space) =
+            edge_row(&conn, "cites", "page_1", "https://example.com/x")
+                .await
+                .unwrap();
+        assert_eq!(lineage, "legacy");
+        assert_eq!(grounded, 0);
+    }
+
+    #[tokio::test]
+    async fn migration_81_backfill_replay_is_idempotent() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        rerun_migration_81(&db).await;
+        let first_count = {
+            let conn = db.conn.lock().await;
+            edges_count(&conn).await
+        };
+
+        rerun_migration_81(&db).await;
+        let second_count = {
+            let conn = db.conn.lock().await;
+            edges_count(&conn).await
+        };
+
+        assert_eq!(
+            first_count, second_count,
+            "a killed-and-rerun backfill must not duplicate edges (content-addressed retry identity)"
+        );
+        assert!(first_count > 0);
+    }
+
+    #[tokio::test]
+    async fn migration_81_fence_trigger_rejects_cross_space_typed_edge() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_b"))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let result = conn
+            .execute(
+                "INSERT INTO edges (edge_id, src_id, src_kind, dst_id, dst_kind, edge_type, lineage, grounded, root_id, space, weight, payload, provenance, operation_id, created_at, superseded_by, valid_until) \
+                 VALUES ('test-edge-1', ?1, 'entity', ?2, 'entity', 'relates', 'assertion', 0, NULL, 'space_a', NULL, NULL, NULL, NULL, 0, NULL, NULL)",
+                libsql::params![e1, e2],
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "a typed edge whose dst endpoint is in a different space must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_81_fence_trigger_allows_legacy_edge_despite_space_mismatch() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_b"))
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO edges (edge_id, src_id, src_kind, dst_id, dst_kind, edge_type, lineage, grounded, root_id, space, weight, payload, provenance, operation_id, created_at, superseded_by, valid_until) \
+             VALUES ('test-edge-2', ?1, 'entity', ?2, 'entity', 'relates', 'legacy', 0, NULL, 'space_a', NULL, NULL, NULL, NULL, 0, NULL, NULL)",
+            libsql::params![e1, e2],
+        )
+        .await
+        .expect("lineage='legacy' is exempt from the fence");
+    }
+
+    #[tokio::test]
+    async fn migration_81_fence_trigger_allows_cites_external_regardless_of_space() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        insert_raw_page_for_m81_test(&conn, "page_x", "space_a").await;
+        conn.execute(
+            "INSERT INTO edges (edge_id, src_id, src_kind, dst_id, dst_kind, edge_type, lineage, grounded, root_id, space, weight, payload, provenance, operation_id, created_at, superseded_by, valid_until) \
+             VALUES ('test-edge-3', 'page_x', 'page', 'https://example.com/y', 'external', 'cites', 'evidence', 0, NULL, 'space_a', NULL, NULL, NULL, NULL, 0, NULL, NULL)",
+            (),
+        )
+        .await
+        .expect("cites-to-external is exempt from the fence (no space to check)");
+    }
+
+    #[tokio::test]
+    async fn migration_81_fresh_and_upgraded_schema_agree() {
+        let (fresh_db, _fresh_dir) = test_db().await;
+        let fresh_sql: String = {
+            let conn = fresh_db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+
+        let (upgraded_db, _upgraded_dir) = test_db().await;
+        rerun_migration_81(&upgraded_db).await;
+        let upgraded_sql: String = {
+            let conn = upgraded_db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+
+        assert_eq!(
+            fresh_sql, upgraded_sql,
+            "fresh-DB and upgraded-DB edges DDL must agree byte-for-byte"
+        );
+    }
+
+    async fn query_plan_detail(conn: &libsql::Connection, sql: &str) -> String {
+        let mut rows = conn
+            .query(&format!("EXPLAIN QUERY PLAN {sql}"), ())
+            .await
+            .unwrap();
+        let mut details = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            let detail: String = row.get(3).unwrap_or_default();
+            details.push(detail);
+        }
+        details.join(" | ")
+    }
+
+    #[tokio::test]
+    async fn migration_81_index_contract_endpoint_lookups_use_index() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let src_plan = query_plan_detail(
+            &conn,
+            "SELECT * FROM edges WHERE src_kind='page' AND src_id='p1'",
+        )
+        .await;
+        assert!(
+            src_plan.to_uppercase().contains("INDEX"),
+            "src lookup should use an index: {src_plan}"
+        );
+
+        let dst_plan = query_plan_detail(
+            &conn,
+            "SELECT * FROM edges WHERE dst_kind='page' AND dst_id='p1'",
+        )
+        .await;
+        assert!(
+            dst_plan.to_uppercase().contains("INDEX"),
+            "dst lookup should use an index: {dst_plan}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_81_index_contract_root_id_lookup_uses_index() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let plan = query_plan_detail(&conn, "SELECT * FROM edges WHERE root_id = 'r1'").await;
+        assert!(
+            plan.to_uppercase().contains("INDEX"),
+            "root_id lookup should use an index: {plan}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_81_index_contract_operation_id_lookup_uses_index() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let plan = query_plan_detail(&conn, "SELECT * FROM edges WHERE operation_id = 'op1'").await;
+        assert!(
+            plan.to_uppercase().contains("INDEX"),
+            "operation_id lookup should use an index: {plan}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_81_index_contract_supersession_chain_lookup_uses_index() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let plan = query_plan_detail(&conn, "SELECT * FROM edges WHERE superseded_by = 'e1'").await;
+        assert!(
+            plan.to_uppercase().contains("INDEX"),
+            "supersession chain lookup should use an index: {plan}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_81_index_contract_active_grounded_space_type_scan_uses_index() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let plan = query_plan_detail(
+            &conn,
+            "SELECT * FROM edges WHERE space='space_a' AND edge_type='relates' AND valid_until IS NULL AND grounded = 1",
+        )
+        .await;
+        assert!(
+            plan.to_uppercase().contains("INDEX"),
+            "active-grounded scan by space/type should use an index: {plan}"
+        );
+    }
+
+    #[tokio::test]
+    async fn acquire_provenance_root_two_writers_converge_on_same_root() {
+        let (db, _dir) = test_db().await;
+        let signals = crate::provenance::IndependenceSignals {
+            source_identity: Some("file:///a.txt"),
+            agent_turn: None,
+            import_batch: None,
+        };
+        let root_1 = db
+            .acquire_provenance_root("document_ingest", "identical content", &signals)
+            .await
+            .unwrap();
+        let root_2 = db
+            .acquire_provenance_root("document_ingest", "identical content", &signals)
+            .await
+            .unwrap();
+        assert_eq!(
+            root_1, root_2,
+            "two writers of byte-identical content must converge on the same root"
+        );
+
+        let conn = db.conn.lock().await;
+        let count = {
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM provenance_roots", ())
+                .await
+                .unwrap();
+            let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            n
+        };
+        assert_eq!(count, 1, "convergence must not mint a second row");
+    }
+
+    // -- M2 PR-1 dual-write acceptance: single-transaction rollback,
+    // retry idempotency, soft-supersession (spec v3 §2, goal-prompt stage b) --
+
+    #[tokio::test]
+    async fn create_relation_dual_write_rolls_back_both_stores_on_edge_failure() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TABLE edges", ()).await.unwrap();
+        }
+
+        let result = db
+            .create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await;
+        assert!(
+            result.is_err(),
+            "a same-transaction dual-write failure must fail the whole call"
+        );
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM relations WHERE from_entity = ?1 AND to_entity = ?2",
+                libsql::params![e1.clone(), e2.clone()],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 0,
+            "the relations write must roll back when the same-transaction edge write fails -- \
+             proves single-transaction atomicity, not two independent autocommit writes"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_relation_dual_write_retry_is_idempotent_no_duplicate_edge() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        // Retry / replay: same logical write submitted again.
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM edges WHERE edge_type = 'relates' AND src_id = ?1 AND dst_id = ?2",
+                libsql::params![e1, e2],
+            )
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            count, 1,
+            "retrying the same create_relation call must converge onto one edge (content-addressed \
+             edge_id + ON CONFLICT), not mint a duplicate voter"
+        );
+    }
+
+    #[tokio::test]
+    async fn supersede_relation_dual_write_soft_invalidates_edge_not_hard_deletes() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e3 = db
+            .create_entity("Carol", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let loser_id = db
+            .create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        let winner_id = db
+            .create_relation(&e1, &e3, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        db.supersede_relation(&loser_id, &winner_id).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT valid_until FROM edges WHERE edge_type = 'relates' AND src_id = ?1 AND dst_id = ?2",
+                libsql::params![e1, e2],
+            )
+            .await
+            .unwrap();
+        let valid_until: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(
+            valid_until.is_some(),
+            "supersede_relation must soft-invalidate (valid_until set), not hard-delete the edge row \
+             -- append-only-with-soft-supersession, spec v3 §2"
+        );
+    }
+
+    #[tokio::test]
+    async fn link_page_source_dual_writes_cites_edge_via_page_evidence_chokepoint() {
+        // page_sources has no single chokepoint of its own, but every
+        // production write site also calls insert_resolved_page_evidence
+        // for the same (page, memory) pair with the identical
+        // content-addressed edge_id -- this proves that transitive
+        // coverage holds for `link_page_source`, one of page_sources's
+        // ~9 scattered write sites.
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_x", "content", "space_a").await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_x", "space_a").await;
+        }
+        db.link_page_source("page_x", "mem_x", "distill")
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, space) = edge_row(&conn, "cites", "page_x", "mem_x").await.unwrap();
+        assert_eq!(lineage, "evidence");
+        assert_eq!(grounded, 0);
+        assert_eq!(space, "space_a");
+    }
+
+    #[tokio::test]
+    async fn replace_page_links_dual_writes_and_invalidates_removed_links() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "src_page", "space_a").await;
+            insert_raw_page_for_m81_test(&conn, "tgt_page", "space_a").await;
+        }
+        db.replace_page_links(
+            "src_page",
+            &[crate::synthesis::wikilinks::Wikilink {
+                target_page_id: Some("tgt_page".to_string()),
+                label: "Tgt Page".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            let (lineage, grounded, space) = edge_row(&conn, "links", "src_page", "tgt_page")
+                .await
+                .unwrap();
+            assert_eq!(lineage, "synthesis");
+            assert_eq!(grounded, 0);
+            assert_eq!(space, "space_a");
+        }
+
+        // Replace with an empty link set -- the edge must be invalidated,
+        // not left dangling active with no backing page_links row.
+        db.replace_page_links("src_page", &[]).await.unwrap();
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT valid_until FROM edges WHERE edge_type = 'links' AND src_id = 'src_page' AND dst_id = 'tgt_page'",
+                (),
+            )
+            .await
+            .unwrap();
+        let valid_until: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(
+            valid_until.is_some(),
+            "a link dropped from the new set must be invalidated, not left active"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_page_citations_dual_writes_memory_and_external_citations() {
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_cited", "content", "space_a").await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_c", "space_a").await;
+        }
+        let citations = serde_json::json!([
+            {"occurrence": 1, "marker": 1, "source_kind": "memory", "locator": "mem_cited",
+             "score": 0.9, "status": "verified", "scope": "sentence"},
+            {"occurrence": 2, "marker": 2, "source_kind": "external_url", "locator": "https://example.com/z",
+             "score": 0.8, "status": "verified", "scope": "sentence"}
+        ]);
+        db.set_page_citations("page_c", Some(&citations.to_string()))
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let (lineage, grounded, space) = edge_row(&conn, "cites", "page_c", "mem_cited")
+            .await
+            .unwrap();
+        assert_eq!(lineage, "synthesis");
+        assert_eq!(grounded, 0);
+        assert_eq!(space, "space_a");
+        let (ext_lineage, ext_grounded, _) =
+            edge_row(&conn, "cites", "page_c", "https://example.com/z")
+                .await
+                .unwrap();
+        assert_eq!(ext_lineage, "legacy");
+        assert_eq!(ext_grounded, 0);
+    }
+
+    /// Bulk-insert/trigger benchmark for the M2 index contract (spec v3 §2:
+    /// "bulk-insert trigger benchmarks in the acceptance gate"). Manual-only
+    /// (like the GPU evals) since it is a timing measurement, not a
+    /// pass/fail correctness check; run with
+    /// `cargo test -p wenlan-core --lib m81_bulk_insert_trigger_benchmark -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn m81_bulk_insert_trigger_benchmark() {
+        let (db, _dir) = test_db().await;
+        const N: usize = 10_000;
+        let mut entity_ids = Vec::with_capacity(N + 1);
+        for i in 0..=N {
+            entity_ids.push(
+                db.create_entity(&format!("Entity {i}"), "thing", Some("space_a"))
+                    .await
+                    .unwrap(),
+            );
+        }
+        let start = std::time::Instant::now();
+        for i in 0..N {
+            db.create_relation(
+                &entity_ids[i],
+                &entity_ids[i + 1],
+                "related_to",
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "[m81_bulk_insert_trigger_benchmark] {N} live dual-writes (relations INSERT + \
+             edges_space_fence-gated edges INSERT, one BEGIN/COMMIT each) in {elapsed:?} \
+             ({:.1}µs/row)",
+            elapsed.as_micros() as f64 / N as f64
+        );
+    }
+
+    #[tokio::test]
+    async fn acquire_provenance_root_different_content_gets_different_root() {
+        let (db, _dir) = test_db().await;
+        let signals = crate::provenance::IndependenceSignals {
+            source_identity: Some("file:///a.txt"),
+            agent_turn: None,
+            import_batch: None,
+        };
+        let root_1 = db
+            .acquire_provenance_root("document_ingest", "content one", &signals)
+            .await
+            .unwrap();
+        let root_2 = db
+            .acquire_provenance_root("document_ingest", "content two", &signals)
+            .await
+            .unwrap();
+        assert_ne!(root_1, root_2);
     }
 }
