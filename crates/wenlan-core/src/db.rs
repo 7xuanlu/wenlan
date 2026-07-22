@@ -45578,7 +45578,13 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(page.source_memory_ids, vec!["accept_dep_revision"]);
-        assert_eq!(page.version, 2);
+        assert_eq!(page.version, 1);
+        assert_eq!(
+            db.get_page_source_revision("page_accept_dependency")
+                .await
+                .unwrap(),
+            1
+        );
         assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
 
         let conn = db.conn.lock().await;
@@ -45718,6 +45724,12 @@ pub(crate) mod tests {
         let page = db.get_page("page_accept_rollback").await.unwrap().unwrap();
         assert_eq!(page.source_memory_ids, vec!["accept_rollback_target"]);
         assert_eq!(page.version, 1);
+        assert_eq!(
+            db.get_page_source_revision("page_accept_rollback")
+                .await
+                .unwrap(),
+            0
+        );
         assert_eq!(page.stale_reason, None);
 
         let conn = db.conn.lock().await;
