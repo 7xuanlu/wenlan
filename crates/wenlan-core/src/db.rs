@@ -17580,9 +17580,28 @@ impl MemoryDB {
         source: &str,
         source_id: &str,
     ) -> Result<(), WenlanError> {
-        Self::mark_pages_depending_on_memory_sources(
+        Self::mark_pages_depending_on_memory_sources_except(
             conn,
             &[(source.to_string(), source_id.to_string())],
+            None,
+        )
+        .await
+    }
+
+    /// Invalidate dependent Pages except for a machine-owned SOURCE Page whose
+    /// identity is moving in the same transaction. The renamed Page keeps its
+    /// compiled state current; other Pages may contain the old locator and must
+    /// still be rebuilt.
+    async fn mark_pages_depending_on_memory_source_except(
+        conn: &libsql::Connection,
+        source: &str,
+        source_id: &str,
+        excluded_page_id: &str,
+    ) -> Result<(), WenlanError> {
+        Self::mark_pages_depending_on_memory_sources_except(
+            conn,
+            &[(source.to_string(), source_id.to_string())],
+            Some(excluded_page_id),
         )
         .await
     }
@@ -17594,6 +17613,14 @@ impl MemoryDB {
     async fn mark_pages_depending_on_memory_sources(
         conn: &libsql::Connection,
         sources: &[(String, String)],
+    ) -> Result<(), WenlanError> {
+        Self::mark_pages_depending_on_memory_sources_except(conn, sources, None).await
+    }
+
+    async fn mark_pages_depending_on_memory_sources_except(
+        conn: &libsql::Connection,
+        sources: &[(String, String)],
+        excluded_page_id: Option<&str>,
     ) -> Result<(), WenlanError> {
         let mut unique_sources: Vec<_> = sources
             .iter()
@@ -17654,6 +17681,9 @@ impl MemoryDB {
                         "inventory page id for memory source {source_id}: {e}"
                     ))
                 })?;
+                if excluded_page_id == Some(page_id.as_str()) {
+                    continue;
+                }
                 *affected_pages.entry(page_id).or_default() += 1;
             }
         }
@@ -17749,7 +17779,18 @@ impl MemoryDB {
                 }
             }
             if source != "episode" {
-                Self::mark_pages_depending_on_memory_source(&conn, source, old_source_id).await?;
+                if let Some((old_page_id, _)) = source_page_ids {
+                    Self::mark_pages_depending_on_memory_source_except(
+                        &conn,
+                        source,
+                        old_source_id,
+                        old_page_id,
+                    )
+                    .await?;
+                } else {
+                    Self::mark_pages_depending_on_memory_source(&conn, source, old_source_id)
+                        .await?;
+                }
 
                 let mut page_rows = conn
                     .query(
@@ -42619,7 +42660,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn rebind_source_id_moves_durable_provenance_without_generation_bump() {
+    async fn rebind_source_id_moves_durable_provenance_without_memory_generation_bump() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![make_memory_doc(
             "source-rebind-old",
@@ -42653,6 +42694,10 @@ pub(crate) mod tests {
         .await
         .unwrap();
         db.set_page_citations_for_test("page_rebind_provenance", "[]")
+            .await
+            .unwrap();
+        let page_source_revision_before = db
+            .get_page_source_revision("page_rebind_provenance")
             .await
             .unwrap();
         {
@@ -42699,7 +42744,15 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(page.version, 1, "rename is not a semantic Page change");
+        assert_eq!(page.version, 1, "rename does not change Page content");
+        assert_eq!(
+            db.get_page_source_revision("page_rebind_provenance")
+                .await
+                .unwrap(),
+            page_source_revision_before + 1,
+            "renaming a provenance locator invalidates the dependent Page generation"
+        );
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
         assert_eq!(
             page.source_memory_ids,
             vec!["source-rebind-new".to_string()]
@@ -42721,8 +42774,8 @@ pub(crate) mod tests {
                 .get::<Option<String>>(0)
                 .unwrap()
                 .as_deref(),
-            Some("[]"),
-            "identical content keeps current citations"
+            None,
+            "citations may contain the old locator and must be rebuilt after a rebind"
         );
         drop(page_rows);
 
@@ -42938,6 +42991,15 @@ pub(crate) mod tests {
         db.set_page_citations_for_test("source_page_rebind_old", "[]")
             .await
             .unwrap();
+        let source_page_before = db
+            .get_page("source_page_rebind_old")
+            .await
+            .unwrap()
+            .unwrap();
+        let source_revision_before = db
+            .get_page_source_revision("source_page_rebind_old")
+            .await
+            .unwrap();
         db.insert_page(
             "page_rebind_referrer",
             "Rebind Referrer",
@@ -42986,6 +43048,17 @@ pub(crate) mod tests {
         assert_eq!(page.version, 1);
         assert_eq!(page.citations.len(), 0);
         assert_eq!(page.source_memory_ids, vec![chunk_id]);
+        assert_eq!(page.stale_reason, source_page_before.stale_reason);
+        assert_eq!(
+            page.sources_updated_count,
+            source_page_before.sources_updated_count
+        );
+        assert_eq!(
+            db.get_page_source_revision("source_page_rebind_new")
+                .await
+                .unwrap(),
+            source_revision_before
+        );
         assert_eq!(
             db.get_page_sources("source_page_rebind_new")
                 .await
