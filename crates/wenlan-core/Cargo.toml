@@ -73,6 +73,13 @@ env_logger = "0.11"
 # eval modules are not feature-gated, so their deps are regular deps.
 tiktoken-rs = "0.6"
 futures = { workspace = true }
+# Unicode NFC normalization for provenance-root content canonicalization
+# (Q6-locked recipe: NFC + line-ending + whitespace, nothing semantic).
+# Already present transitively (text-splitter -> ... -> unicode-normalization
+# 0.1.25), so this pins it as a direct dep rather than growing the resolved
+# graph. Root Cargo.toml is release-please-locked, so this is a per-crate
+# dep like text-splitter/tiktoken-rs above rather than a workspace one.
+unicode-normalization = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "0.1", features = ["metal", "sampler"] }
