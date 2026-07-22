@@ -801,7 +801,7 @@ pub async fn handle_store_memory(
         }
     }
 
-    // Record write event for steep burst detection and the ambient quiet gate.
+    // Record the write event for steep burst detection and recap batching.
     // Capture the timestamp immediately after the durable store, never after
     // background enrichment.
     {

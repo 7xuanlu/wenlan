@@ -6,6 +6,7 @@
 
 pub mod config_routes;
 pub mod error;
+mod host_activity;
 pub mod import_routes;
 pub mod ingest_batcher;
 pub mod ingest_routes;

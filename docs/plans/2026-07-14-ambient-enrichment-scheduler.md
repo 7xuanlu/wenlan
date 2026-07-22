@@ -9,23 +9,24 @@ locally verified. No local product release blocker remains open; ordinary
 required-CI runner execution still applies. RB-01 is closed by five isolated
 lane profiles plus one representative persistent-daemon soak: the daemon
 loaded the model once, completed the Classification → StructuredExtract
-dependency chain, stayed at nominal thermal state for all 32 samples, and
+dependency chain, stayed at nominal thermal state for all 14 current-source
+samples, and
 exited cleanly. A later target-Mac foreground-latency calibration retained the
 20% CPU ceiling, rejected 25% and 30% candidates, and added a 2 GiB
 on-device inference reserve above the ordinary memory floor. RB-05's workflow contract is corrected locally; its
 Linux/Windows runner execution remains a normal required-CI gate.
 
-> Scope: The conservative scheduler plus approved fixed memory stages. Store and imports perform durable handoff only; document, classification, structured extraction, entity, title, Page growth, reconcile, and citation share ambient admission. Automatic maintenance uses bounded stage slices. Automatic steep is fail-closed to the one bounded ReDistill Page slice; legacy global phases remain available only through explicit foreground steep. No semantic batching, generalized dependency graph, or OS thermal API.
+> Scope: The conservative scheduler plus approved fixed memory stages. Store and imports perform durable handoff only; document, classification, structured extraction, entity, title, Page growth, reconcile, and citation share ambient admission. Automatic maintenance uses bounded stage slices. Automatic steep is fail-closed to the one bounded ReDistill Page slice; legacy global phases remain available only through explicit foreground steep. No semantic batching, generalized dependency graph, or non-macOS host-activity probe.
 
 ## Contract
 
 - The scheduler owns document, classification, structured extraction, entity, title, Page growth, reconcile, and citation lanes.
 - One ambient turn selects at most one durable work item and performs at most one LLM request.
 - One admitted automatic turn selects at most one bounded item; every provider role used by that turn shares one hard one-inference budget.
-- Ambient turns never overlap, never detach, and do not start during cooldown, elevated system CPU, or low available memory.
+- Ambient turns never overlap, never detach, and do not start during cooldown, elevated system CPU, low available memory, recent macOS physical input, unavailable supported host telemetry, or non-nominal macOS thermal state.
 - Heavy automatic work requires two consecutive 30-second resource samples. Target-Mac calibration keeps aggregate CPU at or below 20%. Available RAM must exceed `max(2 GiB, 15%)`; on-device background routes additionally reserve 2 GiB for inference, while remote routes retain the ordinary floor.
 - Every selected item either advances a durable checkpoint or records a terminal/retry outcome.
-- Ambient admission has no fixed Wenlan-write delay. `WriteSignal` is used only for trigger-specific recap batching, not as an OS foreground-idle proxy. Inter-turn recovery is `max(120 seconds, 19 × elapsed)`; production CPU, RAM, and two-sample admission can extend that delay but never shorten it. The target-Mac live watchdog separately fails on non-nominal OS thermal state.
+- Ambient admission has no fixed Wenlan-write delay. `WriteSignal` is used only for trigger-specific recap batching, not as an OS foreground-idle proxy. Inter-turn recovery is `max(120 seconds, 19 × elapsed)`; production CPU, RAM, and two-sample admission can extend that delay but never shorten it. On macOS, public OS signals also veto model startup and new heavy turns for 60 seconds after physical input and throughout any non-nominal thermal state.
 
 The automatic store/import enrichment path is inside the bounded controller. Automatic maintenance runs one cursor-backed bounded stage slice. Automatic steep cannot enter Decay, Promote, Recaps, Reweave, Reembed, EntityExtraction, CommunityDetection, Detect, Emergence, SummaryRollup, Overview, RefinementQueue, DecisionLogs, PruneRejections, Evict, or KgRethink; those legacy whole-corpus algorithms are explicit foreground work until they independently earn a bound and convergence proof. ReDistill admits one Page, rejects more than 64 sources before provider invocation, caps each source to 800 characters, caps topic/title-hint text, and advances its durable cursor on an oversized Page.
 
@@ -43,7 +44,7 @@ Every row marked `OPEN` blocks a thermal-ready release. A blocker may move to `C
 
 | ID | Status | Blocker | Why it was not completed in Phase 1 | Exit criteria | Evidence |
 |---|---|---|---|---|---|
-| RB-01 | CLOSED | Target-hardware thermal and convergence envelope | The fixed ten-minute ambient delay was removed rather than treated as foreground protection. Five isolated lanes provide functional/timing evidence; one representative persistent daemon proves the resource/cooldown loop. A later bounded calibration measured foreground timer jitter at 20.70%, 23.82%, and 28.89% starting CPU instead of guessing a higher threshold. | Busy-host refusal, clean exit, one model load, Classification → StructuredExtract dependency, mid-cooldown residency, 30-second thermal/RAM watchdog, bounded RSS, durable receipts, foreground-latency calibration, and fast deterministic scheduling/retry/CAS/one-call gates. | `docs/plans/2026-07-18-ambient-rb01-evidence.md`; daemon artifact `20260721T055753Z-daemon`; 32/32 thermal samples nominal; 20.70% candidate passed foreground p99 budget while 23.82% and 28.89% failed; CPU ceiling remains 20%; on-device routes reserve an additional 2 GiB; process exit 0. |
+| RB-01 | CLOSED | Target-hardware thermal and convergence envelope | The fixed ten-minute ambient delay was removed rather than treated as foreground protection. Five isolated lanes provide functional/timing evidence; one representative persistent daemon proves the resource/cooldown loop. A later bounded calibration measured foreground timer jitter at 20.70%, 23.82%, and 28.89% starting CPU instead of guessing a higher threshold. macOS production admission now also uses public physical-input and thermal signals. | Busy-host and recent-input refusal, clean exit, one model load, Classification → StructuredExtract dependency, mid-cooldown residency, production thermal admission, 30-second thermal/RAM watchdog, bounded RSS, durable receipts, foreground-latency calibration, and fast deterministic scheduling/retry/CAS/one-call gates. | `docs/plans/2026-07-18-ambient-rb01-evidence.md`; current-source daemon artifact `20260722T045828Z-daemon`; 14/14 thermal samples nominal; 120.018-second turn gap; 20.70% candidate passed foreground p99 budget while 23.82% and 28.89% failed; CPU ceiling remains 20%; on-device routes reserve an additional 2 GiB; process exit 0. |
 | RB-02 | CLOSED (automatic path) | Legacy global steep phases were not item-sliced | A one-phase wrapper was insufficient because every non-ReDistill phase still executed its full legacy algorithm. The release seam is therefore an explicit automatic allowlist, not pretending every phase is bounded. | Automatic scheduling can invoke only phases with a source-proven per-turn bound and durable cursor; foreground trigger semantics stay unchanged; unsupported BurstEnd/Daily work cannot create an empty-batch panic or hot-loop. | `crates/wenlan-server/src/scheduler.rs`; scheduler module 56/56; ReDistill cap tests |
 | RB-03 | CLOSED | Accepted reconcile revisions did not converge through fixed enrichment dependencies | Acceptance stays SQL-only and invalidates the fixed receipts for the new head version. The existing ambient lanes then classify, extract structured fields, resolve entity/title/Page work over later turns under the shared budget. | Prove accepted revision priority and eventual receipt convergence without nested acceptance inference. | focused accepted-revision convergence test; `crates/wenlan-core/src/post_write.rs`, `db.rs`, `reconcile.rs` |
 | RB-04 | CLOSED | Graceful shutdown and non-destructive `background off` | Shutdown signals the scheduler, bounds process drain at 1.5 seconds, and preserves launchd/systemd/Task Scheduler registration. If a registered daemon is still starting or respawning and its port refuses connections, CLI stop now stops the supervisor instead of falsely reporting success. Signal handlers are installed before bind or durable startup work, so a SIGTERM arriving during startup cannot take the default abrupt-exit path. | Code-level and child-process tests prove cooperative stop, bounded process exit, startup-signal handling, registered-manager fallback, and preserved registration semantics. | `crates/wenlan-server/src/lifecycle.rs`; `crates/wenlan-server/tests/graceful_shutdown.rs` (4/4); `background_off_` CLI integration group (8/8) |
@@ -306,15 +307,17 @@ Verification risk, tracked but not currently classified as a product release blo
 
 Protective code is complete: the injected policy keeps a measured two-minute
 inter-turn floor, extends recovery after long turns, and adds a two-sample
-CPU/RAM admission gate. The ten-minute value remains only on the existing Idle
-recap trigger. The representative persistent-daemon soak and five isolated
-lanes provide the live and functional evidence. The final timer-only admission
-correction is covered by the deterministic scheduler suite.
+CPU/RAM admission gate. On macOS, public OS probes also defer model startup and
+new heavy turns after recent physical input or during non-nominal thermal
+state. The ten-minute value remains only on the existing Idle recap trigger.
+The representative persistent-daemon soak and five isolated lanes provide the
+live and functional evidence. The timer and host-signal policies are covered by
+deterministic scheduler tests plus a real macOS signal smoke test.
 
-The controller's thermal claim is bounded to the measured target Mac and the
-resource/cooldown implementation exercised by the daemon artifact. It is not a
-claim that production reads OS thermal state directly or that model residency
-has no memory cost.
+The controller's measured thermal envelope remains bounded to the target Mac.
+Production now reads macOS thermal state directly before model startup and new
+heavy turns; it does not claim equivalent OS telemetry on other platforms or
+that model residency has no memory cost.
 
 ## Final verification
 
@@ -416,10 +419,36 @@ current-version receipts, graceful shutdown, and process exit 0.
 The production policy keeps two 30-second CPU samples, a 20% CPU ceiling,
 2 GiB/15% RAM floor plus startup working-set reserve, and `19 × elapsed`
 long-turn recovery with a 120-second minimum. Ambient admission has no fixed
-write-recency delay; that timer-only correction landed after the daemon
-artifact and is covered by deterministic scheduler tests. The target-Mac live profiler/watchdog separately requires
-nominal macOS thermal state every 30 seconds; production runtime admission does
-not currently read the OS thermal state directly.
+write-recency delay. On macOS, production additionally requires 60 seconds
+without physical input and nominal public OS thermal state before model startup
+or a new heavy turn; supported telemetry failure denies admission. The live
+profiler/watchdog independently samples thermal state and RAM every 30 seconds.
 A committed Page-growth terminal no-match with zero calls no longer consumes a
 thermal turn; matches, provider calls, selected Document/Reconcile CPU work,
 and panics remain charged.
+
+The final current-source daemon proof is
+`20260722T045828Z-daemon`: one model load, Classification in 2.651 seconds,
+StructuredExtract in 1.503 seconds, exactly one call per turn, a 120.018-second
+gap, 14/14 nominal thermal samples, peak RSS 3,474,391,040 bytes, durable
+version-1 receipts, graceful shutdown, and exit 0. Production denied three
+post-load samples above 20% before admitting work at 19.64% or below. The
+preceding interrupted `20260722T044647Z-daemon` run is a positive control for
+the new physical-input gate: it logged `ForegroundActive` repeatedly and began
+no inference before operator termination.
+
+Fable's final platform-glue review found that macOS-only enum variants would be
+unconstructed in a non-macOS production build and that raw object
+`rustc-link-arg` metadata was not a reliable downstream native-link contract.
+The enum now carries a target-specific dead-code annotation, and the bridge is
+packaged with cc's target-aware archiver/ranlib commands into a deterministic
+static library published through normal Cargo link metadata. Fresh
+`wenlan-server` and downstream `wenlan-mcp` `real_router` builds both link
+without warnings; scheduler tests pass 85/85 with two manual profiles ignored,
+and the cheap daemon harness passes 8/8 with its real-model proof ignored.
+Fable's follow-up verdict is `sound` with no confirmed correctness bugs. The
+macOS link smoke accepts fail-closed `Unavailable` on CI hosts without a usable
+WindowServer; the target-Mac live artifact separately proves real telemetry.
+Surfacing permanent host-telemetry deferral in `/api/status` remains a
+non-blocking cross-surface observability follow-up; current daemon logs expose
+the transition at the default log level.

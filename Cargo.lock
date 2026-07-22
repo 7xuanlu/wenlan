@@ -5713,6 +5713,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.8.8",
+ "cc",
  "chrono",
  "clap",
  "dirs 6.0.0",

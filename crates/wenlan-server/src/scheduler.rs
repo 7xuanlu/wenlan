@@ -10,6 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::host_activity::{sample_host_activity, HostActivitySnapshot};
 use crate::state::SharedState;
 
 /// 30-minute ceiling for adaptive gap — matches ACTIVITY_GAP_SECS in wenlan-core.
@@ -27,6 +28,9 @@ const BACKSTOP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const DAILY_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Poll interval — how often the scheduler checks trigger conditions.
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
+/// A full two-sample scheduler window without keyboard, mouse, or tablet input.
+/// Unlike Wenlan write recency, this is a real OS foreground-activity signal.
+const FOREGROUND_INPUT_IDLE_THRESHOLD: Duration = Duration::from_secs(60);
 /// Initial delay — lets on-device model warm up before first backstop.
 const INITIAL_DELAY: Duration = Duration::from_secs(60);
 const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -58,6 +62,9 @@ enum ResourceBlockReason {
     Unavailable,
     CpuBusy,
     MemoryPressure,
+    ForegroundActive,
+    HostActivityUnavailable,
+    ThermalPressure,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -104,6 +111,23 @@ impl ResourcePolicy {
             return Some(ResourceBlockReason::CpuBusy);
         }
         None
+    }
+}
+
+fn host_activity_block_reason(snapshot: HostActivitySnapshot) -> Option<ResourceBlockReason> {
+    match snapshot {
+        #[cfg(any(not(target_os = "macos"), test))]
+        HostActivitySnapshot::Unsupported => None,
+        HostActivitySnapshot::Unavailable => Some(ResourceBlockReason::HostActivityUnavailable),
+        HostActivitySnapshot::Observed { thermal_state, .. } if thermal_state != 0 => {
+            Some(ResourceBlockReason::ThermalPressure)
+        }
+        HostActivitySnapshot::Observed { idle_for, .. }
+            if idle_for < FOREGROUND_INPUT_IDLE_THRESHOLD =>
+        {
+            Some(ResourceBlockReason::ForegroundActive)
+        }
+        HostActivitySnapshot::Observed { .. } => None,
     }
 }
 
@@ -180,6 +204,14 @@ impl Rb01ProfileAdmission {
                 ResourceBlockReason::Warming | ResourceBlockReason::Unavailable => {
                     Rb01ProfileBlockReason::ResourceUnavailable
                 }
+                // Host reasons cannot originate from ResourcePolicy; these
+                // arms keep this test-only adapter exhaustive as the shared
+                // production reason enum evolves.
+                ResourceBlockReason::ForegroundActive => Rb01ProfileBlockReason::Warming,
+                ResourceBlockReason::HostActivityUnavailable => {
+                    Rb01ProfileBlockReason::ThermalUnavailable
+                }
+                ResourceBlockReason::ThermalPressure => Rb01ProfileBlockReason::ThermalPressure,
             });
         }
 
@@ -242,6 +274,20 @@ struct ResourceStatus {
     admitted: bool,
     snapshot: Option<ResourceSnapshot>,
     block_reason: Option<ResourceBlockReason>,
+}
+
+fn apply_host_activity(
+    status: ResourceStatus,
+    host_activity: HostActivitySnapshot,
+) -> ResourceStatus {
+    let Some(block_reason) = host_activity_block_reason(host_activity) else {
+        return status;
+    };
+    ResourceStatus {
+        admitted: false,
+        block_reason: Some(block_reason),
+        ..status
+    }
 }
 
 struct SystemResourceProbe {
@@ -321,7 +367,8 @@ pub async fn wait_for_startup_model_admission(
         if crate::lifecycle::sleep_or_shutdown(shutdown, POLL_INTERVAL).await {
             return false;
         }
-        let status = probe.sample(Instant::now(), policy);
+        let status =
+            apply_host_activity(probe.sample(Instant::now(), policy), sample_host_activity());
         if status.admitted {
             tracing::info!(
                 "[on-device] startup load admitted after two quiet samples; reserved_working_set_mb={}",
@@ -1414,7 +1461,10 @@ pub fn spawn_scheduler(
             // Filesystem sync can take long enough for fresh writes to arrive;
             // all time comparisons below must use a post-sync clock sample.
             let now = Instant::now();
-            let resource_status = resource_probe.sample(now, resource_policy);
+            let resource_status = apply_host_activity(
+                resource_probe.sample(now, resource_policy),
+                sample_host_activity(),
+            );
 
             // All automatic heavy work shares the same resource and cooldown
             // gate as the ambient lanes. The Idle recap trigger additionally
@@ -2912,6 +2962,92 @@ mod tests {
             }),
             Some(ResourceBlockReason::MemoryPressure)
         );
+    }
+
+    #[test]
+    fn host_activity_policy_defers_recent_physical_input() {
+        assert_eq!(
+            host_activity_block_reason(HostActivitySnapshot::Observed {
+                thermal_state: 0,
+                idle_for: FOREGROUND_INPUT_IDLE_THRESHOLD - Duration::from_millis(1),
+            }),
+            Some(ResourceBlockReason::ForegroundActive),
+        );
+        assert_eq!(
+            host_activity_block_reason(HostActivitySnapshot::Observed {
+                thermal_state: 0,
+                idle_for: FOREGROUND_INPUT_IDLE_THRESHOLD,
+            }),
+            None,
+            "one full two-sample window without physical input is admissible",
+        );
+    }
+
+    #[test]
+    fn host_activity_policy_defers_every_non_nominal_thermal_state() {
+        for thermal_state in 1..=3 {
+            assert_eq!(
+                host_activity_block_reason(HostActivitySnapshot::Observed {
+                    thermal_state,
+                    idle_for: FOREGROUND_INPUT_IDLE_THRESHOLD,
+                }),
+                Some(ResourceBlockReason::ThermalPressure),
+            );
+        }
+    }
+
+    #[test]
+    fn host_activity_policy_fails_closed_only_when_supported_telemetry_is_unavailable() {
+        assert_eq!(
+            host_activity_block_reason(HostActivitySnapshot::Unavailable),
+            Some(ResourceBlockReason::HostActivityUnavailable),
+        );
+        assert_eq!(
+            host_activity_block_reason(HostActivitySnapshot::Unsupported),
+            None,
+            "non-macOS targets retain the portable CPU/RAM gate",
+        );
+    }
+
+    #[test]
+    fn host_activity_veto_is_applied_after_portable_resource_admission() {
+        let admitted = ResourceStatus {
+            admitted: true,
+            snapshot: Some(ResourceSnapshot {
+                cpu_usage_percent: 8.0,
+                available_memory_bytes: 8 * GIB,
+                total_memory_bytes: 16 * GIB,
+            }),
+            block_reason: None,
+        };
+
+        let blocked = apply_host_activity(
+            admitted,
+            HostActivitySnapshot::Observed {
+                thermal_state: 0,
+                idle_for: Duration::ZERO,
+            },
+        );
+        assert!(!blocked.admitted);
+        assert_eq!(
+            blocked.block_reason,
+            Some(ResourceBlockReason::ForegroundActive),
+        );
+        assert_eq!(blocked.snapshot.unwrap().cpu_usage_percent, 8.0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_host_activity_probe_links_and_returns_a_supported_state() {
+        match sample_host_activity() {
+            HostActivitySnapshot::Observed { thermal_state, .. } => {
+                assert!(thermal_state <= 3);
+            }
+            HostActivitySnapshot::Unavailable => {}
+            HostActivitySnapshot::Unsupported => {
+                panic!("the macOS probe must not report an unsupported platform");
+            }
+        }
     }
 
     #[test]

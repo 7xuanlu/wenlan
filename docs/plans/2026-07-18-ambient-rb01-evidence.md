@@ -1,6 +1,6 @@
 # Ambient RB-01 target-Mac evidence
 
-Date: 2026-07-20
+Date: 2026-07-21
 Branch: `feature/ambient-enrichment-scheduler`
 Status: COMPLETE — RB-01 closed by representative daemon and deterministic proofs
 
@@ -27,19 +27,20 @@ Status: COMPLETE — RB-01 closed by representative daemon and deterministic pro
   5.528 seconds, so the multiplier requires about 105 seconds and the
   two-minute floor keeps the observed envelope below roughly 4.4% duty. The
   production runtime's CPU, memory, and two-sample admission gates remain
-  independent and can defer a turn longer. The target-Mac live watchdog
-  separately requires nominal macOS thermal state; production does not yet
-  read the OS thermal state directly.
-- The representative persistent-daemon proof loaded the model once, completed
-  Classification and StructuredExtract with current-version receipts, kept all
-  32 thermal samples nominal, and exited cleanly. It also observed the
-  production CPU gate reset after the first turn and the measured cooldown
-  before the dependent second turn. The earlier `std::process::exit`/Metal
-  teardown crash remains useful regression history; the `_exit` repair is now
-  covered by both process tests and the successful live exit. This daemon
-  artifact predates the final removal of the write-recency admission timer, so
-  it supports resource/thermal behavior rather than that timer policy; the
-  latter is covered by deterministic scheduler tests.
+  independent and can defer a turn longer. On macOS, production also reads the
+  public `NSProcessInfo.thermalState` and CoreGraphics seconds-since-input
+  signals before model startup and every new heavy turn. Any non-nominal
+  thermal state, unavailable supported telemetry, or physical input in the
+  previous 60 seconds vetoes new work. Other platforms retain the portable
+  CPU/RAM gate until they gain an equivalent supported host probe.
+- The current-source representative persistent-daemon proof loaded the model
+  once, completed Classification and StructuredExtract with one provider call
+  and current-version receipt each, kept all 14 thermal samples nominal, and
+  exited cleanly. CPU samples at 25.15%, 20.71%, and 22.83% deferred work;
+  admitted turns began at 19.64% or below. The turns were separated by
+  120.018 seconds. The earlier `std::process::exit`/Metal teardown crash remains
+  useful regression history; the `_exit` repair is covered by process tests and
+  the successful live exit.
 
 ## Evidence boundary
 
@@ -609,3 +610,29 @@ admission, dependency order, cooldown, thermal state, and clean exit. No
 additional live matrix is required for this change. The later CPU calibration
 keeps the 20% ceiling and adds the deterministic 2 GiB route-memory reserve;
 it does not require repeating the completed lane matrix.
+
+The final production host-gate proof is stored at
+`/Users/lucian/.local/share/repo-data/wenlan/benchmarks/b199d9301fdc008dcc7eb2b50ed8737173fce137-aa136449abb5/20260722T045828Z-daemon`.
+Preflight passed at thermal state 0, 74% free memory, and 10.64%/9.62% CPU;
+post-build admission passed at thermal state 0, 74% free memory, and
+10.19%/10.15% CPU. After model load, production deferred new turns for three
+CPU samples above the 20% ceiling, then completed Classification in 2.651
+seconds and StructuredExtract in 1.503 seconds with one call each. The measured
+completion-to-start gap was 120.018 seconds, all 14 watchdog thermal samples
+were 0, peak daemon RSS was 3,474,391,040 bytes, both version-1 receipts were
+durable, graceful shutdown completed, exit status was 0, and no daemon remained.
+
+The preceding interrupted current-source run is retained at
+`20260722T044647Z-daemon` as a positive control for the physical-input veto. It
+made no inference: after CPU recovery it logged `ForegroundActive` on four
+successive scheduler polls and did not begin another heavy turn. The operator
+then terminated the harness; that nonzero run is not completion evidence.
+
+The final Fable review changed only native build packaging and a non-macOS lint
+annotation after these artifacts: the same Objective-C object is now placed in
+a deterministic static archive with normal Cargo link metadata, so downstream
+crates receive it, and non-macOS builds explicitly allow macOS-only enum
+variants to remain unconstructed. Scheduler behavior and the macOS probe code
+did not change. Fresh local builds linked both the `wenlan-server` binary and
+the downstream `wenlan-mcp` `real_router` test executable without warnings;
+the real-model soak is not repeated for these build-only corrections.
