@@ -36,7 +36,6 @@ encoding_rs = { workspace = true }
 # Memory DB (phase 3c)
 tokio = { workspace = true }
 libsql = { workspace = true }
-fastembed = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 lru = { workspace = true }
@@ -80,6 +79,14 @@ futures = { workspace = true }
 # graph. Root Cargo.toml is release-please-locked, so this is a per-crate
 # dep like text-splitter/tiktoken-rs above rather than a workspace one.
 unicode-normalization = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+fastembed = { workspace = true, features = ["ort-load-dynamic"] }
+
+[target.'cfg(not(windows))'.dependencies]
+# Keep the existing static ORT path outside Windows. The native-TLS download
+# feature is intentional: its rustls variant does not fetch ort-sys binaries.
+fastembed = { workspace = true, features = ["ort-download-binaries-native-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "0.1", features = ["metal", "sampler"] }
