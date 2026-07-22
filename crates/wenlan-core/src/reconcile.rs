@@ -948,9 +948,9 @@ mod tests {
         let provider = Arc::new(crate::llm_provider::SequencedMockProvider::new(vec![
             r#"{"conflicts":[]}"#,
         ]));
-        let llm: Arc<dyn LlmProvider> = provider;
+        let llm: Arc<dyn LlmProvider> = provider.clone();
 
-        run_reconcile_slice(
+        let first = run_reconcile_slice(
             &db,
             &llm,
             &PromptRegistry::default(),
@@ -959,13 +959,19 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(first.judged, 1);
+        assert_eq!(provider.call_count(), 1, "one slice gets one judge call");
         assert_eq!(
-            db.get_app_metadata(FRONTIER_CAPTURES_KEY).await.unwrap(),
-            None,
-            "a spent slice must not query or persist the second frontier"
+            db.get_app_metadata(RECONCILE_SLICE_NEXT_KEY)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(Frontier::Captures.as_metadata()),
+            "the next slice must prefer the opposite frontier"
         );
 
-        run_reconcile_slice(
+        let calls_before_second = provider.call_count();
+        let second = run_reconcile_slice(
             &db,
             &llm,
             &PromptRegistry::default(),
@@ -974,11 +980,19 @@ mod tests {
         )
         .await
         .unwrap();
-
-        let captures = load_state(&db, FRONTIER_CAPTURES_KEY).await;
-        assert!(
-            captures.ts > 0,
-            "a steady document frontier must not starve capture-frontier turns"
+        assert!(second.judged <= 1);
+        assert_eq!(
+            provider.call_count() - calls_before_second,
+            second.judged,
+            "the second slice may also spend at most one judge call"
+        );
+        assert_eq!(
+            db.get_app_metadata(RECONCILE_SLICE_NEXT_KEY)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(Frontier::Docs.as_metadata()),
+            "frontier priority must alternate back after the second slice"
         );
     }
 }
