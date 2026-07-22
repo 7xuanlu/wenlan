@@ -177,6 +177,11 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
         let mut last_citation_sweep = Instant::now()
             .checked_sub(CITATION_SWEEP_INTERVAL)
             .unwrap_or_else(Instant::now);
+        // Fire the edges-parity reconcile sweep every 30 min (read-only; no LLM).
+        const EDGES_RECONCILE_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
+        let mut last_edges_reconcile_sweep = Instant::now()
+            .checked_sub(EDGES_RECONCILE_SWEEP_INTERVAL)
+            .unwrap_or_else(Instant::now);
         let mut last_derived_receipt_sweep = None;
 
         // Load persisted daily timestamp from DB (survives restarts)
@@ -579,6 +584,33 @@ pub fn spawn_scheduler(shared: SharedState, write_signal: WriteSignal) {
                     });
                     last_citation_sweep = now;
                 }
+            }
+
+            // --- 8. Edges-parity reconcile sweep (M2 stage-d): read-only diff
+            //        of the five legacy stores vs `edges`, stamping the parity
+            //        watermark that gates every reader cutover. No LLM. Never
+            //        flips a reader — that stays the manual `set_reader_cutover`
+            //        lever; this only proves (or disproves) parity. ---
+            if wenlan_core::db::edges_reconcile_enabled()
+                && now.duration_since(last_edges_reconcile_sweep) >= EDGES_RECONCILE_SWEEP_INTERVAL
+            {
+                let db_ref = db.clone();
+                let maintenance_child = maintenance_guard.child();
+                tokio::spawn(async move {
+                    let _maintenance_child = maintenance_child;
+                    match db_ref.reconcile_edges_parity().await {
+                        Ok(report) => tracing::info!(
+                            "[scheduler] edges parity sweep: drift={} (missing={}, extra={}, corrupt={}) epoch={}",
+                            report.drift_count,
+                            report.missing_count,
+                            report.extra_count,
+                            report.corrupt_count,
+                            report.epoch
+                        ),
+                        Err(e) => tracing::warn!("[scheduler] edges parity sweep error: {e}"),
+                    }
+                });
+                last_edges_reconcile_sweep = now;
             }
         }
     });
