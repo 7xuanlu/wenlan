@@ -3942,15 +3942,16 @@ mod tests {
             temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
                 let config = crate::config::Config {
                     knowledge_path: Some(knowledge_path),
+                    synthesis_source: Some("on_device".to_string()),
                     ..crate::config::Config::default()
                 };
                 crate::config::save_config(&config).unwrap();
 
                 run_periodic_steep_with_api(
                     &db,
-                    None,
-                    None,
                     Some(&llm),
+                    None,
+                    None,
                     None,
                     &PromptRegistry::default(),
                     &crate::tuning::RefineryConfig::default(),
@@ -4024,15 +4025,16 @@ mod tests {
             temp_env::async_with_vars([("WENLAN_DATA_DIR", Some(data_dir_var.as_str()))], async {
                 let config = crate::config::Config {
                     knowledge_path: Some(knowledge_path),
+                    synthesis_source: Some("on_device".to_string()),
                     ..crate::config::Config::default()
                 };
                 crate::config::save_config(&config).unwrap();
 
                 run_periodic_steep_with_api(
                     &db,
-                    None,
-                    None,
                     Some(&llm),
+                    None,
+                    None,
                     None,
                     &PromptRegistry::default(),
                     &crate::tuning::RefineryConfig::default(),
@@ -4046,11 +4048,21 @@ mod tests {
             .await
             .unwrap();
 
-        let phase_names: Vec<&str> = result.phases.iter().map(|p| p.name.as_str()).collect();
+        let overview = result
+            .phases
+            .iter()
+            .find(|phase| phase.name == "overview")
+            .unwrap_or_else(|| {
+                let phase_names: Vec<&str> =
+                    result.phases.iter().map(|phase| phase.name.as_str()).collect();
+                panic!(
+                    "Daily maintenance must run the reserved Overview refresh phase, got {phase_names:?}"
+                )
+            });
         assert!(
-            phase_names.contains(&"overview"),
-            "Daily maintenance must run the reserved Overview refresh phase, got {:?}",
-            phase_names
+            overview.error.is_none(),
+            "Daily Overview phase must not error: {:?}",
+            overview.error
         );
 
         let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
