@@ -71,7 +71,7 @@ Optional upgrades for richer distill cycles:
   wenlan keys set anthropic       Anthropic API, higher quality
 
 Models and keys do not enable background inference by themselves:
-  wenlan enrichment status        show Everyday + Synthesis as off/ready/paused
+  wenlan enrichment status        show Everyday + Synthesis as off, ready, or paused
   wenlan enrichment configure --everyday <source> --synthesis <source>
                                   review the exact mapping, disclosure, and confirm
   wenlan enrichment disable       turn model-backed background work off
