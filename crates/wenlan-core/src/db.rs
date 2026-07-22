@@ -34390,7 +34390,6 @@ impl MemoryDB {
         link_reason: &str,
     ) -> Result<(), WenlanError> {
         let now = chrono::Utc::now().timestamp();
-        let now_text = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
         Self::reject_page_draft_on_conn(&conn, page_id).await?;
         conn.execute("BEGIN", ())
@@ -34514,13 +34513,12 @@ impl MemoryDB {
                 })?;
                 conn.execute(
                     "UPDATE pages
-                     SET source_memory_ids = ?1, version = version + 1,
-                         last_modified = ?2, citations = NULL,
+                     SET source_memory_ids = ?1, citations = NULL,
                          stale_reason = 'source_updated',
                          sources_updated_count = COALESCE(sources_updated_count, 0) + 1,
                          source_revision = COALESCE(source_revision, 0) + 1
-                     WHERE id = ?3",
-                    libsql::params![source_ids_json, now_text, page_id],
+                     WHERE id = ?2",
+                    libsql::params![source_ids_json, page_id],
                 )
                 .await
                 .map_err(|e| {
@@ -41159,7 +41157,13 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(page.version, 2);
+        assert_eq!(page.version, 1);
+        assert_eq!(
+            db.get_page_source_revision("page-forget-dependencies")
+                .await
+                .unwrap(),
+            1
+        );
         assert!(page.source_memory_ids.is_empty());
         assert_eq!(page.stale_reason.as_deref(), Some("source_removed"));
         assert!(db
@@ -42119,18 +42123,19 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT version, citations, source_memory_ids, stale_reason
+                "SELECT version, source_revision, citations, source_memory_ids, stale_reason
                  FROM pages WHERE id = 'page_bulk_dependency_cleanup'",
                 (),
             )
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(row.get::<i64>(0).unwrap(), 2);
-        assert_eq!(row.get::<Option<String>>(1).unwrap(), None);
-        assert_eq!(row.get::<String>(2).unwrap(), "[]");
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+        assert_eq!(row.get::<i64>(1).unwrap(), 1);
+        assert_eq!(row.get::<Option<String>>(2).unwrap(), None);
+        assert_eq!(row.get::<String>(3).unwrap(), "[]");
         assert_eq!(
-            row.get::<Option<String>>(3).unwrap().as_deref(),
+            row.get::<Option<String>>(4).unwrap().as_deref(),
             Some("source_removed")
         );
     }
@@ -42240,18 +42245,19 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT version, citations, source_memory_ids, stale_reason
+                "SELECT version, source_revision, citations, source_memory_ids, stale_reason
                  FROM pages WHERE id = 'page_time_dependency_cleanup'",
                 (),
             )
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(row.get::<i64>(0).unwrap(), 2);
-        assert_eq!(row.get::<Option<String>>(1).unwrap(), None);
-        assert_eq!(row.get::<String>(2).unwrap(), "[]");
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+        assert_eq!(row.get::<i64>(1).unwrap(), 1);
+        assert_eq!(row.get::<Option<String>>(2).unwrap(), None);
+        assert_eq!(row.get::<String>(3).unwrap(), "[]");
         assert_eq!(
-            row.get::<Option<String>>(3).unwrap().as_deref(),
+            row.get::<Option<String>>(4).unwrap().as_deref(),
             Some("source_removed")
         );
     }
@@ -49642,18 +49648,19 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT version, citations, source_memory_ids, stale_reason
+                "SELECT version, source_revision, citations, source_memory_ids, stale_reason
                  FROM pages WHERE id = 'page_space_delete_dependencies'",
                 (),
             )
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(row.get::<i64>(0).unwrap(), 2);
-        assert_eq!(row.get::<Option<String>>(1).unwrap(), None);
-        assert_eq!(row.get::<String>(2).unwrap(), "[]");
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+        assert_eq!(row.get::<i64>(1).unwrap(), 1);
+        assert_eq!(row.get::<Option<String>>(2).unwrap(), None);
+        assert_eq!(row.get::<String>(3).unwrap(), "[]");
         assert_eq!(
-            row.get::<Option<String>>(3).unwrap().as_deref(),
+            row.get::<Option<String>>(4).unwrap().as_deref(),
             Some("source_removed")
         );
     }
@@ -57338,7 +57345,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn same_source_upsert_bumps_directly_affected_page() {
+    async fn same_source_upsert_advances_directly_affected_page_source_revision() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![make_memory_doc(
             "mem_upsert_page_dependency",
@@ -57380,7 +57387,13 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(page.version, 2);
+        assert_eq!(page.version, 1);
+        assert_eq!(
+            db.get_page_source_revision("page_upsert_dependency")
+                .await
+                .unwrap(),
+            1
+        );
         assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
         assert!(
             db.get_pages_missing_citations(10)
@@ -57614,7 +57627,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn memory_update_bumps_directly_affected_page() {
+    async fn memory_update_advances_directly_affected_page_source_revision() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![make_memory_doc(
             "mem_page_dependency",
@@ -57651,20 +57664,22 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT version, citations, stale_reason, sources_updated_count
+                "SELECT version, source_revision, citations, stale_reason,
+                        sources_updated_count
                  FROM pages WHERE id = 'page_memory_dependency'",
                 (),
             )
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(row.get::<i64>(0).unwrap(), 2);
-        assert_eq!(row.get::<Option<String>>(1).unwrap(), None);
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+        assert_eq!(row.get::<i64>(1).unwrap(), 1);
+        assert_eq!(row.get::<Option<String>>(2).unwrap(), None);
         assert_eq!(
-            row.get::<Option<String>>(2).unwrap().as_deref(),
+            row.get::<Option<String>>(3).unwrap().as_deref(),
             Some("source_updated")
         );
-        assert_eq!(row.get::<i64>(3).unwrap(), 1);
+        assert_eq!(row.get::<i64>(4).unwrap(), 1);
     }
 
     #[tokio::test]
@@ -60977,7 +60992,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn changing_page_evidence_bumps_version_and_resets_citations_once() {
+    async fn changing_page_evidence_bumps_source_revision_and_resets_citations_once() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -61030,7 +61045,7 @@ pub(crate) mod tests {
             let conn = db.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT version, citations, source_memory_ids FROM pages
+                    "SELECT version, source_revision, citations, source_memory_ids FROM pages
                      WHERE id = 'page_evidence_generation'",
                     (),
                 )
@@ -61039,12 +61054,14 @@ pub(crate) mod tests {
             let row = rows.next().await.unwrap().unwrap();
             (
                 row.get::<i64>(0).unwrap(),
-                row.get::<Option<String>>(1).unwrap(),
-                serde_json::from_str::<Vec<String>>(&row.get::<String>(2).unwrap()).unwrap(),
+                row.get::<i64>(1).unwrap(),
+                row.get::<Option<String>>(2).unwrap(),
+                serde_json::from_str::<Vec<String>>(&row.get::<String>(3).unwrap()).unwrap(),
             )
         };
-        let (version, citations, source_ids) = read_state().await;
-        assert_eq!(version, 2);
+        let (version, source_revision, citations, source_ids) = read_state().await;
+        assert_eq!(version, 1);
+        assert_eq!(source_revision, 1);
         assert_eq!(citations, None, "changed evidence re-enters citation lane");
         assert_eq!(
             source_ids,
@@ -61061,11 +61078,16 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(read_state().await.0, 2, "an idempotent link must not bump");
+        let repeated = read_state().await;
+        assert_eq!(
+            (repeated.0, repeated.1),
+            (1, 1),
+            "an idempotent link must not bump either generation"
+        );
     }
 
     #[tokio::test]
-    async fn replace_page_sources_bumps_only_when_effective_set_changes() {
+    async fn replace_page_sources_bumps_source_revision_only_when_effective_set_changes() {
         let (db, _dir) = test_db().await;
         db.upsert_documents(vec![
             make_memory_doc(
@@ -61141,17 +61163,18 @@ pub(crate) mod tests {
         let conn = db.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT version, citations, source_memory_ids FROM pages
+                "SELECT version, source_revision, citations, source_memory_ids FROM pages
                  WHERE id = 'page_replace_evidence_generation'",
                 (),
             )
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(row.get::<i64>(0).unwrap(), 2);
-        assert_eq!(row.get::<Option<String>>(1).unwrap(), None);
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+        assert_eq!(row.get::<i64>(1).unwrap(), 1);
+        assert_eq!(row.get::<Option<String>>(2).unwrap(), None);
         assert_eq!(
-            serde_json::from_str::<Vec<String>>(&row.get::<String>(2).unwrap()).unwrap(),
+            serde_json::from_str::<Vec<String>>(&row.get::<String>(3).unwrap()).unwrap(),
             vec!["mem_replace_evidence_b".to_string()]
         );
     }
