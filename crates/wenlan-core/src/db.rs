@@ -8162,6 +8162,19 @@ impl MemoryDB {
             discriminator,
         );
         let now = chrono::Utc::now().timestamp();
+        // Whether this write is a genuine cross-space (or indeterminate-space)
+        // DOWNGRADE, resolved in Rust where the reason is explicit rather than
+        // inferred from the space stamp. Callers pass `lineage = 'legacy'` for a
+        // fence-applicable destination (memory / entity / page) ONLY when they
+        // detected the destination is not in the source's space (or its space is
+        // indeterminate); an external destination is fence-exempt, so its
+        // `legacy` is an unknown-KIND classification, never a cross-space
+        // downgrade. This marker lets the conflict rule reconcile the row to
+        // `legacy` even when the stored space stamp (which tracks the SOURCE
+        // endpoint) is unchanged by a DESTINATION move -- the round-3 SQL-only
+        // discriminant compared stamps and so missed destination moves,
+        // producing a fence abort (round-4 regression).
+        let cross_space_downgrade = lineage == "legacy" && dst_kind != "external";
         // ON CONFLICT resolves the shadow edge independent of dual-write CALL
         // ORDER, reconciling three things a re-write can change:
         //   1. Reactivation -- a soft-invalidated edge (`valid_until` set) is
@@ -8184,21 +8197,27 @@ impl MemoryDB {
         //           FRESH (`excluded`) value -- a retracted-then-readded edge
         //           takes its current classification (evidence can honestly
         //           become legacy when the memory moved cross-space). Item 4.
-        //        b. A cross-space re-write of an ACTIVE edge
-        //           (`edges.space IS NOT excluded.space`) likewise adopts the
-        //           fresh value -- the caller passes `legacy` on a genuine
-        //           cross-space move; the AFTER UPDATE fence re-validates any
-        //           typed result. This is the item-4 fence downgrade, and it is
-        //           a time-ordered move, NOT an ordering violation.
-        //        c. Two concurrent ACTIVE, SAME-SPACE writes of one fact from
+        //        b. A cross-space DOWNGRADE (`cross_space_downgrade`, bound as
+        //           ?11) reconciles to `legacy` and wins. This covers a genuine
+        //           cross-space (or indeterminate-space) re-assert of a
+        //           fence-applicable destination -- INCLUDING a DESTINATION move
+        //           that leaves the source-space stamp unchanged, which a
+        //           stamp-only comparison misses (round-4 regression). The
+        //           resulting `legacy` row is fence-exempt, so the AFTER UPDATE
+        //           fence does not abort the dual-write txn.
+        //        c. A SOURCE move (`edges.space IS NOT excluded.space`) adopts
+        //           the fresh value -- the edge follows its re-spaced source; the
+        //           AFTER UPDATE fence re-validates any typed result.
+        //        d. Two concurrent ACTIVE, SAME-SPACE writes of one fact from
         //           different stores resolve by a TOTAL, COMMUTATIVE rank so the
         //           result is independent of which store wrote first:
         //           `evidence` > `synthesis` > `legacy`. (`assertion`, from
         //           `relates`/`mentions`, never shares a same-space active
         //           edge_id with these -- distinct `edge_type` -- so its rank is
         //           immaterial, but it is ranked above `legacy` for a total
-        //           order.) An unknown-kind citation's same-space `legacy` can
-        //           no longer clobber an active `evidence`/`synthesis`.
+        //           order.) An unknown-kind citation's same-space `legacy` (which
+        //           is NOT a `cross_space_downgrade`) can no longer clobber an
+        //           active `evidence`/`synthesis`.
         //      So a live edge and its backfilled twin agree regardless of which
         //      store wrote first.
         // FENCE-SAFE: the AFTER UPDATE twin of the space fence re-validates any
@@ -8215,6 +8234,7 @@ impl MemoryDB {
                  space = excluded.space,
                  lineage = CASE
                      WHEN edges.valid_until IS NOT NULL THEN excluded.lineage
+                     WHEN ?11 = 1 THEN 'legacy'
                      WHEN edges.space IS NOT excluded.space THEN excluded.lineage
                      WHEN (CASE excluded.lineage WHEN 'evidence' THEN 3 WHEN 'synthesis' THEN 2 WHEN 'assertion' THEN 1 ELSE 0 END)
                         > (CASE edges.lineage WHEN 'evidence' THEN 3 WHEN 'synthesis' THEN 2 WHEN 'assertion' THEN 1 ELSE 0 END)
@@ -8237,7 +8257,8 @@ impl MemoryDB {
                 lineage.to_string(),
                 space.to_string(),
                 operation_id.map(|s| s.to_string()),
-                now
+                now,
+                cross_space_downgrade as i64
             ],
         )
         .await?;
@@ -62508,6 +62529,145 @@ pub(crate) mod tests {
                 "active synthesis must not be downgraded when legacy writes after"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn dual_write_edge_cites_destination_move_downgrades_to_legacy() {
+        // Round-4 regression: an ACTIVE, same-space typed edge whose DESTINATION
+        // endpoint later moves to another space (incident edges NOT invalidated)
+        // must accept a fresh 'legacy' downgrade re-assert and reconcile to
+        // 'legacy' -- the whole dual-write must SUCCEED, not abort. The round-3
+        // discriminant compared the SOURCE-space stamp (unchanged by a
+        // destination move), misread this as a same-space conflict, kept the
+        // stale 'evidence', and the AFTER UPDATE fence then aborted the txn.
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_dm", "content", "space_a").await;
+        let conn = db.conn.lock().await;
+        insert_raw_page_for_m81_test(&conn, "page_dm", "space_a").await;
+        MemoryDB::dual_write_edge(
+            &conn, "cites", "page", "page_dm", "memory", "mem_dm", "mem_dm", "evidence", "space_a",
+            None,
+        )
+        .await
+        .expect("same-space evidence edge inserts");
+        // Destination memory moves cross-space; the edge is NOT invalidated.
+        conn.execute(
+            "UPDATE memories SET space = 'space_b' WHERE source_id = 'mem_dm'",
+            (),
+        )
+        .await
+        .unwrap();
+        // Caller detects the cross-space move (classifiable=false) and re-asserts
+        // 'legacy'; the source-space stamp it passes is still 'space_a'.
+        let result = MemoryDB::dual_write_edge(
+            &conn, "cites", "page", "page_dm", "memory", "mem_dm", "mem_dm", "legacy", "space_a",
+            None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "cross-space destination-move downgrade must succeed, not abort the txn: {result:?}"
+        );
+        let (lineage, _, _) = edge_row(&conn, "cites", "page_dm", "mem_dm").await.unwrap();
+        assert_eq!(
+            lineage, "legacy",
+            "row must reconcile to legacy after the destination moved"
+        );
+    }
+
+    #[tokio::test]
+    async fn dual_write_edge_relates_destination_move_downgrades_to_legacy() {
+        // Round-4 regression, `relates`->entity kind: same shape as the cites
+        // case -- an active same-space assertion edge whose destination entity
+        // moves cross-space must accept a fresh legacy downgrade and succeed.
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        for (id, space) in [("ent_src", "space_a"), ("ent_dst", "space_a")] {
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, space, confirmed, created_at, updated_at) \
+                 VALUES (?1, ?1, 'Topic', ?2, 0, 0, 0)",
+                libsql::params![id, space],
+            )
+            .await
+            .unwrap();
+        }
+        MemoryDB::dual_write_edge(
+            &conn,
+            "relates",
+            "entity",
+            "ent_src",
+            "entity",
+            "ent_dst",
+            "knows",
+            "assertion",
+            "space_a",
+            None,
+        )
+        .await
+        .expect("same-space assertion edge inserts");
+        conn.execute(
+            "UPDATE entities SET space = 'space_b' WHERE id = 'ent_dst'",
+            (),
+        )
+        .await
+        .unwrap();
+        let result = MemoryDB::dual_write_edge(
+            &conn, "relates", "entity", "ent_src", "entity", "ent_dst", "knows", "legacy",
+            "space_a", None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "relates destination-move downgrade must succeed, not abort: {result:?}"
+        );
+        let (lineage, _, _) = edge_row(&conn, "relates", "ent_src", "ent_dst")
+            .await
+            .unwrap();
+        assert_eq!(lineage, "legacy", "relates row must reconcile to legacy");
+    }
+
+    #[tokio::test]
+    async fn dual_write_edge_links_destination_move_downgrades_to_legacy() {
+        // Round-4 regression, `links`->page kind: an active same-space synthesis
+        // edge whose destination page moves cross-space must accept a fresh
+        // legacy downgrade and succeed.
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        insert_raw_page_for_m81_test(&conn, "page_ls", "space_a").await;
+        insert_raw_page_for_m81_test(&conn, "page_ld", "space_a").await;
+        MemoryDB::dual_write_edge(
+            &conn,
+            "links",
+            "page",
+            "page_ls",
+            "page",
+            "page_ld",
+            "see-also",
+            "synthesis",
+            "space_a",
+            None,
+        )
+        .await
+        .expect("same-space synthesis link edge inserts");
+        conn.execute(
+            "UPDATE pages SET space = 'space_b' WHERE id = 'page_ld'",
+            (),
+        )
+        .await
+        .unwrap();
+        let result = MemoryDB::dual_write_edge(
+            &conn, "links", "page", "page_ls", "page", "page_ld", "see-also", "legacy", "space_a",
+            None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "links destination-move downgrade must succeed, not abort: {result:?}"
+        );
+        let (lineage, _, _) = edge_row(&conn, "links", "page_ls", "page_ld")
+            .await
+            .unwrap();
+        assert_eq!(lineage, "legacy", "links row must reconcile to legacy");
     }
 
     #[tokio::test]
