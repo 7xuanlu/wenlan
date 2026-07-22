@@ -462,12 +462,12 @@ struct AmbientAvailability {
 
 impl AmbientAvailability {
     /// Automatic lanes are a consent boundary as well as a capability check.
-    /// Even deterministic document preparation stays queued until the pinned
-    /// provider is both authorized and healthy, so a later pin can run the
-    /// canonical document pipeline instead of inheriting a terminal stub.
+    /// Deterministic document preparation remains available without a model so
+    /// source data becomes searchable; all inference lanes stay parked until
+    /// the pinned provider is both authorized and healthy.
     fn for_provider(provider_available: bool) -> Self {
         Self {
-            document: provider_available,
+            document: true,
             classification: provider_available,
             structured_extract: provider_available,
             entity: provider_available && wenlan_core::db::entity_sweep_enabled(),
@@ -2219,7 +2219,7 @@ async fn run_document_enrichment_slice_tick(
     prompts: &wenlan_core::prompts::PromptRegistry,
 ) -> usize {
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    match db.claim_next_pending().await {
+    match db.claim_next_pending_for_provider(llm.is_some()).await {
         Ok(Some(entry)) => {
             let slice = std::panic::AssertUnwindSafe(
                 wenlan_core::document_enrichment::run_document_enrichment_slice(
@@ -2517,10 +2517,13 @@ mod tests {
     }
 
     #[test]
-    fn unconfigured_or_unavailable_pin_disables_every_automatic_llm_lane() {
+    fn unconfigured_pin_allows_only_deterministic_document_preparation() {
         let availability = AmbientAvailability::for_provider(false);
+        assert!(
+            availability.supports(AmbientJob::Document),
+            "model consent must not prevent deterministic parse + embedding"
+        );
         for job in [
-            AmbientJob::Document,
             AmbientJob::Classification,
             AmbientJob::StructuredExtract,
             AmbientJob::Entity,
@@ -2531,7 +2534,7 @@ mod tests {
         ] {
             assert!(
                 !availability.supports(job),
-                "{job:?} must leave durable work pending until an authorized provider is available"
+                "{job:?} must remain pending until an authorized provider is available"
             );
         }
     }
@@ -4266,13 +4269,14 @@ mod tests {
             "a source page must be written for the document"
         );
 
-        // Queue row marked done.
+        // Searchable preparation is durable, while model enrichment waits for
+        // an explicit provider pin instead of being falsely marked complete.
         let q = db
             .get_queue_entry(&source_id, &file_path.to_string_lossy())
             .await
             .unwrap()
             .expect("queue entry exists after processing");
-        assert_eq!(q.status, "done");
+        assert_eq!(q.status, "waiting_for_provider");
     }
 
     /// A paused queue row whose backoff has not elapsed must be SKIPPED by the

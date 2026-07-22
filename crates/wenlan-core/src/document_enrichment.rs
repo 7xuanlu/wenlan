@@ -108,7 +108,8 @@ impl DocumentEnrichmentOutcome {
 
 /// Enrich a single queued document end-to-end. See the module docs for the full
 /// contract. Never propagates an error: every failure mode maps to a returned
-/// [`DocumentEnrichmentOutcome`] plus a queue transition (done / paused).
+/// [`DocumentEnrichmentOutcome`] plus a queue transition
+/// (`done` / `paused` / `waiting_for_provider`).
 pub async fn run_document_enrichment(
     db: &MemoryDB,
     entry: &DocEnrichmentQueueEntry,
@@ -176,7 +177,7 @@ async fn run_document_enrichment_with_request_budget(
                 // Still record sync_state so the next sync skips it instead of
                 // re-parsing it every tick.
                 log::warn!("[doc-enrich] {file_path}: not ingestable ({reason}); marking done");
-                if !complete_with_sync_receipt(db, entry).await {
+                if !complete_with_sync_receipt(db, entry, false).await {
                     return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
                 }
                 return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
@@ -268,7 +269,7 @@ async fn run_document_enrichment_with_request_budget(
 
     if chunks.is_empty() {
         log::warn!("[doc-enrich] {file_path}: no chunks after upsert; marking done");
-        if !complete_with_sync_receipt(db, entry).await {
+        if !complete_with_sync_receipt(db, entry, false).await {
             return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
         }
         return DocumentEnrichmentOutcome::terminal_no_page(doc_source_id);
@@ -387,8 +388,9 @@ async fn run_document_enrichment_with_request_budget(
                 paused: true,
             };
         }
-        // No LLM configured: terminal (a retry can't do better without a provider).
-        if !complete_with_sync_receipt(db, entry).await {
+        // The deterministic preparation is searchable, but model-derived
+        // enrichment remains parked until the user authorizes a provider.
+        if !complete_with_sync_receipt(db, entry, true).await {
             return DocumentEnrichmentOutcome {
                 doc_source_id,
                 page_id,
@@ -463,7 +465,7 @@ async fn run_document_enrichment_with_request_budget(
         };
     }
 
-    if !complete_with_sync_receipt(db, entry).await {
+    if !complete_with_sync_receipt(db, entry, false).await {
         return DocumentEnrichmentOutcome {
             doc_source_id,
             page_id,
@@ -546,7 +548,7 @@ async fn yield_document_slice(
 }
 
 /// Atomically record the file's tracked `source_sync_state` and transition the
-/// queue row to terminal. A failed receipt pauses the row for retry.
+/// queue row to its next durable state. A failed receipt pauses the row for retry.
 /// The scan-side mtime+hash skip and the deletion diff both read this table:
 /// without the write, a directory file is re-enqueued on every sync and its
 /// chunks are never reaped after deletion.
@@ -557,7 +559,11 @@ async fn yield_document_slice(
 /// the row is written with `mtime_ns = 0` and the ENQUEUE-time hash, so the
 /// next sync cannot mtime-skip it: it re-hashes, sees the drift, and re-enriches
 /// (or, for a vanished file, the deletion diff reaps the chunks just written).
-async fn complete_with_sync_receipt(db: &MemoryDB, entry: &DocEnrichmentQueueEntry) -> bool {
+async fn complete_with_sync_receipt(
+    db: &MemoryDB,
+    entry: &DocEnrichmentQueueEntry,
+    wait_for_provider: bool,
+) -> bool {
     let path = PathBuf::from(&entry.file_path);
     let stat = tokio::task::spawn_blocking(move || {
         let meta = std::fs::metadata(&path).ok()?;
@@ -585,12 +591,21 @@ async fn complete_with_sync_receipt(db: &MemoryDB, entry: &DocEnrichmentQueueEnt
         // the chunks this run just wrote.
         (None, eh) => (0, eh.unwrap_or_default().to_string()),
     };
-    if let Err(e) = db
-        .complete_document_enrichment(&entry.source_id, &entry.file_path, mtime_ns, &hash)
+    let receipt = if wait_for_provider {
+        db.defer_document_enrichment_until_provider(
+            &entry.source_id,
+            &entry.file_path,
+            mtime_ns,
+            &hash,
+        )
         .await
-    {
+    } else {
+        db.complete_document_enrichment(&entry.source_id, &entry.file_path, mtime_ns, &hash)
+            .await
+    };
+    if let Err(e) = receipt {
         log::warn!(
-            "[doc-enrich] {}: terminal receipt failed: {e}; pausing",
+            "[doc-enrich] {}: completion receipt failed: {e}; pausing",
             entry.file_path
         );
         pause(db, entry, "source sync receipt failed").await;
@@ -1340,6 +1355,34 @@ mod tests {
                 .all(|row| row.source_kind == "external_file"),
             "document source-page evidence must preserve folder chunk provenance, got {evidence:?}"
         );
+        let queued = db
+            .get_queue_entry("folder-notes", &file_path)
+            .await
+            .unwrap()
+            .expect("document queue row");
+        assert_eq!(queued.status, "waiting_for_provider");
+        assert!(
+            db.get_sync_state("folder-notes", &file_path)
+                .await
+                .unwrap()
+                .is_some(),
+            "searchable preparation must publish the sync receipt before waiting for model consent"
+        );
+        assert!(
+            db.claim_next_pending_for_provider(false)
+                .await
+                .unwrap()
+                .is_none(),
+            "without model consent, prepared documents must stay parked instead of spinning"
+        );
+        let resumed = db
+            .claim_next_pending_for_provider(true)
+            .await
+            .unwrap()
+            .expect("configured model must resume the parked document");
+        assert_eq!(resumed.source_id, "folder-notes");
+        assert_eq!(resumed.file_path, file_path);
+        assert_eq!(resumed.status, "in_progress");
     }
 
     #[tokio::test]

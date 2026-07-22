@@ -2332,7 +2332,7 @@ pub struct FileSyncState {
 pub struct DocEnrichmentQueueEntry {
     pub source_id: String,
     pub file_path: String,
-    /// `pending` | `in_progress` | `paused` | `done`.
+    /// `pending` | `in_progress` | `paused` | `waiting_for_provider` | `done`.
     pub status: String,
     pub content_hash: Option<String>,
     /// Index of the last chunk whose enrichment was committed. `-1` = none yet
@@ -37584,13 +37584,20 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Claim the next claimable document for enrichment (serial: at most one
-    /// row). Claimable = `pending`, or `paused` whose `next_retry_at` has
-    /// elapsed (NULL retry time = immediately eligible). Transitions the claimed
-    /// row to `in_progress` and returns it; its `last_completed_chunk` is the
-    /// resume point (start at the next chunk). Oldest-enqueued first. Returns
-    /// `None` when nothing is claimable.
+    /// Claim the next document when a provider is available. This preserves the
+    /// historical API for explicit/full-pipeline callers and tests.
     pub async fn claim_next_pending(&self) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
+        self.claim_next_pending_for_provider(true).await
+    }
+
+    /// Claim at most one document for the ambient lane. Without an authorized
+    /// provider, only fresh pending documents are claimable so deterministic
+    /// parse + embedding can make them searchable. Rows already prepared and
+    /// waiting for consent remain parked until a provider becomes available.
+    pub async fn claim_next_pending_for_provider(
+        &self,
+        provider_available: bool,
+    ) -> Result<Option<DocEnrichmentQueueEntry>, WenlanError> {
         let now = chrono::Utc::now().timestamp();
         let (source_id, file_path) = {
             // Hold the connection lock across SELECT + UPDATE so the claim is
@@ -37600,11 +37607,14 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT source_id, file_path FROM document_enrichment_queue
-                     WHERE status = 'pending'
-                        OR (status = 'paused' AND (next_retry_at IS NULL OR next_retry_at <= ?1))
+                     WHERE (status = 'pending' AND (?2 OR last_completed_chunk = -1))
+                        OR (?2 AND status = 'waiting_for_provider')
+                        OR (status = 'paused'
+                            AND (next_retry_at IS NULL OR next_retry_at <= ?1)
+                            AND (?2 OR last_completed_chunk = -1))
                      ORDER BY enqueued_at ASC, rowid ASC
                      LIMIT 1",
-                    libsql::params![now],
+                    libsql::params![now, provider_available],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("claim_next_pending select: {}", e)))?;
@@ -37832,6 +37842,43 @@ impl MemoryDB {
         mtime_ns: i64,
         content_hash: &str,
     ) -> Result<(), WenlanError> {
+        self.finish_document_enrichment_with_receipt(
+            source_id,
+            file_path,
+            mtime_ns,
+            content_hash,
+            "done",
+        )
+        .await
+    }
+
+    /// Publish the searchable sync receipt but keep model-derived enrichment
+    /// pending until an explicitly authorized provider becomes available.
+    pub async fn defer_document_enrichment_until_provider(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        mtime_ns: i64,
+        content_hash: &str,
+    ) -> Result<(), WenlanError> {
+        self.finish_document_enrichment_with_receipt(
+            source_id,
+            file_path,
+            mtime_ns,
+            content_hash,
+            "waiting_for_provider",
+        )
+        .await
+    }
+
+    async fn finish_document_enrichment_with_receipt(
+        &self,
+        source_id: &str,
+        file_path: &str,
+        mtime_ns: i64,
+        content_hash: &str,
+        next_status: &str,
+    ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().timestamp();
         conn.execute("BEGIN", ())
@@ -37841,11 +37888,11 @@ impl MemoryDB {
             let affected = conn
                 .execute(
                     "UPDATE document_enrichment_queue
-                     SET status = 'done', next_retry_at = NULL,
+                     SET status = ?5, next_retry_at = NULL,
                          error_detail = NULL, updated_at = ?3
                      WHERE source_id = ?1 AND file_path = ?2
                        AND status = 'in_progress' AND content_hash IS ?4",
-                    libsql::params![source_id, file_path, now, content_hash],
+                    libsql::params![source_id, file_path, now, content_hash, next_status],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("complete enrichment queue: {e}")))?;
