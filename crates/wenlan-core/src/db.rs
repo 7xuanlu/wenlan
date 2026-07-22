@@ -16343,42 +16343,131 @@ impl MemoryDB {
         if !pages_already_marked {
             Self::mark_pages_depending_on_memory_source(conn, source, source_id).await?;
         }
-        let affected_page_ids =
+        let mut physical_row_ids = HashSet::new();
+        if source != "episode" {
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM memories WHERE source = ?1 AND source_id = ?2",
+                    libsql::params![source, source_id],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete Page owner lookup: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("delete Page owner row: {e}")))?
             {
+                physical_row_ids
+                    .insert(row.get::<String>(0).map_err(|e| {
+                        WenlanError::VectorDb(format!("delete Page owner id: {e}"))
+                    })?);
+            }
+        }
+
+        // Page provenance has existed in three shapes: the stable logical
+        // source id, physical memory-row ids, and a JSON-only legacy mirror.
+        // Inventory and prune every alias while the owner rows still exist.
+        // The owner guard matches invalidation semantics: deleting a source
+        // that does not exist must not mutate an unrelated stale locator.
+        let affected_pages =
+            if physical_row_ids.is_empty() {
+                Vec::new()
+            } else {
                 let mut rows = conn
                     .query(
-                        "SELECT page_id FROM page_sources WHERE memory_source_id = ?1
-                         UNION
-                         SELECT page_id FROM page_evidence WHERE locator = ?1",
-                        libsql::params![source_id],
+                        "SELECT DISTINCT p.id, p.source_memory_ids
+                     FROM pages p
+                     WHERE EXISTS (
+                               SELECT 1 FROM page_sources ps
+                               WHERE ps.page_id = p.id
+                                 AND (
+                                     ps.memory_source_id = ?2
+                                     OR ps.memory_source_id IN (
+                                         SELECT m.id FROM memories m
+                                         WHERE m.source = ?1 AND m.source_id = ?2
+                                     )
+                                 )
+                           )
+                        OR EXISTS (
+                               SELECT 1 FROM page_evidence pe
+                               WHERE pe.page_id = p.id AND pe.source_kind = 'memory'
+                                 AND (
+                                     pe.locator = ?2
+                                     OR pe.locator IN (
+                                         SELECT m.id FROM memories m
+                                         WHERE m.source = ?1 AND m.source_id = ?2
+                                     )
+                                 )
+                           )
+                        OR EXISTS (
+                               SELECT 1
+                               FROM json_each(COALESCE(p.source_memory_ids, '[]')) legacy_source
+                               WHERE CAST(legacy_source.value AS TEXT) = ?2
+                                  OR CAST(legacy_source.value AS TEXT) IN (
+                                      SELECT m.id FROM memories m
+                                      WHERE m.source = ?1 AND m.source_id = ?2
+                                  )
+                           )
+                     ORDER BY p.id",
+                        libsql::params![source, source_id],
                     )
                     .await
                     .map_err(|e| {
                         WenlanError::VectorDb(format!("delete Page dependency lookup: {e}"))
                     })?;
-                let mut page_ids = Vec::new();
+                let mut pages = Vec::new();
                 while let Some(row) = rows.next().await.map_err(|e| {
                     WenlanError::VectorDb(format!("delete Page dependency row: {e}"))
                 })? {
-                    page_ids.push(row.get::<String>(0).map_err(|e| {
+                    let page_id = row.get::<String>(0).map_err(|e| {
                         WenlanError::VectorDb(format!("delete Page dependency id: {e}"))
-                    })?);
+                    })?;
+                    let source_ids_json = row.get::<String>(1).map_err(|e| {
+                        WenlanError::VectorDb(format!("delete Page dependency sources: {e}"))
+                    })?;
+                    let source_ids: Vec<String> =
+                        serde_json::from_str(&source_ids_json).unwrap_or_default();
+                    pages.push((page_id, source_ids));
                 }
-                page_ids
+                pages
             };
-        conn.execute(
-            "DELETE FROM page_sources WHERE memory_source_id = ?1",
-            libsql::params![source_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete Page sources: {e}")))?;
-        conn.execute(
-            "DELETE FROM page_evidence WHERE locator = ?1",
-            libsql::params![source_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("delete Page evidence: {e}")))?;
-        for page_id in affected_page_ids {
+
+        if !affected_pages.is_empty() {
+            conn.execute(
+                "DELETE FROM page_sources
+                 WHERE memory_source_id = ?2
+                    OR memory_source_id IN (
+                        SELECT id FROM memories WHERE source = ?1 AND source_id = ?2
+                    )",
+                libsql::params![source, source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete Page sources: {e}")))?;
+            conn.execute(
+                "DELETE FROM page_evidence
+                 WHERE source_kind = 'memory'
+                   AND (
+                       locator = ?2
+                       OR locator IN (
+                           SELECT id FROM memories WHERE source = ?1 AND source_id = ?2
+                       )
+                   )",
+                libsql::params![source, source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete Page evidence: {e}")))?;
+        }
+
+        let mut deleted_locators = physical_row_ids;
+        deleted_locators.insert(source_id.to_string());
+        for (page_id, legacy_sources) in affected_pages {
+            let mut remaining = Vec::new();
+            let mut seen = HashSet::new();
+            for source_id in legacy_sources {
+                if !deleted_locators.contains(&source_id) && seen.insert(source_id.clone()) {
+                    remaining.push(source_id);
+                }
+            }
             let mut source_rows = conn
                 .query(
                     "SELECT memory_source_id FROM page_sources
@@ -16389,13 +16478,15 @@ impl MemoryDB {
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("delete Page remaining sources: {e}"))
                 })?;
-            let mut remaining = Vec::new();
             while let Some(row) = source_rows.next().await.map_err(|e| {
                 WenlanError::VectorDb(format!("delete Page remaining source row: {e}"))
             })? {
-                remaining.push(row.get::<String>(0).map_err(|e| {
+                let source_id = row.get::<String>(0).map_err(|e| {
                     WenlanError::VectorDb(format!("delete Page remaining source id: {e}"))
-                })?);
+                })?;
+                if seen.insert(source_id.clone()) {
+                    remaining.push(source_id);
+                }
             }
             let remaining_json = serde_json::to_string(&remaining).map_err(|e| {
                 WenlanError::VectorDb(format!("delete Page remaining source JSON: {e}"))
@@ -38737,10 +38828,14 @@ pub(crate) mod tests {
         before
     }
 
-    async fn assert_pages_invalidated_once(db: &MemoryDB, before: &[(String, i64, i64)]) {
+    async fn assert_pages_invalidated_once(
+        db: &MemoryDB,
+        before: &[(String, i64, i64)],
+        expected_reason: &str,
+    ) {
         for (page_id, revision_before, count_before) in before {
             let page = db.get_page(page_id).await.unwrap().unwrap();
-            assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+            assert_eq!(page.stale_reason.as_deref(), Some(expected_reason));
             assert_eq!(
                 db.get_page_source_revision(page_id).await.unwrap(),
                 revision_before + 1,
@@ -38751,6 +38846,14 @@ pub(crate) mod tests {
                 count_before + 1,
                 "{page_id} must count one changed logical source, not locator aliases"
             );
+            if expected_reason == "source_removed" {
+                assert!(
+                    page.source_memory_ids.is_empty(),
+                    "{page_id} must prune logical, physical-row, and JSON-only aliases"
+                );
+                assert!(db.get_page_sources(page_id).await.unwrap().is_empty());
+                assert!(db.get_page_evidence(page_id).await.unwrap().is_empty());
+            }
         }
     }
 
@@ -38880,7 +38983,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        assert_pages_invalidated_once(&db, &pages).await;
+        assert_pages_invalidated_once(&db, &pages, "source_updated").await;
     }
 
     #[tokio::test]
@@ -40935,9 +41038,47 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_delete_by_source_id_nonexistent() {
         let (db, _dir) = test_db().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "page-nonexistent-source",
+            "Unresolved source",
+            None,
+            "body",
+            None,
+            None,
+            &["nonexistent"],
+            &now,
+        )
+        .await
+        .unwrap();
+        let page_before = db
+            .get_page("page-nonexistent-source")
+            .await
+            .unwrap()
+            .unwrap();
+        let revision_before = db
+            .get_page_source_revision("page-nonexistent-source")
+            .await
+            .unwrap();
+
         // Should not error on missing source_id
         let result = db.delete_by_source_id("local_files", "nonexistent").await;
         assert!(result.is_ok());
+
+        let page_after = db
+            .get_page("page-nonexistent-source")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(page_after.source_memory_ids, vec!["nonexistent"]);
+        assert_eq!(page_after.stale_reason, page_before.stale_reason);
+        assert_eq!(
+            db.get_page_source_revision("page-nonexistent-source")
+                .await
+                .unwrap(),
+            revision_before,
+            "a nonexistent owner must not mutate an unresolved Page locator"
+        );
     }
 
     #[tokio::test]
@@ -41010,11 +41151,15 @@ pub(crate) mod tests {
 
         for page_id in ["page-delete-logical", "page-delete-row"] {
             let page = db.get_page(page_id).await.unwrap().unwrap();
-            assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+            assert_eq!(page.stale_reason.as_deref(), Some("source_removed"));
             assert_eq!(db.get_page_source_revision(page_id).await.unwrap(), 2);
+            assert!(page.source_memory_ids.is_empty());
+            assert!(db.get_page_sources(page_id).await.unwrap().is_empty());
+            assert!(db.get_page_evidence(page_id).await.unwrap().is_empty());
         }
         let json_only = db.get_page("page-delete-json-only").await.unwrap().unwrap();
-        assert_eq!(json_only.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(json_only.stale_reason.as_deref(), Some("source_removed"));
+        assert!(json_only.source_memory_ids.is_empty());
         assert_eq!(
             db.get_page_source_revision("page-delete-json-only")
                 .await
@@ -41075,13 +41220,22 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn delete_memory_cleans_page_provenance_and_background_dependents() {
         let (db, _dir) = test_db().await;
-        db.upsert_documents(vec![make_memory_doc(
-            "mem-forget-dependencies",
-            "Evidence that will be forgotten",
-            "fact",
-            "work",
-            "agent",
-        )])
+        db.upsert_documents(vec![
+            make_memory_doc(
+                "mem-forget-dependencies",
+                "Evidence that will be forgotten",
+                "fact",
+                "work",
+                "agent",
+            ),
+            make_memory_doc(
+                "mem-forget-survivor",
+                "Independent evidence that must remain linked",
+                "fact",
+                "work",
+                "agent",
+            ),
+        ])
         .await
         .unwrap();
         db.upsert_enrichment_origin(
@@ -41101,7 +41255,7 @@ pub(crate) mod tests {
             "Page compiled from evidence that will be forgotten",
             None,
             Some("work"),
-            &["mem-forget-dependencies"],
+            &["mem-forget-dependencies", "mem-forget-survivor"],
             "2026-07-14T00:00:00Z",
         )
         .await
@@ -41164,23 +41318,27 @@ pub(crate) mod tests {
                 .unwrap(),
             1
         );
-        assert!(page.source_memory_ids.is_empty());
+        assert_eq!(page.source_memory_ids, vec!["mem-forget-survivor"]);
         assert_eq!(page.stale_reason.as_deref(), Some("source_removed"));
         assert!(db
             .get_pages_missing_citations(10)
             .await
             .unwrap()
             .contains(&"page-forget-dependencies".to_string()));
-        assert!(db
-            .get_page_sources("page-forget-dependencies")
-            .await
-            .unwrap()
-            .is_empty());
-        assert!(db
-            .get_page_evidence("page-forget-dependencies")
-            .await
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            db.get_page_sources("page-forget-dependencies")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.get_page_evidence("page-forget-dependencies")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
 
         let conn = db.conn.lock().await;
         for (table, sql) in [
@@ -42290,7 +42448,7 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .is_empty());
-        assert_pages_invalidated_once(&db, &pages).await;
+        assert_pages_invalidated_once(&db, &pages, "source_removed").await;
     }
 
     #[tokio::test]
@@ -42363,7 +42521,7 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .is_empty());
-        assert_pages_invalidated_once(&db, &pages).await;
+        assert_pages_invalidated_once(&db, &pages, "source_removed").await;
         let two_source_page = db
             .get_page("page-bulk-delete-two-sources")
             .await
@@ -49728,7 +49886,7 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .is_empty());
-        assert_pages_invalidated_once(&db, &pages).await;
+        assert_pages_invalidated_once(&db, &pages, "source_removed").await;
     }
 
     #[tokio::test]
@@ -56618,7 +56776,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        assert_pages_invalidated_once(&db, &pages).await;
+        assert_pages_invalidated_once(&db, &pages, "source_updated").await;
     }
 
     #[tokio::test]
