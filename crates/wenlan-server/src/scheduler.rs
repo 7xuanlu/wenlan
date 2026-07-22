@@ -5056,8 +5056,9 @@ mod tests {
             rb01_profile_requested(std::env::var("WENLAN_RB01_PROFILE").ok().as_deref()),
             "refusing real-model profile without WENLAN_RB01_PROFILE=1"
         );
-        #[cfg(not(target_os = "macos"))]
-        panic!("RB-01 real-model profile currently targets supported macOS hardware");
+        if std::env::consts::OS != "macos" {
+            panic!("RB-01 real-model profile currently targets supported macOS hardware");
+        }
         let lane_value = std::env::var("WENLAN_RB01_LANE")
             .expect("set WENLAN_RB01_LANE=document|entity|page-growth|reconcile|citation");
         let lane = Rb01ProfileLane::from_env(&lane_value)
