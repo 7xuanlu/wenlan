@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Generic on-device LLM inference engine.
 //!
-//! Wraps `llama-cpp-2` with Metal GPU offload and provides a reusable
-//! inference loop. Domain-specific operations (classification, KG extraction,
-//! reranking, memory merging) live in sibling modules (`classify`, `extract`,
-//! `rerank`, `merge`) and call through to [`LlmEngine::run_inference`] or
-//! compose their own tokenize/decode loops against [`LlmEngine::model`] /
-//! [`LlmEngine::backend`].
+//! Wraps `llama-cpp-2` with runtime-selected GPU offload when the compiled
+//! backend exposes one, otherwise with CPU/OpenMP inference. Domain-specific
+//! operations (classification, KG extraction, reranking, memory merging) live
+//! in sibling modules (`classify`, `extract`, `rerank`, `merge`) and call
+//! through to [`LlmEngine::run_inference`] or compose their own tokenize/decode
+//! loops against [`LlmEngine::model`] / [`LlmEngine::backend`].
 
 use crate::error::WenlanError;
 use crate::llm_provider::format_chatml_prompt;
@@ -59,10 +59,86 @@ pub const MAX_INPUT_CHARS: usize = 20_000;
 pub const MAX_OUTPUT_TOKENS: i32 = 2048;
 /// Timeout for a single LLM inference call. 120s accommodates larger context
 /// windows (16K+) where prompt prefill and generation take longer, especially
-/// on first call after boot (Metal JIT shader compilation).
+/// on first call after boot (GPU backends may compile kernels lazily).
 pub const INFERENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 /// Context window size for the LLM.
 pub const CTX_SIZE: u32 = 8192;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InferenceBackendKind {
+    Metal,
+    Cuda,
+    Vulkan,
+    OtherGpu,
+    Cpu,
+}
+
+/// Runtime plan derived from the backends that this exact llama.cpp binary
+/// compiled and can currently use. Hardware discovery outside llama.cpp (for
+/// example `nvidia-smi`) is deliberately not an input: seeing a GPU does not
+/// prove that the corresponding ggml backend was linked into the binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InferenceBackendPlan {
+    kind: InferenceBackendKind,
+}
+
+impl InferenceBackendPlan {
+    pub(crate) fn from_runtime(supports_gpu_offload: bool, backend_names: &[&str]) -> Self {
+        if !supports_gpu_offload {
+            return Self {
+                kind: InferenceBackendKind::Cpu,
+            };
+        }
+
+        let kind = backend_names
+            .iter()
+            .find_map(|name| match name.trim().to_ascii_lowercase().as_str() {
+                // Pinned llama.cpp 0.1.143 reports the Metal registry as
+                // "MTL"; accept "Metal" as a compatibility alias.
+                "mtl" | "metal" => Some(InferenceBackendKind::Metal),
+                "cuda" => Some(InferenceBackendKind::Cuda),
+                "vulkan" => Some(InferenceBackendKind::Vulkan),
+                _ => None,
+            })
+            .unwrap_or(InferenceBackendKind::OtherGpu);
+
+        Self { kind }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn kind(self) -> InferenceBackendKind {
+        self.kind
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self.kind {
+            InferenceBackendKind::Metal => "Metal",
+            InferenceBackendKind::Cuda => "CUDA",
+            InferenceBackendKind::Vulkan => "Vulkan",
+            InferenceBackendKind::OtherGpu => "GPU",
+            InferenceBackendKind::Cpu => "CPU (OpenMP)",
+        }
+    }
+
+    pub(crate) fn gpu_layers(self) -> u32 {
+        match self.kind {
+            InferenceBackendKind::Cpu => 0,
+            _ => 99,
+        }
+    }
+
+    pub(crate) fn uses_metal_compatibility_fallback(self) -> bool {
+        self.kind == InferenceBackendKind::Metal
+    }
+
+    pub(crate) fn context_failure_message(self, cause: &str) -> String {
+        format!("{} context creation failed: {cause}", self.label())
+    }
+
+    pub(crate) fn model_load_failure_message(self, cause: &str) -> String {
+        format!("model load with {} backend failed: {cause}", self.label())
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
@@ -99,6 +175,7 @@ pub struct LlmEngine {
     pub(crate) backend: Arc<LlamaBackend>,
     pub(crate) model: LlamaCppModel,
     pub(crate) prompts: crate::prompts::PromptRegistry,
+    backend_plan: InferenceBackendPlan,
 }
 
 // SAFETY: LlamaCppModel and LlamaBackend are created once on the init thread
@@ -138,7 +215,8 @@ impl LlmEngine {
         Self::download_model_by_spec(model.repo_id, model.filename)
     }
 
-    /// Load the GGUF model with full Metal GPU offload.
+    /// Load the GGUF model with GPU offload when this llama.cpp binary exposes
+    /// a usable GPU backend; otherwise force a CPU/OpenMP load.
     pub fn new(
         model_path: &Path,
         prompts: crate::prompts::PromptRegistry,
@@ -147,28 +225,67 @@ impl LlmEngine {
 
         let backend = shared_backend()?;
 
-        let model_params = LlamaModelParams::default().with_n_gpu_layers(99);
+        let devices = llama_cpp_2::list_llama_ggml_backend_devices();
+        let backend_names: Vec<&str> = devices
+            .iter()
+            .map(|device| device.backend.as_str())
+            .collect();
+        let backend_plan =
+            InferenceBackendPlan::from_runtime(backend.supports_gpu_offload(), &backend_names);
+        let device_summary = devices
+            .iter()
+            .map(|device| {
+                format!(
+                    "{}:{} ({})",
+                    device.backend, device.name, device.description
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        log::info!(
+            "[llm_engine] inference backend={} gpu_layers={} devices=[{}]",
+            backend_plan.label(),
+            backend_plan.gpu_layers(),
+            device_summary
+        );
+
+        let model_params = LlamaModelParams::default().with_n_gpu_layers(backend_plan.gpu_layers());
 
         log::info!("[llm_engine] loading model...");
-        let model = LlamaCppModel::load_from_file(&backend, model_path, &model_params)
-            .map_err(|e| WenlanError::Llm(format!("model load: {e}")))?;
+        let model =
+            LlamaCppModel::load_from_file(&backend, model_path, &model_params).map_err(|e| {
+                WenlanError::Llm(backend_plan.model_load_failure_message(&e.to_string()))
+            })?;
 
         log::info!("[llm_engine] model loaded successfully");
         Ok(Self {
             backend,
             model,
             prompts,
+            backend_plan,
         })
     }
 
-    /// Probe whether Metal context creation works. Returns true if a minimal
-    /// context can be allocated. Used by the auto-degrade pattern: if this fails,
-    /// the caller can set GGML_METAL_BF16_DISABLE=1 and recreate the engine.
-    pub fn probe_metal_context(&self) -> bool {
+    /// Probe whether a minimal context can be allocated on the selected runtime
+    /// backend. Metal callers may use failure to trigger their BF16 compatibility
+    /// fallback; other platforms surface the selected backend in the error.
+    pub fn probe_context(&self) -> Result<(), String> {
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(NonZeroU32::new(512).unwrap()))
             .with_n_batch(512);
-        self.model.new_context(&self.backend, ctx_params).is_ok()
+        self.model
+            .new_context(&self.backend, ctx_params)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    /// Backward-compatible Metal-specific probe retained for existing callers.
+    pub fn probe_metal_context(&self) -> bool {
+        self.probe_context().is_ok()
+    }
+
+    pub(crate) fn inference_backend_plan(&self) -> InferenceBackendPlan {
+        self.backend_plan
     }
 
     /// Access the loaded llama-cpp model. Used by domain modules that need to
@@ -1604,6 +1721,74 @@ impl BackfillScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inference_backend_plan_uses_cpu_when_gpu_offload_is_unavailable() {
+        let plan = InferenceBackendPlan::from_runtime(false, &["CUDA", "CPU"]);
+
+        assert_eq!(plan.kind(), InferenceBackendKind::Cpu);
+        assert_eq!(plan.gpu_layers(), 0);
+        assert_eq!(plan.label(), "CPU (OpenMP)");
+        assert!(!plan.uses_metal_compatibility_fallback());
+        assert_eq!(
+            plan.context_failure_message("allocation failed"),
+            "CPU (OpenMP) context creation failed: allocation failed"
+        );
+        assert_eq!(
+            plan.model_load_failure_message("invalid GGUF"),
+            "model load with CPU (OpenMP) backend failed: invalid GGUF"
+        );
+    }
+
+    #[test]
+    fn inference_backend_plan_selects_metal_and_its_compatibility_fallback() {
+        let plan = InferenceBackendPlan::from_runtime(true, &["MTL", "CPU"]);
+
+        assert_eq!(plan.kind(), InferenceBackendKind::Metal);
+        assert_eq!(plan.gpu_layers(), 99);
+        assert_eq!(plan.label(), "Metal");
+        assert!(plan.uses_metal_compatibility_fallback());
+    }
+
+    #[test]
+    fn inference_backend_plan_prefers_a_known_gpu_backend_over_other_accelerators() {
+        let plan = InferenceBackendPlan::from_runtime(true, &["ACCEL", "MTL", "CPU"]);
+
+        assert_eq!(plan.kind(), InferenceBackendKind::Metal);
+        assert!(plan.uses_metal_compatibility_fallback());
+    }
+
+    #[test]
+    fn inference_backend_plan_selects_cuda_without_metal_messages() {
+        let plan = InferenceBackendPlan::from_runtime(true, &["CUDA", "CPU"]);
+
+        assert_eq!(plan.kind(), InferenceBackendKind::Cuda);
+        assert_eq!(plan.gpu_layers(), 99);
+        assert_eq!(plan.label(), "CUDA");
+        assert!(!plan.uses_metal_compatibility_fallback());
+        assert_eq!(
+            plan.context_failure_message("driver reset"),
+            "CUDA context creation failed: driver reset"
+        );
+        assert_eq!(
+            plan.model_load_failure_message("out of memory"),
+            "model load with CUDA backend failed: out of memory"
+        );
+    }
+
+    #[test]
+    fn inference_backend_plan_selects_vulkan_without_metal_messages() {
+        let plan = InferenceBackendPlan::from_runtime(true, &["Vulkan", "CPU"]);
+
+        assert_eq!(plan.kind(), InferenceBackendKind::Vulkan);
+        assert_eq!(plan.gpu_layers(), 99);
+        assert_eq!(plan.label(), "Vulkan");
+        assert!(!plan.uses_metal_compatibility_fallback());
+        assert_eq!(
+            plan.context_failure_message("device lost"),
+            "Vulkan context creation failed: device lost"
+        );
+    }
 
     #[test]
     fn backfill_initial_fill_caps_at_slots() {

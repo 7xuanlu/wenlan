@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Provenance projection helpers: delimiter-owned Sources block, the shared
-//! ingress canonicalizer, and `_sources/` stub projection + GC.
+//! Provenance projection helpers: delimiter-owned Sources block, canonical
+//! storage validation, and `_sources/` stub projection + GC.
+
+use crate::error::WenlanError;
 
 /// Opening delimiter for the export-only `## Sources` block. The block is
 /// generated from DB truth at projection time and stripped at ingress; it is
@@ -39,15 +41,28 @@ pub fn canonicalize_page_body(body: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// Strip daemon-reserved Sources-block delimiters from CLIENT-supplied page
-/// content before persistence. The exporter owns these delimiters; persisted
-/// `Page.content` must never carry them, or the watcher's egress
-/// canonicalization becomes asymmetric (mismatched-pair `user_edited` storm or
-/// stray-delimiter prose truncation). Strips a delimiter-owned block (via
-/// `canonicalize_page_body`) AND removes any residual lone START/END tokens
-/// (a stray delimiter with no matching pair, which `canonicalize_page_body`
-/// leaves untouched). Idempotent: delimiter-free content only gets trailing
-/// whitespace trimmed, so re-sanitizing already-stored content is a no-op.
+/// Validate CLIENT-supplied canonical Page source without rewriting it.
+///
+/// The exporter owns both Sources delimiters. Persisting either token would
+/// make vault projection decoding ambiguous, so canonical ingress rejects the
+/// whole write instead of silently deleting user bytes. Delimiter-free source
+/// is returned as the same borrowed string so every later storage consumer
+/// sees the exact representation the caller supplied.
+pub fn validate_canonical_page_content(content: &str) -> Result<&str, WenlanError> {
+    if content.contains(SOURCES_BLOCK_START) || content.contains(SOURCES_BLOCK_END) {
+        return Err(WenlanError::Validation(
+            "Page content contains a daemon-reserved Sources delimiter".to_string(),
+        ));
+    }
+    Ok(content)
+}
+
+/// Compatibility projection decoder retained for downstream callers that used
+/// the pre-0.14.1 ingress helper directly.
+///
+/// Canonical storage paths must use [`validate_canonical_page_content`].
+/// This function intentionally preserves its historical lossy behavior for
+/// callers decoding daemon-owned projection text.
 pub fn sanitize_ingress_content(content: &str) -> String {
     let stripped = canonicalize_page_body(content);
     let cleaned = stripped
@@ -431,39 +446,43 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_ingress_strips_full_block_preserving_prose() {
-        let content = format!(
-            "## Overview\nReal prose here.\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_1]]\n{SOURCES_BLOCK_END}\n\ntail prose"
+    fn canonical_content_validation_preserves_delimiter_free_source_exactly() {
+        let content = "\u{feff}\r\n  ## Overview  \r\nNormal prose.\t \r\n\r\n";
+        assert_ne!(
+            content.trim_end(),
+            content,
+            "positive control: trimming must change this fixture"
         );
-        let out = sanitize_ingress_content(&content);
-        assert!(!out.contains(SOURCES_BLOCK_START));
-        assert!(!out.contains(SOURCES_BLOCK_END));
-        assert!(!out.contains("[[mem_1]]"));
-        assert!(out.contains("Real prose here."));
-        assert!(out.contains("tail prose"));
+        let validated = validate_canonical_page_content(content).unwrap();
+        assert_eq!(validated, content);
+        assert_eq!(validated.as_ptr(), content.as_ptr());
     }
 
     #[test]
-    fn sanitize_ingress_strips_stray_start_without_truncating_prose() {
-        // A lone START token with prose after it. canonicalize_page_body leaves
-        // it untouched (no matching END), so sanitize must remove the token AND
-        // keep BOTH prose halves — no truncation (the data-loss case).
-        let content = format!("prose A {SOURCES_BLOCK_START} prose B");
-        let out = sanitize_ingress_content(&content);
-        assert!(!out.contains(SOURCES_BLOCK_START));
-        assert!(!out.contains(SOURCES_BLOCK_END));
-        assert!(out.contains("prose A"));
-        assert!(out.contains("prose B"));
+    fn canonical_content_validation_rejects_reserved_delimiters_without_rewriting() {
+        let cases = [
+            format!("before {SOURCES_BLOCK_START} after"),
+            format!("before {SOURCES_BLOCK_END} after"),
+            format!("{SOURCES_BLOCK_START}\nowned\n{SOURCES_BLOCK_END}"),
+            format!("```md\n{SOURCES_BLOCK_START}\n```\nkept prose"),
+        ];
+        for content in cases {
+            let error = validate_canonical_page_content(&content).unwrap_err();
+            assert!(matches!(error, WenlanError::Validation(_)));
+            assert!(
+                content.contains("before")
+                    || content.contains("owned")
+                    || content.contains("kept prose")
+            );
+        }
     }
 
     #[test]
-    fn sanitize_ingress_is_noop_on_delimiter_free_content() {
-        let content =
-            "## Overview\nJust normal prose.\n\n## Sources\nuser-typed, not the daemon block.";
-        let out = sanitize_ingress_content(content);
-        assert_eq!(out, content.trim_end());
-        // Idempotent: re-sanitizing already-stored content changes nothing.
-        assert_eq!(sanitize_ingress_content(&out), out);
+    fn compatibility_ingress_sanitizer_keeps_its_projection_decoding_behavior() {
+        let content = format!(
+            "head\n\n{SOURCES_BLOCK_START}\n## Sources\n- [[mem_1]]\n{SOURCES_BLOCK_END}\n\ntail"
+        );
+        assert_eq!(sanitize_ingress_content(&content), "head\n\ntail");
     }
 
     #[test]

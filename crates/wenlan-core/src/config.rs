@@ -89,12 +89,14 @@ pub struct Config {
     pub synthesis_source: Option<String>,
     /// Gates ONLY the proactive Page-Map suggestion phase in the refinery
     /// scheduler (`Phase::PageMaps`). The explicit `POST /api/pages/{id}/map/improve`
-    /// route is NEVER gated by this flag. Default true (via serde on a missing
-    /// field); note `Config::default()` yields `false` — same quirk as
-    /// `private_browsing_detection`, since a derived `Default` ignores the serde
-    /// attribute. Fresh installs read config through `load_config`, which returns
-    /// `Config::default()` only when no file exists.
-    #[serde(default = "default_true")]
+    /// route is NEVER gated by this flag.
+    ///
+    /// DEFAULT FALSE since 2026-07-19: a Canvas that fills itself with a dozen
+    /// `suggested` boxes before the user has drawn anything reads as clutter to
+    /// triage, not as help — the user asked to start from blank and reach for
+    /// suggestions deliberately via the Improve button. Opt back in by setting
+    /// `page_map_auto_suggest: true` in config.json (or via `PUT /api/config`).
+    #[serde(default)]
     pub page_map_auto_suggest: bool,
 }
 
@@ -400,21 +402,26 @@ mod tests {
     }
 
     #[test]
-    fn page_map_auto_suggest_defaults_true_on_missing_field() {
-        // A config file without the field deserializes to true (serde default).
+    fn page_map_auto_suggest_defaults_false_on_missing_field() {
+        // A config file without the field deserializes to false — a Canvas the
+        // user has not asked to populate stays blank. This is the teeth on the
+        // start-from-blank decision; flipping the serde default back to true
+        // fails here.
         let config: Config = serde_json::from_str(r#"{"clipboard_enabled": true}"#).unwrap();
-        assert!(config.page_map_auto_suggest);
+        assert!(!config.page_map_auto_suggest);
     }
 
     #[test]
-    fn page_map_auto_suggest_roundtrip_false() {
+    fn page_map_auto_suggest_roundtrip_true() {
+        // Opting back in survives a serialize/deserialize cycle, so a user who
+        // turns proactive suggestions on keeps them.
         let config = Config {
-            page_map_auto_suggest: false,
+            page_map_auto_suggest: true,
             ..Config::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let restored: Config = serde_json::from_str(&json).unwrap();
-        assert!(!restored.page_map_auto_suggest);
+        assert!(restored.page_map_auto_suggest);
     }
 
     #[test]

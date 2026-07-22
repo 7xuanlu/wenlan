@@ -3935,7 +3935,7 @@ async fn capture_rename_page_row_on_snapshot(
     let (columns, row) = encoded_page_row_on_snapshot(snapshot, page_id).await?;
     let mut rows = snapshot
         .query(
-            "SELECT title,version,status,COALESCE(workspace,space)
+            "SELECT title,version,status,space
                FROM pages WHERE id=?1 LIMIT 2",
             libsql::params::Params::Positional(vec![libsql::Value::Text(page_id.to_string())]),
         )
@@ -4169,14 +4169,12 @@ async fn validate_rename_page_title_collision_on_snapshot(
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND ((?4 IS NULL AND COALESCE(workspace,space) IS NULL)
-                            OR COALESCE(workspace,space)=?4)
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?2)),
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND ((?4 IS NULL AND COALESCE(workspace,space) IS NULL)
-                            OR COALESCE(workspace,space)=?4)
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?3))",
             libsql::params::Params::Positional(vec![
                 libsql::Value::Text(page_id.to_string()),
@@ -4215,14 +4213,12 @@ pub(crate) async fn validate_rename_page_title_collision_on_connection(
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND ((?4 IS NULL AND COALESCE(workspace,space) IS NULL)
-                            OR COALESCE(workspace,space)=?4)
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?2)),
                  EXISTS(
                     SELECT 1 FROM pages
                      WHERE status='active' AND id<>?1
-                       AND ((?4 IS NULL AND COALESCE(workspace,space) IS NULL)
-                            OR COALESCE(workspace,space)=?4)
+                       AND space=COALESCE(?4,'00000000-0000-4000-8000-000000000001')
                        AND lower(title)=lower(?3))",
             libsql::params![
                 page_id,
@@ -5371,7 +5367,7 @@ pub(crate) async fn repair_target_receipt_on_connection(
             let mut rows = connection
                 .query(
                     "SELECT pl.source_page_id,pl.target_page_id,pl.label_key,
-                            COALESCE(p.workspace,p.space)
+                            p.space
                        FROM page_links pl JOIN pages p ON p.id=pl.source_page_id
                       WHERE pl.source_page_id=?1 AND pl.label_key=?2",
                     libsql::params![source_page_id.clone(), label_key.clone()],
@@ -5425,7 +5421,7 @@ async fn validate_page_scope_on_connection(
 ) -> Result<(), WenlanError> {
     let mut rows = connection
         .query(
-            "SELECT COALESCE(workspace,space) FROM pages WHERE id=?1",
+            "SELECT space FROM pages WHERE id=?1",
             libsql::params![page_id],
         )
         .await

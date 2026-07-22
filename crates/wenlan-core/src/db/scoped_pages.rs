@@ -397,7 +397,7 @@ impl MemoryDB {
             ReadScope::Uncategorized => (
                 format!(
                     "SELECT {select} FROM pages c \
-                     WHERE c.status = ?1 AND c.workspace IS NULL \
+                     WHERE c.status = ?1 AND c.workspace = '00000000-0000-4000-8000-000000000001' \
                      ORDER BY c.last_modified DESC LIMIT ?2 OFFSET ?3"
                 ),
                 vec![

@@ -295,7 +295,7 @@ async fn embedding_near_duplicate_pairs(
                AND b.embedding IS NOT NULL \
                AND COALESCE(a.review_status, 'confirmed') = 'confirmed' \
                AND COALESCE(b.review_status, 'confirmed') = 'confirmed' \
-               AND COALESCE(a.workspace, a.space, '') = COALESCE(b.workspace, b.space, '') \
+               AND a.space = b.space \
                AND lower(a.title) != 'overview' \
                AND lower(b.title) != 'overview' \
                AND vector_distance_cos(a.embedding, b.embedding) <= ?1 \
@@ -312,7 +312,7 @@ async fn embedding_near_duplicate_pairs(
                AND b.embedding IS NOT NULL \
                AND COALESCE(a.review_status, 'confirmed') = 'confirmed' \
                AND COALESCE(b.review_status, 'confirmed') = 'confirmed' \
-               AND COALESCE(a.workspace, a.space, '') = COALESCE(b.workspace, b.space, '') \
+               AND a.space = b.space \
                AND lower(a.title) != 'overview' \
                AND lower(b.title) != 'overview' \
                AND vector_distance_cos(a.embedding, b.embedding) <= ?1 \

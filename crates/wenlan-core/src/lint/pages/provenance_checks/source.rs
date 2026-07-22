@@ -278,7 +278,7 @@ fn scoped_pages(filter: &ScopeFilter) -> (&'static str, libsql::params::Params) 
             libsql::params::Params::Positional(vec![libsql::Value::Text(workspace.clone())]),
         ),
         ScopeFilter::Uncategorized => (
-            "SELECT id FROM pages WHERE workspace IS NULL",
+            "SELECT id FROM pages WHERE workspace = '00000000-0000-4000-8000-000000000001'",
             libsql::params::Params::None,
         ),
     }

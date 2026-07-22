@@ -846,7 +846,13 @@ async fn load_pages(context: &LintContext<'_, '_>) -> Result<Vec<Page>, ()> {
             id: row.get(0).map_err(|_| ())?,
             content_tokens: content_tokens(&content),
             content,
-            workspace: row.get(2).map_err(|_| ())?,
+            // M1: pages store the reserved scope sentinel id; translate it back
+            // to None here (as row_to_page does) so uncategorized pages compare
+            // symmetric with uncategorized memories (space = NULL) in same_scope.
+            workspace: row
+                .get::<Option<String>>(2)
+                .map_err(|_| ())?
+                .filter(|s| s != crate::db::UNFILED_SPACE_ID),
             creation_kind: row.get(3).map_err(|_| ())?,
             review_status: row.get(4).map_err(|_| ())?,
         });

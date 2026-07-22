@@ -740,7 +740,7 @@ checksum = "0b023947811758c97c59bf9d1c188fd619ad4718dcaa767947df1cadb14f39f4"
 dependencies = [
  "glob",
  "libc",
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -2498,6 +2498,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3200,6 +3210,7 @@ version = "2.0.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5df903c0d2c07b56950f1058104ab0c8557159f2741782223704de9be73c3c"
 dependencies = [
+ "libloading 0.9.0",
  "ndarray",
  "ort-sys",
  "smallvec",
@@ -5610,7 +5621,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "wenlan"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -5630,7 +5641,7 @@ dependencies = [
 
 [[package]]
 name = "wenlan-core"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5674,7 +5685,7 @@ dependencies = [
 
 [[package]]
 name = "wenlan-mcp"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -5708,7 +5719,7 @@ dependencies = [
 
 [[package]]
 name = "wenlan-server"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5741,7 +5752,7 @@ dependencies = [
 
 [[package]]
 name = "wenlan-types"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "serde",

@@ -430,11 +430,18 @@ async fn stale_dimensions_are_zero_mutation_and_cross_scope_same_title_is_allowe
                     .lock()
                     .await
                     .execute(
+                        // Single-axis (spec §1): a raw INSERT bypassing the
+                        // insert_page_with_kind ladder must still bind both
+                        // scope columns to the same value, mirroring how the
+                        // fixture seeds page-a/page-b ('work'/'work'). Omitting
+                        // `space` would default it to 'unfiled', so the
+                        // same-scope collision the read-collapse checks on
+                        // `space` alone would go undetected.
                         "INSERT INTO pages
                          (id,title,content,source_memory_ids,version,status,created_at,last_compiled,
-                          last_modified,workspace,creation_kind,review_status)
+                          last_modified,space,workspace,creation_kind,review_status)
                          VALUES ('page-new','Origin Git Workflow Gotchas','body','[]',1,'active',
-                                 'now','now','now','work','distilled','confirmed')",
+                                 'now','now','now','work','work','distilled','confirmed')",
                         (),
                     )
                     .await
