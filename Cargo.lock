@@ -5678,6 +5678,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "toml",
+ "unicode-normalization",
  "uuid",
  "wenlan-types",
  "zip",
