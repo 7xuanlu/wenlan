@@ -201,6 +201,7 @@ fn spawn_hanging_health_probe_stub() -> String {
     format!("http://{address}")
 }
 
+#[cfg(unix)]
 fn spawn_keepalive_shutdown_stub() -> (String, std::sync::mpsc::Receiver<bool>) {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
@@ -1094,25 +1095,25 @@ fn background_off_tolerates_transient_probe_timeout_before_socket_closes() {
         ));
 }
 
+#[cfg(unix)]
 #[test]
 fn background_off_does_not_keep_graceful_shutdown_connection_alive() {
     let runtime = IsolatedRuntime::new();
     let (host, close_header) = spawn_keepalive_shutdown_stub();
 
-    cli_with_isolated_runtime(&runtime)
+    let assertion = cli_with_isolated_runtime(&runtime)
         .env("WENLAN_BIND_ADDR", bind_addr_from_stub_host(&host))
         .args(["background", "off"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Stopped com.wenlan.server. No background registration found.",
-        ));
+        .assert();
     assert!(
         close_header
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("shutdown stub must report the request header"),
         "shutdown POST must request connection close"
     );
+    assertion.success().stdout(predicate::str::contains(
+        "Stopped com.wenlan.server. No background registration found.",
+    ));
 }
 
 #[cfg(target_os = "macos")]

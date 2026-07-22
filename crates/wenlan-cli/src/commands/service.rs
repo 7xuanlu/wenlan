@@ -402,13 +402,7 @@ async fn request_daemon_shutdown() -> Result<bool> {
         .build()
         .context("build daemon shutdown client")?;
 
-    let response = match shutdown_client
-        .post(&shutdown_url)
-        // This is a server-visible shutdown contract, not merely a client
-        // pool preference. Hyper graceful shutdown waits for accepted HTTP/1.1
-        // connections to close, so the shutdown request must not leave its
-        // connection alive for the health verifier to reuse.
-        .header(reqwest::header::CONNECTION, "close")
+    let response = match build_shutdown_request(&shutdown_client, &shutdown_url)
         .send()
         .await
     {
@@ -439,6 +433,16 @@ async fn request_daemon_shutdown() -> Result<bool> {
     // the same check; do not reorder that fallback verification.
     verify_daemon_unreachable(&probe_client, &health_url).await?;
     Ok(true)
+}
+
+fn build_shutdown_request(client: &reqwest::Client, shutdown_url: &str) -> reqwest::RequestBuilder {
+    // This is a server-visible shutdown contract, not merely a client pool
+    // preference. Hyper graceful shutdown waits for accepted HTTP/1.1
+    // connections to close, so the shutdown request must not leave its
+    // connection alive for the health verifier to reuse.
+    client
+        .post(shutdown_url)
+        .header(reqwest::header::CONNECTION, "close")
 }
 
 fn local_daemon_base_url() -> Result<String> {
@@ -666,4 +670,24 @@ pub async fn print_status() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_request_declares_connection_close() {
+        let client = reqwest::Client::builder()
+            .build()
+            .expect("build shutdown request test client");
+        let request = build_shutdown_request(&client, "http://127.0.0.1:7878/api/shutdown")
+            .build()
+            .expect("build shutdown request");
+
+        assert_eq!(
+            request.headers().get(reqwest::header::CONNECTION),
+            Some(&reqwest::header::HeaderValue::from_static("close"))
+        );
+    }
 }
