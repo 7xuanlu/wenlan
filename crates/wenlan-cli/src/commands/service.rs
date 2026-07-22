@@ -19,8 +19,9 @@ use crate::client::origin_host_from_env;
 pub const SERVICE_LABEL: &str = "com.wenlan.server";
 const DEFAULT_LOCAL_BIND_ADDR: &str = "127.0.0.1:7878";
 const SHUTDOWN_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const SHUTDOWN_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 const SHUTDOWN_STABILITY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
-const SHUTDOWN_VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const SHUTDOWN_VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Windows Task Scheduler does not love dots in task names. The macOS launchd
 /// and systemd-user paths still use the canonical reverse-DNS `SERVICE_LABEL`.
@@ -444,8 +445,22 @@ async fn verify_daemon_unreachable(client: &reqwest::Client, health_url: &str) -
     let mut unreachable_since = None;
     loop {
         tokio::time::sleep(SHUTDOWN_PROBE_INTERVAL).await;
-        match client.get(health_url).send().await {
-            Err(error) if error.is_connect() => {
+        match client
+            .get(health_url)
+            .timeout(SHUTDOWN_PROBE_TIMEOUT)
+            .send()
+            .await
+        {
+            // During cooperative shutdown the socket can still accept a
+            // connection after the HTTP service has stopped answering. A
+            // timeout is neither proof of exit nor a terminal verification
+            // error: keep probing until the bounded overall deadline. Reset
+            // the refusal window because a listening-but-hung socket is not
+            // yet a confirmed stop.
+            Err(error) if error.is_timeout() => {
+                unreachable_since = None;
+            }
+            Err(error) if is_shutdown_disconnect(&error) => {
                 let since = unreachable_since.get_or_insert_with(std::time::Instant::now);
                 if since.elapsed() >= SHUTDOWN_STABILITY_WINDOW {
                     return Ok(());
@@ -464,6 +479,27 @@ async fn verify_daemon_unreachable(client: &reqwest::Client, health_url: &str) -
             anyhow::bail!("daemon remained reachable at {health_url}");
         }
     }
+}
+
+fn is_shutdown_disconnect(error: &reqwest::Error) -> bool {
+    if error.is_connect() {
+        return true;
+    }
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = cause {
+        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+            return matches!(
+                io_error.kind(),
+                std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+            );
+        }
+        cause = current.source();
+    }
+    false
 }
 
 async fn stop() -> Result<()> {

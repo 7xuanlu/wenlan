@@ -161,6 +161,47 @@ fn spawn_respawning_shutdown_stub() -> String {
 }
 
 #[cfg(target_os = "macos")]
+fn spawn_hanging_health_probe_stub() -> String {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind slow-closing shutdown stub");
+    let address = listener.local_addr().expect("slow-closing stub address");
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept shutdown request");
+        let mut reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        reader
+            .read_line(&mut request_line)
+            .expect("read shutdown request line");
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read shutdown header");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+        }
+        reader
+            .get_mut()
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\nshutting down",
+            )
+            .expect("write shutdown response");
+        drop(reader);
+
+        // A real server can stop servicing health requests before its socket
+        // is fully closed. Hold one accepted probe open long enough for the
+        // client's per-request timeout, then close the listener for real.
+        let (health, _) = listener.accept().expect("accept transient health probe");
+        thread::sleep(std::time::Duration::from_millis(2_200));
+        drop(health);
+        drop(listener);
+    });
+    format!("http://{address}")
+}
+
+#[cfg(target_os = "macos")]
 fn spawn_shutdown_stub_response(
     status: &'static str,
     body: &'static str,
@@ -941,6 +982,22 @@ fn background_off_rejects_daemon_that_respawns_after_initial_disconnect() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("daemon remained reachable"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn background_off_tolerates_transient_probe_timeout_before_socket_closes() {
+    let runtime = IsolatedRuntime::new();
+    let host = spawn_hanging_health_probe_stub();
+
+    cli_with_isolated_runtime(&runtime)
+        .env("WENLAN_BIND_ADDR", bind_addr_from_stub_host(&host))
+        .args(["background", "off"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Stopped com.wenlan.server. No background registration found.",
+        ));
 }
 
 #[cfg(target_os = "macos")]
