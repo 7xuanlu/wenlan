@@ -201,6 +201,72 @@ fn spawn_hanging_health_probe_stub() -> String {
     format!("http://{address}")
 }
 
+fn spawn_keepalive_shutdown_stub() -> String {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind keepalive shutdown stub");
+    let address = listener.local_addr().expect("keepalive stub address");
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept shutdown request");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(12)))
+            .expect("set keepalive stub timeout");
+        let mut reader = BufReader::new(stream);
+
+        let read_request = |reader: &mut BufReader<std::net::TcpStream>| -> Option<String> {
+            let mut request_line = String::new();
+            match reader.read_line(&mut request_line) {
+                Ok(0) => return None,
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    return None;
+                }
+                Err(error) => panic!("read keepalive request line: {error}"),
+            }
+            loop {
+                let mut line = String::new();
+                reader
+                    .read_line(&mut line)
+                    .expect("read keepalive request header");
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            Some(request_line)
+        };
+
+        let shutdown = read_request(&mut reader).expect("shutdown request");
+        assert_eq!(shutdown, "POST /api/shutdown HTTP/1.1\r\n");
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .expect("write shutdown response");
+
+        // Model hyper graceful shutdown: stop accepting fresh connections,
+        // but keep the already-open HTTP/1.1 connection alive until its client
+        // releases it. Reusing this connection for health probes prevents the
+        // server from ever reaching its process-exit path.
+        drop(listener);
+        while let Some(request) = read_request(&mut reader) {
+            assert_eq!(request, "GET /api/health HTTP/1.1\r\n");
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"status\":\"ok\"}")
+                .expect("write keepalive health response");
+        }
+    });
+    format!("http://{address}")
+}
+
 #[cfg(target_os = "macos")]
 fn spawn_shutdown_stub_response(
     status: &'static str,
@@ -244,7 +310,6 @@ fn spawn_shutdown_stub_response(
     (base, received)
 }
 
-#[cfg(target_os = "macos")]
 fn bind_addr_from_stub_host(host: &str) -> &str {
     host.strip_prefix("http://")
         .expect("shutdown stub host must use http")
@@ -989,6 +1054,21 @@ fn background_off_rejects_daemon_that_respawns_after_initial_disconnect() {
 fn background_off_tolerates_transient_probe_timeout_before_socket_closes() {
     let runtime = IsolatedRuntime::new();
     let host = spawn_hanging_health_probe_stub();
+
+    cli_with_isolated_runtime(&runtime)
+        .env("WENLAN_BIND_ADDR", bind_addr_from_stub_host(&host))
+        .args(["background", "off"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Stopped com.wenlan.server. No background registration found.",
+        ));
+}
+
+#[test]
+fn background_off_does_not_keep_graceful_shutdown_connection_alive() {
+    let runtime = IsolatedRuntime::new();
+    let host = spawn_keepalive_shutdown_stub();
 
     cli_with_isolated_runtime(&runtime)
         .env("WENLAN_BIND_ADDR", bind_addr_from_stub_host(&host))

@@ -398,6 +398,11 @@ async fn request_daemon_shutdown() -> Result<bool> {
     let health_url = format!("{base_url}/api/health");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
+        // Never reuse the shutdown POST's HTTP/1.1 connection for health
+        // probes. Hyper graceful shutdown waits for existing connections to
+        // go idle; probing over that same connection would keep the daemon
+        // alive while the verifier itself reports it as still reachable.
+        .pool_max_idle_per_host(0)
         .build()
         .context("build daemon shutdown client")?;
 
@@ -514,6 +519,7 @@ async fn stop() -> Result<()> {
             stop_registered_service().context("daemon was unreachable; service fallback failed")?;
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(2))
+                .pool_max_idle_per_host(0)
                 .build()
                 .context("build daemon shutdown verification client")?;
             let health_url = format!("{}/api/health", local_daemon_base_url()?);
@@ -531,6 +537,7 @@ async fn stop() -> Result<()> {
             })?;
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(2))
+                .pool_max_idle_per_host(0)
                 .build()
                 .context("build daemon shutdown verification client")?;
             let health_url = format!("{}/api/health", local_daemon_base_url()?);
