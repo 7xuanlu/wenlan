@@ -215,37 +215,46 @@ fn spawn_keepalive_shutdown_stub() -> String {
             .expect("set keepalive stub timeout");
         let mut reader = BufReader::new(stream);
 
-        let read_request = |reader: &mut BufReader<std::net::TcpStream>| -> Option<String> {
-            let mut request_line = String::new();
-            match reader.read_line(&mut request_line) {
-                Ok(0) => return None,
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::ConnectionReset
-                            | std::io::ErrorKind::ConnectionAborted
-                            | std::io::ErrorKind::UnexpectedEof
-                    ) =>
-                {
-                    return None;
+        let read_request =
+            |reader: &mut BufReader<std::net::TcpStream>| -> Option<(String, Vec<String>)> {
+                let mut request_line = String::new();
+                match reader.read_line(&mut request_line) {
+                    Ok(0) => return None,
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::UnexpectedEof
+                        ) =>
+                    {
+                        return None;
+                    }
+                    Err(error) => panic!("read keepalive request line: {error}"),
                 }
-                Err(error) => panic!("read keepalive request line: {error}"),
-            }
-            loop {
-                let mut line = String::new();
-                reader
-                    .read_line(&mut line)
-                    .expect("read keepalive request header");
-                if line == "\r\n" || line.is_empty() {
-                    break;
+                let mut headers = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    reader
+                        .read_line(&mut line)
+                        .expect("read keepalive request header");
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    headers.push(line);
                 }
-            }
-            Some(request_line)
-        };
+                Some((request_line, headers))
+            };
 
-        let shutdown = read_request(&mut reader).expect("shutdown request");
+        let (shutdown, shutdown_headers) = read_request(&mut reader).expect("shutdown request");
         assert_eq!(shutdown, "POST /api/shutdown HTTP/1.1\r\n");
+        assert!(shutdown_headers.iter().any(|header| {
+            header.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case("connection")
+                    && value.trim().eq_ignore_ascii_case("close")
+            })
+        }));
         reader
             .get_mut()
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
@@ -256,7 +265,7 @@ fn spawn_keepalive_shutdown_stub() -> String {
         // releases it. Reusing this connection for health probes prevents the
         // server from ever reaching its process-exit path.
         drop(listener);
-        while let Some(request) = read_request(&mut reader) {
+        while let Some((request, _)) = read_request(&mut reader) {
             assert_eq!(request, "GET /api/health HTTP/1.1\r\n");
             reader
                 .get_mut()

@@ -396,32 +396,48 @@ async fn request_daemon_shutdown() -> Result<bool> {
     let base_url = local_daemon_base_url()?;
     let shutdown_url = format!("{base_url}/api/shutdown");
     let health_url = format!("{base_url}/api/health");
-    let client = reqwest::Client::builder()
+    let shutdown_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
-        // Never reuse the shutdown POST's HTTP/1.1 connection for health
-        // probes. Hyper graceful shutdown waits for existing connections to
-        // go idle; probing over that same connection would keep the daemon
-        // alive while the verifier itself reports it as still reachable.
         .pool_max_idle_per_host(0)
         .build()
         .context("build daemon shutdown client")?;
 
-    let response = match client.post(&shutdown_url).send().await {
+    let response = match shutdown_client
+        .post(&shutdown_url)
+        // This is a server-visible shutdown contract, not merely a client
+        // pool preference. Hyper graceful shutdown waits for accepted HTTP/1.1
+        // connections to close, so the shutdown request must not leave its
+        // connection alive for the health verifier to reuse.
+        .header(reqwest::header::CONNECTION, "close")
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(error) if error.is_connect() => return Ok(false),
         Err(error) => {
             return Err(error).with_context(|| format!("POST {shutdown_url} failed"));
         }
     };
-    response
+    let response = response
         .error_for_status()
         .with_context(|| format!("daemon returned an error for {shutdown_url}"))?;
+    response
+        .bytes()
+        .await
+        .with_context(|| format!("read daemon shutdown response from {shutdown_url}"))?;
+    drop(shutdown_client);
+
+    let probe_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .pool_max_idle_per_host(0)
+        .build()
+        .context("build daemon shutdown verification client")?;
 
     // This stability check is load-bearing for manager-backed installs: it
     // catches a delayed respawn after the cooperative exit. When the daemon
     // cannot be reached at all, stop() first stops the manager and then runs
     // the same check; do not reorder that fallback verification.
-    verify_daemon_unreachable(&client, &health_url).await?;
+    verify_daemon_unreachable(&probe_client, &health_url).await?;
     Ok(true)
 }
 
