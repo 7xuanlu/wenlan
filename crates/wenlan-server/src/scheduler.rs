@@ -37,6 +37,7 @@ const DERIVED_RECEIPT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const ENRICHMENT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const RECONCILE_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const CITATION_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const EDGES_RECONCILE_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// Target-Mac evidence keeps short ambient turns below a 5% duty cycle while
 /// avoiding the fivefold convergence penalty of the provisional ten-minute
 /// hotfix. Automatic recap batching still uses its separate ten-minute window.
@@ -429,10 +430,11 @@ enum AmbientJob {
     PageGrowth,
     Reconcile,
     Citation,
+    EdgesReconcile,
 }
 
 impl AmbientJob {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Document,
         Self::Classification,
         Self::StructuredExtract,
@@ -441,6 +443,7 @@ impl AmbientJob {
         Self::PageGrowth,
         Self::Reconcile,
         Self::Citation,
+        Self::EdgesReconcile,
     ];
 }
 
@@ -454,6 +457,7 @@ struct AmbientAvailability {
     page_growth: bool,
     reconcile: bool,
     citation: bool,
+    edges_reconcile: bool,
 }
 
 impl AmbientAvailability {
@@ -471,6 +475,9 @@ impl AmbientAvailability {
             page_growth: provider_available,
             reconcile: provider_available && wenlan_core::db::doc_reconcile_enabled(),
             citation: provider_available && wenlan_core::db::citation_backfill_enabled(),
+            // No model or model consent is involved, but the scan still goes
+            // through the shared foreground/resource/cooldown controller.
+            edges_reconcile: wenlan_core::db::edges_reconcile_enabled(),
         }
     }
 
@@ -484,6 +491,7 @@ impl AmbientAvailability {
             AmbientJob::PageGrowth => self.page_growth,
             AmbientJob::Reconcile => self.reconcile,
             AmbientJob::Citation => self.citation,
+            AmbientJob::EdgesReconcile => self.edges_reconcile,
         }
     }
 }
@@ -498,6 +506,7 @@ struct AmbientSchedule {
     last_page_growth: Option<Instant>,
     last_reconcile: Option<Instant>,
     last_citation: Option<Instant>,
+    last_edges_reconcile: Option<Instant>,
 }
 
 impl AmbientSchedule {
@@ -512,6 +521,7 @@ impl AmbientSchedule {
             last_page_growth: None,
             last_reconcile: None,
             last_citation: None,
+            last_edges_reconcile: None,
         }
     }
 
@@ -549,6 +559,9 @@ impl AmbientSchedule {
                 AmbientJob::Citation => self
                     .last_citation
                     .is_none_or(|last| now.duration_since(last) >= CITATION_SWEEP_INTERVAL),
+                AmbientJob::EdgesReconcile => self
+                    .last_edges_reconcile
+                    .is_none_or(|last| now.duration_since(last) >= EDGES_RECONCILE_SWEEP_INTERVAL),
             };
             if !due {
                 continue;
@@ -562,7 +575,7 @@ impl AmbientSchedule {
     /// thermal cooldown still limits actual work; this only prevents a second
     /// 30-minute delay from turning catch-up into a multi-week drain.
     fn note_job_result(&mut self, job: AmbientJob, now: Instant, selected: bool) {
-        if selected {
+        if selected && job != AmbientJob::EdgesReconcile {
             return;
         }
         match job {
@@ -574,6 +587,9 @@ impl AmbientSchedule {
             AmbientJob::PageGrowth => self.last_page_growth = Some(now),
             AmbientJob::Reconcile => self.last_reconcile = Some(now),
             AmbientJob::Citation => self.last_citation = Some(now),
+            // One edge reconciliation is a complete full pass, not one item
+            // from a backlog. Always enforce its 30-minute interval.
+            AmbientJob::EdgesReconcile => self.last_edges_reconcile = Some(now),
         }
     }
 
@@ -626,6 +642,7 @@ fn ambient_work_consumes_thermal_turn(
     page_growth_terminal_no_match_committed: bool,
 ) -> bool {
     llm_calls > 0
+        || matches!(job, AmbientJob::EdgesReconcile)
         || (selected
             && (matches!(job, AmbientJob::Document | AmbientJob::Reconcile)
                 || (matches!(job, AmbientJob::PageGrowth)
@@ -2163,6 +2180,23 @@ async fn run_ambient_job(
                 }
             }
         }
+        AmbientJob::EdgesReconcile => match db.reconcile_edges_parity().await {
+            Ok(report) => {
+                tracing::info!(
+                    "[scheduler] edges parity sweep: drift={} (missing={}, extra={}, corrupt={}) epoch={}",
+                    report.drift_count,
+                    report.missing_count,
+                    report.extra_count,
+                    report.corrupt_count,
+                    report.epoch
+                );
+                true
+            }
+            Err(error) => {
+                tracing::warn!("[scheduler] edges parity sweep error: {error}");
+                false
+            }
+        },
     };
 
     AmbientTurnReport {
@@ -2462,9 +2496,10 @@ mod tests {
             page_growth: true,
             reconcile: true,
             citation: true,
+            edges_reconcile: true,
         };
         assert_eq!(
-            (0..8)
+            (0..9)
                 .filter_map(|_| schedule.select_due(now, available))
                 .collect::<Vec<_>>(),
             vec![
@@ -2476,6 +2511,7 @@ mod tests {
                 AmbientJob::PageGrowth,
                 AmbientJob::Reconcile,
                 AmbientJob::Citation,
+                AmbientJob::EdgesReconcile,
             ]
         );
     }
@@ -2483,7 +2519,16 @@ mod tests {
     #[test]
     fn unconfigured_or_unavailable_pin_disables_every_automatic_llm_lane() {
         let availability = AmbientAvailability::for_provider(false);
-        for job in AmbientJob::ALL {
+        for job in [
+            AmbientJob::Document,
+            AmbientJob::Classification,
+            AmbientJob::StructuredExtract,
+            AmbientJob::Entity,
+            AmbientJob::Title,
+            AmbientJob::PageGrowth,
+            AmbientJob::Reconcile,
+            AmbientJob::Citation,
+        ] {
             assert!(
                 !availability.supports(job),
                 "{job:?} must leave durable work pending until an authorized provider is available"
@@ -2759,6 +2804,7 @@ mod tests {
             page_growth: true,
             reconcile: true,
             citation: true,
+            edges_reconcile: true,
         };
 
         assert_eq!(
@@ -2790,6 +2836,10 @@ mod tests {
             schedule.select_due(now, available),
             Some(AmbientJob::Citation)
         );
+        assert_eq!(
+            schedule.select_due(now, available),
+            Some(AmbientJob::EdgesReconcile)
+        );
     }
 
     #[test]
@@ -2805,6 +2855,7 @@ mod tests {
             page_growth: true,
             reconcile: true,
             citation: true,
+            edges_reconcile: true,
         };
 
         assert_eq!(
@@ -2839,6 +2890,10 @@ mod tests {
         );
         assert_eq!(
             schedule.select_due(now, available),
+            Some(AmbientJob::EdgesReconcile)
+        );
+        assert_eq!(
+            schedule.select_due(now, available),
             Some(AmbientJob::Document)
         );
         assert_eq!(
@@ -2853,6 +2908,45 @@ mod tests {
         assert!(!should_backoff_ambient_lane(false, 1));
         assert!(should_backoff_ambient_lane(false, 0));
         assert!(!should_backoff_ambient_lane(true, 0));
+    }
+
+    #[test]
+    fn edge_reconcile_full_pass_is_interval_and_thermal_paced_even_on_error() {
+        let now = Instant::now();
+        let mut schedule = AmbientSchedule::new(now);
+        let edge_only = AmbientAvailability {
+            document: false,
+            classification: false,
+            structured_extract: false,
+            entity: false,
+            title: false,
+            page_growth: false,
+            reconcile: false,
+            citation: false,
+            edges_reconcile: true,
+        };
+
+        assert_eq!(
+            schedule.select_due(now, edge_only),
+            Some(AmbientJob::EdgesReconcile)
+        );
+        schedule.note_job_result(AmbientJob::EdgesReconcile, now, true);
+        assert_eq!(schedule.last_edges_reconcile, Some(now));
+        assert_eq!(
+            schedule.select_due(
+                now + EDGES_RECONCILE_SWEEP_INTERVAL - Duration::from_secs(1),
+                edge_only
+            ),
+            None
+        );
+        assert_eq!(
+            schedule.select_due(now + EDGES_RECONCILE_SWEEP_INTERVAL, edge_only),
+            Some(AmbientJob::EdgesReconcile)
+        );
+        assert!(
+            ambient_work_consumes_thermal_turn(AmbientJob::EdgesReconcile, false, 0, false),
+            "a failed final watermark write can follow a full scan and must still cool down"
+        );
     }
 
     #[test]
@@ -5606,6 +5700,7 @@ mod tests {
             page_growth: false,
             reconcile: true,
             citation: false,
+            edges_reconcile: false,
         };
         assert_eq!(
             schedule.select_due(
