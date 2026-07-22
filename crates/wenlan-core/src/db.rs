@@ -11228,10 +11228,10 @@ impl MemoryDB {
                      SET version = CASE WHEN status='draft' THEN version+1 ELSE version END,
                          last_modified = CASE
                              WHEN status='draft' THEN ?1 ELSE last_modified END,
-                         space = CASE WHEN space=?2 THEN NULL ELSE space END,
-                         workspace = CASE WHEN workspace=?2 THEN NULL ELSE workspace END
+                         space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                         workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
                      WHERE space=?2 OR workspace=?2",
-                    libsql::params![page_now.as_str(), name],
+                    libsql::params![page_now.as_str(), name, UNFILED_SPACE_ID],
                 )
                 .await
                 .map_err(|e| {
@@ -11284,10 +11284,10 @@ impl MemoryDB {
                      SET version = CASE WHEN status='draft' THEN version+1 ELSE version END,
                          last_modified = CASE
                              WHEN status='draft' THEN ?1 ELSE last_modified END,
-                         space = CASE WHEN space=?2 THEN NULL ELSE space END,
-                         workspace = CASE WHEN workspace=?2 THEN NULL ELSE workspace END
+                         space = CASE WHEN space=?2 THEN ?3 ELSE space END,
+                         workspace = CASE WHEN workspace=?2 THEN ?3 ELSE workspace END
                      WHERE space=?2 OR workspace=?2",
-                    libsql::params![page_now.as_str(), name],
+                    libsql::params![page_now.as_str(), name, UNFILED_SPACE_ID],
                 )
                 .await
                 .map_err(|e| {
@@ -50441,7 +50441,10 @@ pub(crate) mod tests {
             Some("career"),
             "rename must update legacy pages.space values"
         );
-        assert_eq!(legacy.version, 2, "affected Page must advance once");
+        assert_eq!(
+            legacy.version, 1,
+            "renaming scope metadata must not advance an active Page content version"
+        );
 
         let scoped = db.get_page("page_workspace_work").await.unwrap().unwrap();
         assert_eq!(
@@ -50454,7 +50457,10 @@ pub(crate) mod tests {
             Some("career"),
             "rename must update pages.workspace values"
         );
-        assert_eq!(scoped.version, 2, "affected Page must advance once");
+        assert_eq!(
+            scoped.version, 1,
+            "renaming scope metadata must not advance an active Page content version"
+        );
 
         let conn = db.conn.lock().await;
         let mut rows = conn
@@ -50611,7 +50617,10 @@ pub(crate) mod tests {
             Some("new"),
             "delete-space move must update legacy pages.space values"
         );
-        assert_eq!(legacy.version, 2, "affected Page must advance once");
+        assert_eq!(
+            legacy.version, 1,
+            "moving scope metadata must not advance an active Page content version"
+        );
 
         let scoped = db
             .get_page("page_delete_move_workspace")
@@ -50628,7 +50637,10 @@ pub(crate) mod tests {
             Some("new"),
             "delete-space move must update pages.workspace values"
         );
-        assert_eq!(scoped.version, 2, "affected Page must advance once");
+        assert_eq!(
+            scoped.version, 1,
+            "moving scope metadata must not advance an active Page content version"
+        );
 
         let conn = db.conn.lock().await;
         let mut rows = conn
@@ -50704,9 +50716,13 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let page = page_rows.next().await.unwrap().unwrap();
-        assert_eq!(page.get::<Option<String>>(0).unwrap(), None);
-        assert_eq!(page.get::<Option<String>>(1).unwrap(), None);
-        assert_eq!(page.get::<i64>(2).unwrap(), 2);
+        assert_eq!(page.get::<String>(0).unwrap(), UNFILED_SPACE_ID);
+        assert_eq!(page.get::<String>(1).unwrap(), UNFILED_SPACE_ID);
+        assert_eq!(
+            page.get::<i64>(2).unwrap(),
+            1,
+            "unassigning scope metadata must not advance an active Page content version"
+        );
     }
 
     #[tokio::test]
@@ -50810,7 +50826,10 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(page.space, None);
         assert_eq!(page.workspace, None);
-        assert_eq!(page.version, 2);
+        assert_eq!(
+            page.version, 1,
+            "deleting scope metadata must not advance an active Page content version"
+        );
     }
 
     #[tokio::test]
@@ -62070,7 +62089,10 @@ pub(crate) mod tests {
             Some("dest"),
             "space move must update legacy pages.space values"
         );
-        assert_eq!(legacy.version, 2, "affected Page must advance once");
+        assert_eq!(
+            legacy.version, 1,
+            "reassigning scope metadata must not advance an active Page content version"
+        );
 
         let scoped = db.get_page("page_workspace_src").await.unwrap().unwrap();
         assert_eq!(
@@ -62083,7 +62105,10 @@ pub(crate) mod tests {
             Some("dest"),
             "space move must update pages.workspace values"
         );
-        assert_eq!(scoped.version, 2, "affected Page must advance once");
+        assert_eq!(
+            scoped.version, 1,
+            "reassigning scope metadata must not advance an active Page content version"
+        );
 
         let conn = db.conn.lock().await;
         let mut rows = conn
