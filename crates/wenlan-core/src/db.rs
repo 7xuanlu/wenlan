@@ -8151,6 +8151,24 @@ impl MemoryDB {
         discriminator: &str,
         lineage: &str,
         space: &str,
+        // Whether this write is a genuine cross-space (or indeterminate-space)
+        // DOWNGRADE, supplied by the producer from its OWN space resolution --
+        // never inferred here from `(lineage, dst_kind)`. Each caller sets it
+        // from the same destination-space comparison that chose `lineage`
+        // (`resolved_space_downgrades` for a resolved single destination; the
+        // two-endpoint compare for `relates`), so a same-space determinate
+        // destination is `false` even if some producer labelled it `legacy`,
+        // and a cross-space/indeterminate destination is `true`. External
+        // destinations are fence-exempt and always pass `false` (their `legacy`
+        // is an unknown-KIND label, not a downgrade). This marker lets the
+        // conflict rule reconcile the row to `legacy` even when the stored space
+        // stamp (which tracks the SOURCE endpoint) is unchanged by a DESTINATION
+        // move -- the round-3 SQL-only discriminant compared stamps and so
+        // missed destination moves, producing a fence abort (round-4
+        // regression). Passing it explicitly (round-5) removes the reconstructed
+        // proxy, which could not prove a producer never emits same-space
+        // non-external `legacy`.
+        cross_space_downgrade: bool,
         operation_id: Option<&str>,
     ) -> Result<String, libsql::Error> {
         let edge_id = crate::provenance::compute_edge_id(
@@ -8162,19 +8180,6 @@ impl MemoryDB {
             discriminator,
         );
         let now = chrono::Utc::now().timestamp();
-        // Whether this write is a genuine cross-space (or indeterminate-space)
-        // DOWNGRADE, resolved in Rust where the reason is explicit rather than
-        // inferred from the space stamp. Callers pass `lineage = 'legacy'` for a
-        // fence-applicable destination (memory / entity / page) ONLY when they
-        // detected the destination is not in the source's space (or its space is
-        // indeterminate); an external destination is fence-exempt, so its
-        // `legacy` is an unknown-KIND classification, never a cross-space
-        // downgrade. This marker lets the conflict rule reconcile the row to
-        // `legacy` even when the stored space stamp (which tracks the SOURCE
-        // endpoint) is unchanged by a DESTINATION move -- the round-3 SQL-only
-        // discriminant compared stamps and so missed destination moves,
-        // producing a fence abort (round-4 regression).
-        let cross_space_downgrade = lineage == "legacy" && dst_kind != "external";
         // ON CONFLICT resolves the shadow edge independent of dual-write CALL
         // ORDER, reconciling three things a re-write can change:
         //   1. Reactivation -- a soft-invalidated edge (`valid_until` set) is
@@ -8323,6 +8328,26 @@ impl MemoryDB {
         }
     }
 
+    /// Whether a dual-write edge to a fence-applicable (non-external)
+    /// destination is a genuine cross-space -- or space-indeterminate --
+    /// DOWNGRADE, i.e. the reason it carries `lineage='legacy'`. This is the
+    /// single seam that turns a RESOLVED destination space into the downgrade
+    /// reason `dual_write_edge` needs, so no caller and `dual_write_edge` itself
+    /// reconstruct it from the lineage label:
+    ///   - `Some(s)` where `s == edge_space` (same determinate space) -> `false`
+    ///     -- NOT a downgrade; a `legacy` here (if any) must lose to a typed
+    ///     edge through ranking, never bypass it.
+    ///   - `Some(_)` differing space (cross-space) -> `true`.
+    ///   - `None` (unresolved / conflicting / absent, per `resolve_memory_space`
+    ///     and the `page_sources` subquery) -> `true` -- indeterminate downgrades
+    ///     for the same fence-safety reason a cross-space one does.
+    ///
+    /// External destinations are fence-exempt and never call this (their
+    /// `legacy` is an unknown-KIND label); their callers pass `false` directly.
+    fn resolved_space_downgrades(resolved_dst_space: Option<&str>, edge_space: &str) -> bool {
+        resolved_dst_space != Some(edge_space)
+    }
+
     /// Dual-write (M2 PR-1) for a `pages.citations` blob write: reasserts
     /// one `cites` edge per citation in the new blob, mirroring
     /// `backfill_edges_from_page_citations`'s classification exactly. Does
@@ -8363,22 +8388,27 @@ impl MemoryDB {
         };
 
         for citation in citations {
-            let (dst_kind, lineage) = match citation.source_kind.as_str() {
+            let (dst_kind, lineage, cross_space_downgrade) = match citation.source_kind.as_str() {
                 "memory" => {
-                    let resolves = Self::resolve_memory_space(conn, &citation.locator).await?
-                        == Some(space.clone());
-                    ("memory", if resolves { "synthesis" } else { "legacy" })
+                    let resolved = Self::resolve_memory_space(conn, &citation.locator).await?;
+                    let downgrades = Self::resolved_space_downgrades(resolved.as_deref(), &space);
+                    (
+                        "memory",
+                        if downgrades { "legacy" } else { "synthesis" },
+                        downgrades,
+                    )
                 }
                 // A distiller-authored citation to an external URI is
                 // `synthesis` (matrix row 6), NOT `legacy`: its external
                 // destination is fence-exempt, so there is no cross-space
                 // reason to downgrade. Writing `legacy` would collide with
-                // `page_evidence`'s `evidence` on the same external edge_id and
-                // make the resolved lineage order-dependent (round-2 item #2).
-                // Unknown/unresolved kinds can't classify a real destination
-                // and stay `legacy`.
-                "external_url" | "external_file" => ("external", "synthesis"),
-                _ => ("external", "legacy"),
+                // `page_evidence`'s `evidence` on the same external edge_id
+                // and make the resolved lineage order-dependent (round-2
+                // item #2). Unknown/unresolved kinds can't classify a real
+                // destination and stay `legacy` -- an unknown-KIND label,
+                // never a cross-space downgrade (external is fence-exempt).
+                "external_url" | "external_file" => ("external", "synthesis", false),
+                _ => ("external", "legacy", false),
             };
             Self::dual_write_edge(
                 conn,
@@ -8390,6 +8420,7 @@ impl MemoryDB {
                 &citation.locator,
                 lineage,
                 &space,
+                cross_space_downgrade,
                 None,
             )
             .await?;
@@ -15960,11 +15991,14 @@ impl MemoryDB {
                     };
                     drop(space_rows);
                     if let Some(page_space) = page_space {
-                        let lineage = if new_memory_space.as_deref() == Some(page_space.as_str())
-                        {
-                            "evidence"
-                        } else {
+                        let cross_space_downgrade = Self::resolved_space_downgrades(
+                            new_memory_space.as_deref(),
+                            &page_space,
+                        );
+                        let lineage = if cross_space_downgrade {
                             "legacy"
+                        } else {
+                            "evidence"
                         };
                         Self::dual_write_edge(
                             &conn,
@@ -15976,6 +16010,7 @@ impl MemoryDB {
                             new_source_id,
                             lineage,
                             &page_space,
+                            cross_space_downgrade,
                             None,
                         )
                         .await
@@ -18999,13 +19034,20 @@ impl MemoryDB {
                     None => (None, None),
                 };
             drop(space_rows);
-            let (lineage, space) = match (&from_space, &to_space) {
-                (Some(fs), Some(ts)) if fs == ts => ("assertion", fs.clone()),
+            // `relates` resolves two endpoints, not one destination, so it does
+            // not go through `resolved_space_downgrades`: SAME-SPACE requires
+            // both entity spaces present and equal; anything else (differing, or
+            // either unresolved) is a cross-space/indeterminate downgrade. dst
+            // is always `entity` (never fence-exempt external). Mirrors
+            // `backfill_edges_from_relations`.
+            let (lineage, space, cross_space_downgrade) = match (&from_space, &to_space) {
+                (Some(fs), Some(ts)) if fs == ts => ("assertion", fs.clone(), false),
                 _ => (
                     "legacy",
                     from_space
                         .or(to_space)
                         .unwrap_or_else(|| UNFILED_SPACE_ID.to_string()),
+                    true,
                 ),
             };
             Self::dual_write_edge(
@@ -19018,6 +19060,7 @@ impl MemoryDB {
                 &canonical,
                 lineage,
                 &space,
+                cross_space_downgrade,
                 None,
             )
             .await?;
@@ -27436,21 +27479,41 @@ impl MemoryDB {
             .await?;
 
             if let Some(space) = &page_space {
-                let (dst_kind, classifiable) = match source_kind.as_str() {
+                let (dst_kind, lineage, cross_space_downgrade) = match source_kind.as_str() {
                     // A `memory` citation is only fence-safe when the memory
                     // shares the page's space -- `cites`->`memory` is NOT
                     // exempt from the space fence (only `cites`->`external`
-                    // is), mirroring `backfill_edges_from_page_evidence`.
-                    "memory" => (
-                        "memory",
-                        Self::resolve_memory_space(conn, sid).await? == Some(space.clone()),
-                    ),
-                    "external_url" | "external_file" => ("external", true),
-                    _ => ("external", false),
+                    // is), mirroring `backfill_edges_from_page_evidence`. A
+                    // differing / unresolved memory space is the cross-space
+                    // (indeterminate) downgrade.
+                    "memory" => {
+                        let resolved = Self::resolve_memory_space(conn, sid).await?;
+                        let downgrades =
+                            Self::resolved_space_downgrades(resolved.as_deref(), space);
+                        (
+                            "memory",
+                            if downgrades { "legacy" } else { "evidence" },
+                            downgrades,
+                        )
+                    }
+                    // External destinations are fence-exempt: `evidence` for a
+                    // real URI, `legacy` for an unknown KIND -- neither a
+                    // cross-space downgrade.
+                    "external_url" | "external_file" => ("external", "evidence", false),
+                    _ => ("external", "legacy", false),
                 };
-                let lineage = if classifiable { "evidence" } else { "legacy" };
                 Self::dual_write_edge(
-                    conn, "cites", "page", page_id, dst_kind, sid, sid, lineage, space, None,
+                    conn,
+                    "cites",
+                    "page",
+                    page_id,
+                    dst_kind,
+                    sid,
+                    sid,
+                    lineage,
+                    space,
+                    cross_space_downgrade,
+                    None,
                 )
                 .await?;
             }
@@ -29653,10 +29716,12 @@ impl MemoryDB {
                     None => None,
                 };
                 drop(dst_rows);
-                let lineage = if dst_space.as_deref() == Some(space.as_str()) {
-                    "synthesis"
-                } else {
+                let cross_space_downgrade =
+                    Self::resolved_space_downgrades(dst_space.as_deref(), &space);
+                let lineage = if cross_space_downgrade {
                     "legacy"
+                } else {
+                    "synthesis"
                 };
                 Self::dual_write_edge(
                     &conn,
@@ -29668,6 +29733,7 @@ impl MemoryDB {
                     &label_key,
                     lineage,
                     &space,
+                    cross_space_downgrade,
                     None,
                 )
                 .await?;
@@ -30689,18 +30755,35 @@ impl MemoryDB {
                 };
                 drop(rows);
                 if let Some(space) = space {
-                    let (dst_kind, classifiable) = match source_kind {
-                        "memory" => (
-                            "memory",
-                            Self::resolve_memory_space(&conn, locator).await? == Some(space.clone()),
-                        ),
-                        "external_url" | "external_file" => ("external", true),
-                        _ => ("external", false),
+                    let (dst_kind, lineage, cross_space_downgrade) = match source_kind {
+                        "memory" => {
+                            let resolved = Self::resolve_memory_space(&conn, locator).await?;
+                            let downgrades =
+                                Self::resolved_space_downgrades(resolved.as_deref(), &space);
+                            (
+                                "memory",
+                                if downgrades { "legacy" } else { "evidence" },
+                                downgrades,
+                            )
+                        }
+                        // External destinations are fence-exempt: `evidence` for
+                        // a real URI, `legacy` for an unknown KIND -- neither a
+                        // cross-space downgrade.
+                        "external_url" | "external_file" => ("external", "evidence", false),
+                        _ => ("external", "legacy", false),
                     };
-                    let lineage = if classifiable { "evidence" } else { "legacy" };
                     Self::dual_write_edge(
-                        &conn, "cites", "page", page_id, dst_kind, locator, locator, lineage,
-                        &space, None,
+                        &conn,
+                        "cites",
+                        "page",
+                        page_id,
+                        dst_kind,
+                        locator,
+                        locator,
+                        lineage,
+                        &space,
+                        cross_space_downgrade,
+                        None,
                     )
                     .await?;
                 }
@@ -62197,13 +62280,14 @@ pub(crate) mod tests {
             "mem_1",
             "synthesis",
             "space_a",
+            false,
             None,
         )
         .await
         .unwrap();
         MemoryDB::dual_write_edge(
             &conn, "cites", "page", "page_1", "memory", "mem_1", "mem_1", "evidence", "space_a",
-            None,
+            false, None,
         )
         .await
         .unwrap();
@@ -62216,7 +62300,7 @@ pub(crate) mod tests {
         // evidence first, synthesis second -> evidence retained (no downgrade).
         MemoryDB::dual_write_edge(
             &conn, "cites", "page", "page_2", "memory", "mem_2", "mem_2", "evidence", "space_a",
-            None,
+            false, None,
         )
         .await
         .unwrap();
@@ -62230,6 +62314,7 @@ pub(crate) mod tests {
             "mem_2",
             "synthesis",
             "space_a",
+            false,
             None,
         )
         .await
@@ -62370,7 +62455,8 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
             MemoryDB::dual_write_edge(
-                &conn, "cites", "page", "page_a", "external", loc, loc, "evidence", "space_a", None,
+                &conn, "cites", "page", "page_a", "external", loc, loc, "evidence", "space_a",
+                false, None,
             )
             .await
             .unwrap();
@@ -62386,7 +62472,8 @@ pub(crate) mod tests {
             let conn = db.conn.lock().await;
             insert_raw_page_for_m81_test(&conn, "page_b", "space_a").await;
             MemoryDB::dual_write_edge(
-                &conn, "cites", "page", "page_b", "external", loc, loc, "evidence", "space_a", None,
+                &conn, "cites", "page", "page_b", "external", loc, loc, "evidence", "space_a",
+                false, None,
             )
             .await
             .unwrap();
@@ -62430,7 +62517,7 @@ pub(crate) mod tests {
             );
             MemoryDB::dual_write_edge(
                 &conn, "cites", "page", "page_u1", "external", loc, loc, "evidence", "space_a",
-                None,
+                false, None,
             )
             .await
             .unwrap();
@@ -62447,7 +62534,7 @@ pub(crate) mod tests {
             insert_raw_page_for_m81_test(&conn, "page_u2", "space_a").await;
             MemoryDB::dual_write_edge(
                 &conn, "cites", "page", "page_u2", "external", loc, loc, "evidence", "space_a",
-                None,
+                false, None,
             )
             .await
             .unwrap();
@@ -62475,7 +62562,8 @@ pub(crate) mod tests {
             let conn = db.conn.lock().await;
             insert_raw_page_for_m81_test(&conn, "page_s1", "space_a").await;
             MemoryDB::dual_write_edge(
-                &conn, "cites", "page", "page_s1", "external", loc, loc, "legacy", "space_a", None,
+                &conn, "cites", "page", "page_s1", "external", loc, loc, "legacy", "space_a",
+                false, None,
             )
             .await
             .unwrap();
@@ -62489,6 +62577,7 @@ pub(crate) mod tests {
                 loc,
                 "synthesis",
                 "space_a",
+                false,
                 None,
             )
             .await
@@ -62514,12 +62603,14 @@ pub(crate) mod tests {
                 loc,
                 "synthesis",
                 "space_a",
+                false,
                 None,
             )
             .await
             .unwrap();
             MemoryDB::dual_write_edge(
-                &conn, "cites", "page", "page_s2", "external", loc, loc, "legacy", "space_a", None,
+                &conn, "cites", "page", "page_s2", "external", loc, loc, "legacy", "space_a",
+                false, None,
             )
             .await
             .unwrap();
@@ -62546,7 +62637,7 @@ pub(crate) mod tests {
         insert_raw_page_for_m81_test(&conn, "page_dm", "space_a").await;
         MemoryDB::dual_write_edge(
             &conn, "cites", "page", "page_dm", "memory", "mem_dm", "mem_dm", "evidence", "space_a",
-            None,
+            false, None,
         )
         .await
         .expect("same-space evidence edge inserts");
@@ -62561,7 +62652,7 @@ pub(crate) mod tests {
         // 'legacy'; the source-space stamp it passes is still 'space_a'.
         let result = MemoryDB::dual_write_edge(
             &conn, "cites", "page", "page_dm", "memory", "mem_dm", "mem_dm", "legacy", "space_a",
-            None,
+            true, None,
         )
         .await;
         assert!(
@@ -62601,6 +62692,7 @@ pub(crate) mod tests {
             "knows",
             "assertion",
             "space_a",
+            false,
             None,
         )
         .await
@@ -62613,7 +62705,7 @@ pub(crate) mod tests {
         .unwrap();
         let result = MemoryDB::dual_write_edge(
             &conn, "relates", "entity", "ent_src", "entity", "ent_dst", "knows", "legacy",
-            "space_a", None,
+            "space_a", true, None,
         )
         .await;
         assert!(
@@ -62645,6 +62737,7 @@ pub(crate) mod tests {
             "see-also",
             "synthesis",
             "space_a",
+            false,
             None,
         )
         .await
@@ -62657,7 +62750,7 @@ pub(crate) mod tests {
         .unwrap();
         let result = MemoryDB::dual_write_edge(
             &conn, "links", "page", "page_ls", "page", "page_ld", "see-also", "legacy", "space_a",
-            None,
+            true, None,
         )
         .await;
         assert!(
@@ -62668,6 +62761,80 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(lineage, "legacy", "links row must reconcile to legacy");
+    }
+
+    #[tokio::test]
+    async fn resolved_space_downgrades_gates_lineage_through_real_resolver() {
+        // Round-5: the cross-space downgrade reason MUST come from the
+        // destination's RESOLVED space, never be reconstructed from
+        // `(lineage, dst_kind)`. This is the reviewer's negative test: a
+        // same-space, DETERMINATE, non-external destination through the REAL
+        // resolver must NOT downgrade (its edge stays typed, never `legacy`);
+        // a differing space (cross-space) or an unresolved one (indeterminate)
+        // MUST. Nothing here trusts the lineage label to infer the reason.
+
+        // The pure seam every producer feeds the resolver's output through.
+        assert!(
+            !MemoryDB::resolved_space_downgrades(Some("space_a"), "space_a"),
+            "same determinate space must NOT be a downgrade"
+        );
+        assert!(
+            MemoryDB::resolved_space_downgrades(Some("space_b"), "space_a"),
+            "a differing space (cross-space) must be a downgrade"
+        );
+        assert!(
+            MemoryDB::resolved_space_downgrades(None, "space_a"),
+            "an unresolved / indeterminate space must be a downgrade"
+        );
+
+        // The REAL resolver (`resolve_memory_space`) feeds the same seam.
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_same", "content", "space_a").await;
+        seed_memory_with_source_id_and_space(&db, "mem_cross", "content", "space_b").await;
+        {
+            let conn = db.conn.lock().await;
+            let same = MemoryDB::resolve_memory_space(&conn, "mem_same")
+                .await
+                .unwrap();
+            assert_eq!(same.as_deref(), Some("space_a"));
+            assert!(
+                !MemoryDB::resolved_space_downgrades(same.as_deref(), "space_a"),
+                "a same-space memory resolved through the REAL resolver must not downgrade"
+            );
+            let cross = MemoryDB::resolve_memory_space(&conn, "mem_cross")
+                .await
+                .unwrap();
+            assert!(
+                MemoryDB::resolved_space_downgrades(cross.as_deref(), "space_a"),
+                "a cross-space memory resolved through the REAL resolver must downgrade"
+            );
+            let absent = MemoryDB::resolve_memory_space(&conn, "mem_ghost")
+                .await
+                .unwrap();
+            assert_eq!(absent, None, "an absent memory resolves to None");
+            assert!(
+                MemoryDB::resolved_space_downgrades(absent.as_deref(), "space_a"),
+                "an unresolvable memory must downgrade (indeterminate)"
+            );
+            insert_raw_page_for_m81_test(&conn, "page_rr", "space_a").await;
+        }
+
+        // End-to-end: a same-space memory citation through the REAL producer
+        // (`link_page_evidence` -> `resolve_memory_space` -> `dual_write_edge`)
+        // must land `evidence`, never `legacy`. This is the property the proxy
+        // could not guarantee: a non-external destination is legacy ONLY on a
+        // genuine cross-space/indeterminate resolution.
+        db.link_page_evidence("page_rr", "memory", Some("mem_same"), None, "test")
+            .await
+            .unwrap();
+        let conn = db.conn.lock().await;
+        let (lineage, _, _) = edge_row(&conn, "cites", "page_rr", "mem_same")
+            .await
+            .unwrap();
+        assert_eq!(
+            lineage, "evidence",
+            "a same-space memory citation through the real producer must be 'evidence', never 'legacy'"
+        );
     }
 
     #[tokio::test]
@@ -62683,7 +62850,7 @@ pub(crate) mod tests {
         insert_raw_page_for_m81_test(&conn, "page_r", "space_a").await;
         let edge_id = MemoryDB::dual_write_edge(
             &conn, "cites", "page", "page_r", "memory", "mem_r", "mem_r", "evidence", "space_a",
-            None,
+            false, None,
         )
         .await
         .unwrap();
@@ -62698,7 +62865,8 @@ pub(crate) mod tests {
         .await
         .unwrap();
         MemoryDB::dual_write_edge(
-            &conn, "cites", "page", "page_r", "memory", "mem_r", "mem_r", "legacy", "space_a", None,
+            &conn, "cites", "page", "page_r", "memory", "mem_r", "mem_r", "legacy", "space_a",
+            true, None,
         )
         .await
         .unwrap();
@@ -62731,7 +62899,7 @@ pub(crate) mod tests {
         insert_raw_page_for_m81_test(&conn, "page_f", "space_a").await;
         let edge_id = MemoryDB::dual_write_edge(
             &conn, "cites", "page", "page_f", "memory", "mem_f", "mem_f", "evidence", "space_a",
-            None,
+            false, None,
         )
         .await
         .unwrap();
@@ -62747,7 +62915,7 @@ pub(crate) mod tests {
         // Buggy reassert: keeps evidence/space_a though the memory is now cross-space.
         let result = MemoryDB::dual_write_edge(
             &conn, "cites", "page", "page_f", "memory", "mem_f", "mem_f", "evidence", "space_a",
-            None,
+            false, None,
         )
         .await;
         assert!(
@@ -62867,7 +63035,7 @@ pub(crate) mod tests {
             conn.execute("BEGIN", ()).await.unwrap();
             MemoryDB::dual_write_edge(
                 &conn, "cites", "page", "page_cl", "memory", "ghost", "ghost", "legacy", "space_a",
-                None,
+                true, None,
             )
             .await
             .unwrap();
