@@ -533,7 +533,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 81;
+pub const SCHEMA_VERSION: u32 = 82;
 
 /// Reserved id AND name of the uncategorized-page sentinel space (M1 honest
 /// columns). Uncategorized pages store this value in `pages.space`/`workspace`
@@ -7478,6 +7478,19 @@ impl MemoryDB {
             if version < 81 {
                 self.migrate_81_unified_edges().await?;
             }
+
+            // Migration 82 (M2 PR-2 "reader cutover", stages c+d): the
+            // cutover CONTROL PLANE that lets a reader safely switch from a
+            // legacy store to `edges`, per-consumer and reversibly, gated on a
+            // proven parity watermark and the durable dual-write epoch (spec
+            // v3 §7 M2 row: "reader cutover behind a durable dual-write epoch
+            // + parity watermark proving no unreconciled older operation").
+            // Two small tables (`edges_reader_cutover`, `edges_parity_watermark`);
+            // the epoch itself already lives on `edges_migration_state` (PR-1).
+            // See migrate_82_edge_cutover.
+            if version < 82 {
+                self.migrate_82_edge_cutover().await?;
+            }
         }
 
         Ok(())
@@ -8048,6 +8061,78 @@ impl MemoryDB {
         log::info!("[migration] Migration 81 applied: unified edges + provenance_roots (M2 PR-1)");
         Ok(())
     }
+
+    // Migration 82 (M2 PR-2 "reader cutover", stages c+d). Adds the cutover
+    // control plane on top of PR-1's write-only `edges` shadow:
+    //
+    //   * `edges_reader_cutover` -- one row per named READER (a "consumer",
+    //     spec's per-consumer cutover unit). `enabled=0` keeps the consumer on
+    //     the legacy store; a flip to `1` is REVERSIBLE (flip back). Default is
+    //     empty / OFF, so this migration changes NO read behavior -- every
+    //     reader stays on its legacy store until an operator/soak explicitly
+    //     flips a consumer AND parity is proven.
+    //   * `edges_parity_watermark` -- the durable proof from the stage-(d)
+    //     reconciliation sweep: the epoch it was proven under, the drift count
+    //     (0 == `edges` is byte-identical to the union of the five legacy
+    //     stores), and a per-store report. A single row (`id=1`).
+    //
+    // The dual-write EPOCH already lives on `edges_migration_state.epoch`
+    // (PR-1). The gating predicate `reader_uses_edges` (below) reads all three:
+    // a consumer flips to `edges` iff it is enabled AND the watermark is clean
+    // (`drift_count = 0`) AND the watermark's `proven_epoch` still equals the
+    // current epoch (no dual-write coverage lapse since the proof). That triple
+    // is what "no unreconciled older operation remains" means operationally.
+    //
+    // Replay-safe: pure `CREATE TABLE IF NOT EXISTS` inside one BEGIN/COMMIT,
+    // no backfill, no data mutation -- kill/rerun converges trivially.
+    async fn migrate_82_edge_cutover(&self) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m82 begin: {e}")))?;
+
+        let result: Result<(), WenlanError> = async {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS edges_reader_cutover (
+                    consumer TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+                    cutover_epoch INTEGER,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS edges_parity_watermark (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    proven_epoch INTEGER,
+                    drift_count INTEGER,
+                    checked_at INTEGER,
+                    report_json TEXT
+                );",
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m82 DDL: {e}")))?;
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m82 commit: {e}")))?;
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        }
+        drop(conn);
+
+        let conn = self.conn.lock().await;
+        conn.execute("PRAGMA user_version = 82", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m82 bump: {e}")))?;
+        log::info!("[migration] Migration 82 applied: edge reader-cutover control plane (M2 PR-2)");
+        Ok(())
+    }
 }
 
 /// Per-store backfill tally for the M2 PR-1 migration report (spec §2
@@ -8072,6 +8157,58 @@ impl EdgeBackfillCounts {
             "unknown_skipped": self.unknown_skipped,
         })
     }
+}
+
+/// Stage-(d) reconciliation result (spec v3 §7 M2 row: the parity proof).
+/// `drift_count == 0` means the invariant `edges (active) ≡ relations ∪
+/// page_sources ∪ page_evidence ∪ pages.citations ∪ page_links` holds --
+/// every non-skipped legacy row has its active `edges` twin AND every
+/// active edge has a legacy source. `reader_uses_edges` only flips a
+/// consumer to `edges` when the stamped watermark carrying this result is
+/// clean (drift 0) and current (proven under the live dual-write epoch).
+/// Samples are bounded by `SAMPLE_CAP` so a large drift cannot balloon the
+/// stored report.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ParityReport {
+    /// Dual-write epoch the sweep ran under (stamped into the watermark).
+    pub epoch: i64,
+    /// Distinct `edge_id`s the five legacy stores imply (deduped).
+    pub expected_active: usize,
+    /// Distinct active (`valid_until IS NULL`) `edge_id`s in `edges`.
+    pub actual_active: usize,
+    /// Expected-but-absent: a legacy row with no active edge (under-shadow).
+    pub missing_count: usize,
+    /// Active-but-unexpected: an active edge with no legacy source (over-shadow).
+    pub extra_count: usize,
+    /// `missing_count + extra_count`; the single number the reader gate reads.
+    pub drift_count: usize,
+    /// Up to `SAMPLE_CAP` missing `edge_id`s (sorted), for debugging a drift.
+    pub missing_sample: Vec<String>,
+    /// Up to `SAMPLE_CAP` extra `edge_id`s (sorted).
+    pub extra_sample: Vec<String>,
+    /// Per-store rows that contributed an edge (diagnostic; pre-dedup).
+    pub per_store_contributed: std::collections::BTreeMap<String, u64>,
+    /// Per-store rows skipped with no determinable edge (NULL locator /
+    /// orphan target / unparseable citations blob) -- mirrors the backfill's
+    /// `unknown_skipped`, so a skipped row is drift-neutral on both sides.
+    pub per_store_skipped: std::collections::BTreeMap<String, u64>,
+}
+
+impl ParityReport {
+    const SAMPLE_CAP: usize = 20;
+}
+
+/// §6.9 backup receipt: evidence a pre-migration online backup is sound.
+/// `integrity_ok` is the result of `PRAGMA integrity_check` run against the
+/// *produced snapshot* (opened independently), not the live DB -- so a
+/// caller can trust the file before relying on it as a restore point.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BackupReceipt {
+    pub dest: String,
+    pub source_pages: i64,
+    pub backup_pages: i64,
+    pub integrity_ok: bool,
+    pub created_at: i64,
 }
 
 impl MemoryDB {
@@ -8288,6 +8425,513 @@ impl MemoryDB {
         )
         .await?;
         Ok(())
+    }
+
+    // ===== M2 PR-2 reader-cutover control plane (stages c+d) =====
+    //
+    // The cutover gate that lets a reader switch from a legacy store to
+    // `edges`, per-consumer and reversibly, only after parity is proven.
+    // `reader_uses_edges` is the single predicate every cut-over reader
+    // consults; everything else here maintains the state it reads. The
+    // reconciliation sweep that STAMPS the watermark lives further below
+    // (`reconcile_edges_parity`).
+
+    /// The current dual-write coverage epoch (spec v3 §7 M2 row). Lives on the
+    /// single `edges_migration_state` row (created + seeded to 1 by PR-1's
+    /// migration 81). A parity proof is only trustworthy under the epoch it was
+    /// taken in: a coverage lapse bumps the epoch (`bump_dual_write_epoch`),
+    /// which retires every older watermark. Absent state row => generation 1.
+    async fn current_dual_write_epoch(conn: &libsql::Connection) -> Result<i64, libsql::Error> {
+        let mut rows = conn
+            .query("SELECT epoch FROM edges_migration_state WHERE id = 1", ())
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(row.get::<i64>(0).unwrap_or(1)),
+            None => Ok(1),
+        }
+    }
+
+    /// Bump the dual-write coverage epoch (spec v3 §7 M2 row: the "durable
+    /// dual-write epoch"). Call this whenever dual-write coverage MAY have
+    /// lapsed -- i.e. legacy rows could have been written without their `edges`
+    /// twin outside the atomic same-transaction dual-write. Bumping retires
+    /// every parity watermark taken under the previous epoch, so no reader can
+    /// flip again until a fresh reconciliation re-proves parity at the new
+    /// epoch. Returns the new epoch.
+    ///
+    /// In the CURRENT build there is no live lapse path: dual-write is
+    /// unconditional and shares the legacy write's transaction (PR-1), and the
+    /// §6.9 refuse-newer-schema guard (`db.rs`, the `version > SCHEMA_VERSION`
+    /// check) stops an older, non-dual-writing daemon from ever opening this
+    /// schema and writing behind our back. So this is the durable guard the
+    /// spec mandates, exercised directly by the epoch-guard test; its
+    /// production trigger is a future rung that makes dual-write conditional
+    /// (or an operator-initiated coverage reset). It is kept real and tested
+    /// rather than stubbed.
+    pub async fn bump_dual_write_epoch(&self) -> Result<i64, WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE edges_migration_state SET epoch = epoch + 1 WHERE id = 1",
+            (),
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("bump_dual_write_epoch: {e}")))?;
+        Self::current_dual_write_epoch(&conn)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("bump_dual_write_epoch read: {e}")))
+    }
+
+    /// Flip a reader consumer's cutover ON or OFF (spec v3 §7 M2 row: cutover
+    /// is "per-consumer and reversible"). Idempotent upsert. This records
+    /// INTENT only; the actual read source is still decided by
+    /// `reader_uses_edges` on a clean, current parity watermark, so enabling a
+    /// consumer before parity is proven does not move it off legacy, and
+    /// disabling it always moves it back (reversibility). `cutover_epoch`
+    /// records the epoch a consumer was last enabled under, for soak audit; it
+    /// is not part of the gate.
+    pub async fn set_reader_cutover(
+        &self,
+        consumer: &str,
+        enabled: bool,
+    ) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        let epoch = Self::current_dual_write_epoch(&conn)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("set_reader_cutover epoch: {e}")))?;
+        conn.execute(
+            "INSERT INTO edges_reader_cutover (consumer, enabled, cutover_epoch, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(consumer) DO UPDATE SET
+                 enabled = excluded.enabled,
+                 cutover_epoch = CASE
+                     WHEN excluded.enabled = 1 THEN excluded.cutover_epoch
+                     ELSE edges_reader_cutover.cutover_epoch
+                 END,
+                 updated_at = excluded.updated_at",
+            libsql::params![consumer, if enabled { 1i64 } else { 0i64 }, epoch, now],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("set_reader_cutover: {e}")))?;
+        Ok(())
+    }
+
+    /// THE reader-cutover gate (spec v3 §7 M2 row). Returns true iff the named
+    /// consumer may read from `edges` instead of its legacy store right now.
+    /// All three must hold:
+    ///   1. the consumer is explicitly enabled,
+    ///   2. the parity watermark is CLEAN (`drift_count = 0`) -- the stage-(d)
+    ///      reconciliation proved `edges` byte-identical to the union of the
+    ///      five legacy stores, so no unreconciled legacy row ("older
+    ///      operation") remains, and
+    ///   3. the proof is CURRENT: `proven_epoch` equals the current dual-write
+    ///      epoch, so no coverage lapse has invalidated it since.
+    ///
+    /// Any missing row (no watermark yet, unknown consumer) => false => legacy.
+    /// This is the ONLY thing standing between a premature flip and a wrong
+    /// read; it fails safe toward legacy in every ambiguous case.
+    async fn reader_uses_edges(
+        conn: &libsql::Connection,
+        consumer: &str,
+    ) -> Result<bool, libsql::Error> {
+        // (1) consumer explicitly enabled?
+        let enabled: bool = {
+            let mut rows = conn
+                .query(
+                    "SELECT enabled FROM edges_reader_cutover WHERE consumer = ?1",
+                    libsql::params![consumer],
+                )
+                .await?;
+            match rows.next().await? {
+                Some(row) => row.get::<i64>(0).unwrap_or(0) == 1,
+                None => false,
+            }
+        };
+        if !enabled {
+            return Ok(false);
+        }
+        // (2)+(3) a clean, current parity watermark?
+        let (proven_epoch, drift): (Option<i64>, Option<i64>) = {
+            let mut rows = conn
+                .query(
+                    "SELECT proven_epoch, drift_count FROM edges_parity_watermark WHERE id = 1",
+                    (),
+                )
+                .await?;
+            match rows.next().await? {
+                Some(row) => (
+                    row.get::<Option<i64>>(0).unwrap_or(None),
+                    row.get::<Option<i64>>(1).unwrap_or(None),
+                ),
+                None => (None, None),
+            }
+        };
+        // Clean == drift proven and zero; any drift or an unproven watermark
+        // keeps the reader on legacy.
+        if drift != Some(0) {
+            return Ok(false);
+        }
+        let proven_epoch = match proven_epoch {
+            Some(e) => e,
+            None => return Ok(false),
+        };
+        // Current == proof taken under the epoch we are still in (no lapse).
+        let current_epoch = Self::current_dual_write_epoch(conn).await?;
+        Ok(proven_epoch == current_epoch)
+    }
+
+    /// Stage-(d) reconciliation sweep (spec v3 §7 M2 row). Recomputes the
+    /// content-addressed `edge_id` set the five legacy stores imply and
+    /// diffs it against the live *active* edge set, asserting
+    /// `edges ≡ relations ∪ page_sources ∪ page_evidence ∪ pages.citations ∪
+    /// page_links`. Stamps `edges_parity_watermark` with the drift and the
+    /// current epoch; `reader_uses_edges` gates every cutover on that stamp.
+    ///
+    /// This RE-DERIVES the expected set independently -- it does NOT call the
+    /// `backfill_edges_from_*` helpers -- so a fresh-DB run reporting
+    /// `drift_count == 0` is a real differential/equivalence oracle (backfill
+    /// and reconcile agreeing is evidence, not a tautology). `edge_id` is
+    /// content-addressed over structural fields ONLY (edge_type, src/dst
+    /// kind+id, discriminator), never `space` or `lineage`, so the expected
+    /// set needs no per-row space resolution and the sweep is a linear scan
+    /// -- which is what lets it run at the §6.5 scale (100k memories / 5k
+    /// pages). The skip rules mirror the backfill exactly (NULL locator, NULL
+    /// `target_page_id`, unparseable citations blob), so a skipped row is
+    /// absent from BOTH sides and stays drift-neutral.
+    ///
+    /// SQLite discipline (§6.3): reads only, then ONE watermark UPSERT; no
+    /// transaction spans anything (there are no LLM/embedding calls here).
+    pub async fn reconcile_edges_parity(&self) -> Result<ParityReport, WenlanError> {
+        use std::collections::{BTreeMap, HashSet};
+        let conn = self.conn.lock().await;
+        let epoch = Self::current_dual_write_epoch(&conn)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile epoch: {e}")))?;
+
+        let mut expected: HashSet<String> = HashSet::new();
+        let mut contributed: BTreeMap<String, u64> = BTreeMap::new();
+        let mut skipped: BTreeMap<String, u64> = BTreeMap::new();
+
+        // relations -> relates (entity->entity, discriminator relation_type).
+        // Mirrors backfill_edges_from_relations: every row, none skipped.
+        {
+            let mut n = 0u64;
+            let mut rows = conn
+                .query(
+                    "SELECT from_entity, to_entity, relation_type FROM relations",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile relations: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile relations row: {e}")))?
+            {
+                let from: String = row.get(0).unwrap_or_default();
+                let to: String = row.get(1).unwrap_or_default();
+                let rtype: String = row.get(2).unwrap_or_default();
+                expected.insert(crate::provenance::compute_edge_id(
+                    "relates", "entity", &from, "entity", &to, &rtype,
+                ));
+                n += 1;
+            }
+            contributed.insert("relations".to_string(), n);
+        }
+
+        // page_sources -> cites (page->memory, discriminator memory_source_id).
+        // Mirrors backfill_edges_from_page_sources: every row, none skipped.
+        {
+            let mut n = 0u64;
+            let mut rows = conn
+                .query("SELECT page_id, memory_source_id FROM page_sources", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile page_sources: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile page_sources row: {e}")))?
+            {
+                let page_id: String = row.get(0).unwrap_or_default();
+                let msid: String = row.get(1).unwrap_or_default();
+                expected.insert(crate::provenance::compute_edge_id(
+                    "cites", "page", &page_id, "memory", &msid, &msid,
+                ));
+                n += 1;
+            }
+            contributed.insert("page_sources".to_string(), n);
+        }
+
+        // page_evidence -> cites (dst memory|external, discriminator locator).
+        // Mirrors backfill_edges_from_page_evidence: NULL locator is skipped
+        // (no destination); dst_kind is `memory` iff source_kind==`memory`,
+        // else `external`. Space only sets lineage, so it is not read here.
+        {
+            let mut n = 0u64;
+            let mut sk = 0u64;
+            let mut rows = conn
+                .query(
+                    "SELECT page_id, source_kind, locator FROM page_evidence",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile page_evidence: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile page_evidence row: {e}")))?
+            {
+                let page_id: String = row.get(0).unwrap_or_default();
+                let source_kind: String = row.get(1).unwrap_or_default();
+                let locator: Option<String> = row.get(2).unwrap_or(None);
+                let Some(locator) = locator else {
+                    sk += 1;
+                    continue;
+                };
+                let dst_kind = if source_kind == "memory" {
+                    "memory"
+                } else {
+                    "external"
+                };
+                expected.insert(crate::provenance::compute_edge_id(
+                    "cites", "page", &page_id, dst_kind, &locator, &locator,
+                ));
+                n += 1;
+            }
+            contributed.insert("page_evidence".to_string(), n);
+            skipped.insert("page_evidence".to_string(), sk);
+        }
+
+        // page_links -> links (page->page, discriminator label_key). Mirrors
+        // backfill_edges_from_page_links: NULL target_page_id (orphan
+        // wikilink) is skipped -- no page->page edge exists yet.
+        {
+            let mut n = 0u64;
+            let mut sk = 0u64;
+            let mut rows = conn
+                .query(
+                    "SELECT source_page_id, target_page_id, label_key FROM page_links",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile page_links: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile page_links row: {e}")))?
+            {
+                let src: String = row.get(0).unwrap_or_default();
+                let tgt: Option<String> = row.get(1).unwrap_or(None);
+                let label: String = row.get(2).unwrap_or_default();
+                let Some(tgt) = tgt else {
+                    sk += 1;
+                    continue;
+                };
+                expected.insert(crate::provenance::compute_edge_id(
+                    "links", "page", &src, "page", &tgt, &label,
+                ));
+                n += 1;
+            }
+            contributed.insert("page_links".to_string(), n);
+            skipped.insert("page_links".to_string(), sk);
+        }
+
+        // pages.citations -> cites (dst memory|external, discriminator
+        // locator). Mirrors backfill_edges_from_page_citations: an
+        // unparseable citations blob skips the WHOLE page. Rows are collected
+        // before the parse loop so the query handle is released first.
+        {
+            let mut pages: Vec<(String, String)> = Vec::new();
+            let mut rows = conn
+                .query(
+                    "SELECT id, citations FROM pages WHERE citations IS NOT NULL",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile pages citations: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile pages citations row: {e}")))?
+            {
+                let id: String = row.get(0).unwrap_or_default();
+                let cj: String = row.get::<String>(1).unwrap_or_default();
+                pages.push((id, cj));
+            }
+            drop(rows);
+            let mut n = 0u64;
+            let mut sk = 0u64;
+            for (page_id, cj) in pages {
+                let Ok(cites) = serde_json::from_str::<Vec<wenlan_types::pages::PageCitation>>(&cj)
+                else {
+                    sk += 1;
+                    continue;
+                };
+                for c in cites {
+                    let dst_kind = if c.source_kind == "memory" {
+                        "memory"
+                    } else {
+                        "external"
+                    };
+                    expected.insert(crate::provenance::compute_edge_id(
+                        "cites", "page", &page_id, dst_kind, &c.locator, &c.locator,
+                    ));
+                    n += 1;
+                }
+            }
+            contributed.insert("pages.citations".to_string(), n);
+            skipped.insert("pages.citations".to_string(), sk);
+        }
+
+        // actual: the live active-edge set.
+        let mut actual: HashSet<String> = HashSet::new();
+        {
+            let mut rows = conn
+                .query("SELECT edge_id FROM edges WHERE valid_until IS NULL", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile edges: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("reconcile edges row: {e}")))?
+            {
+                actual.insert(row.get::<String>(0).unwrap_or_default());
+            }
+        }
+
+        // Symmetric difference -> drift, with bounded sorted samples.
+        let mut missing_count = 0usize;
+        let mut missing_sample: Vec<String> = Vec::new();
+        for id in expected.difference(&actual) {
+            missing_count += 1;
+            if missing_sample.len() < ParityReport::SAMPLE_CAP {
+                missing_sample.push(id.clone());
+            }
+        }
+        let mut extra_count = 0usize;
+        let mut extra_sample: Vec<String> = Vec::new();
+        for id in actual.difference(&expected) {
+            extra_count += 1;
+            if extra_sample.len() < ParityReport::SAMPLE_CAP {
+                extra_sample.push(id.clone());
+            }
+        }
+        missing_sample.sort();
+        extra_sample.sort();
+        let drift_count = missing_count + extra_count;
+
+        let report = ParityReport {
+            epoch,
+            expected_active: expected.len(),
+            actual_active: actual.len(),
+            missing_count,
+            extra_count,
+            drift_count,
+            missing_sample,
+            extra_sample,
+            per_store_contributed: contributed,
+            per_store_skipped: skipped,
+        };
+
+        // Stamp the watermark: proven_epoch is always the epoch we scanned
+        // under, drift_count is the result. `reader_uses_edges` requires BOTH
+        // drift==0 AND proven_epoch==current, so a nonzero drift or a later
+        // epoch bump keeps every consumer on legacy.
+        let now = chrono::Utc::now().timestamp();
+        let report_json = serde_json::to_string(&report)
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile report json: {e}")))?;
+        conn.execute(
+            "INSERT INTO edges_parity_watermark (id, proven_epoch, drift_count, checked_at, report_json)
+             VALUES (1, ?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                 proven_epoch = excluded.proven_epoch,
+                 drift_count = excluded.drift_count,
+                 checked_at = excluded.checked_at,
+                 report_json = excluded.report_json",
+            libsql::params![epoch, drift_count as i64, now, report_json],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("reconcile watermark: {e}")))?;
+
+        Ok(report)
+    }
+
+    /// §6.9 pre-migration online backup. Uses `VACUUM INTO` -- the WAL-safe
+    /// SQLite online-snapshot path: a raw file copy is unsound while a WAL is
+    /// live, whereas `VACUUM INTO` writes a fresh, fully-checkpointed,
+    /// internally-consistent database in a single statement against the live
+    /// connection. Verifies the snapshot by opening it independently and
+    /// running `PRAGMA integrity_check`, and returns a receipt (page counts +
+    /// integrity result). Recovery is simply opening the produced file as a
+    /// `MemoryDB` (`MemoryDB::new` / `open_for_repair`) -- proven by the
+    /// restore-drill test.
+    pub async fn online_backup(
+        &self,
+        dest: &std::path::Path,
+    ) -> Result<BackupReceipt, WenlanError> {
+        // VACUUM INTO refuses to write to an existing file.
+        if dest.exists() {
+            std::fs::remove_file(dest)
+                .map_err(|e| WenlanError::VectorDb(format!("online_backup rm dest: {e}")))?;
+        }
+        let dest_str = dest.to_string_lossy().to_string();
+        // VACUUM INTO's target-filename argument's bound-parameter support is
+        // version-dependent; a single-quote-escaped literal is portable.
+        let escaped = dest_str.replace('\'', "''");
+        let source_pages = {
+            let conn = self.conn.lock().await;
+            conn.execute(&format!("VACUUM INTO '{escaped}'"), ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("online_backup vacuum: {e}")))?;
+            Self::pragma_i64(&conn, "PRAGMA page_count").await?
+        };
+
+        // Open the snapshot on its own connection and verify it.
+        let backup = libsql::Builder::new_local(&dest_str)
+            .build()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("online_backup open: {e}")))?;
+        let bconn = backup
+            .connect()
+            .map_err(|e| WenlanError::VectorDb(format!("online_backup connect: {e}")))?;
+        let integrity_ok =
+            {
+                let mut rows = bconn
+                    .query("PRAGMA integrity_check", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("online_backup integrity: {e}")))?;
+                match rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("online_backup integrity row: {e}"))
+                })? {
+                    Some(row) => row.get::<String>(0).unwrap_or_default() == "ok",
+                    None => false,
+                }
+            };
+        let backup_pages = Self::pragma_i64(&bconn, "PRAGMA page_count").await?;
+
+        Ok(BackupReceipt {
+            dest: dest_str,
+            source_pages,
+            backup_pages,
+            integrity_ok,
+            created_at: chrono::Utc::now().timestamp(),
+        })
+    }
+
+    /// Read a single-row, single-column integer PRAGMA (e.g. `page_count`).
+    async fn pragma_i64(conn: &libsql::Connection, pragma: &str) -> Result<i64, WenlanError> {
+        let mut rows = conn
+            .query(pragma, ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("{pragma}: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("{pragma} row: {e}")))?
+        {
+            Some(row) => Ok(row.get::<i64>(0).unwrap_or(0)),
+            None => Ok(0),
+        }
     }
 
     /// Resolve a memory's space by `source_id` for the `cites`->`memory`
@@ -20120,9 +20764,28 @@ impl MemoryDB {
             return Ok(0);
         }
 
-        // 2. Build adjacency list from relations table (undirected, weighted by edge count)
+        // 2. Build adjacency list (undirected, weighted by parallel-edge count).
+        // Reader cutover (M2 PR-2, stage c): the "communities" consumer reads
+        // the `relates` adjacency from `edges` instead of the legacy
+        // `relations` store ONLY when `reader_uses_edges` says parity is
+        // proven-clean and current -- otherwise it stays on legacy. The two
+        // sources are byte-identical under clean parity: `relations` has a
+        // UNIQUE(from_entity,to_entity,relation_type) index, so each row maps
+        // to exactly one distinct `relates` edge_id and the (from,to) multiset
+        // matches. The gate defaults OFF, so production behavior is unchanged
+        // until a cutover is explicitly enabled AND a clean watermark exists;
+        // the byte-identical guarantee is regression-locked by the paired test
+        // `detect_communities_edges_path_matches_legacy`.
+        let adjacency_sql = if Self::reader_uses_edges(&conn, "communities")
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            "SELECT src_id, dst_id FROM edges WHERE edge_type = 'relates' AND valid_until IS NULL"
+        } else {
+            "SELECT from_entity, to_entity FROM relations"
+        };
         let mut edge_rows = conn
-            .query("SELECT from_entity, to_entity FROM relations", ())
+            .query(adjacency_sql, ())
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?;
 
@@ -61213,6 +61876,590 @@ pub(crate) mod tests {
                 row.get(2).unwrap(),
             )
         })
+    }
+
+    // ===== M2 PR-2 (stages c+d) test helpers =====
+
+    async fn seed_page_source(conn: &libsql::Connection, page_id: &str, memory_source_id: &str) {
+        conn.execute(
+            "INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason) \
+             VALUES (?1, ?2, 1712707200, 'test')",
+            libsql::params![page_id, memory_source_id],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn seed_page_evidence(
+        conn: &libsql::Connection,
+        page_id: &str,
+        source_kind: &str,
+        locator: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO page_evidence (page_id, source_kind, locator, title, linked_at, link_reason) \
+             VALUES (?1, ?2, ?3, NULL, 1712707200, NULL)",
+            libsql::params![page_id, source_kind, locator.map(|s| s.to_string())],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn seed_page_link(
+        conn: &libsql::Connection,
+        source_page_id: &str,
+        target_page_id: Option<&str>,
+        label_key: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO page_links (source_page_id, target_page_id, label_key, label) \
+             VALUES (?1, ?2, ?3, ?3)",
+            libsql::params![
+                source_page_id,
+                target_page_id.map(|s| s.to_string()),
+                label_key
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn set_page_citations(conn: &libsql::Connection, page_id: &str, json: &str) {
+        conn.execute(
+            "UPDATE pages SET citations = ?1 WHERE id = ?2",
+            libsql::params![json, page_id],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn parity_watermark_row(conn: &libsql::Connection) -> Option<(Option<i64>, Option<i64>)> {
+        // (proven_epoch, drift_count)
+        let mut rows = conn
+            .query(
+                "SELECT proven_epoch, drift_count FROM edges_parity_watermark WHERE id = 1",
+                (),
+            )
+            .await
+            .unwrap();
+        rows.next()
+            .await
+            .unwrap()
+            .map(|row| (row.get(0).unwrap(), row.get(1).unwrap()))
+    }
+
+    /// Directly stamp the watermark to a synthetic state (for gate tests that
+    /// need a specific drift without running a real sweep).
+    async fn stamp_parity_watermark(conn: &libsql::Connection, proven_epoch: i64, drift: i64) {
+        conn.execute(
+            "INSERT INTO edges_parity_watermark (id, proven_epoch, drift_count, checked_at, report_json) \
+             VALUES (1, ?1, ?2, 1712707200, '{}') \
+             ON CONFLICT(id) DO UPDATE SET proven_epoch = excluded.proven_epoch, \
+                 drift_count = excluded.drift_count",
+            libsql::params![proven_epoch, drift],
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_82_creates_cutover_control_plane() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        for table in ["edges_reader_cutover", "edges_parity_watermark"] {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    libsql::params![table],
+                )
+                .await
+                .unwrap();
+            let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(present, 1, "{table} must exist after migration 82");
+        }
+        let uv: i64 = {
+            let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(uv as u32, crate::db::SCHEMA_VERSION);
+        assert_eq!(crate::db::SCHEMA_VERSION, 82);
+    }
+
+    /// THE load-bearing stage-(c) test (spec v3 §7 M2 row): an enabled
+    /// consumer with an unreconciled legacy row present MUST stay on legacy
+    /// until parity is proven. Absent a clean watermark the gate refuses.
+    #[tokio::test]
+    async fn reader_gate_blocks_flip_until_parity_proven() {
+        let (db, _dir) = test_db().await;
+        // An unreconciled older operation exists: a raw relation with no
+        // reconciliation sweep run yet.
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        // Operator enables the consumer (intent) -- but no watermark yet.
+        db.set_reader_cutover("communities", true).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        assert!(
+            !MemoryDB::reader_uses_edges(&conn, "communities")
+                .await
+                .unwrap(),
+            "enabling a consumer must NOT flip it while parity is unproven"
+        );
+    }
+
+    #[tokio::test]
+    async fn reader_flips_only_after_clean_parity_and_reverts() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        db.set_reader_cutover("communities", true).await.unwrap();
+
+        // Prove parity, then the gate opens.
+        let report = db.reconcile_edges_parity().await.unwrap();
+        assert_eq!(
+            report.drift_count, 0,
+            "live dual-write must reconcile clean"
+        );
+        {
+            let conn = db.conn.lock().await;
+            assert!(
+                MemoryDB::reader_uses_edges(&conn, "communities")
+                    .await
+                    .unwrap(),
+                "a clean, current watermark must open the gate for an enabled consumer"
+            );
+        }
+
+        // Reversibility: disabling moves it straight back to legacy.
+        db.set_reader_cutover("communities", false).await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            assert!(
+                !MemoryDB::reader_uses_edges(&conn, "communities")
+                    .await
+                    .unwrap(),
+                "disabling a consumer must always revert it to legacy"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn epoch_bump_retires_watermark_and_reblocks_reader() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        db.set_reader_cutover("communities", true).await.unwrap();
+        db.reconcile_edges_parity().await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            assert!(MemoryDB::reader_uses_edges(&conn, "communities")
+                .await
+                .unwrap());
+        }
+
+        // A coverage-lapse bump retires the older proof -> reader re-blocked.
+        let new_epoch = db.bump_dual_write_epoch().await.unwrap();
+        assert_eq!(new_epoch, 2);
+        {
+            let conn = db.conn.lock().await;
+            assert!(
+                !MemoryDB::reader_uses_edges(&conn, "communities")
+                    .await
+                    .unwrap(),
+                "a stale-epoch watermark must NOT open the gate"
+            );
+        }
+
+        // Re-proving at the new epoch reopens it.
+        db.reconcile_edges_parity().await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            let (proven, drift) = parity_watermark_row(&conn).await.unwrap();
+            assert_eq!(proven, Some(2));
+            assert_eq!(drift, Some(0));
+            assert!(MemoryDB::reader_uses_edges(&conn, "communities")
+                .await
+                .unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn nonzero_drift_keeps_reader_on_legacy() {
+        let (db, _dir) = test_db().await;
+        db.set_reader_cutover("communities", true).await.unwrap();
+        let conn = db.conn.lock().await;
+        // Watermark is current-epoch but dirty.
+        stamp_parity_watermark(&conn, 1, 1).await;
+        assert!(
+            !MemoryDB::reader_uses_edges(&conn, "communities")
+                .await
+                .unwrap(),
+            "a nonzero-drift watermark must keep the reader on legacy"
+        );
+    }
+
+    /// The stage-(d) differential/equivalence oracle: on a freshly-backfilled
+    /// DB seeded across ALL FIVE stores (including the skip cases), reconcile
+    /// -- which re-derives the expected set INDEPENDENTLY of the backfill code
+    /// -- must report drift 0. Backfill and reconcile agreeing is the proof.
+    #[tokio::test]
+    async fn reconcile_fresh_backfill_drift_zero_across_all_stores() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        seed_memory_with_source_id_and_space(&db, "mem_1", "content one", "space_a").await;
+        {
+            let conn = db.conn.lock().await;
+            insert_raw_page_for_m81_test(&conn, "page_1", "space_a").await;
+            insert_raw_page_for_m81_test(&conn, "page_2", "space_a").await;
+            // page_sources: page_1 -> mem_1
+            seed_page_source(&conn, "page_1", "mem_1").await;
+            // page_evidence: one classifiable memory row + one NULL-locator
+            // row (the SKIP case -- must be drift-neutral).
+            seed_page_evidence(&conn, "page_1", "external_url", Some("https://ex.com")).await;
+            seed_page_evidence(&conn, "page_1", "authored", None).await;
+            // page_links: one resolved + one orphan (target NULL -> SKIP).
+            seed_page_link(&conn, "page_1", Some("page_2"), "alpha").await;
+            seed_page_link(&conn, "page_1", None, "orphan").await;
+            // pages.citations blob: one memory citation on page_2.
+            set_page_citations(
+                &conn,
+                "page_2",
+                r#"[{"occurrence":1,"marker":1,"source_kind":"memory","locator":"mem_1","score":0.9,"status":"verified","scope":"sentence"}]"#,
+            )
+            .await;
+        }
+        rerun_migration_81(&db).await;
+
+        let report = db.reconcile_edges_parity().await.unwrap();
+        assert_eq!(
+            report.drift_count, 0,
+            "backfill and independent reconcile must agree exactly (missing={}, extra={}, missing_sample={:?}, extra_sample={:?})",
+            report.missing_count, report.extra_count, report.missing_sample, report.extra_sample
+        );
+        assert!(
+            report.expected_active > 0,
+            "the seeded stores must imply edges"
+        );
+        assert_eq!(report.expected_active, report.actual_active);
+        // Skip cases were counted, not turned into edges.
+        assert_eq!(report.per_store_skipped.get("page_evidence"), Some(&1));
+        assert_eq!(report.per_store_skipped.get("page_links"), Some(&1));
+        // Watermark stamped clean at epoch 1.
+        let conn = db.conn.lock().await;
+        let (proven, drift) = parity_watermark_row(&conn).await.unwrap();
+        assert_eq!((proven, drift), (Some(1), Some(0)));
+    }
+
+    #[tokio::test]
+    async fn reconcile_detects_missing_edge() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(db.reconcile_edges_parity().await.unwrap().drift_count, 0);
+
+        // Tombstone the live edge WITHOUT deleting its legacy relation row:
+        // the relation is now under-shadowed.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE edges SET valid_until = 1712707200 WHERE edge_type = 'relates'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let report = db.reconcile_edges_parity().await.unwrap();
+        assert!(
+            report.missing_count >= 1,
+            "a retracted edge over a live relation is missing"
+        );
+        assert!(report.drift_count >= 1);
+    }
+
+    #[tokio::test]
+    async fn reconcile_detects_extra_edge() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(db.reconcile_edges_parity().await.unwrap().drift_count, 0);
+
+        // Insert an active edge with no legacy source (fence-exempt legacy
+        // lineage): an over-shadow.
+        {
+            let conn = db.conn.lock().await;
+            MemoryDB::insert_backfilled_edge(
+                &conn, "relates", "entity", "ghost_a", "entity", "ghost_b", "rt", "legacy",
+                "space_a", "test",
+            )
+            .await
+            .unwrap();
+        }
+        let report = db.reconcile_edges_parity().await.unwrap();
+        assert!(report.extra_count >= 1, "an orphan active edge is extra");
+        assert!(report.drift_count >= 1);
+    }
+
+    /// Stage-(c) wiring proof: `detect_communities` must produce the IDENTICAL
+    /// entity->community assignment whether it reads the legacy `relations`
+    /// store (cutover OFF) or the `edges` `relates` adjacency (cutover ON with
+    /// clean parity). Byte-identical, not merely close.
+    #[tokio::test]
+    async fn detect_communities_edges_path_matches_legacy() {
+        let (db, _dir) = test_db().await;
+        // Two disjoint pairs -> two communities.
+        let a = db
+            .create_entity("A", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let b = db
+            .create_entity("B", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let c = db
+            .create_entity("C", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let d = db
+            .create_entity("D", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&a, &b, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        db.create_relation(&c, &d, "knows", None, None, None, None)
+            .await
+            .unwrap();
+
+        async fn community_map(db: &MemoryDB) -> std::collections::BTreeMap<String, i64> {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query("SELECT id, community_id FROM entities ORDER BY id", ())
+                .await
+                .unwrap();
+            let mut m = std::collections::BTreeMap::new();
+            while let Some(row) = rows.next().await.unwrap() {
+                m.insert(
+                    row.get::<String>(0).unwrap(),
+                    row.get::<i64>(1).unwrap_or(-1),
+                );
+            }
+            m
+        }
+
+        // Cutover OFF (default) -> legacy relations path.
+        db.detect_communities().await.unwrap();
+        let legacy_map = community_map(&db).await;
+
+        // Prove parity, enable the consumer -> edges path.
+        assert_eq!(db.reconcile_edges_parity().await.unwrap().drift_count, 0);
+        db.set_reader_cutover("communities", true).await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            assert!(MemoryDB::reader_uses_edges(&conn, "communities")
+                .await
+                .unwrap());
+        }
+        db.detect_communities().await.unwrap();
+        let edges_map = community_map(&db).await;
+
+        assert_eq!(
+            legacy_map, edges_map,
+            "the edges-backed community detection must be byte-identical to legacy"
+        );
+        // And it actually found two communities (non-degenerate).
+        let distinct: std::collections::BTreeSet<i64> = edges_map.values().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            2,
+            "two disjoint pairs must yield two communities"
+        );
+    }
+
+    /// §6.9 restore drill: an online backup (VACUUM INTO) is a sound,
+    /// independent restore point. Seed, back up, DESTROY the original, then
+    /// open the snapshot and confirm the data survived + integrity is clean.
+    #[tokio::test]
+    async fn online_backup_is_a_restorable_snapshot() {
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_backup", "precious", "space_a").await;
+
+        let restore_dir = tempdir().unwrap();
+        let dest = restore_dir.path().join("origin_memory.db");
+        let receipt = db.online_backup(&dest).await.unwrap();
+        assert!(
+            receipt.integrity_ok,
+            "the snapshot must pass integrity_check"
+        );
+        assert!(receipt.backup_pages > 0, "the snapshot must be non-empty");
+
+        // Destroy the original: the backup must be independent of it.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DELETE FROM memories", ()).await.unwrap();
+        }
+
+        // Restore: open the snapshot as a live MemoryDB and confirm survival.
+        let restored = MemoryDB::open_for_repair(restore_dir.path()).await.unwrap();
+        let rconn = restored.conn.lock().await;
+        let count: i64 = {
+            let mut rows = rconn
+                .query(
+                    "SELECT COUNT(*) FROM memories WHERE source_id = 'mem_backup'",
+                    (),
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(
+            count, 1,
+            "the restored snapshot must still hold the pre-backup memory"
+        );
+    }
+
+    /// §6.5-scale acceptance (100k memories / 5k pages). Manual-only (needs
+    /// minutes + hundreds of MB); run with:
+    ///   RUSTC_WRAPPER= cargo test -p wenlan-core --lib \
+    ///     db::tests::bench_reconcile_parity_at_scale -- --ignored --nocapture
+    /// Seeds 100k memories, 5k pages, 100k page->memory `page_sources` (one
+    /// cite each), backfills, then times reconcile + the gate check and asserts
+    /// drift 0 at scale.
+    #[tokio::test]
+    #[ignore]
+    async fn bench_reconcile_parity_at_scale() {
+        use std::time::Instant;
+        const MEMORIES: usize = 100_000;
+        const PAGES: usize = 5_000;
+        const CITES_PER_PAGE: usize = MEMORIES / PAGES; // 20
+
+        let (db, _dir) = test_db().await;
+
+        let t_seed = Instant::now();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("BEGIN", ()).await.unwrap();
+            for i in 0..MEMORIES {
+                conn.execute(
+                    "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                        last_modified, chunk_type, source_agent, space, confidence, confirmed, \
+                        memory_type, pending_revision) \
+                     VALUES (?1, 'c', 'memory', ?1, 't', 0, 1712707200, 'text', NULL, 'space_a', 1.0, 0, 'fact', 0)",
+                    libsql::params![format!("mem_{i}")],
+                )
+                .await
+                .unwrap();
+            }
+            for p in 0..PAGES {
+                conn.execute(
+                    "INSERT INTO pages (id, title, content, created_at, last_compiled, last_modified, space, workspace) \
+                     VALUES (?1, 't', 'c', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'space_a', 'space_a')",
+                    libsql::params![format!("page_{p}")],
+                )
+                .await
+                .unwrap();
+                for k in 0..CITES_PER_PAGE {
+                    let mem = p * CITES_PER_PAGE + k;
+                    conn.execute(
+                        "INSERT INTO page_sources (page_id, memory_source_id, linked_at, link_reason) \
+                         VALUES (?1, ?2, 1712707200, 'bench')",
+                        libsql::params![format!("page_{p}"), format!("mem_{mem}")],
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            conn.execute("COMMIT", ()).await.unwrap();
+        }
+        let seed_secs = t_seed.elapsed().as_secs_f64();
+
+        let t_backfill = Instant::now();
+        rerun_migration_81(&db).await;
+        let backfill_secs = t_backfill.elapsed().as_secs_f64();
+
+        let t_reconcile = Instant::now();
+        let report = db.reconcile_edges_parity().await.unwrap();
+        let reconcile_secs = t_reconcile.elapsed().as_secs_f64();
+
+        db.set_reader_cutover("communities", true).await.unwrap();
+        let t_gate = Instant::now();
+        let flip = {
+            let conn = db.conn.lock().await;
+            MemoryDB::reader_uses_edges(&conn, "communities")
+                .await
+                .unwrap()
+        };
+        let gate_ms = t_gate.elapsed().as_secs_f64() * 1000.0;
+
+        eprintln!(
+            "[bench §6.5] memories={MEMORIES} pages={PAGES} cites={}",
+            MEMORIES
+        );
+        eprintln!("[bench §6.5] seed={seed_secs:.1}s backfill={backfill_secs:.1}s reconcile={reconcile_secs:.2}s gate={gate_ms:.2}ms");
+        eprintln!(
+            "[bench §6.5] expected_active={} actual_active={} drift={}",
+            report.expected_active, report.actual_active, report.drift_count
+        );
+        assert_eq!(report.drift_count, 0, "parity must hold at §6.5 scale");
+        assert_eq!(
+            report.expected_active, MEMORIES,
+            "one cites edge per memory"
+        );
+        assert!(flip, "gate opens on a clean, current watermark (communities has no edges but the predicate still holds)");
     }
 
     #[tokio::test]
