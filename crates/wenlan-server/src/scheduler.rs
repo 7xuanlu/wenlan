@@ -3299,7 +3299,11 @@ mod tests {
         let lock = include_str!("../../../Cargo.lock");
         let packages: Vec<_> = lock
             .split("[[package]]")
-            .filter(|package| package.contains("\nname = \"sysinfo\"\n"))
+            .filter(|package| {
+                package
+                    .lines()
+                    .any(|line| line.trim() == "name = \"sysinfo\"")
+            })
             .collect();
         assert_eq!(
             packages.len(),
@@ -3309,7 +3313,7 @@ mod tests {
         let package = packages[0];
         let version = package
             .lines()
-            .find_map(|line| line.strip_prefix("version = \""))
+            .find_map(|line| line.trim().strip_prefix("version = \""))
             .and_then(|version| version.strip_suffix('"'))
             .expect("sysinfo package must carry a version");
         let mut parts = version
