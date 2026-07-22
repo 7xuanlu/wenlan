@@ -1483,6 +1483,21 @@ pub fn citation_backfill_enabled() -> bool {
     }
 }
 
+/// Gate for the background edges-parity reconcile sweep (M2 stage-d). Opt-out:
+/// default ON; disable with WENLAN_ENABLE_EDGES_RECONCILE=0/false/no/off. The
+/// sweep is read-only apart from the single `edges_parity_watermark` UPSERT that
+/// [`MemoryDB::reconcile_edges_parity`] stamps; it never flips a reader (that is
+/// the manual `set_reader_cutover` lever). No LLM.
+pub fn edges_reconcile_enabled() -> bool {
+    match std::env::var("WENLAN_ENABLE_EDGES_RECONCILE") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
 /// True iff `WENLAN_RERANK_SKIP_PREFERENCE` is truthy. OPT-IN, default OFF.
 ///
 /// When ON, preference/recommendation-seeking queries (per
@@ -7489,7 +7504,7 @@ impl MemoryDB {
             // the epoch itself already lives on `edges_migration_state` (PR-1).
             // See migrate_82_edge_cutover.
             if version < 82 {
-                self.migrate_82_edge_cutover().await?;
+                self.migrate_82_edge_cutover(version).await?;
             }
         }
 
@@ -8062,6 +8077,50 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// §6.9 pre-migration backup: take an online snapshot + integrity receipt
+    /// BEFORE a migration's DDL so a botched migration has a restore point, and
+    /// record the receipt in `app_metadata` (key `backup_before_migration_<n>`)
+    /// so an operator can find it. Skips a fresh DB (`prior_version == 0`:
+    /// nothing to protect -- the first-ever open runs every migration from
+    /// scratch). The snapshot lands beside the live db as
+    /// `pre_migration_<n>_backup.db`.
+    async fn backup_before_migration(
+        &self,
+        migration: i64,
+        prior_version: i64,
+    ) -> Result<(), WenlanError> {
+        if prior_version == 0 {
+            return Ok(());
+        }
+        let source_path = {
+            let conn = self.conn.lock().await;
+            Self::main_db_path(&conn).await?
+        };
+        let dir = source_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let dest = dir.join(format!("pre_migration_{migration}_backup.db"));
+        let receipt = self.online_backup(&dest).await?;
+        if !receipt.integrity_ok {
+            return Err(WenlanError::VectorDb(format!(
+                "backup_before_migration {migration}: snapshot failed integrity_check"
+            )));
+        }
+        let receipt_json = serde_json::to_string(&receipt)
+            .map_err(|e| WenlanError::VectorDb(format!("backup receipt json: {e}")))?;
+        self.set_app_metadata(
+            &format!("backup_before_migration_{migration}"),
+            &receipt_json,
+        )
+        .await?;
+        log::info!(
+            "[migration] pre-migration {migration} backup: {} ({} pages, integrity ok)",
+            receipt.dest,
+            receipt.backup_pages
+        );
+        Ok(())
+    }
+
     // Migration 82 (M2 PR-2 "reader cutover", stages c+d). Adds the cutover
     // control plane on top of PR-1's write-only `edges` shadow:
     //
@@ -8085,7 +8144,13 @@ impl MemoryDB {
     //
     // Replay-safe: pure `CREATE TABLE IF NOT EXISTS` inside one BEGIN/COMMIT,
     // no backfill, no data mutation -- kill/rerun converges trivially.
-    async fn migrate_82_edge_cutover(&self) -> Result<(), WenlanError> {
+    async fn migrate_82_edge_cutover(&self, prior_version: i64) -> Result<(), WenlanError> {
+        // §6.9: pre-migration online backup + integrity receipt BEFORE any DDL,
+        // so a botched cutover migration has a restore point. Taken here (not
+        // inside the BEGIN) because `online_backup` checkpoints + copies under
+        // its own conn lock; skips a fresh DB (prior_version == 0).
+        self.backup_before_migration(82, prior_version).await?;
+
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
             .await
@@ -8180,12 +8245,24 @@ pub struct ParityReport {
     pub missing_count: usize,
     /// Active-but-unexpected: an active edge with no legacy source (over-shadow).
     pub extra_count: usize,
-    /// `missing_count + extra_count`; the single number the reader gate reads.
+    /// Same `edge_id` present on both sides but the stored structural columns
+    /// (edge_type, src/dst kind+id) disagree with what the legacy row implies
+    /// -- an endpoint-corrupted row that kept its id. `detect_communities` and
+    /// every other reader consume these stored columns, so a mismatch here
+    /// feeds wrong endpoints and MUST count as drift even though the id set is
+    /// identical. (The discriminator is folded into the id, not stored as a
+    /// column, so it cannot be independently corrupted; the id equality already
+    /// covers it.)
+    pub corrupt_count: usize,
+    /// `missing_count + extra_count + corrupt_count`; the single number the
+    /// reader gate reads.
     pub drift_count: usize,
     /// Up to `SAMPLE_CAP` missing `edge_id`s (sorted), for debugging a drift.
     pub missing_sample: Vec<String>,
     /// Up to `SAMPLE_CAP` extra `edge_id`s (sorted).
     pub extra_sample: Vec<String>,
+    /// Up to `SAMPLE_CAP` endpoint-corrupted `edge_id`s (sorted).
+    pub corrupt_sample: Vec<String>,
     /// Per-store rows that contributed an edge (diagnostic; pre-dedup).
     pub per_store_contributed: std::collections::BTreeMap<String, u64>,
     /// Per-store rows skipped with no determinable edge (NULL locator /
@@ -8440,14 +8517,21 @@ impl MemoryDB {
     /// single `edges_migration_state` row (created + seeded to 1 by PR-1's
     /// migration 81). A parity proof is only trustworthy under the epoch it was
     /// taken in: a coverage lapse bumps the epoch (`bump_dual_write_epoch`),
-    /// which retires every older watermark. Absent state row => generation 1.
-    async fn current_dual_write_epoch(conn: &libsql::Connection) -> Result<i64, libsql::Error> {
+    /// which retires every older watermark. Returns `None` when there is no
+    /// trustworthy current epoch -- a missing state row OR an undecodable
+    /// `epoch` column (NULL/corrupt). `None` is NOT epoch 1: callers must treat
+    /// it as "gate closed / cannot prove", never fabricate a generation, so a
+    /// deleted or corrupt `edges_migration_state` can never silently reopen a
+    /// reader cutover.
+    async fn current_dual_write_epoch(
+        conn: &libsql::Connection,
+    ) -> Result<Option<i64>, libsql::Error> {
         let mut rows = conn
             .query("SELECT epoch FROM edges_migration_state WHERE id = 1", ())
             .await?;
         match rows.next().await? {
-            Some(row) => Ok(row.get::<i64>(0).unwrap_or(1)),
-            None => Ok(1),
+            Some(row) => Ok(row.get::<i64>(0).ok()),
+            None => Ok(None),
         }
     }
 
@@ -8470,15 +8554,29 @@ impl MemoryDB {
     /// rather than stubbed.
     pub async fn bump_dual_write_epoch(&self) -> Result<i64, WenlanError> {
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE edges_migration_state SET epoch = epoch + 1 WHERE id = 1",
-            (),
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("bump_dual_write_epoch: {e}")))?;
+        let affected = conn
+            .execute(
+                "UPDATE edges_migration_state SET epoch = epoch + 1 WHERE id = 1",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("bump_dual_write_epoch: {e}")))?;
+        // A zero-row UPDATE means the state row is gone -- there is no epoch to
+        // bump. Fail loud: fabricating one (the old `Ok(1)` path) would falsely
+        // "retire" nothing and could leave a stale watermark looking current.
+        if affected == 0 {
+            return Err(WenlanError::VectorDb(
+                "bump_dual_write_epoch: no edges_migration_state row to bump".to_string(),
+            ));
+        }
         Self::current_dual_write_epoch(&conn)
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("bump_dual_write_epoch read: {e}")))
+            .map_err(|e| WenlanError::VectorDb(format!("bump_dual_write_epoch read: {e}")))?
+            .ok_or_else(|| {
+                WenlanError::VectorDb(
+                    "bump_dual_write_epoch: state row vanished after bump".to_string(),
+                )
+            })
     }
 
     /// Flip a reader consumer's cutover ON or OFF (spec v3 §7 M2 row: cutover
@@ -8496,9 +8594,13 @@ impl MemoryDB {
     ) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().timestamp();
+        // Audit-only field (not part of the gate). With no current epoch (no
+        // migration state yet) record 0: `reader_uses_edges` keeps the consumer
+        // on legacy regardless, so a missing epoch must not block the lever.
         let epoch = Self::current_dual_write_epoch(&conn)
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("set_reader_cutover epoch: {e}")))?;
+            .map_err(|e| WenlanError::VectorDb(format!("set_reader_cutover epoch: {e}")))?
+            .unwrap_or(0);
         conn.execute(
             "INSERT INTO edges_reader_cutover (consumer, enabled, cutover_epoch, updated_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -8575,8 +8677,13 @@ impl MemoryDB {
             Some(e) => e,
             None => return Ok(false),
         };
-        // Current == proof taken under the epoch we are still in (no lapse).
-        let current_epoch = Self::current_dual_write_epoch(conn).await?;
+        // Current == proof taken under the epoch we are still in (no lapse). No
+        // current epoch (missing/corrupt state) => cannot prove currency => stay
+        // on legacy.
+        let current_epoch = match Self::current_dual_write_epoch(conn).await? {
+            Some(e) => e,
+            None => return Ok(false),
+        };
         Ok(proven_epoch == current_epoch)
     }
 
@@ -8602,13 +8709,26 @@ impl MemoryDB {
     /// SQLite discipline (§6.3): reads only, then ONE watermark UPSERT; no
     /// transaction spans anything (there are no LLM/embedding calls here).
     pub async fn reconcile_edges_parity(&self) -> Result<ParityReport, WenlanError> {
-        use std::collections::{BTreeMap, HashSet};
+        use std::collections::{BTreeMap, HashMap};
         let conn = self.conn.lock().await;
+        // No current epoch (missing/corrupt edges_migration_state) => there is
+        // nothing trustworthy to stamp a watermark under; fail loud rather than
+        // proving parity against a fabricated epoch.
         let epoch = Self::current_dual_write_epoch(&conn)
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("reconcile epoch: {e}")))?;
+            .map_err(|e| WenlanError::VectorDb(format!("reconcile epoch: {e}")))?
+            .ok_or_else(|| {
+                WenlanError::VectorDb(
+                    "reconcile_edges_parity: no current dual-write epoch (missing/corrupt edges_migration_state)"
+                        .to_string(),
+                )
+            })?;
 
-        let mut expected: HashSet<String> = HashSet::new();
+        // edge_id -> the stored structural columns it must carry (edge_type,
+        // src_kind, src_id, dst_kind, dst_id). A map, not a set, so a same-id
+        // row whose endpoints were corrupted in place counts as drift.
+        let mut expected: HashMap<String, (String, String, String, String, String)> =
+            HashMap::new();
         let mut contributed: BTreeMap<String, u64> = BTreeMap::new();
         let mut skipped: BTreeMap<String, u64> = BTreeMap::new();
 
@@ -8631,9 +8751,13 @@ impl MemoryDB {
                 let from: String = row.get(0).unwrap_or_default();
                 let to: String = row.get(1).unwrap_or_default();
                 let rtype: String = row.get(2).unwrap_or_default();
-                expected.insert(crate::provenance::compute_edge_id(
+                let id = crate::provenance::compute_edge_id(
                     "relates", "entity", &from, "entity", &to, &rtype,
-                ));
+                );
+                expected.insert(
+                    id,
+                    ("relates".into(), "entity".into(), from, "entity".into(), to),
+                );
                 n += 1;
             }
             contributed.insert("relations".to_string(), n);
@@ -8654,9 +8778,19 @@ impl MemoryDB {
             {
                 let page_id: String = row.get(0).unwrap_or_default();
                 let msid: String = row.get(1).unwrap_or_default();
-                expected.insert(crate::provenance::compute_edge_id(
+                let id = crate::provenance::compute_edge_id(
                     "cites", "page", &page_id, "memory", &msid, &msid,
-                ));
+                );
+                expected.insert(
+                    id,
+                    (
+                        "cites".into(),
+                        "page".into(),
+                        page_id,
+                        "memory".into(),
+                        msid,
+                    ),
+                );
                 n += 1;
             }
             contributed.insert("page_sources".to_string(), n);
@@ -8693,9 +8827,19 @@ impl MemoryDB {
                 } else {
                     "external"
                 };
-                expected.insert(crate::provenance::compute_edge_id(
+                let id = crate::provenance::compute_edge_id(
                     "cites", "page", &page_id, dst_kind, &locator, &locator,
-                ));
+                );
+                expected.insert(
+                    id,
+                    (
+                        "cites".into(),
+                        "page".into(),
+                        page_id,
+                        dst_kind.into(),
+                        locator,
+                    ),
+                );
                 n += 1;
             }
             contributed.insert("page_evidence".to_string(), n);
@@ -8727,9 +8871,9 @@ impl MemoryDB {
                     sk += 1;
                     continue;
                 };
-                expected.insert(crate::provenance::compute_edge_id(
-                    "links", "page", &src, "page", &tgt, &label,
-                ));
+                let id =
+                    crate::provenance::compute_edge_id("links", "page", &src, "page", &tgt, &label);
+                expected.insert(id, ("links".into(), "page".into(), src, "page".into(), tgt));
                 n += 1;
             }
             contributed.insert("page_links".to_string(), n);
@@ -8773,9 +8917,19 @@ impl MemoryDB {
                     } else {
                         "external"
                     };
-                    expected.insert(crate::provenance::compute_edge_id(
+                    let id = crate::provenance::compute_edge_id(
                         "cites", "page", &page_id, dst_kind, &c.locator, &c.locator,
-                    ));
+                    );
+                    expected.insert(
+                        id,
+                        (
+                            "cites".into(),
+                            "page".into(),
+                            page_id.clone(),
+                            dst_kind.into(),
+                            c.locator,
+                        ),
+                    );
                     n += 1;
                 }
             }
@@ -8783,11 +8937,17 @@ impl MemoryDB {
             skipped.insert("pages.citations".to_string(), sk);
         }
 
-        // actual: the live active-edge set.
-        let mut actual: HashSet<String> = HashSet::new();
+        // actual: the live active edges, id -> stored structural columns. Reads
+        // the SAME columns `detect_communities` (and every reader) consume, so a
+        // corrupted endpoint is visible here even when the id set matches.
+        let mut actual: HashMap<String, (String, String, String, String, String)> = HashMap::new();
         {
             let mut rows = conn
-                .query("SELECT edge_id FROM edges WHERE valid_until IS NULL", ())
+                .query(
+                    "SELECT edge_id, edge_type, src_kind, src_id, dst_kind, dst_id \
+                     FROM edges WHERE valid_until IS NULL",
+                    (),
+                )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("reconcile edges: {e}")))?;
             while let Some(row) = rows
@@ -8795,30 +8955,58 @@ impl MemoryDB {
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("reconcile edges row: {e}")))?
             {
-                actual.insert(row.get::<String>(0).unwrap_or_default());
+                let id: String = row.get(0).unwrap_or_default();
+                actual.insert(
+                    id,
+                    (
+                        row.get(1).unwrap_or_default(),
+                        row.get(2).unwrap_or_default(),
+                        row.get(3).unwrap_or_default(),
+                        row.get(4).unwrap_or_default(),
+                        row.get(5).unwrap_or_default(),
+                    ),
+                );
             }
         }
 
-        // Symmetric difference -> drift, with bounded sorted samples.
+        // drift = missing (expected id absent) + extra (actual id unexpected) +
+        // corrupt (id on both sides but stored columns disagree), bounded
+        // sorted samples.
         let mut missing_count = 0usize;
         let mut missing_sample: Vec<String> = Vec::new();
-        for id in expected.difference(&actual) {
-            missing_count += 1;
-            if missing_sample.len() < ParityReport::SAMPLE_CAP {
-                missing_sample.push(id.clone());
+        let mut corrupt_count = 0usize;
+        let mut corrupt_sample: Vec<String> = Vec::new();
+        for (id, exp_cols) in &expected {
+            match actual.get(id) {
+                None => {
+                    missing_count += 1;
+                    if missing_sample.len() < ParityReport::SAMPLE_CAP {
+                        missing_sample.push(id.clone());
+                    }
+                }
+                Some(act_cols) if act_cols != exp_cols => {
+                    corrupt_count += 1;
+                    if corrupt_sample.len() < ParityReport::SAMPLE_CAP {
+                        corrupt_sample.push(id.clone());
+                    }
+                }
+                Some(_) => {}
             }
         }
         let mut extra_count = 0usize;
         let mut extra_sample: Vec<String> = Vec::new();
-        for id in actual.difference(&expected) {
-            extra_count += 1;
-            if extra_sample.len() < ParityReport::SAMPLE_CAP {
-                extra_sample.push(id.clone());
+        for id in actual.keys() {
+            if !expected.contains_key(id) {
+                extra_count += 1;
+                if extra_sample.len() < ParityReport::SAMPLE_CAP {
+                    extra_sample.push(id.clone());
+                }
             }
         }
         missing_sample.sort();
         extra_sample.sort();
-        let drift_count = missing_count + extra_count;
+        corrupt_sample.sort();
+        let drift_count = missing_count + extra_count + corrupt_count;
 
         let report = ParityReport {
             epoch,
@@ -8826,9 +9014,11 @@ impl MemoryDB {
             actual_active: actual.len(),
             missing_count,
             extra_count,
+            corrupt_count,
             drift_count,
             missing_sample,
             extra_sample,
+            corrupt_sample,
             per_store_contributed: contributed,
             per_store_skipped: skipped,
         };
@@ -8873,23 +9063,49 @@ impl MemoryDB {
         &self,
         dest: &std::path::Path,
     ) -> Result<BackupReceipt, WenlanError> {
-        // Start from a clean destination -- a stale main file or WAL/SHM sidecar
-        // would make the fresh copy inconsistent.
+        let dest_str = dest.to_string_lossy().to_string();
         let sidecar = |suffix: &str| {
             let mut s = dest.as_os_str().to_os_string();
             s.push(suffix);
             std::path::PathBuf::from(s)
         };
-        for p in [dest.to_path_buf(), sidecar("-wal"), sidecar("-shm")] {
-            if p.exists() {
-                std::fs::remove_file(&p)
-                    .map_err(|e| WenlanError::VectorDb(format!("online_backup rm dest: {e}")))?;
-            }
-        }
-        let dest_str = dest.to_string_lossy().to_string();
 
         let source_pages = {
             let conn = self.conn.lock().await;
+
+            // Resolve the live source FIRST and refuse to back up onto it: the
+            // cleanup below deletes `dest`, so a caller passing the db path (or a
+            // symlink to it) as `dest` would otherwise destroy the live database.
+            // Canonicalize both so a symlink / relative-vs-absolute alias is
+            // caught. ponytail: canonical-path compare, not dev+ino -- covers the
+            // real footgun portably; hardlink aliasing is out of scope.
+            let source_path = Self::main_db_path(&conn).await?;
+            let source_canon = std::fs::canonicalize(&source_path).map_err(|e| {
+                WenlanError::VectorDb(format!("online_backup canonicalize source: {e}"))
+            })?;
+            if dest.exists() {
+                let dest_canon = std::fs::canonicalize(dest).map_err(|e| {
+                    WenlanError::VectorDb(format!("online_backup canonicalize dest: {e}"))
+                })?;
+                if dest_canon == source_canon {
+                    return Err(WenlanError::VectorDb(
+                        "online_backup: dest resolves to the live database -- refusing to overwrite the source"
+                            .to_string(),
+                    ));
+                }
+            }
+
+            // Start from a clean destination -- a stale main file or WAL/SHM
+            // sidecar would make the fresh copy inconsistent. Safe now that dest
+            // is proven distinct from the source.
+            for p in [dest.to_path_buf(), sidecar("-wal"), sidecar("-shm")] {
+                if p.exists() {
+                    std::fs::remove_file(&p).map_err(|e| {
+                        WenlanError::VectorDb(format!("online_backup rm dest: {e}"))
+                    })?;
+                }
+            }
+
             // Fold the WAL into the main db and truncate it, so the single main
             // file is a complete, consistent image to copy. The pragma returns a
             // `(busy, log, checkpointed)` row (hence `query`, not `execute`); a
@@ -8912,7 +9128,6 @@ impl MemoryDB {
                     ));
                 }
             }
-            let source_path = Self::main_db_path(&conn).await?;
             // ponytail: synchronous copy while holding the conn mutex -- fine for
             // an admin backup on the single-writer daemon; nothing can interleave.
             std::fs::copy(&source_path, dest)
@@ -62188,6 +62403,75 @@ pub(crate) mod tests {
         );
     }
 
+    /// Epoch FAIL-CLOSED: with a clean, current watermark the gate is open, but
+    /// the moment the `edges_migration_state` row is lost there is no
+    /// trustworthy current epoch -- `current_dual_write_epoch` returns `None`,
+    /// and the gate must CLOSE (a fail-open default would flip every enabled
+    /// reader onto `edges` the instant the state row vanished).
+    #[tokio::test]
+    async fn missing_migration_state_closes_reader_gate() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        db.set_reader_cutover("communities", true).await.unwrap();
+        db.reconcile_edges_parity().await.unwrap();
+        {
+            let conn = db.conn.lock().await;
+            assert!(
+                MemoryDB::reader_uses_edges(&conn, "communities")
+                    .await
+                    .unwrap(),
+                "sanity: a clean, current watermark opens the gate"
+            );
+        }
+
+        // Lose the epoch state row (deleted/corrupt). The watermark is still
+        // clean, but its epoch can no longer be proven current.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DELETE FROM edges_migration_state", ())
+                .await
+                .unwrap();
+        }
+        {
+            let conn = db.conn.lock().await;
+            assert!(
+                !MemoryDB::reader_uses_edges(&conn, "communities")
+                    .await
+                    .unwrap(),
+                "a missing edges_migration_state row must CLOSE the gate, not open it"
+            );
+        }
+    }
+
+    /// Epoch bump must FAIL LOUD on a zero-row UPDATE: with no state row there
+    /// is no epoch to bump, and the old `Ok(1)` fallback would silently "retire"
+    /// nothing while leaving a stale watermark looking current.
+    #[tokio::test]
+    async fn bump_epoch_fails_loud_when_state_row_missing() {
+        let (db, _dir) = test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DELETE FROM edges_migration_state", ())
+                .await
+                .unwrap();
+        }
+        let err = db.bump_dual_write_epoch().await.unwrap_err();
+        assert!(
+            format!("{err}").contains("no edges_migration_state row"),
+            "bump must fail loud on a zero-row UPDATE, got: {err}"
+        );
+    }
+
     /// The stage-(d) differential/equivalence oracle: on a freshly-backfilled
     /// DB seeded across ALL FIVE stores (including the skip cases), reconcile
     /// -- which re-derives the expected set INDEPENDENTLY of the backfill code
@@ -62317,6 +62601,67 @@ pub(crate) mod tests {
         assert!(report.drift_count >= 1);
     }
 
+    /// The parity oracle must be STRUCTURAL, not set-only: a live edge whose
+    /// stored endpoint was corrupted in place -- WITHOUT changing its
+    /// content-addressed `edge_id` -- keeps the id set identical yet feeds a
+    /// wrong endpoint to every reader (`detect_communities` reads `dst_id`
+    /// directly). A set-difference oracle would report this clean; the
+    /// structural-column diff must flag it as drift.
+    #[tokio::test]
+    async fn reconcile_detects_corrupt_endpoint() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .create_entity("Alice", "person", Some("space_a"))
+            .await
+            .unwrap();
+        let e2 = db
+            .create_entity("Bob", "person", Some("space_a"))
+            .await
+            .unwrap();
+        // A third entity in the SAME space: a real, fence-legal endpoint to
+        // silently drift the edge onto (repointing to a non-existent id would
+        // instead trip `edges_space_fence`, which is a different guard).
+        let e3 = db
+            .create_entity("Carol", "person", Some("space_a"))
+            .await
+            .unwrap();
+        db.create_relation(&e1, &e2, "knows", None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(db.reconcile_edges_parity().await.unwrap().drift_count, 0);
+
+        // Corrupt the STORED dst endpoint in place, leaving `edge_id` untouched:
+        // the legacy relation still implies (e1 -> e2), but the live edge now
+        // points at e3 -- a real, same-space, but WRONG endpoint. The id set is
+        // unchanged (no missing/extra), yet every reader now sees e1 -> e3.
+        {
+            let conn = db.conn.lock().await;
+            let affected = conn
+                .execute(
+                    "UPDATE edges SET dst_id = ?1 \
+                     WHERE edge_type = 'relates' AND dst_id = ?2 AND valid_until IS NULL",
+                    libsql::params![e3.clone(), e2.clone()],
+                )
+                .await
+                .unwrap();
+            assert_eq!(affected, 1, "exactly one live relates edge to corrupt");
+        }
+        let report = db.reconcile_edges_parity().await.unwrap();
+        assert!(
+            report.corrupt_count >= 1,
+            "an endpoint-corrupted row is corrupt, not clean (report={report:?})"
+        );
+        assert_eq!(
+            report.missing_count, 0,
+            "the id set is unchanged: not a missing edge"
+        );
+        assert_eq!(
+            report.extra_count, 0,
+            "the id set is unchanged: not an extra edge"
+        );
+        assert!(report.drift_count >= 1);
+    }
+
     /// Stage-(c) wiring proof: `detect_communities` must produce the IDENTICAL
     /// entity->community assignment whether it reads the legacy `relations`
     /// store (cutover OFF) or the `edges` `relates` adjacency (cutover ON with
@@ -62393,16 +62738,44 @@ pub(crate) mod tests {
         );
     }
 
-    /// §6.9 restore drill: an online backup (VACUUM INTO) is a sound,
-    /// independent restore point. Seed, back up, DESTROY the original, then
-    /// open the snapshot and confirm the data survived + integrity is clean.
+    /// §6.9 restore drill: an online backup is a sound, INDEPENDENT restore
+    /// point. Seed (including an EMBEDDED row so the DiskANN vector index carries
+    /// real content -- the shadow tables a naive `VACUUM INTO` would reorder),
+    /// back up to a separate dir, then REALLY restore: close the source, delete
+    /// the original db + WAL/SHM sidecars, copy the snapshot back ONTO the
+    /// canonical source path, reopen it there, and confirm integrity + row
+    /// counts + a working vector query all survive.
     #[tokio::test]
     async fn online_backup_is_a_restorable_snapshot() {
         let (db, _dir) = test_db().await;
         seed_memory_with_source_id_and_space(&db, "mem_backup", "precious", "space_a").await;
+        // An embedded row so `memories_vec_idx` (DiskANN) has real content to
+        // carry across backup+restore -- integrity_check alone never exercises a
+        // lookup, so a probe query is the functional proof.
+        let vec_literal = format!("[{}]", vec!["0.05"; 768].join(","));
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                    last_modified, chunk_type, source_agent, space, confidence, confirmed, \
+                    memory_type, pending_revision, embedding) \
+                 VALUES ('mem_vec', 'v', 'memory', 'mem_vec', 't', 0, 1712707200, 'text', NULL, \
+                    'space_a', 1.0, 0, 'fact', 0, vector32(?1))",
+                libsql::params![vec_literal.clone()],
+            )
+            .await
+            .unwrap();
+        }
 
-        let restore_dir = tempdir().unwrap();
-        let dest = restore_dir.path().join("origin_memory.db");
+        // Resolve the live source path (to restore back ONTO it) and snapshot to
+        // a SEPARATE directory.
+        let source_path = {
+            let conn = db.conn.lock().await;
+            MemoryDB::main_db_path(&conn).await.unwrap()
+        };
+        let source_dir = source_path.parent().unwrap().to_path_buf();
+        let backup_dir = tempdir().unwrap();
+        let dest = backup_dir.path().join("snapshot.db");
         let receipt = db.online_backup(&dest).await.unwrap();
         assert!(
             receipt.integrity_ok,
@@ -62414,19 +62787,38 @@ pub(crate) mod tests {
             "a physical copy must have the same page count as the source"
         );
 
-        // Destroy the original: the backup must be independent of it.
-        {
-            let conn = db.conn.lock().await;
-            conn.execute("DELETE FROM memories", ()).await.unwrap();
+        // REALLY restore: close the source connection, delete the original db +
+        // WAL/SHM, copy the snapshot onto the canonical source path, reopen.
+        drop(db);
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = source_path.clone().into_os_string();
+            p.push(suffix);
+            let p = std::path::PathBuf::from(p);
+            if p.exists() {
+                std::fs::remove_file(&p).unwrap();
+            }
         }
+        assert!(
+            !source_path.exists(),
+            "the original db must be gone before restore"
+        );
+        std::fs::copy(&dest, &source_path).unwrap();
 
-        // Restore: open the snapshot as a live MemoryDB and confirm survival.
-        let restored = MemoryDB::open_for_repair(restore_dir.path()).await.unwrap();
+        let restored = MemoryDB::open_for_repair(&source_dir).await.unwrap();
         let rconn = restored.conn.lock().await;
+
+        // integrity of the restored file.
+        let integrity: String = {
+            let mut rows = rconn.query("PRAGMA integrity_check", ()).await.unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(integrity, "ok", "restored db integrity must be clean");
+
+        // both seeded rows survived.
         let count: i64 = {
             let mut rows = rconn
                 .query(
-                    "SELECT COUNT(*) FROM memories WHERE source_id = 'mem_backup'",
+                    "SELECT COUNT(*) FROM memories WHERE source_id IN ('mem_backup', 'mem_vec')",
                     (),
                 )
                 .await
@@ -62434,9 +62826,71 @@ pub(crate) mod tests {
             rows.next().await.unwrap().unwrap().get(0).unwrap()
         };
         assert_eq!(
-            count, 1,
-            "the restored snapshot must still hold the pre-backup memory"
+            count, 2,
+            "the restored snapshot must still hold the pre-backup memories"
         );
+
+        // vector index usable: a DiskANN top-k query executes and returns the
+        // embedded row -- proves the vector shadow tables survived the copy.
+        let hit: Option<String> = {
+            let mut rows = rconn
+                .query(
+                    "SELECT m.source_id \
+                     FROM vector_top_k('memories_vec_idx', vector32(?1), 5) AS vt \
+                     JOIN memories m ON m.rowid = vt.id \
+                     WHERE m.source_id = 'mem_vec'",
+                    libsql::params![vec_literal],
+                )
+                .await
+                .unwrap();
+            rows.next()
+                .await
+                .unwrap()
+                .map(|r| r.get::<String>(0).unwrap())
+        };
+        assert_eq!(
+            hit.as_deref(),
+            Some("mem_vec"),
+            "the DiskANN vector index must be queryable after restore"
+        );
+    }
+
+    /// §6.9 self-backup guard: passing the LIVE db path as the backup dest must
+    /// be rejected BEFORE the dest-cleanup delete -- otherwise `online_backup`
+    /// would delete its own source. The source must be byte-untouched.
+    #[tokio::test]
+    async fn online_backup_refuses_to_overwrite_the_live_db() {
+        let (db, _dir) = test_db().await;
+        seed_memory_with_source_id_and_space(&db, "mem_live", "keep", "space_a").await;
+        let source_path = {
+            let conn = db.conn.lock().await;
+            MemoryDB::main_db_path(&conn).await.unwrap()
+        };
+        let before = std::fs::metadata(&source_path).unwrap().len();
+
+        let err = db.online_backup(&source_path).await.unwrap_err();
+        assert!(
+            format!("{err}").contains("refusing to overwrite the source"),
+            "online_backup(live_db) must be rejected, got: {err}"
+        );
+
+        // The source is untouched: still present, byte-unchanged, still holds the row.
+        assert!(source_path.exists(), "the live db must not be deleted");
+        assert_eq!(
+            before,
+            std::fs::metadata(&source_path).unwrap().len(),
+            "the live db file must be byte-unchanged by a rejected self-backup"
+        );
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM memories WHERE source_id = 'mem_live'",
+                (),
+            )
+            .await
+            .unwrap();
+        let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(n, 1, "the live db row must survive a rejected self-backup");
     }
 
     /// §6.5-scale acceptance (100k memories / 5k pages). Manual-only (needs
