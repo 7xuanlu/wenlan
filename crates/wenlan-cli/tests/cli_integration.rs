@@ -201,13 +201,15 @@ fn spawn_hanging_health_probe_stub() -> String {
     format!("http://{address}")
 }
 
-fn spawn_keepalive_shutdown_stub() -> String {
+fn spawn_keepalive_shutdown_stub() -> (String, std::sync::mpsc::Receiver<bool>) {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+    use std::sync::mpsc;
     use std::thread;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind keepalive shutdown stub");
     let address = listener.local_addr().expect("keepalive stub address");
+    let (close_header_tx, close_header_rx) = mpsc::channel();
     thread::spawn(move || {
         let (stream, _) = listener.accept().expect("accept shutdown request");
         stream
@@ -249,12 +251,30 @@ fn spawn_keepalive_shutdown_stub() -> String {
 
         let (shutdown, shutdown_headers) = read_request(&mut reader).expect("shutdown request");
         assert_eq!(shutdown, "POST /api/shutdown HTTP/1.1\r\n");
-        assert!(shutdown_headers.iter().any(|header| {
+        let close_requested = shutdown_headers.iter().any(|header| {
             header.split_once(':').is_some_and(|(name, value)| {
                 name.eq_ignore_ascii_case("connection")
                     && value.trim().eq_ignore_ascii_case("close")
             })
-        }));
+        });
+        close_header_tx
+            .send(close_requested)
+            .expect("report shutdown connection header");
+
+        if close_requested {
+            // Hyper 1.x marks an HTTP/1.1 connection non-persistent when the
+            // request carries `Connection: close`, then closes it after the
+            // response. Model that server contract instead of leaving a raw
+            // TCP socket alive in a state Hyper would never expose.
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+                .expect("write closing shutdown response");
+            drop(reader);
+            drop(listener);
+            return;
+        }
+
         reader
             .get_mut()
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
@@ -273,7 +293,7 @@ fn spawn_keepalive_shutdown_stub() -> String {
                 .expect("write keepalive health response");
         }
     });
-    format!("http://{address}")
+    (format!("http://{address}"), close_header_rx)
 }
 
 #[cfg(target_os = "macos")]
@@ -1077,7 +1097,7 @@ fn background_off_tolerates_transient_probe_timeout_before_socket_closes() {
 #[test]
 fn background_off_does_not_keep_graceful_shutdown_connection_alive() {
     let runtime = IsolatedRuntime::new();
-    let host = spawn_keepalive_shutdown_stub();
+    let (host, close_header) = spawn_keepalive_shutdown_stub();
 
     cli_with_isolated_runtime(&runtime)
         .env("WENLAN_BIND_ADDR", bind_addr_from_stub_host(&host))
@@ -1087,6 +1107,12 @@ fn background_off_does_not_keep_graceful_shutdown_connection_alive() {
         .stdout(predicate::str::contains(
             "Stopped com.wenlan.server. No background registration found.",
         ));
+    assert!(
+        close_header
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("shutdown stub must report the request header"),
+        "shutdown POST must request connection close"
+    );
 }
 
 #[cfg(target_os = "macos")]
