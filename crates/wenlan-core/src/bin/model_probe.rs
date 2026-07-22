@@ -6,6 +6,20 @@ use std::time::Instant;
 use wenlan_core::engine::LlmEngine;
 use wenlan_core::prompts::PromptRegistry;
 
+fn validate_probe_classification(raw: &str) -> Result<&'static str, String> {
+    let result = wenlan_core::llm_provider::parse_classify_response(raw)
+        .ok_or_else(|| "expected preference classification in a valid JSON object".to_string())?;
+
+    if result.memory_type == "preference" {
+        Ok("preference")
+    } else {
+        Err(format!(
+            "expected preference classification, got {}",
+            result.memory_type
+        ))
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
@@ -38,14 +52,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     println!("--- Raw output ({:?}) ---", elapsed);
-    match raw {
-        Some(s) => {
-            println!("{}", s);
-            println!();
-            println!("--- Length: {} chars ---", s.len());
-        }
-        None => println!("(empty/None)"),
-    }
+    let raw = raw.ok_or_else(|| std::io::Error::other("model returned no inference output"))?;
+    println!("{}", raw);
+    println!();
+    println!("--- Length: {} chars ---", raw.len());
+
+    let classification = validate_probe_classification(&raw).map_err(std::io::Error::other)?;
+    println!("--- Verified classification: {classification} ---");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_preference_classification_passes() {
+        let raw = r#"{"memory_type":"preference","domain":"tools","tags":["indentation","tabs"]}"#;
+
+        assert_eq!(validate_probe_classification(raw).unwrap(), "preference");
+    }
+
+    #[test]
+    fn partial_or_invalid_output_fails() {
+        let err = validate_probe_classification(r#"{"memory_type":"pref"#).unwrap_err();
+
+        assert!(err.contains("expected preference"));
+    }
+
+    #[test]
+    fn wrong_classification_fails() {
+        let raw = r#"{"memory_type":"fact","domain":"tools","tags":[]}"#;
+
+        assert!(validate_probe_classification(raw).is_err());
+    }
 }
