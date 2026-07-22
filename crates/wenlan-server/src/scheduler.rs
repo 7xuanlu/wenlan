@@ -3610,7 +3610,7 @@ mod tests {
 
     #[test]
     fn unsupported_burst_end_does_not_preempt_bounded_idle_work() {
-        let now = Instant::now();
+        let now = Instant::now() + DAILY_INTERVAL + Duration::from_secs(1);
         let mut snapshot = HashMap::new();
         snapshot.insert(
             "zeta".to_string(),
@@ -3644,7 +3644,7 @@ mod tests {
 
     #[test]
     fn unsupported_mature_burst_is_drained_without_a_thermal_turn() {
-        let now = Instant::now();
+        let now = Instant::now() + DAILY_INTERVAL + Duration::from_secs(1);
         let writes = WriteSignal::new();
         for offset in [1_100, 1_000, 900] {
             writes.record_at("alpha", now - Duration::from_secs(offset));
@@ -3656,7 +3656,7 @@ mod tests {
 
     #[test]
     fn automatic_trigger_priority_leaves_later_due_work_for_future_turns() {
-        let now = Instant::now();
+        let now = Instant::now() + DAILY_INTERVAL + Duration::from_secs(1);
         let snapshot = HashMap::new();
 
         assert_eq!(
@@ -3687,7 +3687,7 @@ mod tests {
 
     #[test]
     fn pending_maintenance_yields_to_due_steep_after_one_stage() {
-        let now = Instant::now();
+        let now = Instant::now() + DAILY_INTERVAL + Duration::from_secs(1);
         let mut snapshot = HashMap::new();
         snapshot.insert(
             "busy-agent".to_string(),
