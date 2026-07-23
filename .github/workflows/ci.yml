@@ -54,6 +54,8 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
               - 'scripts/lint-scale-gate.sh'
+              - 'scripts/stabilize-rust-cache-toolchains.sh'
+              - 'scripts/stabilize-rust-cache-toolchains.test.sh'
               - 'scripts/stage-onnxruntime-windows.ps1'
               - 'scripts/smoke-windows.ps1'
               - 'scripts/smoke-windows-llm.ps1'
@@ -110,6 +112,8 @@ jobs:
               - 'scripts/smoke-windows.ps1'
               - 'scripts/smoke-windows-llm.ps1'
               - 'scripts/smoke-windows-llm.test.ps1'
+              - 'scripts/stabilize-rust-cache-toolchains.sh'
+              - 'scripts/stabilize-rust-cache-toolchains.test.sh'
               - 'scripts/lint-scale-gate.sh'
               - 'crates/wenlan-core/src/lint/**'
               - 'crates/wenlan-core/src/engine.rs'
@@ -211,6 +215,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
         with:
           toolchain: 1.95.0
+      # rust-cache hashes every installed rustup toolchain, including unrelated
+      # versions preinstalled by the Windows runner image. Keep that external
+      # image churn from invalidating Wenlan's pinned 1.95.0 target cache.
+      - name: Validate Windows Rust cache toolchain stabilizer
+        if: matrix.os == 'windows-2022'
+        shell: bash
+        run: bash scripts/stabilize-rust-cache-toolchains.test.sh
+      - name: Stabilize Windows Rust cache toolchain inputs
+        if: matrix.os == 'windows-2022'
+        shell: bash
+        run: bash scripts/stabilize-rust-cache-toolchains.sh
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
