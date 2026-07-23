@@ -22,6 +22,41 @@ const SHUTDOWN_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_m
 const SHUTDOWN_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 const SHUTDOWN_STABILITY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 const SHUTDOWN_VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+const DAEMON_PROCESS_ID_HEADER: &str = "x-wenlan-process-id";
+
+#[derive(Clone, Copy, Debug)]
+struct DaemonProcessIdentity {
+    pid: sysinfo::Pid,
+    started_at: Option<u64>,
+}
+
+impl DaemonProcessIdentity {
+    fn capture(raw_pid: u32) -> Self {
+        let pid = sysinfo::Pid::from_u32(raw_pid);
+        let mut system = sysinfo::System::new();
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        Self {
+            pid,
+            started_at: system.process(pid).map(sysinfo::Process::start_time),
+        }
+    }
+
+    fn is_running(self, system: &mut sysinfo::System) -> bool {
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[self.pid]), true);
+        match (self.started_at, system.process(self.pid)) {
+            (Some(started_at), Some(process)) => process.start_time() == started_at,
+            // The process had already exited by the time the CLI captured its
+            // identity. Do not let PID reuse turn that completed exit back
+            // into a live match.
+            (None, _) | (_, None) => false,
+        }
+    }
+}
+
+enum DaemonShutdownRequest {
+    NotRunning,
+    Requested(Option<DaemonProcessIdentity>),
+}
 
 /// Windows Task Scheduler does not love dots in task names. The macOS launchd
 /// and systemd-user paths still use the canonical reverse-DNS `SERVICE_LABEL`.
@@ -392,10 +427,9 @@ fn stop_registered_service() -> Result<()> {
     }
 }
 
-async fn request_daemon_shutdown() -> Result<bool> {
+async fn request_daemon_shutdown() -> Result<DaemonShutdownRequest> {
     let base_url = local_daemon_base_url()?;
     let shutdown_url = format!("{base_url}/api/shutdown");
-    let health_url = format!("{base_url}/api/health");
     let shutdown_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .pool_max_idle_per_host(0)
@@ -407,7 +441,7 @@ async fn request_daemon_shutdown() -> Result<bool> {
         .await
     {
         Ok(response) => response,
-        Err(error) if error.is_connect() => return Ok(false),
+        Err(error) if error.is_connect() => return Ok(DaemonShutdownRequest::NotRunning),
         Err(error) => {
             return Err(error).with_context(|| format!("POST {shutdown_url} failed"));
         }
@@ -415,24 +449,24 @@ async fn request_daemon_shutdown() -> Result<bool> {
     let response = response
         .error_for_status()
         .with_context(|| format!("daemon returned an error for {shutdown_url}"))?;
+    let process = response
+        .headers()
+        .get(DAEMON_PROCESS_ID_HEADER)
+        .map(|value| {
+            value
+                .to_str()
+                .context("daemon shutdown process id header is not UTF-8")?
+                .parse::<u32>()
+                .context("daemon shutdown process id header is not a valid PID")
+        })
+        .transpose()?
+        .map(DaemonProcessIdentity::capture);
     response
         .bytes()
         .await
         .with_context(|| format!("read daemon shutdown response from {shutdown_url}"))?;
     drop(shutdown_client);
-
-    let probe_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .pool_max_idle_per_host(0)
-        .build()
-        .context("build daemon shutdown verification client")?;
-
-    // This stability check is load-bearing for manager-backed installs: it
-    // catches a delayed respawn after the cooperative exit. When the daemon
-    // cannot be reached at all, stop() first stops the manager and then runs
-    // the same check; do not reorder that fallback verification.
-    verify_daemon_unreachable(&probe_client, &health_url).await?;
-    Ok(true)
+    Ok(DaemonShutdownRequest::Requested(process))
 }
 
 fn build_shutdown_request(client: &reqwest::Client, shutdown_url: &str) -> reqwest::RequestBuilder {
@@ -465,11 +499,20 @@ fn local_daemon_base_url() -> Result<String> {
     Ok(format!("http://{address}"))
 }
 
-async fn verify_daemon_unreachable(client: &reqwest::Client, health_url: &str) -> Result<()> {
+async fn verify_daemon_unreachable(
+    client: &reqwest::Client,
+    health_url: &str,
+    expected_process: Option<DaemonProcessIdentity>,
+) -> Result<()> {
     let deadline = std::time::Instant::now() + SHUTDOWN_VERIFY_TIMEOUT;
     let mut unreachable_since = None;
+    let mut process_system = expected_process.map(|_| sysinfo::System::new());
     loop {
         tokio::time::sleep(SHUTDOWN_PROBE_INTERVAL).await;
+        let expected_process_running = match (expected_process, process_system.as_mut()) {
+            (Some(process), Some(system)) => process.is_running(system),
+            _ => false,
+        };
         match client
             .get(health_url)
             .timeout(SHUTDOWN_PROBE_TIMEOUT)
@@ -483,15 +526,28 @@ async fn verify_daemon_unreachable(client: &reqwest::Client, health_url: &str) -
             // the refusal window because a listening-but-hung socket is not
             // yet a confirmed stop.
             Err(error) if error.is_timeout() => {
-                unreachable_since = None;
+                if expected_process.is_some() && !expected_process_running {
+                    unreachable_since.get_or_insert_with(std::time::Instant::now);
+                } else {
+                    unreachable_since = None;
+                }
             }
             Err(error) if is_shutdown_disconnect(&error) => {
-                let since = unreachable_since.get_or_insert_with(std::time::Instant::now);
-                if since.elapsed() >= SHUTDOWN_STABILITY_WINDOW {
-                    return Ok(());
+                if expected_process.is_none() || !expected_process_running {
+                    unreachable_since.get_or_insert_with(std::time::Instant::now);
+                } else {
+                    unreachable_since = None;
                 }
             }
             Ok(_) => {
+                if !expected_process_running {
+                    if let Some(process) = expected_process {
+                        anyhow::bail!(
+                            "a different daemon remained reachable at {health_url} after process {} exited",
+                            process.pid
+                        );
+                    }
+                }
                 if unreachable_since.is_some() {
                     anyhow::bail!("daemon remained reachable at {health_url} after disconnecting");
                 }
@@ -500,7 +556,15 @@ async fn verify_daemon_unreachable(client: &reqwest::Client, health_url: &str) -
                 return Err(error).with_context(|| format!("verify shutdown via {health_url}"));
             }
         }
+        if unreachable_since.is_some_and(|since| since.elapsed() >= SHUTDOWN_STABILITY_WINDOW) {
+            return Ok(());
+        }
         if std::time::Instant::now() >= deadline {
+            if expected_process_running {
+                if let Some(process) = expected_process {
+                    anyhow::bail!("daemon process {} remained running", process.pid);
+                }
+            }
             anyhow::bail!("daemon remained reachable at {health_url}");
         }
     }
@@ -527,9 +591,30 @@ fn is_shutdown_disconnect(error: &reqwest::Error) -> bool {
     false
 }
 
+async fn verify_local_daemon_shutdown(
+    expected_process: Option<DaemonProcessIdentity>,
+) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .pool_max_idle_per_host(0)
+        .build()
+        .context("build daemon shutdown verification client")?;
+    let health_url = format!("{}/api/health", local_daemon_base_url()?);
+    verify_daemon_unreachable(&client, &health_url, expected_process).await
+}
+
 async fn stop() -> Result<()> {
     let registration_present = is_installed();
-    let shutdown_requested = match request_daemon_shutdown().await {
+    let mut expected_process = None;
+    let graceful_result = match request_daemon_shutdown().await {
+        Ok(DaemonShutdownRequest::Requested(process)) => {
+            expected_process = process;
+            verify_local_daemon_shutdown(process).await.map(|()| true)
+        }
+        Ok(DaemonShutdownRequest::NotRunning) => Ok(false),
+        Err(error) => Err(error),
+    };
+    let shutdown_requested = match graceful_result {
         Ok(true) => true,
         Ok(false) if registration_present => {
             // Connection refusal is ambiguous while a registered manager job
@@ -537,13 +622,7 @@ async fn stop() -> Result<()> {
             // otherwise `background off` can report success before the hot
             // daemon appears on its port.
             stop_registered_service().context("daemon was unreachable; service fallback failed")?;
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(2))
-                .pool_max_idle_per_host(0)
-                .build()
-                .context("build daemon shutdown verification client")?;
-            let health_url = format!("{}/api/health", local_daemon_base_url()?);
-            verify_daemon_unreachable(&client, &health_url)
+            verify_local_daemon_shutdown(None)
                 .await
                 .context("service fallback did not keep the daemon stopped")?;
             true
@@ -555,13 +634,7 @@ async fn stop() -> Result<()> {
                     "graceful daemon shutdown failed ({graceful_error:#}); service fallback failed"
                 )
             })?;
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(2))
-                .pool_max_idle_per_host(0)
-                .build()
-                .context("build daemon shutdown verification client")?;
-            let health_url = format!("{}/api/health", local_daemon_base_url()?);
-            verify_daemon_unreachable(&client, &health_url)
+            verify_local_daemon_shutdown(expected_process)
                 .await
                 .with_context(|| format!("graceful daemon shutdown failed: {graceful_error:#}"))?;
             true
@@ -675,6 +748,28 @@ pub async fn print_status() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_process_identity_observes_child_exit() {
+        #[cfg(target_os = "windows")]
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
+            .spawn()
+            .expect("spawn process identity test child");
+        #[cfg(not(target_os = "windows"))]
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn process identity test child");
+
+        let identity = DaemonProcessIdentity::capture(child.id());
+        let mut system = sysinfo::System::new();
+        assert!(identity.is_running(&mut system));
+
+        child.kill().expect("kill process identity test child");
+        child.wait().expect("reap process identity test child");
+        assert!(!identity.is_running(&mut system));
+    }
 
     #[test]
     fn shutdown_request_declares_connection_close() {

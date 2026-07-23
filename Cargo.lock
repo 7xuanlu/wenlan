@@ -5632,6 +5632,7 @@ dependencies = [
  "serde",
  "serde_json",
  "service-manager",
+ "sysinfo",
  "tempfile",
  "tokio",
  "wenlan-core",

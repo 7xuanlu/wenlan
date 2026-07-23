@@ -155,6 +155,14 @@ async fn shutdown_drains_completable_request_before_process_exit() {
         .await
         .expect("shutdown response");
     assert!(shutdown.status().is_success());
+    assert_eq!(
+        shutdown
+            .headers()
+            .get("x-wenlan-process-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(daemon.child.0.id().to_string().as_str()),
+        "shutdown response must identify the exact daemon process being stopped"
+    );
     assert_eq!(shutdown.text().await.unwrap(), "shutting down");
 
     assert_successful_llm_response(llm_request).await;

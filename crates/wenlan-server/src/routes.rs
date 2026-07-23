@@ -3,7 +3,7 @@ use crate::error::ServerError;
 use crate::state::ServerState;
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::Json,
     Extension,
 };
@@ -1189,9 +1189,15 @@ pub async fn handle_test_llm(
 /// and retains a hard deadline for tasks that cannot cooperate.
 pub async fn handle_shutdown(
     Extension(shutdown): Extension<crate::lifecycle::ShutdownHandle>,
-) -> &'static str {
+) -> (HeaderMap, &'static str) {
     shutdown.request();
-    "shutting down"
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-wenlan-process-id",
+        HeaderValue::from_str(&std::process::id().to_string())
+            .expect("process id is always a valid HTTP header value"),
+    );
+    (headers, "shutting down")
 }
 
 #[cfg(test)]
