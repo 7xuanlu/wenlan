@@ -164,6 +164,15 @@ Mention these only if the user asks for richer synthesis:
 - `wenlan models install` for local model-backed distillation.
 - `wenlan keys set anthropic` for stronger synthesis.
 
+Installing a model or key only makes that provider available; it does not
+authorize background inference. If the user wants automatic enrichment, run
+`wenlan enrichment status`, help them choose the exact Everyday and Synthesis
+sources, then run `wenlan enrichment configure --everyday <source> --synthesis
+<source>`. The CLI itself shows the task mapping and cloud/on-device disclosure
+and obtains the one confirmation. Never add `--yes` unless the user already
+stated that exact mapping. `wenlan enrichment disable` reverses the consent
+without deleting the model or key.
+
 ## Codex note
 
 This Codex slice has no session-start hook. `/setup` is the explicit health and

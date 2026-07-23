@@ -28,12 +28,13 @@ pub struct StoreMemoryResponse {
     /// How structured fields were populated. "agent" | "llm" | "none" | "unknown" (forward-compat default).
     #[serde(default = "default_extraction_method")]
     pub extraction_method: String,
-    /// Enrichment state for the memory. `"pending"` when background
-    /// classification + entity extraction + concept linking will run;
-    /// `"not_needed"` when no LLM is available and the memory stays as
-    /// caller-supplied. Machine-readable — Tauri app uses this to drive
+    /// Enrichment state for the memory. `"pending"` when the quiet/cooldown-
+    /// gated ambient scheduler has authorized derived work remaining;
+    /// `"paused"` when no source is pinned or the pinned source is unavailable.
+    /// `"not_needed"` remains accepted as a legacy wire value from older
+    /// daemons. Machine-readable — Tauri app uses this to drive
     /// polling / live-update UI, MCP callers can choose to relay state.
-    /// Defaulted for backward compatibility with pre-async-enrichment clients.
+    /// Defaulted for backward compatibility with older clients.
     #[serde(default)]
     pub enrichment: String,
     /// Prose cue for caller agents — safe to relay to the user verbatim.
@@ -1221,8 +1222,8 @@ mod tests {
 
     #[test]
     fn store_memory_response_exposes_enrichment_and_hint() {
-        // Post-async-refactor shape: the daemon returns immediately after
-        // upsert and reports deferred enrichment via `enrichment` + `hint`.
+        // The daemon returns immediately after upsert and reports quiet
+        // deferred enrichment via `enrichment` + `hint`.
         let json = r#"{
             "source_id": "mem_xyz",
             "chunks_created": 1,
@@ -1230,11 +1231,11 @@ mod tests {
             "warnings": [],
             "extraction_method": "unknown",
             "enrichment": "pending",
-            "hint": "Stored. Wenlan is compiling classification + concept links in the background (~2s). Recall will surface the enriched form shortly."
+            "hint": "Stored. Recall is available now; Wenlan will quietly enrich classification and page links in the background."
         }"#;
         let parsed: StoreMemoryResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.enrichment, "pending");
-        assert!(parsed.hint.contains("compiling"));
+        assert!(parsed.hint.contains("quietly enrich"));
     }
 
     #[test]
@@ -1280,8 +1281,7 @@ mod tests {
 
     #[test]
     fn store_memory_response_roundtrips_not_needed_state() {
-        // Daemon reports `not_needed` when no LLM is available. Hint is empty
-        // (skip_serializing_if) so the JSON shrinks accordingly.
+        // Keep accepting the legacy state emitted by older daemons.
         let response = StoreMemoryResponse {
             source_id: "mem_no_llm".into(),
             chunks_created: 1,
@@ -1302,6 +1302,26 @@ mod tests {
         let parsed: StoreMemoryResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.enrichment, "not_needed");
         assert_eq!(parsed.hint, "");
+    }
+
+    #[test]
+    fn store_memory_response_roundtrips_paused_state_with_hint() {
+        let response = StoreMemoryResponse {
+            source_id: "mem_paused".into(),
+            chunks_created: 1,
+            memory_type: "fact".into(),
+            entity_id: None,
+            quality: None,
+            warnings: vec![],
+            extraction_method: "none".into(),
+            enrichment: "paused".into(),
+            hint: "Stored; choose a model source to enable enrichment.".into(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"enrichment\":\"paused\""));
+        let parsed: StoreMemoryResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.enrichment, "paused");
+        assert!(parsed.hint.contains("choose a model source"));
     }
 
     #[test]

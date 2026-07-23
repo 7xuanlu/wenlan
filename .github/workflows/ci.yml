@@ -54,6 +54,8 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
               - 'scripts/lint-scale-gate.sh'
+              - 'scripts/stabilize-rust-cache-toolchains.sh'
+              - 'scripts/stabilize-rust-cache-toolchains.test.sh'
               - 'scripts/stage-onnxruntime-windows.ps1'
               - 'scripts/smoke-windows.ps1'
               - 'scripts/smoke-windows-llm.ps1'
@@ -110,6 +112,8 @@ jobs:
               - 'scripts/smoke-windows.ps1'
               - 'scripts/smoke-windows-llm.ps1'
               - 'scripts/smoke-windows-llm.test.ps1'
+              - 'scripts/stabilize-rust-cache-toolchains.sh'
+              - 'scripts/stabilize-rust-cache-toolchains.test.sh'
               - 'scripts/lint-scale-gate.sh'
               - 'crates/wenlan-core/src/lint/**'
               - 'crates/wenlan-core/src/engine.rs'
@@ -211,6 +215,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
         with:
           toolchain: 1.95.0
+      # rust-cache hashes every installed rustup toolchain, including unrelated
+      # versions preinstalled by the Windows runner image. Keep that external
+      # image churn from invalidating Wenlan's pinned 1.95.0 target cache.
+      - name: Validate Windows Rust cache toolchain stabilizer
+        if: matrix.os == 'windows-2022'
+        shell: bash
+        run: bash scripts/stabilize-rust-cache-toolchains.test.sh
+      - name: Stabilize Windows Rust cache toolchain inputs
+        if: matrix.os == 'windows-2022'
+        shell: bash
+        run: bash scripts/stabilize-rust-cache-toolchains.sh
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -358,14 +373,18 @@ jobs:
           # but the install path needs the actual release-or-debug binaries).
           cargo build -p wenlan -p wenlan-server
           STAGE=$(mktemp -d)
+          UNIT_PATH="$HOME/.config/systemd/user/wenlan-server.service"
           cp target/debug/wenlan target/debug/wenlan-server "$STAGE/"
           cleanup() {
             "$STAGE/wenlan" background off 2>/dev/null || true
+            systemctl --user disable --now wenlan-server.service >/dev/null 2>&1 || true
+            rm -f "$UNIT_PATH"
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
             rm -rf "$STAGE"
           }
           trap cleanup EXIT
           "$STAGE/wenlan" background on
-          test -f ~/.config/systemd/user/wenlan-server.service
+          test -f "$UNIT_PATH"
           systemctl --user is-enabled wenlan-server
           for i in $(seq 1 90); do
             if curl -sf http://127.0.0.1:7878/api/health >/dev/null; then
@@ -380,7 +399,10 @@ jobs:
             fi
           done
           "$STAGE/wenlan" background off
-          test ! -f ~/.config/systemd/user/wenlan-server.service
+          test -f "$UNIT_PATH"
+          systemctl --user is-enabled wenlan-server
+          active_state="$(systemctl --user show wenlan-server --property=ActiveState --value)"
+          test "$active_state" = "inactive"
           echo "    Linux background on/off round-trip PASS"
       # Full-stack acceptance test over real HTTP: ingest a folder via the
       # shipped CLI, poll hybrid search for a sentinel string, delete a
@@ -433,57 +455,81 @@ jobs:
       # `wenlan background on` on Windows registers a per-user Task Scheduler
       # ONLOGON entry via schtasks.exe and triggers it immediately. We
       # verify the full round-trip: background on registers the task, daemon
-      # binds /api/health, background off removes the task.
+      # binds /api/health, and background off stops the daemon while preserving
+      # the task registration. Test cleanup removes the task separately.
       - name: E2E wenlan background on/off round-trip (Windows; schtasks)
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $backgroundOnOut = & target\release\wenlan.exe background on 2>&1
-          $backgroundOnCode = $LASTEXITCODE
-          Write-Host "background on exit=$backgroundOnCode out=$backgroundOnOut"
-          if ($backgroundOnCode -ne 0) { throw "background on failed: $backgroundOnOut" }
+          try {
+            $backgroundOnOut = & target\release\wenlan.exe background on 2>&1
+            $backgroundOnCode = $LASTEXITCODE
+            Write-Host "background on exit=$backgroundOnCode out=$backgroundOnOut"
+            if ($backgroundOnCode -ne 0) { throw "background on failed: $backgroundOnOut" }
 
-          # schtasks /query must report the task as present.
-          & schtasks.exe /query /tn WenlanServer | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "schtasks did not register WenlanServer" }
+            # schtasks /query must report the task as present.
+            & schtasks.exe /query /tn WenlanServer | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "schtasks did not register WenlanServer" }
 
-          # /run launched the daemon as a separate process. Poll /api/health.
-          $healthy = $false
-          for ($i = 0; $i -lt 30; $i++) {
+            # /run launched the daemon as a separate process. Poll /api/health.
+            $healthy = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:7878/api/health" -UseBasicParsing -TimeoutSec 1
+                if ($r.StatusCode -eq 200) { $healthy = $true; break }
+              } catch { }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $healthy) {
+              & schtasks.exe /query /tn WenlanServer /fo LIST /v
+              throw "daemon did not respond on /api/health after schtasks /run"
+            }
+            Write-Host "    daemon healthy under scheduled task"
+
+            $backgroundOffOut = & target\release\wenlan.exe background off 2>&1
+            $backgroundOffCode = $LASTEXITCODE
+            Write-Host "background off exit=$backgroundOffCode out=$backgroundOffOut"
+            if ($backgroundOffCode -ne 0) { throw "background off failed: $backgroundOffOut" }
+
+            # background off must preserve the task registration.
+            & schtasks.exe /query /tn WenlanServer 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw "background off removed the WenlanServer scheduled task"
+            }
+
+            # The registered task remains, but its daemon must be unreachable.
+            $healthReachable = $false
             try {
-              $r = Invoke-WebRequest -Uri "http://127.0.0.1:7878/api/health" -UseBasicParsing -TimeoutSec 1
-              if ($r.StatusCode -eq 200) { $healthy = $true; break }
-            } catch { }
-            Start-Sleep -Seconds 1
+              $null = Invoke-WebRequest -Uri "http://127.0.0.1:7878/api/health" -UseBasicParsing -TimeoutSec 1
+              $healthReachable = $true
+            } catch {
+              # An HTTP error response still proves the daemon is reachable;
+              # only connection failure/timeout satisfies the stop contract.
+              if ($null -ne $_.Exception.Response) { $healthReachable = $true }
+            }
+            if ($healthReachable) { throw "background off left /api/health reachable" }
+
+            Write-Host "    Windows background on/off round-trip PASS"
+          } finally {
+            # Test-only cleanup: remove the preserved registration and kill any
+            # leftover daemon so the runner is clean even when an assertion fails.
+            Get-Process -Name wenlan-server -ErrorAction SilentlyContinue |
+              Stop-Process -Force -ErrorAction SilentlyContinue
+
+            $deleteOut = & schtasks.exe /delete /tn WenlanServer /f 2>&1
+            $deleteCode = $LASTEXITCODE
+            Write-Host "test cleanup delete exit=$deleteCode out=$deleteOut"
+            if ($deleteCode -ne 0) {
+              & schtasks.exe /query /tn WenlanServer 2>&1 | Out-Null
+              if ($LASTEXITCODE -eq 0) {
+                throw "test cleanup failed to remove the WenlanServer scheduled task"
+              }
+            }
+
+            # Expected nonzero task-query/delete codes must not leak into the step.
+            $global:LASTEXITCODE = 0
           }
-          if (-not $healthy) {
-            & schtasks.exe /query /tn WenlanServer /fo LIST /v
-            throw "daemon did not respond on /api/health after schtasks /run"
-          }
-          Write-Host "    daemon healthy under scheduled task"
-
-          $backgroundOffOut = & target\release\wenlan.exe background off 2>&1
-          $backgroundOffCode = $LASTEXITCODE
-          Write-Host "background off exit=$backgroundOffCode out=$backgroundOffOut"
-          if ($backgroundOffCode -ne 0) { throw "background off failed: $backgroundOffOut" }
-
-          # Task must be gone; /query returns 1 with stderr "not found".
-          & schtasks.exe /query /tn WenlanServer 2>&1 | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            & schtasks.exe /delete /tn WenlanServer /f | Out-Null
-            throw "background off did not remove the scheduled task"
-          }
-
-          # Best-effort: kill any leftover wenlan-server.exe so the next step
-          # is not blocked on port 7878.
-          Get-Process -Name wenlan-server -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-
-          Write-Host "    Windows background on/off round-trip PASS"
-          # schtasks /query exit 1 leaks under $ErrorActionPreference=Stop.
-          $global:LASTEXITCODE = 0
-          exit 0
 
   # Quarantine lane: exercises test files present in the tree but not wired
   # into the required `test` job (dormant wenlan-mcp / wenlan-types

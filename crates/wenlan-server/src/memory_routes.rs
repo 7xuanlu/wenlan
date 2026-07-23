@@ -191,7 +191,89 @@ fn compute_warnings_and_extraction(
     }
 }
 
+fn fixed_enrichment_origin(
+    caller_supplied_memory_type: bool,
+    caller_supplied_profile_alias: bool,
+    caller_supplied_structured_fields: bool,
+    rejected_explicit_space: bool,
+) -> wenlan_core::db::EnrichmentOrigin {
+    wenlan_core::db::EnrichmentOrigin {
+        memory_type_explicit: caller_supplied_memory_type && !caller_supplied_profile_alias,
+        structured_fields_explicit: caller_supplied_structured_fields,
+        space_rejected: rejected_explicit_space,
+    }
+}
+
 /// POST /api/memory/store
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoreLockTestStage {
+    Dedup,
+    AgentGate,
+    EntityResolution,
+    ActivityAgentLookup,
+    ActivityLog,
+}
+
+#[cfg(test)]
+struct StoreLockTestHook {
+    stage: StoreLockTestStage,
+    reached: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+fn store_lock_test_hook() -> &'static std::sync::Mutex<Option<Arc<StoreLockTestHook>>> {
+    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<Arc<StoreLockTestHook>>>> =
+        std::sync::OnceLock::new();
+    HOOK.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+async fn wait_at_store_lock_test_hook(stage: StoreLockTestStage) {
+    let hook = store_lock_test_hook().lock().unwrap().clone();
+    if let Some(hook) = hook.filter(|hook| hook.stage == stage) {
+        hook.reached.notify_one();
+        hook.release.notified().await;
+    }
+}
+
+#[cfg(test)]
+struct StoreLockTestHookRegistration(Arc<StoreLockTestHook>);
+
+#[cfg(test)]
+impl StoreLockTestHookRegistration {
+    fn install(stage: StoreLockTestStage) -> Self {
+        let hook = Arc::new(StoreLockTestHook {
+            stage,
+            reached: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let mut slot = store_lock_test_hook().lock().unwrap();
+        if slot.is_some() {
+            drop(slot);
+            panic!("store lock test hook already installed");
+        }
+        *slot = Some(hook.clone());
+        drop(slot);
+        Self(hook)
+    }
+
+    fn hook(&self) -> &Arc<StoreLockTestHook> {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for StoreLockTestHookRegistration {
+    fn drop(&mut self) {
+        *store_lock_test_hook().lock().unwrap() = None;
+        // notify_one stores a permit if the task cloned the hook but has not
+        // parked yet, so cleanup is safe even on a multi-thread test runtime.
+        self.0.release.notify_one();
+    }
+}
+
 pub async fn handle_store_memory(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
@@ -240,19 +322,22 @@ pub async fn handle_store_memory(
     }
 
     // Dedup check
-    {
+    let db = {
         let s = state.read().await;
-        if let Some(db) = s.db.as_ref() {
-            if db.has_memory_content(&req.content).await.unwrap_or(false) {
-                return Err(ServerError::ValidationError(
-                    "Duplicate: a memory with this content already exists".into(),
-                ));
-            }
+        s.db.clone()
+    };
+    if let Some(db) = db {
+        #[cfg(test)]
+        wait_at_store_lock_test_hook(StoreLockTestStage::Dedup).await;
+        if db.has_memory_content(&req.content).await.unwrap_or(false) {
+            return Err(ServerError::ValidationError(
+                "Duplicate: a memory with this content already exists".into(),
+            ));
         }
     }
 
     // Validate caller-supplied memory_type — parse and keep it as-is. Profile
-    // aliases now resolve in the async enrichment path below; previously this
+    // aliases now resolve in the ambient classification lane; previously this
     // block made an LLM call (up to 5s sync) to resolve the subtype, which
     // dominated store-time latency. Caller-supplied alias flows through to the
     // deferred classifier which produces the concrete subtype.
@@ -265,7 +350,7 @@ pub async fn handle_store_memory(
     let validated_memory_type: Option<String> = match req.memory_type.as_deref() {
         None | Some("") => None,
         Some(mt) if MemoryType::is_profile_alias(mt) => {
-            // Stored as "identity" as a conservative placeholder; async classify
+            // Stored as "identity" as a conservative placeholder; ambient classify
             // replaces with the actual subtype (identity/preference/goal/fact).
             // Matches the prior fallback when no LLM was available.
             Some("identity".to_string())
@@ -289,7 +374,8 @@ pub async fn handle_store_memory(
         .title
         .unwrap_or_else(|| truncate_for_title(&req.content));
 
-    // Phase 1: Agent gating + note whether an LLM is available.
+    // Phase 1: Agent gating + resolve the same hard-pinned background route
+    // the scheduler will use. A loaded slot is capability, not consent.
     //
     // Resolve the agent name via `extract_agent_name` (header-canonical)
     // before gating. Previously this read `req.source_agent` (body-only),
@@ -298,27 +384,43 @@ pub async fn handle_store_memory(
     // and gating entirely (got `None → "full"` auto-trust).
     //
     // Prompts, classify/extract LLM calls, and classification writebacks all
-    // moved to the async enrichment spawn below — the sync path only needs
-    // to know whether an LLM is available so it can pick the right response
-    // hint and `enrichment` state.
+    // moved to the ambient scheduler — the sync path only needs
+    // to know whether automatic enrichment is authorized and currently
+    // available so it can return a truthful response state.
     let resolved_agent = extract_agent_name(&headers, req.source_agent.as_deref());
-    let (trust_level, llm_available) = {
+    let runtime_config = wenlan_core::config::load_config();
+    let everyday_pin =
+        wenlan_core::refinery::EverydaySource::parse(runtime_config.everyday_source.as_deref());
+    let (db, api_llm, external_llm, local_llm) = {
         let s = state.read().await;
-        let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?;
-        let trust = if resolved_agent == "unknown" {
-            // No agent identified at all → local/first-party write, full trust.
-            "full".to_string()
-        } else {
-            db.check_agent_for_write(&resolved_agent)
-                .await
-                .map_err(|e| ServerError::Internal(e.to_string()))?
-        };
-        (trust, s.llm.is_some())
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.api_llm.clone(),
+            s.external_llm.clone(),
+            s.llm.clone(),
+        )
     };
+    let trust_level = if resolved_agent == "unknown" {
+        // No agent identified at all → local/first-party write, full trust.
+        "full".to_string()
+    } else {
+        #[cfg(test)]
+        wait_at_store_lock_test_hook(StoreLockTestStage::AgentGate).await;
+        db.check_agent_for_write(&resolved_agent)
+            .await
+            .map_err(|e| ServerError::Internal(e.to_string()))?
+    };
+    let ambient_route_mode = wenlan_core::refinery::resolve_everyday(
+        everyday_pin,
+        api_llm.as_ref(),
+        external_llm.as_ref(),
+        local_llm.as_ref(),
+    )
+    .mode;
 
-    // Placeholder classification. The async enrichment path will replace
+    // Placeholder classification. The ambient classification lane may replace
     // these via `db.apply_enrichment(...)` and `db.set_document_tags(...)`
-    // once the LLM has run (typically within a few seconds).
+    // after the quiet/cooldown gates admit the memory.
     let memory_type_str = validated_memory_type
         .clone()
         .unwrap_or_else(|| "fact".to_string());
@@ -326,14 +428,20 @@ pub async fn handle_store_memory(
     let classified_quality: Option<String> = None;
 
     // Structured fields / retrieval_cue are caller-supplied or deferred to the
-    // async extractor. Sync path never runs the extract LLM call anymore.
+    // ambient extractor. Sync path never runs the extract LLM call anymore.
     let extracted_fields: Option<String> = None;
     let extracted_cue: Option<String> = None;
 
     // Capture before `req.structured_fields` is consumed into the RawDocument —
-    // the async enrichment spawn uses this to decide whether to run the LLM
+    // the durable enrichment origin uses this to decide whether the ambient
     // extract pass. If the caller already supplied fields, we skip extract.
     let caller_supplied_structured_fields = req.structured_fields.is_some();
+    let enrichment_origin = fixed_enrichment_origin(
+        caller_supplied_memory_type,
+        caller_supplied_a_profile_alias,
+        caller_supplied_structured_fields,
+        ignored_unregistered_space.is_some(),
+    );
 
     // Phase 2b-validate: split into warnings (schema-validation only) and extraction_method (status label).
     let (mut warnings, extraction_method) = compute_warnings_and_extraction(
@@ -351,8 +459,13 @@ pub async fn handle_store_memory(
     let resolved_entity_id = if let Some(ref direct_id) = req.entity_id {
         Some(direct_id.clone())
     } else if let Some(ref entity_name) = req.entity {
-        let s = state.read().await;
-        if let Some(db) = s.db.as_ref() {
+        let db = {
+            let s = state.read().await;
+            s.db.clone()
+        };
+        if let Some(db) = db {
+            #[cfg(test)]
+            wait_at_store_lock_test_hook(StoreLockTestStage::EntityResolution).await;
             match db.resolve_entity_by_name(entity_name).await {
                 Ok(Some(id)) => {
                     tracing::info!("[memory] resolved entity '{}' → {}", entity_name, id);
@@ -403,10 +516,14 @@ pub async fn handle_store_memory(
     let pending_revision = false;
     let final_supersedes = req.supersedes.clone();
 
-    let agent_for_activity = {
+    let db = {
         let s = state.read().await;
-        extract_agent_name_with_db(&headers, req.source_agent.as_deref(), s.db.as_deref()).await
+        s.db.clone()
     };
+    #[cfg(test)]
+    wait_at_store_lock_test_hook(StoreLockTestStage::ActivityAgentLookup).await;
+    let agent_for_activity =
+        extract_agent_name_with_db(&headers, req.source_agent.as_deref(), db.as_deref()).await;
     let supersedes_for_activity = final_supersedes.clone();
 
     let supersede_mode = if memory_type_str == "decision" {
@@ -416,11 +533,6 @@ pub async fn handle_store_memory(
     };
 
     let final_domain = req.space;
-    let structured_fields_for_enrichment = req
-        .structured_fields
-        .as_ref()
-        .map(|v| v.to_string())
-        .or_else(|| extracted_fields.clone());
     let doc = RawDocument {
         source: "memory".to_string(),
         source_id: source_id.clone(),
@@ -489,17 +601,25 @@ pub async fn handle_store_memory(
             s.quality_gate.clone(),
         )
     };
+    let origin_db = db_fallback.clone().ok_or(ServerError::DbNotInitialized)?;
+    origin_db
+        .upsert_enrichment_origin(&source_id, enrichment_origin)
+        .await
+        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
 
     let chunks_created = if let Some(batcher) = ingest_batcher {
         // Coalesced path: concurrent callers share one FastEmbed call +
         // one libSQL transaction. Gate runs inside the coalescer flush.
         // See `ingest_batcher.rs` for details.
         use crate::ingest_batcher::StoreOutcome;
-        match batcher
-            .submit(doc, chunks_predicted)
-            .await
-            .map_err(ServerError::IngestFailed)?
-        {
+        let outcome = match batcher.submit(doc, chunks_predicted).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let _ = origin_db.delete_enrichment_origin(&source_id).await;
+                return Err(ServerError::IngestFailed(error));
+            }
+        };
+        match outcome {
             StoreOutcome::Stored { chunks_created } => chunks_created,
             StoreOutcome::GateRejected {
                 reason,
@@ -541,6 +661,7 @@ pub async fn handle_store_memory(
                     doc_agent_for_log.as_deref().unwrap_or("unknown"),
                     detail,
                 );
+                let _ = origin_db.delete_enrichment_origin(&source_id).await;
                 return Err(ServerError::QualityGateRejected {
                     reason,
                     detail,
@@ -548,6 +669,7 @@ pub async fn handle_store_memory(
                 });
             }
             StoreOutcome::UpsertFailed(msg) => {
+                let _ = origin_db.delete_enrichment_origin(&source_id).await;
                 return Err(ServerError::IngestFailed(msg));
             }
         }
@@ -616,190 +738,80 @@ pub async fn handle_store_memory(
                 .reason
                 .map(|r| (r.as_str().to_string(), r.detail()))
                 .unwrap_or_else(|| ("unknown".to_string(), "Quality gate rejected".to_string()));
+            let _ = origin_db.delete_enrichment_origin(&source_id).await;
             return Err(ServerError::QualityGateRejected {
                 reason: rej_reason,
                 detail: rej_detail,
                 similar_to: similar_source_id,
             });
         }
-        db.upsert_documents(vec![doc])
-            .await
-            .map_err(|e| ServerError::IngestFailed(e.to_string()))?
+        match db.upsert_documents(vec![doc]).await {
+            Ok(chunks) => chunks,
+            Err(error) => {
+                let _ = origin_db.delete_enrichment_origin(&source_id).await;
+                return Err(ServerError::IngestFailed(error.to_string()));
+            }
+        }
     };
 
     if chunks_created == 0 {
+        let _ = origin_db.delete_enrichment_origin(&source_id).await;
         return Err(ServerError::ValidationError(
             "Memory produced no indexable content after processing".into(),
         ));
     }
 
-    // Classified tags are now written in the async enrichment spawn below —
+    // Classified tags are now written by the ambient classification lane —
     // `classified_tags` is always empty at this point because classify moved
     // off the sync path. Kept as a no-op branch for the rare caller that
     // pre-supplies tags in the future; can be removed with an API cleanup.
     let _ = classified_tags; // intentionally unused
 
     // Log agent activity
-    {
+    let db = {
         let s = state.read().await;
-        if let Some(db) = s.db.as_ref() {
-            if let Some(ref old_id) = supersedes_for_activity {
-                let ids = vec![source_id.clone(), old_id.clone()];
-                if let Err(e) = db
-                    .log_agent_activity(
-                        &agent_for_activity,
-                        "refine",
-                        &ids,
-                        None,
-                        "updated with new reasoning",
-                    )
-                    .await
-                {
-                    tracing::warn!("Failed to log agent refine activity: {}", e);
-                }
-            } else {
-                let ids = vec![source_id.clone()];
-                let detail = format!("stored a {} memory", memory_type_str);
-                if let Err(e) = db
-                    .log_agent_activity(&agent_for_activity, "store", &ids, None, &detail)
-                    .await
-                {
-                    tracing::warn!("Failed to log agent store activity: {}", e);
-                }
+        s.db.clone()
+    };
+    if let Some(db) = db {
+        #[cfg(test)]
+        wait_at_store_lock_test_hook(StoreLockTestStage::ActivityLog).await;
+        if let Some(ref old_id) = supersedes_for_activity {
+            let ids = vec![source_id.clone(), old_id.clone()];
+            if let Err(e) = db
+                .log_agent_activity(
+                    &agent_for_activity,
+                    "refine",
+                    &ids,
+                    None,
+                    "updated with new reasoning",
+                )
+                .await
+            {
+                tracing::warn!("Failed to log agent refine activity: {}", e);
+            }
+        } else {
+            let ids = vec![source_id.clone()];
+            let detail = format!("stored a {} memory", memory_type_str);
+            if let Err(e) = db
+                .log_agent_activity(&agent_for_activity, "store", &ids, None, &detail)
+                .await
+            {
+                tracing::warn!("Failed to log agent store activity: {}", e);
             }
         }
     }
 
-    // Record write event for the steep scheduler's burst detection.
-    // Must be called BEFORE spawning post-ingest — captures the write
-    // timestamp immediately, not after LLM enrichment completes.
+    // Record the write event for steep burst detection and recap batching.
+    // Capture the timestamp immediately after the durable store, never after
+    // background enrichment.
     {
         let s = state.read().await;
         s.write_signal.record(&resolved_agent);
     }
 
-    // Deferred enrichment (async, non-blocking).
-    //
-    // Two phases run here, off the request's critical path:
-    //
-    //   1. LLM classify + extract + `db.apply_enrichment(...)` + tags write —
-    //      replaces the inline LLM calls that used to gate the HTTP response.
-    //      Sync path stored placeholder values (memory_type="fact" unless the
-    //      caller supplied one; no domain/quality/structured_fields from LLM);
-    //      this phase fills them in via a combined UPDATE. Tags are written
-    //      directly to MemoryDB via `db.set_document_tags(...)`.
-    //
-    //   2. `run_post_ingest_enrichment(...)` — entity auto-linking, title
-    //      enrichment, page growth. Runs with the enriched fields phase 1 produced.
-    //
-    // IMPORTANT: extract Arcs/clones from the read guard and drop it BEFORE
-    // entering any `.await` on LLM or DB work. Holding a read guard across an
-    // await would block writers (e.g., config updates, space edits) for the
-    // full duration of enrichment — which can take several seconds per LLM
-    // call. See docs/superpowers/specs/2026-04-09-core-app-separation-design.md.
-    {
-        let state_clone = state.clone();
-        let source_id_clone = source_id.clone();
-        let content_clone = req.content.clone();
-        let entity_id_clone = resolved_entity_id.clone();
-        let initial_memory_type = memory_type_str.clone();
-        let initial_domain = final_domain.clone();
-        let rejected_explicit_domain = ignored_unregistered_space.is_some();
-        // Already moved into the doc above — rebuild from the same formula
-        // the RawDocument constructor used.
-        let initial_supersede_mode = if memory_type_str == "decision" {
-            "archive".to_string()
-        } else {
-            "hide".to_string()
-        };
-        let initial_structured_fields = structured_fields_for_enrichment.clone();
-        let agent_supplied_memory_type = caller_supplied_memory_type;
-        let agent_supplied_profile_alias = caller_supplied_a_profile_alias;
-        let agent_supplied_structured_fields = caller_supplied_structured_fields;
-        // Deferred-enrichment body, parameterised on a cooperative-cancel flag.
-        // `cancel = None` (the default-OFF path) keeps every step running to
-        // completion exactly as before. When debounced reflection is enabled,
-        // the debouncer passes `Some(flag)` and flips it on a newer same-agent
-        // write so this body short-circuits at the next clean step boundary.
-        let run_reflection =
-            move |cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>| async move {
-                // Snapshot everything we need, then drop the guard.
-                let (db, llm, prompts, refinery, distillation, knowledge_path, maintenance) = {
-                    let s = state_clone.read().await;
-                    let Some(db) = s.db.clone() else {
-                        return;
-                    };
-                    (
-                        db,
-                        s.llm.clone(),
-                        s.prompts.clone(),
-                        s.tuning.refinery.clone(),
-                        s.tuning.distillation.clone(),
-                        Some(wenlan_core::config::load_config().knowledge_path_or_default()),
-                        s.maintenance_coordinator.clone(),
-                    )
-                }; // read guard dropped here — writers may proceed
-                let _maintenance_guard = maintenance.begin_background().await;
-
-                // Canonical post-store enrichment (Phase 1 classify/extract/
-                // apply_enrichment/tags + Phase 2 post-ingest + Phase 3 dual-pool)
-                // now lives in `wenlan_core::ingest` so the daemon, the eval seed
-                // pipeline, and the importer all enrich through ONE path. The
-                // snapshot above dropped the read guard; everything below operates on
-                // the cloned Arcs, so no RwLock guard is held across `.await`.
-                let opts = wenlan_core::ingest::EnrichmentOpts {
-                    initial_memory_type: initial_memory_type.clone(),
-                    initial_domain: initial_domain.clone(),
-                    rejected_explicit_domain,
-                    initial_supersede_mode: initial_supersede_mode.clone(),
-                    initial_structured_fields: initial_structured_fields.clone(),
-                    agent_supplied_memory_type,
-                    agent_supplied_profile_alias,
-                    agent_supplied_structured_fields,
-                };
-                wenlan_core::ingest::run_canonical_enrichment(
-                    &db,
-                    &source_id_clone,
-                    &content_clone,
-                    entity_id_clone.as_deref(),
-                    llm.as_ref(),
-                    &prompts,
-                    &refinery,
-                    &distillation,
-                    knowledge_path.as_deref(),
-                    &opts,
-                    cancel.as_deref(),
-                )
-                .await;
-            };
-
-        // Dispatch: opt-in debounced reflection vs. verbatim detached spawn.
-        //
-        // Default OFF (`WENLAN_ENABLE_REFLECTION_DEBOUNCE` unset/falsey): spawn
-        // immediately with `cancel = None` — byte-identical to the pre-T22 path
-        // (no debouncer touched, no coalescing, every store gets its own task).
-        //
-        // ON: route through the per-agent `ReflectionDebouncer`. A burst of
-        // rapid same-agent stores collapses to a single reflection of the last
-        // write — earlier in-flight reflections are cancelled at a clean step
-        // boundary, never dropped (the latest always runs). Snapshot the
-        // debouncer handle + window from the read guard, then DROP the guard
-        // before scheduling so no RwLock guard is held across the spawn/await.
-        if wenlan_core::db::reflection_debounce_enabled() {
-            let (debouncer, window) = {
-                let s = state.read().await;
-                (
-                    s.reflection_debouncer.clone(),
-                    std::time::Duration::from_secs(s.tuning.refinery.reflection_debounce_secs),
-                )
-            };
-            debouncer.schedule(&resolved_agent, window, move |flag| {
-                run_reflection(Some(flag))
-            });
-        } else {
-            tokio::spawn(run_reflection(None));
-        }
-    }
+    // Automatic enrichment is intentionally not spawned from the request path.
+    // The ambient scheduler owns admission, ordering, retries, and the one-call
+    // budget for every automatic inference stage.
 
     // Fire-once onboarding milestone checks (ingest side).
     //
@@ -837,21 +849,28 @@ pub async fn handle_store_memory(
         }
     }
 
-    // Build caller-facing status. Enrichment is pending whenever an LLM is
-    // wired — classify + extract + apply_enrichment runs asynchronously and
-    // will backfill `memory_type`, `domain`, `quality`, tags, and structured
-    // fields within a few seconds. When no LLM is available, the memory
-    // stays as caller-supplied — no enrichment will run, and callers should
-    // not poll for enriched fields.
-    let (enrichment, hint) = if llm_available {
-        (
+    // Build caller-facing status from the effective hard-pin route. Recall is
+    // available immediately in every state; only a healthy explicit pin may
+    // promise that automatic enrichment will eventually run.
+    let (enrichment, hint) = match ambient_route_mode {
+        wenlan_core::refinery::RouteMode::Pinned => (
             "pending".to_string(),
-            "Stored. Wenlan is compiling classification + page links in the \
-             background (~2s). Recall will surface the enriched form shortly."
+            "Stored. Recall is available now; Wenlan will quietly enrich \
+             classification and page links in the background."
                 .to_string(),
-        )
-    } else {
-        ("not_needed".to_string(), String::new())
+        ),
+        wenlan_core::refinery::RouteMode::Unconfigured => (
+            "paused".to_string(),
+            "Stored. Recall is available now; background enrichment is paused \
+             until you choose a model source."
+                .to_string(),
+        ),
+        wenlan_core::refinery::RouteMode::PinnedUnavailable => (
+            "paused".to_string(),
+            "Stored. Recall is available now; background enrichment is paused \
+             because the selected model source is unavailable."
+                .to_string(),
+        ),
     };
 
     Ok(Json(StoreMemoryResponse {
@@ -3457,10 +3476,9 @@ pub async fn handle_list_orphan_links(
 /// POST /api/memory/{id}/update-page
 ///
 /// Manual edit from the app. Goes through the one page-write gate, so a hand
-/// edit is treated like every other write: version CAS, changelog entry,
-/// history row, and an md re-projection. It used to call the DB directly and
-/// got none of those — an in-app edit left no trail and could silently
-/// overwrite a change that landed while the editor was open.
+/// edit is treated like every other write: version CAS, changelog entry, and
+/// history row. This route does not re-project Markdown; the comment below
+/// documents that separate synchronization boundary.
 ///
 /// `expected_version` is optional. Sending it makes the edit a precondition
 /// (refused outright if the page moved); omitting it guards on the version the
@@ -3474,11 +3492,10 @@ pub async fn handle_update_page(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    // Preserve existing source_memory_ids — the HTTP request only carries
-    // the new content body. Passing &[] here would wipe the page's
-    // source list, causing silent data loss.
-    let existing = db
-        .get_page(&id)
+    // Preserve the route's 404 shape, but do not copy sources from this
+    // advisory read. PageWrite derives them again from the exact generation
+    // its CAS updates, so a source attached in between cannot be deleted.
+    db.get_page(&id)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .ok_or_else(|| ServerError::NotFound(format!("page {id} not found")))?;
@@ -3489,25 +3506,17 @@ pub async fn handle_update_page(
     // DB stays authoritative and nothing is lost). Projecting here needs the
     // knowledge path to come from ServerState — reading global config inside
     // a handler would point tests at the user's real vault. Tracked separately.
-    let result = wenlan_core::post_write::update_page(
+    let result = wenlan_core::post_write::update_page_preserving_sources(
         &db,
         &id,
         wenlan_types::requests::UpdatePageRequest {
             content: req.content,
-            // ponytail: these are the page's current sources, not the caller's,
-            // and they go into the retry digest. If another writer changes the
-            // source list between a write and its retry, the digest shifts and an
-            // honest retry is told its operation id was reused for a different
-            // write. Wrong error, but no double-write — the receipt still guards
-            // the mutation. Fix by digesting the caller's request only.
-            source_memory_ids: existing.source_memory_ids,
+            source_memory_ids: vec![],
             expected_version: req.expected_version,
             caller_id: req.caller_id,
             operation_id: req.operation_id,
         },
         "manual_edit",
-        false,
-        None,
         None,
     )
     .await?;
@@ -3594,6 +3603,7 @@ pub async fn handle_refresh_page(
             &req.content,
             &req.source_memory_ids,
             "agent_refresh",
+            None,
         )
         .await
         .map_err(ServerError::from)?;
@@ -3808,8 +3818,325 @@ pub async fn handle_list_unconfirmed_memories(
 }
 
 #[cfg(test)]
+mod store_scheduler_handoff_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    struct DataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
+            }
+        }
+    }
+
+    struct CountingProvider {
+        calls: AtomicUsize,
+        called: Notify,
+    }
+
+    #[async_trait]
+    impl wenlan_core::llm_provider::LlmProvider for CountingProvider {
+        async fn generate(
+            &self,
+            _request: wenlan_core::llm_provider::LlmRequest,
+        ) -> Result<String, wenlan_core::llm_provider::LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.called.notify_one();
+            Ok(
+                r#"{"memory_type":"fact","domain":null,"quality":"high","importance":5,"tags":[]}"#
+                    .to_string(),
+            )
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "store-handoff-test"
+        }
+
+        fn backend(&self) -> wenlan_core::llm_provider::LlmBackend {
+            wenlan_core::llm_provider::LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    #[tokio::test]
+    async fn store_releases_server_state_before_all_db_awaits() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(dir.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let gate = wenlan_core::quality_gate::QualityGate::new(wenlan_core::tuning::GateConfig {
+            enabled: false,
+            ..Default::default()
+        });
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            quality_gate: gate,
+            ..Default::default()
+        }));
+        wenlan_core::config::save_config(&wenlan_core::config::Config::default()).unwrap();
+
+        let mut blocked_stages = Vec::new();
+        for (index, stage) in [
+            StoreLockTestStage::Dedup,
+            StoreLockTestStage::AgentGate,
+            StoreLockTestStage::EntityResolution,
+            StoreLockTestStage::ActivityAgentLookup,
+            StoreLockTestStage::ActivityLog,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let registration = StoreLockTestHookRegistration::install(stage);
+            let hook = registration.hook().clone();
+            let request = StoreMemoryRequest {
+                content: format!(
+                    "Store lock stage {stage:?} must release ServerState before DB await {index}."
+                ),
+                memory_type: None,
+                space: None,
+                source_agent: Some(format!("lock-lifetime-test-agent-{index}")),
+                title: None,
+                confidence: None,
+                supersedes: None,
+                entity: (stage == StoreLockTestStage::EntityResolution)
+                    .then(|| "missing-lock-test-entity".to_string()),
+                entity_id: None,
+                structured_fields: None,
+                retrieval_cue: None,
+            };
+            let task_state = state.clone();
+            let store_task = tokio::spawn(async move {
+                handle_store_memory(
+                    State(task_state),
+                    HeaderMap::new(),
+                    crate::space_header::SpaceHeader(None),
+                    Json(request),
+                )
+                .await
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), hook.reached.notified())
+                .await
+                .unwrap_or_else(|_| panic!("store route never reached lock stage {stage:?}"));
+
+            let writer =
+                tokio::time::timeout(std::time::Duration::from_millis(500), state.write()).await;
+            let writer_acquired = writer.is_ok();
+            drop(writer);
+            hook.release.notify_one();
+            let _response = store_task.await.unwrap().unwrap();
+            drop(registration);
+            if !writer_acquired {
+                blocked_stages.push(stage);
+            }
+        }
+
+        assert!(
+            blocked_stages.is_empty(),
+            "ServerState read guard remained held across DB awaits at {blocked_stages:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_with_unconfigured_provider_reports_paused_without_calling_provider() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(dir.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let provider = Arc::new(CountingProvider {
+            calls: AtomicUsize::new(0),
+            called: Notify::new(),
+        });
+        let gate = wenlan_core::quality_gate::QualityGate::new(wenlan_core::tuning::GateConfig {
+            enabled: false,
+            ..Default::default()
+        });
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            llm: Some(provider.clone()),
+            quality_gate: gate,
+            ..Default::default()
+        }));
+        let req = StoreMemoryRequest {
+            content: "Store must hand enrichment to the ambient scheduler only.".to_string(),
+            memory_type: None,
+            space: None,
+            source_agent: Some("test-agent".to_string()),
+            title: None,
+            confidence: None,
+            supersedes: None,
+            entity: None,
+            entity_id: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+
+        wenlan_core::config::save_config(&wenlan_core::config::Config::default()).unwrap();
+        let response = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(req),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.0.enrichment, "paused");
+        assert!(response.0.hint.contains("Recall is available now"));
+        assert!(response.0.hint.contains("choose a model source"));
+        assert!(
+            !response.0.hint.contains("~2s"),
+            "ambient work must not promise a foreground-style completion ETA"
+        );
+        assert!(db.get_classification_candidate(3).await.unwrap().is_some());
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                provider.called.notified()
+            )
+            .await
+            .is_err(),
+            "the HTTP store path must never forward an enrichment inference"
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn store_with_healthy_external_pin_reports_pending_without_inline_inference() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(dir.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let provider = Arc::new(CountingProvider {
+            calls: AtomicUsize::new(0),
+            called: Notify::new(),
+        });
+        let gate = wenlan_core::quality_gate::QualityGate::new(wenlan_core::tuning::GateConfig {
+            enabled: false,
+            ..Default::default()
+        });
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            external_llm: Some(provider.clone()),
+            quality_gate: gate,
+            ..Default::default()
+        }));
+        let req = StoreMemoryRequest {
+            content: "A healthy explicit pin should authorize only deferred enrichment."
+                .to_string(),
+            memory_type: None,
+            space: None,
+            source_agent: Some("test-agent".to_string()),
+            title: None,
+            confidence: None,
+            supersedes: None,
+            entity: None,
+            entity_id: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        };
+
+        wenlan_core::config::save_config(&wenlan_core::config::Config {
+            everyday_source: Some("external".to_string()),
+            ..wenlan_core::config::Config::default()
+        })
+        .unwrap();
+        let response = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(req),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.0.enrichment, "pending");
+        assert!(response.0.hint.contains("quietly enrich"));
+        assert!(db.get_classification_candidate(3).await.unwrap().is_some());
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                provider.called.notified()
+            )
+            .await
+            .is_err(),
+            "the request path must not spend the authorized provider call"
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[cfg(test)]
 mod split_tests {
     use super::*;
+
+    #[test]
+    fn fixed_origin_folds_profile_alias_but_preserves_other_explicit_inputs() {
+        assert_eq!(
+            fixed_enrichment_origin(true, true, true, true),
+            wenlan_core::db::EnrichmentOrigin {
+                memory_type_explicit: false,
+                structured_fields_explicit: true,
+                space_rejected: true,
+            }
+        );
+        assert_eq!(
+            fixed_enrichment_origin(true, false, false, false),
+            wenlan_core::db::EnrichmentOrigin {
+                memory_type_explicit: true,
+                structured_fields_explicit: false,
+                space_rejected: false,
+            }
+        );
+    }
 
     // Helper: construct a StoreMemoryResponse from the post-refactor helper and assert shape.
     #[test]

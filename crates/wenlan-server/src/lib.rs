@@ -6,10 +6,12 @@
 
 pub mod config_routes;
 pub mod error;
+mod host_activity;
 pub mod import_routes;
 pub mod ingest_batcher;
 pub mod ingest_routes;
 pub mod knowledge_routes;
+pub mod lifecycle;
 pub mod lint_routes;
 pub mod maintenance_coordinator;
 pub mod memory_routes;

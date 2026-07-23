@@ -44,6 +44,13 @@ Data lives under ~/.wenlan/:
 Open pages with /pages. Inspect history with:
 
   git -C ~/.wenlan log --oneline
+
+Optional models and keys do not enable background inference by themselves:
+
+  wenlan enrichment status        show Everyday + Synthesis as off/ready/paused
+  wenlan enrichment configure --everyday <source> --synthesis <source>
+                                  review the exact mapping, disclosure, and confirm
+  wenlan enrichment disable       turn model-backed background work off
 ```
 
 If the local runtime or MCP bridge is down, tell the user to run `/setup`.

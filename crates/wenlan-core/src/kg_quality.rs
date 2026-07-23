@@ -1014,6 +1014,91 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn fold_relation_type_rolls_back_when_ledger_insert_fails() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .store_entity("RollbackA", "person", None, Some("test"), None)
+            .await
+            .unwrap();
+        let e2 = db
+            .store_entity("RollbackB", "project", None, Some("test"), None)
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO relations
+                     (id, from_entity, to_entity, relation_type, confidence, created_at)
+                 VALUES ('rollback-canon', ?1, ?2, 'works_on', 0.9, 1)",
+                libsql::params![e1.clone(), e2.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO relations
+                     (id, from_entity, to_entity, relation_type, confidence,
+                      explanation, created_at)
+                 VALUES ('rollback-alias', ?1, ?2, 'working_at', 0.5,
+                         'must survive failed ledger', 1)",
+                libsql::params![e1.clone(), e2.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_relation_vocab_ledger
+                 BEFORE INSERT ON vocab_heal_ledger
+                 WHEN NEW.kind = 'relation'
+                 BEGIN
+                     SELECT RAISE(FAIL, 'forced relation ledger failure');
+                 END;",
+            )
+            .await
+            .unwrap();
+        }
+
+        let error = db
+            .fold_relation_type("working_at", "works_on")
+            .await
+            .expect_err("ledger failure must reject the whole fold");
+        assert!(
+            error.to_string().contains("forced relation ledger failure"),
+            "unexpected fold error: {error}"
+        );
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, relation_type, explanation
+                 FROM relations
+                 WHERE from_entity = ?1 AND to_entity = ?2
+                 ORDER BY id",
+                libsql::params![e1, e2],
+            )
+            .await
+            .unwrap();
+        let mut surviving = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            surviving.push((
+                row.get::<String>(0).unwrap(),
+                row.get::<String>(1).unwrap(),
+                row.get::<Option<String>>(2).unwrap(),
+            ));
+        }
+        assert_eq!(
+            surviving,
+            vec![
+                (
+                    "rollback-alias".to_string(),
+                    "working_at".to_string(),
+                    Some("must survive failed ledger".to_string()),
+                ),
+                ("rollback-canon".to_string(), "works_on".to_string(), None,),
+            ],
+            "relation mutation and undo ledger must commit or roll back together"
+        );
+    }
+
     // ── hallucination_guard ──────────────────────────────────────────────
 
     #[tokio::test]

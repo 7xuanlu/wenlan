@@ -65,6 +65,10 @@ assert_rejects "setup autocomplete drift" \
     perl -0pi -e 's/user-invocable: true/user-invocable: false/' \
     "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
 
+assert_rejects "codex background-consent command drift" \
+    perl -0pi -e 's/wenlan enrichment disable/wenlan background off/' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
+
 assert_rejects "codex README setup command drift" \
     perl -0pi -e 's|/setup|/init|g' \
     "$TMPDIR_TEST/root/plugin-codex/README.md"

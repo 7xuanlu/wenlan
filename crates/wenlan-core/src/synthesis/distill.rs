@@ -24,6 +24,8 @@ const FORMATION_SWEEP_THRESHOLDS: [f64; 4] = [0.55, 0.60, 0.65, 0.70];
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_NUMERATOR: usize = 1;
 const DISTILL_CLUSTER_DOCUMENT_MAX_SHARE_DENOMINATOR: usize = 2;
 const EXISTING_TITLES_HINT_LIMIT: usize = 100;
+const EXISTING_TITLE_CHAR_CAP: usize = 128;
+const PAGE_TOPIC_CHAR_CAP: usize = 192;
 const NO_SPACE_KEY: &str = "(none)";
 
 /// What a distillation pass is scoped to. Resolved from a free-form string
@@ -79,27 +81,26 @@ pub(crate) async fn build_existing_titles_hint(
     topic: &str,
     workspace: Option<&str>,
 ) -> String {
+    let capped_topic: String = topic.chars().take(PAGE_TOPIC_CHAR_CAP).collect();
     let mut titles = db
-        .list_relevant_active_page_titles(topic, workspace, EXISTING_TITLES_HINT_LIMIT)
+        .list_relevant_active_page_titles(&capped_topic, workspace, EXISTING_TITLES_HINT_LIMIT)
         .await
         .unwrap_or_default();
     if titles.is_empty() {
         titles = db
-            .list_pages("active", 1000, 0)
+            .list_active_page_titles_scoped(workspace, EXISTING_TITLES_HINT_LIMIT)
             .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|page| workspace.is_none_or(|w| page_workspace(page) == Some(w)))
-            .map(|page| page.title)
-            .take(EXISTING_TITLES_HINT_LIMIT)
-            .collect();
+            .unwrap_or_default();
     }
     if titles.is_empty() {
         return String::new();
     }
     let formatted = titles
         .iter()
-        .map(|t| format!("[[{t}]]"))
+        .map(|title| {
+            let capped: String = title.chars().take(EXISTING_TITLE_CHAR_CAP).collect();
+            format!("[[{capped}]]")
+        })
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -120,7 +121,8 @@ pub(crate) async fn build_page_compile_user_prompt(
     memories_block: &str,
 ) -> String {
     let titles_hint = build_existing_titles_hint(db, topic, workspace).await;
-    format!("{titles_hint}Topic: {topic}\n\n{memories_block}")
+    let capped_topic: String = topic.chars().take(PAGE_TOPIC_CHAR_CAP).collect();
+    format!("{titles_hint}Topic: {capped_topic}\n\n{memories_block}")
 }
 
 /// LLM cluster refinement: for entities with multiple clusters, ask the LLM to merge/split/rename.
@@ -1175,6 +1177,26 @@ pub struct RefreshOutcome {
     pub revision_card_id: Option<String>,
 }
 
+pub(crate) const AUTOMATIC_PAGE_REFRESH_SOURCE_CAP: usize = 64;
+
+/// Reject an oversized automatic Page refresh before source contents are
+/// materialized. The normalized join table is authoritative when present;
+/// legacy Pages with no join rows fall back to their JSON source list.
+pub(crate) async fn automatic_refresh_exceeds_source_cap(
+    db: &MemoryDB,
+    page: &crate::pages::Page,
+) -> Result<bool, WenlanError> {
+    let joined = db
+        .count_page_sources_up_to(&page.id, AUTOMATIC_PAGE_REFRESH_SOURCE_CAP)
+        .await?;
+    let source_count = if joined == 0 {
+        page.source_memory_ids.len()
+    } else {
+        joined
+    };
+    Ok(source_count > AUTOMATIC_PAGE_REFRESH_SOURCE_CAP)
+}
+
 /// Rebuild a page's prose from its CURRENT sources via the DISTILL_PAGE prompt,
 /// verify per-claim `[N]` citations against the numbered sources, and write the
 /// result atomically through the canonical PageWrite path.
@@ -1928,6 +1950,36 @@ mod tests {
             "refresh should retain already-valid wikilinks when the prompt exposes the real title, got:\n{}",
             page.content
         );
+    }
+
+    #[tokio::test]
+    async fn page_compile_prompt_caps_topic_and_existing_title_text() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let long_title = "T".repeat(600);
+        let long_topic = "Q".repeat(600);
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            "bounded_prompt_existing_page",
+            &long_title,
+            None,
+            "short body",
+            None,
+            None,
+            &[],
+            &now,
+        )
+        .await
+        .unwrap();
+
+        let prompt =
+            build_page_compile_user_prompt(&db, &long_topic, None, "[1] bounded source").await;
+
+        assert!(
+            prompt.chars().count() < 600,
+            "fixed-count title hints still need a hard character bound; got {} chars",
+            prompt.chars().count()
+        );
+        assert!(prompt.ends_with("[1] bounded source"));
     }
 
     // ── refresh_page: the ONE re-distill/repair op ──────────────────────────

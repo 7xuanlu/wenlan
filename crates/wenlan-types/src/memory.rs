@@ -135,6 +135,8 @@ pub struct EnrichmentStepStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub attempts: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_version: Option<i64>,
 }
 
 /// Response for GET /api/memory/{id}/enrichment-status.

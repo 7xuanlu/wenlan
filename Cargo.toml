@@ -91,7 +91,7 @@ pdf-extract = "0.10"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 service-manager = "0.11"
 serde_yaml = "0.9"
-sysinfo = "0.33"
+sysinfo = "=0.38.3"
 toml = "0.8"
 fs2 = "0.4"
 cap-std = "=4.0.2"
