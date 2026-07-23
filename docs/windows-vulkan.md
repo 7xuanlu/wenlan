@@ -38,6 +38,10 @@ $env:LIB = "$env:LOCALAPPDATA\wenlan-build\vcpkg\installed\x64-windows-static-md
 # llama.cpp's nested Vulkan shader build can exceed legacy MAX_PATH when the
 # checkout is deep. Keep Cargo output on a deliberately short local path.
 $env:CARGO_TARGET_DIR = "C:\wl-target"
+
+# MSVC's nested Vulkan shader probes can concurrently write the same PDB.
+# Serialize release builds so cl.exe does not fail with C1041.
+$env:CARGO_BUILD_JOBS = "1"
 ```
 
 If libclang is not on its standard path, set `LIBCLANG_PATH` to the directory
@@ -53,8 +57,8 @@ cargo fmt --check --all
 cargo test -p wenlan-types
 cargo test -p wenlan-core --lib engine::tests
 cargo test -p wenlan-server status_reports_selected_vulkan_device
-cargo build --release -p wenlan-core --bin model_probe
-cargo build --release -p wenlan-server
+cargo build --release --jobs 1 -p wenlan-core --bin model_probe
+cargo build --release --jobs 1 -p wenlan-server
 
 & scripts\setup-vulkan-sdk-windows.test.ps1
 & scripts\smoke-windows-llm.test.ps1
@@ -175,6 +179,10 @@ runs before making performance claims.
   `vulkan-shaders-gen`: the nested CMake path crossed legacy MAX_PATH. Set
   `CARGO_TARGET_DIR=C:\wl-target`, then rebuild; enabling Windows long paths
   does not make every older MSVC/CMake child tool long-path aware.
+- `C1041: cannot open program database`: concurrent nested MSVC probes wrote
+  the same PDB. Set `CARGO_BUILD_JOBS=1` and pass `--jobs 1` to the release
+  build. The Windows CI and release jobs intentionally use this slower,
+  deterministic path.
 - Vulkan builds but the daemon reports CPU: inspect `fallback_reason`, update
   the GPU driver, run `vulkaninfo.exe --summary`, then retry the live smoke.
 - A hybrid laptop picks the integrated GPU: inspect the device indexes printed

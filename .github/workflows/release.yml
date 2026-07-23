@@ -247,6 +247,11 @@ jobs:
       # ubuntu-24.04. No cross / zigbuild / QEMU needed. Eliminates an
       # entire class of openssl-sys/system-OpenSSL/container-version traps
       # that consumed several PRs for v0.7.0.
+      - name: Serialize native build (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: '"CARGO_BUILD_JOBS=1" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
       - name: Build
         env:
           SCCACHE_GHA_ENABLED: "true"

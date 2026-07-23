@@ -431,8 +431,8 @@ jobs:
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
-          cargo build --release -p wenlan -p wenlan-server
-          cargo build --release -p wenlan-core --bin model_probe
+          cargo build --release --jobs 1 -p wenlan -p wenlan-server
+          cargo build --release --jobs 1 -p wenlan-core --bin model_probe
 
       - name: Validate Windows LLM probe and smoke harness
         if: matrix.os == 'windows-2022'
