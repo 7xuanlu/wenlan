@@ -210,6 +210,12 @@ jobs:
           vcpkg install sqlite3:x64-windows-static-md
           "LIB=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Set up Vulkan SDK (Windows only)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          & scripts/setup-vulkan-sdk-windows.ps1
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:

@@ -60,6 +60,8 @@ jobs:
               - 'scripts/smoke-windows.ps1'
               - 'scripts/smoke-windows-llm.ps1'
               - 'scripts/smoke-windows-llm.test.ps1'
+              - 'scripts/setup-vulkan-sdk-windows.ps1'
+              - 'scripts/setup-vulkan-sdk-windows.test.ps1'
               - 'scripts/verify-ort-source-pin.py'
               - 'scripts/verify-ort-source-pin.test.py'
               # Release PRs must run the drift guard: 0.10.1 merged with
@@ -114,6 +116,8 @@ jobs:
               - 'scripts/smoke-windows-llm.test.ps1'
               - 'scripts/stabilize-rust-cache-toolchains.sh'
               - 'scripts/stabilize-rust-cache-toolchains.test.sh'
+              - 'scripts/setup-vulkan-sdk-windows.ps1'
+              - 'scripts/setup-vulkan-sdk-windows.test.ps1'
               - 'scripts/lint-scale-gate.sh'
               - 'crates/wenlan-core/src/lint/**'
               - 'crates/wenlan-core/src/engine.rs'
@@ -246,6 +250,12 @@ jobs:
           vcpkg install sqlite3:x64-windows-static-md
           "LIB=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
         shell: pwsh
+      - name: Set up Vulkan SDK (Windows only)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          & scripts/setup-vulkan-sdk-windows.test.ps1
+          & scripts/setup-vulkan-sdk-windows.ps1
       # The hosted runner currently exposes an unrelated onnxruntime.dll on
       # its default DLL search path. Dynamic-ORT tests must never pick that up:
       # stage the SHA-verified runtime before any inference-capable test and
