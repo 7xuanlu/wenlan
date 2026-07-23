@@ -4798,6 +4798,27 @@ impl MemoryDB {
                                     e
                                 );
                             }
+                            // Mirror the recovered embedding onto the entity's
+                            // kind='entity' shadow page (M3 PR-1 dual-write
+                            // parity), in the SAME tx, so a boot that recovers
+                            // entity embeddings never leaves the shadow's
+                            // embedding stale/NULL. A no-op for an entity that
+                            // has no mapped shadow.
+                            if let Err(e) = conn
+                                .execute(
+                                    "UPDATE pages SET embedding = vector32(?1) \
+                                     WHERE kind = 'entity' \
+                                       AND id = (SELECT page_id FROM entity_page_map WHERE entity_id = ?2)",
+                                    libsql::params![Self::vec_to_sql(&embeddings[idx]), id.clone()],
+                                )
+                                .await
+                            {
+                                log::warn!(
+                                    "[memory_db] null entity embed recovery shadow id={}: {}",
+                                    id,
+                                    e
+                                );
+                            }
                         }
                     }
                     if let Err(e) = conn.execute("COMMIT", ()).await {
@@ -65030,6 +65051,84 @@ pub(crate) mod tests {
         let workspace: String = row.get(1).unwrap();
         assert_eq!(space, UNFILED_SPACE_ID);
         assert_eq!(workspace, UNFILED_SPACE_ID);
+    }
+
+    #[tokio::test]
+    async fn null_entity_embed_recovery_mirrors_shadow_embedding() {
+        // rework2 ITEM 1 (M3 PR-1): the startup crash-recovery pass re-embeds
+        // entities whose embedding is NULL. It must ALSO re-embed the mapped
+        // kind='entity' shadow page in the same batch tx -- otherwise every
+        // boot that recovers an entity embedding leaves its shadow's embedding
+        // stale/NULL, drifting the dual-write.
+        let (db, _dir) = test_db().await;
+        let id = db
+            .store_entity("Grace Hopper", "person", Some("work"), Some("test"), None)
+            .await
+            .unwrap();
+
+        // Drive both the entity and its shadow to a NULL embedding, as a crash
+        // mid re-embed would leave them, and capture the shadow's page id.
+        let page_id: String = {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE entities SET embedding = NULL WHERE id = ?1",
+                libsql::params![id.clone()],
+            )
+            .await
+            .unwrap();
+            let mut rows = conn
+                .query(
+                    "SELECT page_id FROM entity_page_map WHERE entity_id = ?1",
+                    libsql::params![id.clone()],
+                )
+                .await
+                .unwrap();
+            let pid: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            conn.execute(
+                "UPDATE pages SET embedding = NULL WHERE id = ?1",
+                libsql::params![pid.clone()],
+            )
+            .await
+            .unwrap();
+            pid
+        };
+
+        // Re-run migrations: the unconditional entity crash-recovery pass fires
+        // because an entity now has a NULL embedding.
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("crash-recovery pass runs");
+
+        let conn = db.conn.lock().await;
+        // Both the entity and its shadow are re-embedded and byte-equal.
+        let (entity_emb_null, shadow_emb_null, equal): (i64, i64, i64) = {
+            let mut rows = conn
+                .query(
+                    "SELECT \
+                        (SELECT embedding IS NULL FROM entities WHERE id = ?1), \
+                        (SELECT embedding IS NULL FROM pages WHERE id = ?2), \
+                        COALESCE((SELECT (SELECT embedding FROM entities WHERE id = ?1) \
+                                = (SELECT embedding FROM pages WHERE id = ?2)), 0)",
+                    libsql::params![id.clone(), page_id.clone()],
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            (
+                row.get(0).unwrap(),
+                row.get(1).unwrap(),
+                row.get(2).unwrap(),
+            )
+        };
+        assert_eq!(entity_emb_null, 0, "entity embedding must be recovered");
+        assert_eq!(
+            shadow_emb_null, 0,
+            "shadow page embedding must be recovered, not left NULL"
+        );
+        assert_eq!(
+            equal, 1,
+            "the shadow embedding must equal the entity's recovered embedding"
+        );
     }
 
     #[tokio::test]
