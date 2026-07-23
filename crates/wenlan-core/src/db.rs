@@ -10395,17 +10395,23 @@ impl MemoryDB {
         dest: &std::path::Path,
     ) -> Result<BackupReceipt, WenlanError> {
         let dest_str = dest.to_string_lossy().to_string();
-        let sidecar = |suffix: &str| {
-            let mut s = dest.as_os_str().to_os_string();
+        let sidecar = |base: &std::path::Path, suffix: &str| {
+            let mut s = base.as_os_str().to_os_string();
             s.push(suffix);
             std::path::PathBuf::from(s)
         };
+        // Stage the physical copy here and publish it onto `dest` with a single
+        // atomic rename, only once it is complete AND integrity-clean. A crash
+        // mid-copy then leaves this partial `.tmp` -- never a truncated `dest`
+        // that a retry (`backup_before_migration`'s exists()-skip) would trust.
+        let tmp = sidecar(dest, ".tmp");
+        let tmp_str = tmp.to_string_lossy().to_string();
 
         let source_pages = {
             let conn = self.conn.lock().await;
 
             // Resolve the live source FIRST and refuse to back up onto it: the
-            // cleanup below deletes `dest`, so a caller passing the db path (or a
+            // rename below replaces `dest`, so a caller passing the db path (or a
             // symlink to it) as `dest` would otherwise destroy the live database.
             // Canonicalize both so a symlink / relative-vs-absolute alias is
             // caught. ponytail: canonical-path compare, not dev+ino -- covers the
@@ -10426,13 +10432,12 @@ impl MemoryDB {
                 }
             }
 
-            // Start from a clean destination -- a stale main file or WAL/SHM
-            // sidecar would make the fresh copy inconsistent. Safe now that dest
-            // is proven distinct from the source.
-            for p in [dest.to_path_buf(), sidecar("-wal"), sidecar("-shm")] {
+            // Discard any stale staging file (+ WAL/SHM sidecars) left by a
+            // crashed prior attempt -- the fresh copy below must start clean.
+            for p in [tmp.clone(), sidecar(&tmp, "-wal"), sidecar(&tmp, "-shm")] {
                 if p.exists() {
                     std::fs::remove_file(&p).map_err(|e| {
-                        WenlanError::VectorDb(format!("online_backup rm dest: {e}"))
+                        WenlanError::VectorDb(format!("online_backup rm stale tmp: {e}"))
                     })?;
                 }
             }
@@ -10461,21 +10466,22 @@ impl MemoryDB {
             }
             // ponytail: synchronous copy while holding the conn mutex -- fine for
             // an admin backup on the single-writer daemon; nothing can interleave.
-            std::fs::copy(&source_path, dest)
+            std::fs::copy(&source_path, &tmp)
                 .map_err(|e| WenlanError::VectorDb(format!("online_backup copy: {e}")))?;
             Self::pragma_i64(&conn, "PRAGMA page_count").await?
         };
 
-        // Open the snapshot on its own connection and verify it.
-        let backup = libsql::Builder::new_local(&dest_str)
-            .build()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("online_backup open: {e}")))?;
-        let bconn = backup
-            .connect()
-            .map_err(|e| WenlanError::VectorDb(format!("online_backup connect: {e}")))?;
-        let integrity_ok =
-            {
+        // Open the STAGED snapshot on its own connection and verify it BEFORE
+        // publishing. The connection is scoped so it drops before the rename.
+        let (integrity_ok, backup_pages) = {
+            let backup = libsql::Builder::new_local(&tmp_str)
+                .build()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("online_backup open: {e}")))?;
+            let bconn = backup
+                .connect()
+                .map_err(|e| WenlanError::VectorDb(format!("online_backup connect: {e}")))?;
+            let integrity_ok = {
                 let mut rows = bconn
                     .query("PRAGMA integrity_check", ())
                     .await
@@ -10487,7 +10493,36 @@ impl MemoryDB {
                     None => false,
                 }
             };
-        let backup_pages = Self::pragma_i64(&bconn, "PRAGMA page_count").await?;
+            let backup_pages = Self::pragma_i64(&bconn, "PRAGMA page_count").await?;
+            (integrity_ok, backup_pages)
+        };
+        // The verify connection is dropped now; clear its (read-only, empty)
+        // WAL/SHM sidecars so the published snapshot carries none.
+        for p in [sidecar(&tmp, "-wal"), sidecar(&tmp, "-shm")] {
+            if p.exists() {
+                std::fs::remove_file(&p).map_err(|e| {
+                    WenlanError::VectorDb(format!("online_backup rm tmp sidecar: {e}"))
+                })?;
+            }
+        }
+
+        if integrity_ok {
+            // Publish atomically. A stale WAL/SHM beside a prior `dest` would be
+            // replayed onto the freshly renamed file and corrupt it, so clear
+            // them first; `dest` itself is replaced by the rename.
+            for p in [sidecar(dest, "-wal"), sidecar(dest, "-shm")] {
+                if p.exists() {
+                    std::fs::remove_file(&p).map_err(|e| {
+                        WenlanError::VectorDb(format!("online_backup rm dest sidecar: {e}"))
+                    })?;
+                }
+            }
+            std::fs::rename(&tmp, dest)
+                .map_err(|e| WenlanError::VectorDb(format!("online_backup publish rename: {e}")))?;
+        } else {
+            // Never publish an unverified snapshot; discard the staged copy.
+            let _ = std::fs::remove_file(&tmp);
+        }
 
         Ok(BackupReceipt {
             dest: dest_str,
@@ -65154,17 +65189,52 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn backup_before_migration_preserves_existing_restore_point() {
-        // 7b (M3 PR-1 stage f): a retried migration must NOT re-snapshot over an
-        // existing pre-migration backup. `online_backup` deletes `dest` before
-        // copying, so a re-fire would clobber the pristine restore point with an
-        // already-partially-migrated DB. Prove the skip by planting a sentinel at
-        // the dest path and asserting a re-fired migration leaves it byte-intact.
+    async fn backup_before_migration_publishes_a_valid_restore_point() {
+        // M3 PR-1 (ITEM 4): a pre-migration backup at `dest` must only ever be a
+        // real, integrity-clean snapshot -- never arbitrary bytes a crashed prior
+        // attempt left behind. `online_backup` stages the copy into `<dest>.tmp`
+        // and publishes it with a single atomic rename, only after the staged copy
+        // passes integrity_check. Two teeth:
+        //   (a) a stale `.tmp` from a crash is discarded (not renamed onto `dest`
+        //       as if valid), and a fresh verified snapshot is published; and
+        //   (b) once a valid `dest` exists, a retried migration skips re-snapshot
+        //       and preserves it byte-for-byte.
         let (db, dir) = test_db().await;
         let dest = dir.path().join("pre_migration_86_backup.db");
-        let sentinel: &[u8] = b"SENTINEL pre-migration backup -- must survive a retry";
-        std::fs::write(&dest, sentinel).unwrap();
+        let tmp = {
+            let mut s = dest.clone().into_os_string();
+            s.push(".tmp");
+            std::path::PathBuf::from(s)
+        };
+        // A crashed prior attempt's partial staging file -- must be discarded, and
+        // never renamed onto `dest` as if it were a valid backup.
+        std::fs::write(&tmp, b"CRASHED partial staging -- must be discarded").unwrap();
 
+        // (a) direct backup: stale staging discarded, fresh snapshot published.
+        let receipt = db.online_backup(&dest).await.unwrap();
+        assert!(
+            receipt.integrity_ok,
+            "the published snapshot must pass integrity_check"
+        );
+        assert!(
+            !tmp.exists(),
+            "the staging file must be consumed by the atomic rename, not left behind"
+        );
+        {
+            // `dest` is a real, integrity-clean database -- not the planted garbage.
+            let backup = libsql::Builder::new_local(dest.to_string_lossy().to_string())
+                .build()
+                .await
+                .unwrap();
+            let bconn = backup.connect().unwrap();
+            let mut rows = bconn.query("PRAGMA integrity_check", ()).await.unwrap();
+            let integ: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(integ, "ok", "the published dest must open as a valid db");
+        }
+
+        // (b) a retried migration must NOT re-snapshot over the now-valid restore
+        // point -- `backup_before_migration` skips when `dest` already exists.
+        let before = std::fs::read(&dest).unwrap();
         {
             let conn = db.conn.lock().await;
             conn.execute("PRAGMA user_version = 85", ()).await.unwrap();
@@ -65172,12 +65242,10 @@ pub(crate) mod tests {
         db.run_migrations(&crate::events::NoopEmitter)
             .await
             .expect("migration 86 re-fires");
-
         let after = std::fs::read(&dest).unwrap();
         assert_eq!(
-            after.as_slice(),
-            sentinel,
-            "an existing pre-migration backup must be preserved across a retry, not re-snapshotted"
+            before, after,
+            "an existing valid pre-migration backup must be preserved across a retry, not re-snapshotted"
         );
     }
 
