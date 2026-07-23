@@ -74,7 +74,13 @@ pub struct Page {
     /// `entities` rows -- write-only in PR-1 (spec's fail-closed visibility
     /// fence excludes them at `select_visible_pages` and every page-search/
     /// list surface that bypasses it), never surfaced to a reader yet.
-    #[serde(default = "default_page_kind")]
+    ///
+    /// `skip_serializing` freezes the wire shape (spec M3 D4): `kind` is an
+    /// internal discriminator the daemon uses for the visibility fence, but it
+    /// is deliberately absent from every serialized `Page` so the app-visible
+    /// contract is byte-identical to pre-M3. `default = "default_page_kind"`
+    /// stays so inbound JSON (which never carries `kind`) still deserializes.
+    #[serde(default = "default_page_kind", skip_serializing)]
     pub kind: String,
 }
 
@@ -180,5 +186,28 @@ mod citation_tests {
         )
         .unwrap();
         assert_eq!(legacy.scope, "sentence");
+    }
+
+    /// Wire freeze (spec M3 D4): the `kind` discriminator must never appear in a
+    /// serialized `Page`, so the app-visible contract stays byte-identical to
+    /// pre-M3. A shadow page (`kind = "entity"`) is fenced from readers, but even
+    /// a normal page must not leak the field.
+    #[test]
+    fn kind_is_never_serialized_onto_the_wire() {
+        let mut page: Page = serde_json::from_str(
+            r#"{"id":"p1","title":"T","content":"body","source_memory_ids":[],
+                "version":1,"status":"active","created_at":"x","last_compiled":"x",
+                "last_modified":"x","sources_updated_count":0,"user_edited":false}"#,
+        )
+        .unwrap();
+        // Deserialization still fills `kind` from its default when absent.
+        assert_eq!(page.kind, "concept");
+        page.kind = "entity".to_string();
+
+        let value: serde_json::Value = serde_json::to_value(&page).unwrap();
+        assert!(
+            value.get("kind").is_none(),
+            "serialized Page must not carry a `kind` key (wire freeze D4); got {value}"
+        );
     }
 }
