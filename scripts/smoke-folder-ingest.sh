@@ -89,7 +89,10 @@ fi
 
 echo "==> Searching for the buried sentinel sentence"
 hit=""
-for i in $(seq 1 60); do
+# First ambient admission is intentionally bounded by the 60s startup delay
+# plus two 30s resource samples. Keep two poll windows of CI jitter beyond
+# that 120s floor; the loop still exits immediately when the document lands.
+for i in $(seq 1 90); do
     RESP="$(curl -sf -X POST "$HOST/api/memory/search" \
         -H 'Content-Type: application/json' \
         -d '{"query":"xylophone birch buried sentinel sentence","limit":5}')" || RESP=""
@@ -100,7 +103,7 @@ for i in $(seq 1 60); do
     fi
     sleep 2
 done
-[ -n "$hit" ] || fail "buried sentence not retrievable within 120s"
+[ -n "$hit" ] || fail "buried sentence not retrievable within 180s"
 
 echo "==> Waiting for the sibling document in the next bounded thermal turn"
 sibling_hit=""
