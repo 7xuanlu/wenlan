@@ -32,9 +32,12 @@ jobs:
       docs:    ${{ steps.filter.outputs.docs }}
       plugin:  ${{ steps.filter.outputs.plugin }}
       npm:     ${{ steps.filter.outputs.npm }}
+      macos:   ${{ steps.filter.outputs.macos }}
       windows: ${{ steps.filter.outputs.windows }}
-      # Test matrix OSes as a JSON array. Windows is included only when
-      # Windows-affecting files changed (saves ~30min per PR otherwise).
+      windows-lint: ${{ steps.filter.outputs.windows-lint }}
+      windows-release: ${{ steps.filter.outputs.windows-release }}
+      # Test matrix OSes as a JSON array. On PRs, Windows is included only when
+      # Windows-affecting files changed. Non-PR runs keep the full backstop.
       test-oses: ${{ steps.matrix.outputs.json }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -47,21 +50,27 @@ jobs:
               # `some` quantifier, a negative glob like `!crates/*/npm/**`
               # makes README-only PRs match this filter.
               - 'crates/**/*.rs'
+              # Native sources bootstrap the drift guard that verifies their
+              # platform route; otherwise a new file could skip its own check.
+              - 'crates/**/*.c'
+              - 'crates/**/*.cc'
+              - 'crates/**/*.cpp'
+              - 'crates/**/*.cxx'
+              - 'crates/**/*.h'
+              - 'crates/**/*.hh'
+              - 'crates/**/*.hpp'
+              - 'crates/**/*.hxx'
+              - 'crates/**/*.m'
+              - 'crates/**/*.mm'
               - 'crates/**/Cargo.toml'
               - 'crates/*/resources/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
-              - 'scripts/lint-scale-gate.sh'
-              - 'scripts/stabilize-rust-cache-toolchains.sh'
-              - 'scripts/stabilize-rust-cache-toolchains.test.sh'
-              - 'scripts/stage-onnxruntime-windows.ps1'
-              - 'scripts/smoke-windows.ps1'
-              - 'scripts/smoke-windows-llm.ps1'
-              - 'scripts/smoke-windows-llm.test.ps1'
-              - 'scripts/verify-ort-source-pin.py'
-              - 'scripts/verify-ort-source-pin.test.py'
+              - '.github/workflows/release.yml'
+              - 'docker/**'
+              - 'scripts/**'
               # Release PRs must run the drift guard: 0.10.1 merged with
               # version drift precisely because these two files don't match
               # any glob above, so the rust tests (incl. drift_guard) skipped
@@ -99,15 +108,72 @@ jobs:
               - '.github/workflows/release.yml'
             npm:
               - 'crates/*/npm/**'
+            macos:
+              # macOS owns launchd/host-activity behavior and its native build
+              # surface. Every current Rust file with a macOS cfg marker is
+              # covered here; drift_guard fails if a future one is not.
+              - 'crates/wenlan-cli/src/**'
+              - 'crates/wenlan-cli/tests/**'
+              - 'crates/wenlan-core/src/drift_guard.rs'
+              - 'crates/wenlan-core/src/config.rs'
+              - 'crates/wenlan-core/src/export/knowledge.rs'
+              - 'crates/wenlan-core/src/lint/**'
+              - 'crates/wenlan-core/src/llm_provider.rs'
+              - 'crates/wenlan-core/src/repair.rs'
+              - 'crates/wenlan-core/src/repair/**'
+              - 'crates/wenlan-core/src/repair_plan/**'
+              - 'crates/wenlan-core/src/sources/directory.rs'
+              - 'crates/**/*.c'
+              - 'crates/**/*.cc'
+              - 'crates/**/*.cpp'
+              - 'crates/**/*.cxx'
+              - 'crates/**/*.h'
+              - 'crates/**/*.hh'
+              - 'crates/**/*.hpp'
+              - 'crates/**/*.hxx'
+              - 'crates/**/*.m'
+              - 'crates/**/*.mm'
+              - 'crates/wenlan-mcp/src/**'
+              - 'crates/wenlan-server/src/**'
+              - 'crates/wenlan-server/tests/**'
+              - 'scripts/install-macos-app.sh'
+              - 'scripts/test-install-macos-app.sh'
+              - 'install.sh'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/build.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'version.txt'
+              - '.release-please-manifest.json'
+              - 'CHANGELOG.md'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
             windows:
-              # Files that change Windows-specific behavior. PRs not
-              # touching any of these skip the Windows test job entirely.
-              - 'crates/wenlan-cli/src/commands/service.rs'
-              - 'crates/wenlan-cli/src/commands/mcp.rs'
-              - 'crates/wenlan-cli/tests/cli_integration.rs'
-              - 'crates/wenlan-cli/tests/distribution.rs'
-              - 'crates/wenlan-server/src/main.rs'
+              # Windows owns CLI/service/runtime portability, native ORT, and
+              # packaging. drift_guard scans cfg-bearing Rust + PowerShell
+              # paths so this list cannot silently miss a new Windows surface.
+              - 'crates/wenlan-cli/src/**'
+              - 'crates/wenlan-cli/tests/**'
+              - 'crates/wenlan-server/src/**'
+              - 'crates/wenlan-server/tests/**'
               - 'crates/wenlan-mcp/npm/install.js'
+              - 'crates/wenlan-mcp/src/**'
+              - 'crates/wenlan-core/src/config.rs'
+              - 'crates/wenlan-core/src/drift_guard.rs'
+              - 'crates/wenlan-core/src/export/knowledge.rs'
+              - 'crates/wenlan-core/src/repair.rs'
+              - 'crates/wenlan-core/src/repair/**'
+              - 'crates/wenlan-core/src/repair_plan/**'
+              - 'crates/wenlan-core/src/sources/directory.rs'
+              - 'crates/**/*.c'
+              - 'crates/**/*.cc'
+              - 'crates/**/*.cpp'
+              - 'crates/**/*.cxx'
+              - 'crates/**/*.h'
+              - 'crates/**/*.hh'
+              - 'crates/**/*.hpp'
+              - 'crates/**/*.hxx'
               - 'scripts/stage-onnxruntime-windows.ps1'
               - 'scripts/smoke-windows.ps1'
               - 'scripts/smoke-windows-llm.ps1'
@@ -119,30 +185,83 @@ jobs:
               - 'crates/wenlan-core/src/engine.rs'
               - 'crates/wenlan-core/src/llm_provider.rs'
               - 'crates/wenlan-core/src/bin/model_probe.rs'
+              # Exact entry retained for the ORT feature-manifest contract;
+              # the broader manifest glob below covers future crates too.
               - 'crates/wenlan-core/Cargo.toml'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/build.rs'
+              - 'crates/*/npm/**'
               - 'install.sh'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              - 'version.txt'
+              - '.release-please-manifest.json'
+              - 'CHANGELOG.md'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+            windows-lint:
+              # The Windows functional lint-scale proof is useful only when
+              # its implementation or harness changes.
+              - 'crates/wenlan-core/src/lint/**'
+              - 'scripts/lint-scale-gate.sh'
+            windows-release:
+              # Expensive release-profile proof is required only when a PR can
+              # change native linkage, Cargo/build inputs, or packaged output.
+              # Non-PR backstops run it regardless of this filter.
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/build.rs'
+              - 'crates/**/*.c'
+              - 'crates/**/*.cc'
+              - 'crates/**/*.cpp'
+              - 'crates/**/*.cxx'
+              - 'crates/**/*.h'
+              - 'crates/**/*.hh'
+              - 'crates/**/*.hpp'
+              - 'crates/**/*.hxx'
+              - 'crates/*/npm/**'
+              - 'crates/wenlan-core/src/engine.rs'
+              - 'crates/wenlan-core/src/llm_provider.rs'
+              - 'crates/wenlan-core/src/bin/model_probe.rs'
+              - 'crates/wenlan-server/src/main.rs'
+              - 'crates/wenlan-mcp/npm/install.js'
+              - 'install.sh'
+              - 'scripts/stage-onnxruntime-windows.ps1'
+              - 'scripts/smoke-windows.ps1'
+              - 'scripts/smoke-windows-llm.ps1'
+              - 'scripts/smoke-windows-llm.test.ps1'
+              - 'version.txt'
+              - '.release-please-manifest.json'
+              - 'CHANGELOG.md'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
 
       - id: matrix
         run: |
-          if [ "${{ steps.filter.outputs.windows }}" = "true" ]; then
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo 'json=["ubuntu-24.04", "macos-14", "windows-2022"]' >> "$GITHUB_OUTPUT"
-          else
+          elif [ "${{ steps.filter.outputs.macos }}" = "true" ] && [ "${{ steps.filter.outputs.windows }}" = "true" ]; then
+            echo 'json=["ubuntu-24.04", "macos-14", "windows-2022"]' >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.filter.outputs.macos }}" = "true" ]; then
             echo 'json=["ubuntu-24.04", "macos-14"]' >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.filter.outputs.windows }}" = "true" ]; then
+            echo 'json=["ubuntu-24.04", "windows-2022"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'json=["ubuntu-24.04"]' >> "$GITHUB_OUTPUT"
           fi
 
-  # Rust fmt + lint only run when Rust-affecting paths changed. Docs/image-only
-  # PRs should still get the required aggregate `conclusion` check, but they
-  # should not spend runners on Cargo jobs. The fail-open surface is closed by
-  # `conclusion`, which explicitly fails if `detect-changes` itself fails.
+  # On PRs, Rust fmt + lint only run when Rust-affecting paths changed.
+  # Docs/image-only PRs should still get the required aggregate `conclusion`
+  # check, but they should not spend runners on Cargo jobs. Non-PR runs keep the
+  # full backstop. The fail-open surface is closed by `conclusion`, which
+  # explicitly fails if `detect-changes` itself fails.
   fmt:
     name: fmt
     needs: [detect-changes]
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    if: "needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.macos == 'true' || needs.detect-changes.outputs.windows == 'true' || github.event_name != 'pull_request'"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -154,8 +273,8 @@ jobs:
 
   lint:
     name: lint
-    needs: [detect-changes, fmt]
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    needs: [detect-changes]
+    if: "needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.macos == 'true' || needs.detect-changes.outputs.windows == 'true' || github.event_name != 'pull_request'"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -185,8 +304,8 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
-    needs: [detect-changes, fmt, lint]
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    needs: [detect-changes]
+    if: "needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.macos == 'true' || needs.detect-changes.outputs.windows == 'true' || github.event_name != 'pull_request'"
     runs-on: ${{ matrix.os }}
     strategy:
       # Cancel the rest of the matrix when one OS fails. Saves ~20-30min
@@ -292,7 +411,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: bash scripts/lint-scale-gate.sh "$RUNNER_TEMP/task-19-memory-lint-debugger-linux.txt"
       - name: Page lint scale gate (Windows functional)
-        if: matrix.os == 'windows-2022'
+        if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-lint == 'true')
         shell: pwsh
         run: |
           # Functional portability only; the Linux leg owns time and RSS thresholds.
@@ -322,7 +441,7 @@ jobs:
           "exit_code=$gateCode" | Add-Content -Path $receipt
           if ($gateCode -ne 0) { throw "Windows functional scale gate failed" }
       - name: Upload Page lint scale receipt
-        if: always() && (matrix.os == 'ubuntu-24.04' || matrix.os == 'windows-2022')
+        if: always() && (matrix.os == 'ubuntu-24.04' || (matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-lint == 'true')))
         uses: actions/upload-artifact@v4
         with:
           name: task-19-lint-scale-${{ matrix.os }}-${{ github.sha }}
@@ -340,6 +459,12 @@ jobs:
       # sync/enrich/delete lifecycle in-process).
       - name: Integration tests wenlan-cli + wenlan-server
         run: cargo nextest run -p wenlan -p wenlan-server
+      # The MCP runtime has platform-specific token/transport code, while its
+      # test suite remains quarantined below. Compile every target on the
+      # platform owners so cfg-only breakage cannot hide behind Ubuntu clippy.
+      - name: Compile platform-owned MCP runtime
+        if: matrix.os == 'macos-14' || matrix.os == 'windows-2022'
+        run: cargo check -p wenlan-mcp --all-targets
       - name: Run integration tests (core) (Linux)
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
@@ -414,14 +539,24 @@ jobs:
       - name: E2E folder ingest over HTTP (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: bash scripts/smoke-folder-ingest.sh
-      # The Windows release-profile smoke is intentionally PR-gated to the
-      # windows-affecting path filter above. It proves the dynamically loaded
-      # ORT DLL before a release tag can publish an unusable backend.
-      - name: Build Windows release binaries
+      # Ordinary Windows PR proof uses debug artifacts already warmed by the
+      # integration suite. Stage the pinned DLL next to the daemon because the
+      # scheduled task does not inherit ORT_DYLIB_PATH from this runner shell.
+      - name: Build Windows contract binaries
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
-          cargo build --release -p wenlan -p wenlan-server
+          cargo build -p wenlan -p wenlan-server
+          & scripts/stage-onnxruntime-windows.ps1 `
+            -DestinationDirectory "target\debug"
+
+      # Release-profile proof remains on every non-PR backstop and on PRs whose
+      # diff can change native linkage, Cargo/build inputs, or packaging.
+      - name: Build Windows release binaries
+        if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true')
+        shell: pwsh
+        run: |
+          cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp
           cargo build --release -p wenlan-core --bin model_probe
 
       - name: Validate Windows LLM probe and smoke harness
@@ -444,7 +579,7 @@ jobs:
           & scripts/smoke-windows-llm.test.ps1
 
       - name: Native ORT smoke (Windows; release profile)
-        if: matrix.os == 'windows-2022'
+        if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true')
         shell: pwsh
         run: |
           & scripts/stage-onnxruntime-windows.ps1 `
@@ -463,7 +598,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           try {
-            $backgroundOnOut = & target\release\wenlan.exe background on 2>&1
+            $backgroundOnOut = & target\debug\wenlan.exe background on 2>&1
             $backgroundOnCode = $LASTEXITCODE
             Write-Host "background on exit=$backgroundOnCode out=$backgroundOnOut"
             if ($backgroundOnCode -ne 0) { throw "background on failed: $backgroundOnOut" }
@@ -487,7 +622,7 @@ jobs:
             }
             Write-Host "    daemon healthy under scheduled task"
 
-            $backgroundOffOut = & target\release\wenlan.exe background off 2>&1
+            $backgroundOffOut = & target\debug\wenlan.exe background off 2>&1
             $backgroundOffCode = $LASTEXITCODE
             Write-Host "background off exit=$backgroundOffCode out=$backgroundOffOut"
             if ($backgroundOffCode -ne 0) { throw "background off failed: $backgroundOffOut" }
@@ -539,7 +674,7 @@ jobs:
   test-quarantine:
     name: test-quarantine
     needs: [detect-changes]
-    if: "needs.detect-changes.outputs.rust == 'true' && !startsWith(github.event.head_commit.message, 'chore(main): release')"
+    if: "needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.macos == 'true' || needs.detect-changes.outputs.windows == 'true' || github.event_name != 'pull_request'"
     runs-on: ubuntu-24.04
     continue-on-error: true
     env:
@@ -597,28 +732,45 @@ jobs:
   # of stalling forever on a never-run required check.
   #
   # detect-changes.result is checked explicitly: if the path filter itself
-  # fails, downstream jobs would be skipped silently and this gate would
-  # otherwise pass. fmt/lint/test/plugin/npm are path-filtered, so `skipped`
-  # is their normal state on PRs not touching those surfaces.
+  # fails, downstream jobs would be skipped silently. Every filtered job also
+  # has an expected-vs-actual assertion: expected jobs must succeed and jobs
+  # with no matching diff must be skipped.
   conclusion:
     name: conclusion
     needs: [detect-changes, fmt, lint, test, docs, plugin, npm]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
-      - name: Aggregate
+      - name: Aggregate expected CI results
         run: |
+          expect_job() {
+            name="$1"
+            expected="$2"
+            actual="$3"
+            if [ "$expected" = "true" ]; then
+              if [ "$actual" != "success" ]; then
+                echo "$name was required but result was $actual"
+                exit 1
+              fi
+            elif [ "$actual" != "skipped" ]; then
+              echo "$name was not required but result was $actual"
+              exit 1
+            fi
+          }
+
           dc='${{ needs.detect-changes.result }}'
           if [ "$dc" != 'success' ]; then
             echo "detect-changes did not succeed: $dc"
             exit 1
           fi
-          for r in '${{ needs.fmt.result }}' '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.docs.result }}' '${{ needs.plugin.result }}' '${{ needs.npm.result }}'; do
-            case "$r" in
-              success|skipped) ;;
-              *) echo "Upstream job failed: $r"; exit 1 ;;
-            esac
-          done
+
+          run_rust='${{ needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.macos == 'true' || needs.detect-changes.outputs.windows == 'true' || github.event_name != 'pull_request' }}'
+          expect_job fmt "$run_rust" '${{ needs.fmt.result }}'
+          expect_job lint "$run_rust" '${{ needs.lint.result }}'
+          expect_job test "$run_rust" '${{ needs.test.result }}'
+          expect_job docs '${{ needs.detect-changes.outputs.docs == 'true' }}' '${{ needs.docs.result }}'
+          expect_job plugin '${{ needs.detect-changes.outputs.plugin == 'true' }}' '${{ needs.plugin.result }}'
+          expect_job npm '${{ needs.detect-changes.outputs.npm == 'true' }}' '${{ needs.npm.result }}'
 
   plugin:
     needs: detect-changes
