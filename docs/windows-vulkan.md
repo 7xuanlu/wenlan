@@ -45,9 +45,9 @@ $env:CARGO_BUILD_JOBS = "1"
 ```
 
 If libclang is not on its standard path, set `LIBCLANG_PATH` to the directory
-containing `libclang.dll`. If more than one Visual Studio generator is present
-but only one has the C++ workload, set `CMAKE_GENERATOR` explicitly, for
-example `Visual Studio 16 2019`. Verify `perl
+containing `libclang.dll`. Set `CMAKE_GENERATOR=Ninja` when using the Visual
+Studio 2019 Build Tools: llama.cpp's Vulkan shader rules use CMake `DEPFILE`,
+which the Visual Studio 16 generator cannot consume. Verify `perl
 -MLocale::Maketext::Simple -e "print qq(ok\n)"` before building the server.
 
 ## Build and test
@@ -163,8 +163,10 @@ runs before making performance claims.
 ## Troubleshooting
 
 - `could not find any instance of Visual Studio`: the selected generator lacks
-  the C++ workload. Install it or set `CMAKE_GENERATOR` to the complete Build
-  Tools instance.
+  the C++ workload. Install it and run from a matching developer environment.
+- `add_custom_command DEPFILE is not supported by this generator`: use
+  `CMAKE_GENERATOR=Ninja`; do not select `Visual Studio 16 2019` for the Vulkan
+  build.
 - `cannot open input file 'sqlite3.lib'`: install the vcpkg triplet above and
   prepend its `lib` directory to `LIB`.
 - `Command 'perl' not found` or `Can't locate Locale/Maketext/Simple.pm` while
