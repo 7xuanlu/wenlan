@@ -103,6 +103,7 @@ fn fastembed_ci_cache_violations(workflow: &str) -> Vec<String> {
     const CACHE_STEP: &str = "Cache fastembed model (Linux)";
     const CACHE_DIR: &str = "${{ github.workspace }}/.fastembed_cache";
     const CACHE_PATH: &str = "${{ env.FASTEMBED_CACHE_DIR }}";
+    const CACHE_KEY: &str = "fastembed-bge-base-en-v1.5-q-v2";
     const JOBS: &[(&str, &str)] = &[
         ("test", "Workspace lib tests (Linux)"),
         (
@@ -157,6 +158,12 @@ fn fastembed_ci_cache_violations(workflow: &str) -> Vec<String> {
                 "job {job_name} caches {actual_path:?}, expected {CACHE_PATH:?}"
             ));
         }
+        let actual_key = steps[cache_index]["with"]["key"].as_str();
+        if actual_key != Some(CACHE_KEY) {
+            violations.push(format!(
+                "job {job_name} uses FastEmbed cache key {actual_key:?}, expected {CACHE_KEY:?}"
+            ));
+        }
 
         let consumer_index = steps
             .iter()
@@ -175,6 +182,117 @@ fn fastembed_ci_cache_violations(workflow: &str) -> Vec<String> {
     violations
 }
 
+fn coverage_fastembed_cache_violations(workflow: &str) -> Vec<String> {
+    const CACHE_STEP: &str = "Cache fastembed model (Linux)";
+    const CACHE_DIR: &str = "${{ github.workspace }}/.fastembed_cache";
+    const CACHE_PATH: &str = "${{ env.FASTEMBED_CACHE_DIR }}";
+    const CACHE_KEY: &str = "fastembed-bge-base-en-v1.5-q-v2";
+
+    let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse coverage.yml");
+    let mut violations = Vec::new();
+    let actual_cache_dir = parsed["jobs"]["coverage"]["env"]["FASTEMBED_CACHE_DIR"].as_str();
+    if actual_cache_dir != Some(CACHE_DIR) {
+        violations.push(format!(
+            "coverage sets FASTEMBED_CACHE_DIR={actual_cache_dir:?}, expected {CACHE_DIR:?}"
+        ));
+    }
+
+    let Some(steps) = parsed["jobs"]["coverage"]["steps"].as_sequence() else {
+        violations.push("coverage job has no steps".into());
+        return violations;
+    };
+    let cache_steps: Vec<&serde_yaml::Value> = steps
+        .iter()
+        .filter(|step| step["name"].as_str() == Some(CACHE_STEP))
+        .collect();
+    if cache_steps.len() != 1 {
+        violations.push(format!(
+            "coverage has {} {CACHE_STEP:?} steps, expected 1",
+            cache_steps.len()
+        ));
+        return violations;
+    }
+    let cache_step = cache_steps[0];
+    let actual_path = cache_step["with"]["path"].as_str();
+    if actual_path != Some(CACHE_PATH) {
+        violations.push(format!(
+            "coverage caches {actual_path:?}, expected {CACHE_PATH:?}"
+        ));
+    }
+    let actual_key = cache_step["with"]["key"].as_str();
+    if actual_key != Some(CACHE_KEY) {
+        violations.push(format!(
+            "coverage uses FastEmbed cache key {actual_key:?}, expected {CACHE_KEY:?}"
+        ));
+    }
+
+    violations
+}
+
+fn release_rust_cache_violations(workflow: &str) -> Vec<String> {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse release.yml");
+    let mut violations = Vec::new();
+    let Some(steps) = parsed["jobs"]["release"]["steps"].as_sequence() else {
+        return vec!["release job has no steps".into()];
+    };
+
+    if steps.iter().any(|step| {
+        step["uses"]
+            .as_str()
+            .is_some_and(|uses| uses.contains("sccache-action"))
+    }) {
+        violations.push(
+            "release tag builds install sccache despite near-zero cross-tag cache reuse".into(),
+        );
+    }
+    let build = steps
+        .iter()
+        .find(|step| step["name"].as_str() == Some("Build"));
+    if build.is_none_or(|step| {
+        step["env"]["RUSTC_WRAPPER"].as_str() == Some("sccache")
+            || step["env"]["SCCACHE_GHA_ENABLED"].as_str() == Some("true")
+    }) {
+        violations.push("release Build still depends on sccache GHA state".into());
+    }
+    if !steps.iter().any(|step| {
+        step["uses"]
+            .as_str()
+            .is_some_and(|uses| uses.contains("Swatinem/rust-cache"))
+    }) {
+        violations.push("release job removed its target-level rust-cache fallback".into());
+    }
+
+    violations
+}
+
+fn nextest_core_serialization_violations(config: &str) -> Vec<String> {
+    let parsed: toml::Value = toml::from_str(config).expect("parse nextest.toml");
+    let mut violations = Vec::new();
+    let max_threads = parsed["test-groups"]["wenlan-core"]["max-threads"].as_integer();
+    if max_threads != Some(1) {
+        violations.push(format!(
+            "wenlan-core nextest group max-threads={max_threads:?}, expected 1"
+        ));
+    }
+
+    let has_override = parsed["profile"]["default"]["overrides"]
+        .as_array()
+        .is_some_and(|overrides| {
+            overrides.iter().any(|override_| {
+                override_["filter"].as_str() == Some("package(wenlan-core)")
+                    && override_["test-group"].as_str() == Some("wenlan-core")
+            })
+        });
+    if !has_override {
+        violations.push(
+            "nextest default profile does not assign package(wenlan-core) to its serialized group"
+                .into(),
+        );
+    }
+
+    violations
+}
+
 #[test]
 fn fastembed_ci_cache_is_restored_before_model_consumers() {
     let workflow =
@@ -185,6 +303,115 @@ fn fastembed_ci_cache_is_restored_before_model_consumers() {
         "FastEmbed CI cache contract drift:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn coverage_and_ci_share_the_fastembed_cache_contract() {
+    let workflow = std::fs::read_to_string(repo_root().join(".github/workflows/coverage.yml"))
+        .expect("read coverage.yml");
+    let violations = coverage_fastembed_cache_violations(&workflow);
+    assert!(
+        violations.is_empty(),
+        "Coverage FastEmbed cache contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn coverage_fastembed_cache_contract_detects_non_sharing_path() {
+    let workflow = r#"
+jobs:
+  coverage:
+    env: {}
+    steps:
+      - name: Cache fastembed model (Linux)
+        with:
+          path: ~/.local/share/wenlan/memorydb/fastembed_cache
+          key: fastembed-bge-base-en-v1.5-q-v1
+"#;
+    let violations = coverage_fastembed_cache_violations(workflow);
+    for expected in ["FASTEMBED_CACHE_DIR", "coverage caches", "cache key"] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "fixture must exercise {expected:?}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn release_uses_target_cache_without_tag_scoped_sccache_writes() {
+    let workflow = std::fs::read_to_string(repo_root().join(".github/workflows/release.yml"))
+        .expect("read release.yml");
+    let violations = release_rust_cache_violations(&workflow);
+    assert!(
+        violations.is_empty(),
+        "Release cache contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn release_cache_contract_rejects_sccache_only_fixture() {
+    let workflow = r#"
+jobs:
+  release:
+    steps:
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@sha
+      - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+        run: cargo build --release
+"#;
+    let violations = release_rust_cache_violations(workflow);
+    for expected in [
+        "install sccache",
+        "depends on sccache",
+        "rust-cache fallback",
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "fixture must exercise {expected:?}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn nextest_keeps_core_isolated_while_other_macos_tests_parallelize() {
+    let config = std::fs::read_to_string(repo_root().join(".config/nextest.toml"))
+        .expect("read nextest.toml");
+    let violations = nextest_core_serialization_violations(&config);
+    assert!(
+        violations.is_empty(),
+        "nextest core serialization contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn nextest_core_serialization_contract_rejects_missing_group() {
+    let config = r#"
+[test-groups]
+wenlan-core = { max-threads = 3 }
+
+[[profile.default.overrides]]
+filter = 'package(other)'
+test-group = 'wenlan-core'
+"#;
+    let violations = nextest_core_serialization_violations(config);
+    for expected in ["max-threads", "package(wenlan-core)"] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "fixture must exercise {expected:?}: {violations:?}"
+        );
+    }
 }
 
 #[test]
@@ -227,6 +454,12 @@ jobs:
             .iter()
             .any(|violation| violation.contains("WENLAN_TEST_FASTEMBED_CACHE")),
         "fixture must reject per-step cache overrides: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("cache key")),
+        "fixture must reject a missing or stale cache key: {violations:?}"
     );
 }
 
@@ -1032,7 +1265,13 @@ fn ci_routing_contract_violations(
     let ci: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse ci.yml");
     let mut violations = Vec::new();
 
-    for output in ["macos", "windows", "windows-lint", "windows-release"] {
+    for output in [
+        "macos",
+        "windows",
+        "windows-lint",
+        "windows-release",
+        "mcp-platform",
+    ] {
         if ci["jobs"]["detect-changes"]["outputs"][output]
             .as_str()
             .is_none()
@@ -1046,6 +1285,11 @@ fn ci_routing_contract_violations(
         violations.push(
             "Linux canonical routing is not a fail-closed catch-all for tracked Rust sources"
                 .into(),
+        );
+    }
+    if !rust_paths.contains(".github/workflows/coverage.yml") {
+        violations.push(
+            "coverage workflow cannot bootstrap its FastEmbed cache contract through rust".into(),
         );
     }
     for (path, platform, filter) in platform_sensitive_paths {
@@ -1072,6 +1316,17 @@ fn ci_routing_contract_violations(
     }
     let windows_paths = detect_change_filter_paths(&ci, "windows");
     let macos_paths = detect_change_filter_paths(&ci, "macos");
+    for (filter, paths) in [
+        ("rust", &rust_paths),
+        ("macos", &macos_paths),
+        ("windows", &windows_paths),
+    ] {
+        if !paths.contains(".config/nextest.toml") {
+            violations.push(format!(
+                "{filter} routing omits nextest config that guards macOS core-test isolation"
+            ));
+        }
+    }
     for extension in ["c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx"] {
         let path = format!("crates/**/*.{extension}");
         for (filter, paths) in [
@@ -1168,6 +1423,35 @@ fn ci_routing_contract_violations(
             }
         }
     }
+    let mcp_platform = detect_change_filter_paths(&ci, "mcp-platform");
+    for path in [
+        "crates/wenlan-mcp/src/**",
+        "crates/wenlan-mcp/Cargo.toml",
+        "crates/wenlan-mcp/build.rs",
+        "crates/wenlan-types/src/**",
+        "crates/wenlan-types/Cargo.toml",
+        "crates/wenlan-types/build.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+    ] {
+        if !mcp_platform.contains(path) {
+            violations.push(format!(
+                "mcp-platform routing omits platform-compile-sensitive path {path}"
+            ));
+        }
+    }
+    for path in &mcp_platform {
+        for (platform, platform_paths) in [("macos", &macos_paths), ("windows", &windows_paths)] {
+            if !filter_routes_path(platform_paths, path) {
+                violations.push(format!(
+                    "mcp-platform path does not also schedule {platform}: {path}"
+                ));
+            }
+        }
+    }
 
     for job in ["lint", "test"] {
         let actual = job_needs(&ci, job);
@@ -1176,6 +1460,36 @@ fn ci_routing_contract_violations(
                 "{job} is unnecessarily serialized; needs={actual:?}, expected [\"detect-changes\"]"
             ));
         }
+    }
+    for profile in ["DEV", "TEST"] {
+        let key = format!("CARGO_PROFILE_{profile}_DEBUG");
+        let actual = ci["jobs"]["test"]["env"][&key].as_str();
+        if actual != Some("0") {
+            violations.push(format!(
+                "test job sets {key}={actual:?}, expected \"0\" for dev/test artifact reuse"
+            ));
+        }
+    }
+    let setup_sccache = job_step(&ci, "test", "Set up sccache");
+    let setup_condition = setup_sccache
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    let enable_sccache = job_step(&ci, "test", "Enable sccache (Linux)");
+    let enable_condition = enable_sccache
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    let enable_run = enable_sccache
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    if setup_condition != "matrix.os == 'ubuntu-24.04'"
+        || enable_condition != "matrix.os == 'ubuntu-24.04'"
+        || !enable_run.contains("SCCACHE_GHA_ENABLED=true")
+        || !enable_run.contains("RUSTC_WRAPPER=sccache")
+        || ci["jobs"]["test"]["env"]["RUSTC_WRAPPER"].as_str() == Some("sccache")
+    {
+        violations.push(
+            "test matrix does not restrict sccache reads/writes to the proven Linux lane".into(),
+        );
     }
     for job in ["fmt", "lint", "test", "test-quarantine"] {
         let condition = ci["jobs"][job]["if"].as_str().unwrap_or_default();
@@ -1334,9 +1648,57 @@ fn ci_routing_contract_violations(
         .unwrap_or_default();
     if !mcp_condition.contains("matrix.os == 'macos-14'")
         || !mcp_condition.contains("matrix.os == 'windows-2022'")
-        || !mcp_run.contains("cargo check -p wenlan-mcp --all-targets")
+        || !mcp_condition.contains("needs.detect-changes.outputs.mcp-platform == 'true'")
+        || !mcp_condition.contains("github.event_name != 'pull_request'")
+        || !mcp_run.contains("cargo check -p wenlan-mcp --lib --bins")
+        || mcp_run.contains("--all-targets")
     {
-        violations.push("macOS/Windows ownership does not compile every wenlan-mcp target".into());
+        violations.push(
+            "macOS/Windows ownership does not differentially compile every wenlan-mcp target"
+                .into(),
+        );
+    }
+
+    let macos_lib = job_step(&ci, "test", "Workspace lib tests (macOS)");
+    let macos_lib_run = macos_lib
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    if !macos_lib_run.contains("cargo nextest run --workspace --lib")
+        || macos_lib_run.contains("--test-threads=1")
+    {
+        violations.push("macOS nextest workspace proof is unnecessarily single-threaded".into());
+    }
+
+    let Some(test_steps) = ci["jobs"]["test"]["steps"].as_sequence() else {
+        violations.push("test job has no steps for fail-fast ordering".into());
+        return violations;
+    };
+    let step_index = |name: &str| {
+        test_steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some(name))
+    };
+    let integration_index = step_index("Integration tests wenlan-cli + wenlan-server");
+    match (
+        step_index("Validate Windows smoke harness"),
+        integration_index,
+    ) {
+        (Some(harness), Some(integration)) if harness < integration => {}
+        _ => violations
+            .push("Validate Windows smoke harness does not fail fast before integration".into()),
+    }
+    match (
+        integration_index,
+        step_index("Build Windows release binaries"),
+        step_index("Compile platform-owned MCP runtime"),
+        step_index("Build Windows contract binaries"),
+    ) {
+        (Some(integration), Some(release), Some(mcp), Some(debug))
+            if integration < release && release < mcp && release < debug => {}
+        _ => violations.push(
+            "Windows steps do not prioritize integration then release proof before later compilation"
+                .into(),
+        ),
     }
 
     violations
@@ -1391,6 +1753,12 @@ jobs:
       - name: Native ORT smoke (Windows; release profile)
         if: matrix.os == 'windows-2022'
         run: smoke
+      - name: Workspace lib tests (macOS, single-threaded)
+        if: matrix.os == 'macos-14'
+        run: cargo nextest run --workspace --lib --test-threads=1
+      - name: Compile platform-owned MCP runtime
+        if: matrix.os == 'macos-14' || matrix.os == 'windows-2022'
+        run: cargo check -p wenlan-mcp --all-targets
   conclusion:
     steps:
       - name: Aggregate
@@ -1416,13 +1784,21 @@ jobs:
         "bootstrap the CI contract",
         "expected-vs-actual",
         "unnecessarily serialized",
+        "dev/test artifact reuse",
+        "proven Linux lane",
         "condition omits CI scheduling trigger",
+        "coverage workflow",
+        "nextest config",
         "release-profile-sensitive",
         "release-sensitive",
         "wenlan-mcp artifact",
         "does not also schedule",
         "debug runtime artifacts",
-        "compile every wenlan-mcp target",
+        "differentially compile every wenlan-mcp target",
+        "mcp-platform routing",
+        "single-threaded",
+        "fail fast before integration",
+        "release proof before later compilation",
         "root installer",
     ] {
         assert!(

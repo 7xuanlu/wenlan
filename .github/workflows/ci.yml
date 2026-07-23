@@ -36,6 +36,7 @@ jobs:
       windows: ${{ steps.filter.outputs.windows }}
       windows-lint: ${{ steps.filter.outputs.windows-lint }}
       windows-release: ${{ steps.filter.outputs.windows-release }}
+      mcp-platform: ${{ steps.filter.outputs.mcp-platform }}
       # Test matrix OSes as a JSON array. On PRs, Windows is included only when
       # Windows-affecting files changed. Non-PR runs keep the full backstop.
       test-oses: ${{ steps.matrix.outputs.json }}
@@ -67,7 +68,9 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              - '.config/nextest.toml'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/coverage.yml'
               - '.github/workflows/release.yml'
               - 'docker/**'
               - 'scripts/**'
@@ -134,11 +137,17 @@ jobs:
               - 'crates/**/*.m'
               - 'crates/**/*.mm'
               - 'crates/wenlan-mcp/src/**'
+              - 'crates/wenlan-mcp/Cargo.toml'
+              - 'crates/wenlan-mcp/build.rs'
+              - 'crates/wenlan-types/src/**'
+              - 'crates/wenlan-types/Cargo.toml'
+              - 'crates/wenlan-types/build.rs'
               - 'crates/wenlan-server/src/**'
               - 'crates/wenlan-server/tests/**'
               - 'scripts/install-macos-app.sh'
               - 'scripts/test-install-macos-app.sh'
               - 'install.sh'
+              - '.config/nextest.toml'
               - 'crates/**/Cargo.toml'
               - 'crates/**/build.rs'
               - 'Cargo.toml'
@@ -159,6 +168,11 @@ jobs:
               - 'crates/wenlan-server/tests/**'
               - 'crates/wenlan-mcp/npm/install.js'
               - 'crates/wenlan-mcp/src/**'
+              - 'crates/wenlan-mcp/Cargo.toml'
+              - 'crates/wenlan-mcp/build.rs'
+              - 'crates/wenlan-types/src/**'
+              - 'crates/wenlan-types/Cargo.toml'
+              - 'crates/wenlan-types/build.rs'
               - 'crates/wenlan-core/src/config.rs'
               - 'crates/wenlan-core/src/drift_guard.rs'
               - 'crates/wenlan-core/src/export/knowledge.rs'
@@ -182,6 +196,7 @@ jobs:
               - 'scripts/stabilize-rust-cache-toolchains.test.sh'
               - 'scripts/lint-scale-gate.sh'
               - 'crates/wenlan-core/src/lint/**'
+              - '.config/nextest.toml'
               - 'crates/wenlan-core/src/engine.rs'
               - 'crates/wenlan-core/src/llm_provider.rs'
               - 'crates/wenlan-core/src/bin/model_probe.rs'
@@ -236,6 +251,21 @@ jobs:
               - 'version.txt'
               - '.release-please-manifest.json'
               - 'CHANGELOG.md'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+            mcp-platform:
+              # The MCP runtime owns Unix/non-Unix cfg branches. Compile all
+              # shipped targets on both platform owners only when its source,
+              # runtime dependency graph, toolchain, or workflow changes.
+              - 'crates/wenlan-mcp/src/**'
+              - 'crates/wenlan-mcp/Cargo.toml'
+              - 'crates/wenlan-mcp/build.rs'
+              - 'crates/wenlan-types/src/**'
+              - 'crates/wenlan-types/Cargo.toml'
+              - 'crates/wenlan-types/build.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
 
@@ -320,14 +350,11 @@ jobs:
         # and pay the ~30min Windows tax anyway today.
         os: ${{ fromJSON(needs.detect-changes.outputs.test-oses) }}
     env:
-      # Drop debuginfo from test artifacts. CI has no debugger attached and the
-      # build cache stays warm via rust-cache. Trims linker time + cache size.
+      # Keep dev/test dependency fingerprints aligned and drop debuginfo. CI
+      # has no debugger attached; this lets nextest and later debug binary
+      # builds reuse more artifacts while trimming linker time + cache size.
+      CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
-      # sccache wraps rustc and caches compile outputs to GHA, including
-      # C/C++ from build scripts (ring, openssl-src, llama-cpp-sys). Bigger
-      # win than rust-cache alone on cold cache.
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
       FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -346,7 +373,14 @@ jobs:
         shell: bash
         run: bash scripts/stabilize-rust-cache-toolchains.sh
       - name: Set up sccache
+        if: matrix.os == 'ubuntu-24.04'
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - name: Enable sccache (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: test
@@ -402,11 +436,12 @@ jobs:
       - name: Workspace lib tests (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: cargo nextest run --workspace --lib
-      - name: Workspace lib tests (macOS, single-threaded)
+      - name: Workspace lib tests (macOS)
         if: matrix.os == 'macos-14'
         # nextest spawns one process per test by default — sidesteps the
         # ONNX atexit FFI race that required --test-threads=1 with cargo test.
-        run: cargo nextest run --workspace --lib --test-threads=1
+        # .config/nextest.toml still serializes wenlan-core's model/cache tests.
+        run: cargo nextest run --workspace --lib
       - name: Page lint scale gate (Linux time + RSS)
         if: matrix.os == 'ubuntu-24.04'
         run: bash scripts/lint-scale-gate.sh "$RUNNER_TEMP/task-19-memory-lint-debugger-linux.txt"
@@ -448,6 +483,27 @@ jobs:
           path: ${{ runner.temp }}/task-19-memory-lint-debugger-*.txt
           retention-days: 30
           if-no-files-found: error
+      # Syntax and stub-behavior checks are cheap and independent of Rust
+      # compilation. Run them before the long Windows Cargo steps so a broken
+      # release harness fails in seconds rather than near the end of the job.
+      - name: Validate Windows smoke harness
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts\smoke-windows-llm.ps1"),
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -ne 0) {
+            $parseErrors | Format-List | Out-String | Write-Error
+            throw "scripts\smoke-windows-llm.ps1 has PowerShell parse errors"
+          }
+          & scripts/smoke-windows-llm.test.ps1
+
       # Integration tests for wenlan-cli + wenlan-server. We deliberately do
       # NOT use `--workspace --tests` because that pulls in wenlan-core's
       # `eval_harness.rs` which requires `ANTHROPIC_API_KEY` (not in CI).
@@ -459,12 +515,22 @@ jobs:
       # sync/enrich/delete lifecycle in-process).
       - name: Integration tests wenlan-cli + wenlan-server
         run: cargo nextest run -p wenlan -p wenlan-server
+      # Release-profile proof remains on every non-PR backstop and on PRs whose
+      # diff can change native linkage, Cargo/build inputs, or packaging. Run
+      # functional integration first, then prioritize release-only failures
+      # ahead of the MCP runtime and debug artifact builds.
+      - name: Build Windows release binaries
+        if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true')
+        shell: pwsh
+        run: |
+          cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp
+          cargo build --release -p wenlan-core --bin model_probe
       # The MCP runtime has platform-specific token/transport code, while its
-      # test suite remains quarantined below. Compile every target on the
-      # platform owners so cfg-only breakage cannot hide behind Ubuntu clippy.
+      # test suite remains quarantined below. Compile the shipped lib/bin on
+      # both platform owners; Linux quarantine owns test/dev-dependency targets.
       - name: Compile platform-owned MCP runtime
-        if: matrix.os == 'macos-14' || matrix.os == 'windows-2022'
-        run: cargo check -p wenlan-mcp --all-targets
+        if: (matrix.os == 'macos-14' || matrix.os == 'windows-2022') && (github.event_name != 'pull_request' || needs.detect-changes.outputs.mcp-platform == 'true')
+        run: cargo check -p wenlan-mcp --lib --bins
       - name: Run integration tests (core) (Linux)
         if: matrix.os == 'ubuntu-24.04'
         # nextest process-per-test sidesteps the macOS SIGSEGV root cause
@@ -550,33 +616,10 @@ jobs:
           & scripts/stage-onnxruntime-windows.ps1 `
             -DestinationDirectory "target\debug"
 
-      # Release-profile proof remains on every non-PR backstop and on PRs whose
-      # diff can change native linkage, Cargo/build inputs, or packaging.
-      - name: Build Windows release binaries
-        if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true')
-        shell: pwsh
-        run: |
-          cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp
-          cargo build --release -p wenlan-core --bin model_probe
-
-      - name: Validate Windows LLM probe and smoke harness
+      - name: Validate Windows LLM probe
         if: matrix.os == 'windows-2022'
         shell: pwsh
-        run: |
-          cargo test -p wenlan-core --bin model_probe
-
-          $tokens = $null
-          $parseErrors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path "scripts\smoke-windows-llm.ps1"),
-            [ref]$tokens,
-            [ref]$parseErrors
-          ) | Out-Null
-          if ($parseErrors.Count -ne 0) {
-            $parseErrors | Format-List | Out-String | Write-Error
-            throw "scripts\smoke-windows-llm.ps1 has PowerShell parse errors"
-          }
-          & scripts/smoke-windows-llm.test.ps1
+        run: cargo test -p wenlan-core --bin model_probe
 
       - name: Native ORT smoke (Windows; release profile)
         if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true')
