@@ -8958,7 +8958,6 @@ impl MemoryDB {
                         id INTEGER PRIMARY KEY CHECK (id = 1),
                         stage TEXT NOT NULL,
                         cursor TEXT,
-                        batch_checksum TEXT,
                         epoch INTEGER NOT NULL DEFAULT 1,
                         completed_at INTEGER,
                         report_json TEXT
@@ -9046,7 +9045,33 @@ impl MemoryDB {
         // kill mid-batch) a cheap no-op over already-mapped entities rather
         // than a duplicate insert -- the same idempotent-rescan pattern 83
         // and 85 use, backed here by `entity_page_map.page_id` being UNIQUE.
-        let mut cursor: i64 = i64::MIN;
+        //
+        // Resume from the durable cursor so a restart after a mid-migration
+        // kill picks up the un-committed tail instead of re-scanning the whole
+        // `entities` table from rowid 0. The cursor is stamped in the SAME
+        // transaction as its batch's inserts (below), so a stored value is
+        // always a safe lower bound -- every rowid <= cursor was durably
+        // mapped. Absent / NULL / unparseable (a fresh run) falls back to
+        // i64::MIN. The NOT-EXISTS guard still protects the boundary row.
+        let mut cursor: i64 = {
+            let conn = self.conn.lock().await;
+            let stored: Option<String> = {
+                let mut rows = conn
+                    .query(
+                        "SELECT cursor FROM entity_page_migration_state WHERE id = 1",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m86 read cursor: {e}")))?;
+                match rows.next().await {
+                    Ok(Some(row)) => row.get::<Option<String>>(0).unwrap_or(None),
+                    _ => None,
+                }
+            };
+            stored
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(i64::MIN)
+        };
         let mut total_created: i64 = 0;
         loop {
             let conn = self.conn.lock().await;
@@ -64406,6 +64431,108 @@ pub(crate) mod tests {
         assert!(
             err.to_string().contains("m86"),
             "error should identify migration 86: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_86_resume_reads_stored_cursor_and_skips_below_range() {
+        // Resume teeth (M3 PR-1 stage e): a restart must READ the durable
+        // cursor and treat every entity at/below it as already processed,
+        // fetching only the un-committed tail. Proven by leaving an UNMAPPED
+        // entity below a seeded cursor: with cursor-resume that entity is never
+        // fetched, stays unmapped, and the Step-4 completeness assertion fails
+        // loud; a from-scratch (i64::MIN) rescan would instead pick it up and
+        // let the migration wrongly succeed. The tail entity above the cursor
+        // is backfilled either way. (Integration of resume + the
+        // `assert_entities_have_shadow_pages` guard.)
+        let (db, _dir) = test_db().await;
+        let (r_below, r_tail) = {
+            let conn = db.conn.lock().await;
+            insert_raw_entity_for_m86_test(
+                &conn,
+                "e_below",
+                "Below Cursor",
+                "person",
+                None,
+                None,
+                0,
+            )
+            .await;
+            insert_raw_entity_for_m86_test(&conn, "e_tail", "Tail", "person", None, None, 0).await;
+            // Both entities must be unmapped so the backfill has real work and
+            // the completeness assertion has teeth: clear any shadow pages the
+            // initial test_db migration minted, plus the map.
+            conn.execute("DELETE FROM entity_page_map", ())
+                .await
+                .unwrap();
+            conn.execute("DELETE FROM pages WHERE kind = 'entity'", ())
+                .await
+                .unwrap();
+            let mut rows = conn
+                .query("SELECT id, rowid FROM entities", ())
+                .await
+                .unwrap();
+            let (mut below, mut tail) = (0i64, 0i64);
+            while let Some(row) = rows.next().await.unwrap() {
+                let id: String = row.get(0).unwrap();
+                let rid: i64 = row.get(1).unwrap();
+                match id.as_str() {
+                    "e_below" => below = rid,
+                    "e_tail" => tail = rid,
+                    _ => {}
+                }
+            }
+            (below, tail)
+        };
+        assert!(
+            r_below < r_tail,
+            "insertion order must give e_below the lower rowid"
+        );
+
+        // Seed a mid-range cursor at e_below's rowid: `WHERE rowid > ?1` then
+        // excludes e_below and includes e_tail.
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE entity_page_migration_state SET stage = 'backfilling', cursor = ?1 WHERE id = 1",
+                libsql::params![r_below.to_string()],
+            )
+            .await
+            .unwrap();
+            conn.execute("PRAGMA user_version = 85", ()).await.unwrap();
+        }
+
+        let result = db.run_migrations(&crate::events::NoopEmitter).await;
+        assert!(
+            result.is_err(),
+            "resume must honor the stored cursor: e_below sits at/under it and is never \
+             re-fetched, so the completeness assertion must fail -- a from-scratch rescan \
+             would wrongly map it and let the migration succeed"
+        );
+
+        let conn = db.conn.lock().await;
+        let mapped = |entity_id: &'static str| {
+            let conn = &conn;
+            async move {
+                let mut rows = conn
+                    .query(
+                        "SELECT COUNT(*) FROM entity_page_map WHERE entity_id = ?1",
+                        libsql::params![entity_id],
+                    )
+                    .await
+                    .unwrap();
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+            }
+        };
+        assert_eq!(
+            mapped("e_tail").await,
+            1,
+            "the tail entity above the cursor must be backfilled"
+        );
+        assert_eq!(
+            mapped("e_below").await,
+            0,
+            "the entity at/below the stored cursor must be skipped by resume"
         );
     }
 
