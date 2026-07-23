@@ -12211,6 +12211,65 @@ impl MemoryDB {
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("delete_space delete memories: {}", e))
                 })?;
+                // Tear the space's entities down the SAME way the single-entity
+                // `delete_entity` does (M3 PR-1), scoped to the space, BEFORE the
+                // `DELETE FROM entities` below. Two reasons this is the full
+                // mirror, not just a shadow delete:
+                //  * entity_aliases.canonical_entity_id references entities(id)
+                //    WITHOUT ON DELETE CASCADE (db.rs migration 41 DDL), and
+                //    store_entity auto-creates a self-alias, so a bare
+                //    `DELETE FROM entities` FK-fails for any real entity -- the
+                //    whole delete would roll back. Clear the aliases first.
+                //  * the kind='entity' shadow pages are orphaned otherwise: the
+                //    entity_page_map row's entity-side cascade drops only the map
+                //    row on entity delete, never the shadow page. Delete the
+                //    shadows here (their map rows then cascade on the page side).
+                // memories/pages entity_id references are nulled to match
+                // delete_entity exactly (no dangling link to a removed entity).
+                tx.execute(
+                    "UPDATE memories SET entity_id = NULL \
+                     WHERE entity_id IN (SELECT id FROM entities WHERE space = ?1)",
+                    libsql::params![name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "delete_space delete null memories entity_id: {}",
+                        e
+                    ))
+                })?;
+                tx.execute(
+                    "UPDATE pages SET entity_id = NULL \
+                     WHERE entity_id IN (SELECT id FROM entities WHERE space = ?1)",
+                    libsql::params![name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "delete_space delete null pages entity_id: {}",
+                        e
+                    ))
+                })?;
+                tx.execute(
+                    "DELETE FROM entity_aliases \
+                     WHERE canonical_entity_id IN (SELECT id FROM entities WHERE space = ?1)",
+                    libsql::params![name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space delete aliases: {}", e))
+                })?;
+                tx.execute(
+                    "DELETE FROM pages WHERE kind = 'entity' \
+                     AND id IN (SELECT page_id FROM entity_page_map m \
+                                JOIN entities e ON e.id = m.entity_id \
+                                WHERE e.space = ?1)",
+                    libsql::params![name],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space delete shadow pages: {}", e))
+                })?;
                 tx.execute(
                     "DELETE FROM entities WHERE space = ?1",
                     libsql::params![name],
@@ -46644,6 +46703,90 @@ pub(crate) mod tests {
             .unwrap()
             .is_empty());
         assert_pages_invalidated_once(&db, &pages).await;
+    }
+
+    #[tokio::test]
+    async fn delete_space_delete_removes_entity_shadow_pages() {
+        // rework2 ITEM 3 (M3 PR-1): delete_space("delete") cascades the entities
+        // (and their entity_page_map rows) away, but must ALSO delete the mapped
+        // kind='entity' shadow pages -- mirroring delete_entity -- so none is
+        // left orphaned when the entities go.
+        let (db, _dir) = test_db().await;
+        db.create_space("doomed", None, false).await.unwrap();
+        let id = db
+            .store_entity("Doomed Dan", "person", Some("doomed"), Some("test"), None)
+            .await
+            .unwrap();
+        let page_id: String = {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT page_id FROM entity_page_map WHERE entity_id = ?1",
+                    libsql::params![id.clone()],
+                )
+                .await
+                .unwrap();
+            rows.next()
+                .await
+                .unwrap()
+                .expect("shadow must exist before delete")
+                .get(0)
+                .unwrap()
+        };
+
+        db.delete_space("doomed", "delete").await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let entity_count: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                    libsql::params![id.clone()],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        let map_count: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entity_page_map WHERE entity_id = ?1",
+                    libsql::params![id.clone()],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        // The self-alias store_entity created must be gone too -- its FK to
+        // entities(id) has no ON DELETE CASCADE, so leaving it would have
+        // FK-failed the whole delete.
+        let alias_count: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM entity_aliases WHERE canonical_entity_id = ?1",
+                    libsql::params![id],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        let page_count: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM pages WHERE id = ?1",
+                    libsql::params![page_id],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(entity_count, 0, "entity must be deleted");
+        assert_eq!(map_count, 0, "entity_page_map row must be gone");
+        assert_eq!(alias_count, 0, "the entity's aliases must be deleted");
+        assert_eq!(
+            page_count, 0,
+            "the shadow page must be deleted, not orphaned"
+        );
     }
 
     #[tokio::test]
