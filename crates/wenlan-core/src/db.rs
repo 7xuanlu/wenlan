@@ -24031,7 +24031,10 @@ impl MemoryDB {
     pub async fn count_active_pages(&self) -> Result<i64, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
-            .query("SELECT COUNT(*) FROM pages WHERE status = 'active'", ())
+            .query(
+                "SELECT COUNT(*) FROM pages WHERE status = 'active' AND COALESCE(kind, 'concept') != 'entity'",
+                (),
+            )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("count_active_pages query: {}", e)))?;
         let row = rows
@@ -24120,7 +24123,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
-                 FROM pages WHERE status = 'active' ORDER BY created_at ASC LIMIT 1",
+                 FROM pages WHERE status = 'active' AND COALESCE(kind, 'concept') != 'entity' ORDER BY created_at ASC LIMIT 1",
                 (),
             )
             .await
@@ -28563,6 +28566,7 @@ impl MemoryDB {
                 "SELECT id, title, version, created_at, last_modified
                  FROM pages
                  WHERE status = 'active'
+                   AND COALESCE(kind, 'concept') != 'entity'
                  ORDER BY last_modified DESC LIMIT ?1",
                 libsql::params![limit],
             )
@@ -30204,7 +30208,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
-                 FROM pages WHERE id = ?1",
+                 FROM pages WHERE id = ?1 AND COALESCE(kind, 'concept') != 'entity'",
                 libsql::params![id],
             )
             .await
@@ -30222,7 +30226,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
-                 FROM pages WHERE entity_id = ?1 AND status = 'active' LIMIT 1",
+                 FROM pages WHERE entity_id = ?1 AND status = 'active' AND COALESCE(kind, 'concept') != 'entity' LIMIT 1",
                 libsql::params![entity_id],
             )
             .await
@@ -30273,7 +30277,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
-                 FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3",
+                 FROM pages WHERE status = ?1 AND COALESCE(kind, 'concept') != 'entity' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3",
                 libsql::params![status, limit, offset],
             )
             .await
@@ -30300,6 +30304,7 @@ impl MemoryDB {
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
                  FROM pages
                  WHERE status = ?1
+                   AND COALESCE(kind, 'concept') != 'entity'
                    AND stale_reason IS NOT NULL
                    AND COALESCE(user_edited, 0) = 0
                  ORDER BY COALESCE(sources_updated_count, 0) DESC, last_modified ASC
@@ -30343,7 +30348,7 @@ impl MemoryDB {
         let (sql, params): (String, Vec<libsql::Value>) = match space {
             Some("uncategorized") => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
-                 FROM pages WHERE status = ?1 AND space = '00000000-0000-4000-8000-000000000001' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                 FROM pages WHERE status = ?1 AND COALESCE(kind, 'concept') != 'entity' AND space = '00000000-0000-4000-8000-000000000001' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
                     libsql::Value::Integer(limit as i64),
@@ -30352,7 +30357,7 @@ impl MemoryDB {
             ),
             Some(d) => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
-                 FROM pages WHERE status = ?1 AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
+                 FROM pages WHERE status = ?1 AND COALESCE(kind, 'concept') != 'entity' AND space = ?2 ORDER BY last_modified DESC LIMIT ?3 OFFSET ?4".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
                     libsql::Value::Text(d.to_string()),
@@ -30362,7 +30367,7 @@ impl MemoryDB {
             ),
             None => (
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
-                 FROM pages WHERE status = ?1 ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
+                 FROM pages WHERE status = ?1 AND COALESCE(kind, 'concept') != 'entity' ORDER BY last_modified DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![
                     libsql::Value::Text(status.to_string()),
                     libsql::Value::Integer(limit as i64),
@@ -31589,7 +31594,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, source_memory_ids FROM pages WHERE status = 'active' LIMIT 1000",
+                "SELECT id, title, source_memory_ids FROM pages WHERE status = 'active' AND COALESCE(kind, 'concept') != 'entity' LIMIT 1000",
                 (),
             )
             .await
@@ -31701,6 +31706,7 @@ impl MemoryDB {
         let mut rows = conn
             .query(
                 "SELECT title FROM pages WHERE status = 'active' \
+                   AND COALESCE(kind, 'concept') != 'entity' \
                  ORDER BY last_modified DESC LIMIT ?1",
                 libsql::params![limit as i64],
             )
@@ -31738,6 +31744,7 @@ impl MemoryDB {
             Some(workspace) => (
                 "SELECT title FROM pages \
                  WHERE status = 'active' \
+                   AND COALESCE(kind, 'concept') != 'entity' \
                    AND embedding IS NOT NULL \
                    AND space = ?2 \
                  ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
@@ -31752,6 +31759,7 @@ impl MemoryDB {
             None => (
                 "SELECT title FROM pages \
                  WHERE status = 'active' \
+                   AND COALESCE(kind, 'concept') != 'entity' \
                    AND embedding IS NOT NULL \
                  ORDER BY vector_distance_cos(embedding, vector32(?1)) ASC \
                  LIMIT ?2"
@@ -31795,6 +31803,7 @@ impl MemoryDB {
             .query(
                 "SELECT id FROM pages \
                  WHERE LOWER(title) = LOWER(?1) AND status = 'active' \
+                   AND COALESCE(kind, 'concept') != 'entity' \
                  LIMIT 1",
                 libsql::params![trimmed],
             )
@@ -31830,6 +31839,7 @@ impl MemoryDB {
             .query(
                 "SELECT id FROM pages
                  WHERE LOWER(title) = LOWER(?1) AND status = 'active'
+                   AND COALESCE(kind, 'concept') != 'entity'
                    AND space = COALESCE(?2, '00000000-0000-4000-8000-000000000001')
                  ORDER BY id ASC LIMIT 2",
                 libsql::params![trimmed, scope],
@@ -32830,7 +32840,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id FROM pages WHERE status = 'active' AND citations IS NULL ORDER BY last_modified ASC LIMIT ?1",
+                "SELECT id FROM pages WHERE status = 'active' AND COALESCE(kind, 'concept') != 'entity' AND citations IS NULL ORDER BY last_modified ASC LIMIT ?1",
                 libsql::params![limit as i64],
             )
             .await
@@ -33201,7 +33211,8 @@ impl MemoryDB {
                         c.workspace, c.citations, COALESCE(c.kind, 'concept')
                  FROM pages c
                  INNER JOIN page_sources cs ON c.id = cs.page_id
-                 WHERE cs.memory_source_id = ?1 AND c.status = 'active'",
+                 WHERE cs.memory_source_id = ?1 AND c.status = 'active'
+                   AND COALESCE(c.kind, 'concept') != 'entity'",
                 libsql::params![memory_source_id],
             )
             .await
@@ -34020,7 +34031,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut sql = String::from(
             "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept') \
-             FROM pages WHERE stale_reason = ?1 AND status = 'active'",
+             FROM pages WHERE stale_reason = ?1 AND status = 'active' AND COALESCE(kind, 'concept') != 'entity'",
         );
         let mut bind: Vec<libsql::Value> = vec![libsql::Value::Text(reason.to_string())];
         if let Some(eid) = entity_id_filter {
@@ -34058,6 +34069,7 @@ impl MemoryDB {
                 "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept')
                  FROM pages
                  WHERE status = 'archived'
+                   AND COALESCE(kind, 'concept') != 'entity'
                    AND entity_id IS NULL
                    AND space = '00000000-0000-4000-8000-000000000001'
                    AND COALESCE(user_edited, 0) = 0
@@ -64596,6 +64608,414 @@ pub(crate) mod tests {
                 .iter()
                 .any(|item| item.title == "Scoped Recent Entity Marker"),
             "the scoped recent-activity surface must not surface a kind='entity' shadow page"
+        );
+    }
+
+    // -- M3 PR-1 rework wave 1 (item A): SQL-level visibility fences. Each test
+    // is constructed so the shadow WOULD surface without its fence (non-vacuous):
+    // store_entity dual-writes an active, embedded, space-bound shadow page, then
+    // the reader is asserted to exclude it. Mirrors the stage-f Rust-level fence
+    // tests above.
+
+    /// Helper: the shadow page id dual-written for an entity.
+    async fn shadow_page_id(db: &MemoryDB, entity_id: &str) -> String {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT page_id FROM entity_page_map WHERE entity_id = ?1",
+                libsql::params![entity_id.to_string()],
+            )
+            .await
+            .unwrap();
+        rows.next()
+            .await
+            .unwrap()
+            .expect("entity must have a mapped shadow page")
+            .get(0)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_page_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Get Page Marker", "person", Some("work"), None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+
+        let page = db.get_page(&pid).await.unwrap();
+        assert!(
+            page.is_none(),
+            "get_page must return None for a kind='entity' shadow id (fail-closed by ID)"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_page_scoped_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Get Page Scoped Marker", "person", Some("work"), None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+
+        // Space scope exercises the scoped SQL (Global delegates to get_page).
+        let page = db
+            .get_page_scoped(
+                &pid,
+                &crate::read_scope::ReadScope::Space("work".to_string()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            page.is_none(),
+            "get_page_scoped must return None for a kind='entity' shadow id"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_pages_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("List Pages Marker", "person", Some("work"), None, None)
+            .await
+            .unwrap();
+
+        let pages = db.list_pages("active", 50, 0).await.unwrap();
+        assert!(
+            !pages.iter().any(|p| p.title == "List Pages Marker"),
+            "list_pages must not surface a kind='entity' shadow page"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_pages_scoped_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity(
+            "List Pages Scoped Marker",
+            "person",
+            Some("work"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let pages = db
+            .list_pages_scoped(
+                "active",
+                50,
+                0,
+                &crate::read_scope::ReadScope::Space("work".to_string()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !pages.iter().any(|p| p.title == "List Pages Scoped Marker"),
+            "list_pages_scoped (Space arm) must not surface a kind='entity' shadow page"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_pages_by_space_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        // One shadow in "work", one with no space (folds to UNFILED) -- covers
+        // all three arms (Some(d), Some("uncategorized"), None) non-vacuously.
+        db.store_entity("Space Bound Marker", "person", Some("work"), None, None)
+            .await
+            .unwrap();
+        db.store_entity("Unfiled Bound Marker", "person", None, None, None)
+            .await
+            .unwrap();
+
+        let by_space = db
+            .list_pages_by_space("active", Some("work"), 50, 0)
+            .await
+            .unwrap();
+        assert!(
+            !by_space.iter().any(|p| p.title == "Space Bound Marker"),
+            "list_pages_by_space(Some(space)) must exclude the shadow"
+        );
+
+        let uncategorized = db
+            .list_pages_by_space("active", Some("uncategorized"), 50, 0)
+            .await
+            .unwrap();
+        assert!(
+            !uncategorized
+                .iter()
+                .any(|p| p.title == "Unfiled Bound Marker"),
+            "list_pages_by_space(uncategorized) must exclude the UNFILED shadow"
+        );
+
+        let all = db.list_pages_by_space("active", None, 50, 0).await.unwrap();
+        assert!(
+            !all.iter()
+                .any(|p| p.title == "Space Bound Marker" || p.title == "Unfiled Bound Marker"),
+            "list_pages_by_space(None) must exclude every shadow"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_recent_changes_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("Recent Changes Marker", "person", None, None, None)
+            .await
+            .unwrap();
+
+        let changes = db.list_recent_changes(50).await.unwrap();
+        assert!(
+            !changes.iter().any(|c| c.title == "Recent Changes Marker"),
+            "list_recent_changes must not surface a kind='entity' shadow page"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_recent_changes_scoped_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity(
+            "Recent Changes Scoped Marker",
+            "person",
+            Some("work"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let changes = db
+            .list_recent_changes_scoped(
+                50,
+                &crate::read_scope::ReadScope::Space("work".to_string()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !changes
+                .iter()
+                .any(|c| c.title == "Recent Changes Scoped Marker"),
+            "list_recent_changes_scoped (Space arm) must not surface a shadow page"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_active_page_titles_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("Active Titles Marker", "person", None, None, None)
+            .await
+            .unwrap();
+
+        let titles = db.list_active_page_titles(50).await.unwrap();
+        assert!(
+            !titles.iter().any(|t| t == "Active Titles Marker"),
+            "list_active_page_titles must not surface a kind='entity' shadow title"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_relevant_active_page_titles_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity(
+            "Relevant Titles Zephyr Marker",
+            "person",
+            Some("work"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Both branches: no-workspace (None) and workspace-scoped (Some).
+        let unscoped = db
+            .list_relevant_active_page_titles("Relevant Titles Zephyr Marker", None, 10)
+            .await
+            .unwrap();
+        assert!(
+            !unscoped
+                .iter()
+                .any(|t| t == "Relevant Titles Zephyr Marker"),
+            "list_relevant_active_page_titles(None) must not surface a shadow title"
+        );
+
+        let scoped = db
+            .list_relevant_active_page_titles("Relevant Titles Zephyr Marker", Some("work"), 10)
+            .await
+            .unwrap();
+        assert!(
+            !scoped.iter().any(|t| t == "Relevant Titles Zephyr Marker"),
+            "list_relevant_active_page_titles(Some(space)) must not surface a shadow title"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_active_page_id_by_title_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("Find By Title Marker", "person", None, None, None)
+            .await
+            .unwrap();
+
+        let found = db
+            .find_active_page_id_by_title("Find By Title Marker")
+            .await
+            .unwrap();
+        assert!(
+            found.is_none(),
+            "find_active_page_id_by_title must not resolve a wikilink to a shadow page"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_unique_active_page_id_by_title_scoped_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity(
+            "Find Unique By Title Marker",
+            "person",
+            Some("work"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let found = db
+            .find_unique_active_page_id_by_title_scoped("Find Unique By Title Marker", Some("work"))
+            .await
+            .unwrap();
+        assert!(
+            found.is_none(),
+            "find_unique_active_page_id_by_title_scoped must not resolve to a shadow page"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_active_pages_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("Count Marker", "person", None, None, None)
+            .await
+            .unwrap();
+
+        let count = db.count_active_pages().await.unwrap();
+        assert_eq!(
+            count, 0,
+            "count_active_pages must not count kind='entity' shadow pages (milestone honesty)"
+        );
+    }
+
+    #[tokio::test]
+    async fn oldest_active_page_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("Oldest Page Marker", "person", None, None, None)
+            .await
+            .unwrap();
+
+        let oldest = db.oldest_active_page().await.unwrap();
+        assert!(
+            oldest.is_none(),
+            "oldest_active_page must skip kind='entity' shadow pages"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_page_source_index_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        db.store_entity("Source Index Marker", "person", None, None, None)
+            .await
+            .unwrap();
+
+        let index = db.load_page_source_index().await.unwrap();
+        assert!(
+            !index.iter().any(|e| e.page_title == "Source Index Marker"),
+            "load_page_source_index must not include a kind='entity' shadow page"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_pages_missing_citations_excludes_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Missing Citations Marker", "person", None, None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+
+        // Shadow pages are born with NULL citations, so without the fence this
+        // annotate-only backfill sweep would pick them up.
+        let ids = db.get_pages_missing_citations(50).await.unwrap();
+        assert!(
+            !ids.contains(&pid),
+            "get_pages_missing_citations must not enqueue a shadow page for citation backfill"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_page_sources_scoped_rejects_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Sources Marker", "person", None, None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+
+        let result = db
+            .get_page_sources_scoped(&pid, &crate::read_scope::ReadScope::Global)
+            .await;
+        assert!(
+            result.is_err(),
+            "get_page_sources_scoped must 404 (not Ok([])) for a shadow id (fail-closed by ID)"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_page_outbound_links_scoped_rejects_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Outbound Links Marker", "person", None, None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+
+        let result = db
+            .get_page_outbound_links_scoped(&pid, &crate::read_scope::ReadScope::Global)
+            .await;
+        assert!(
+            result.is_err(),
+            "get_page_outbound_links_scoped must 404 for a shadow id"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_page_inbound_links_scoped_rejects_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Inbound Links Marker", "person", None, None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+
+        let result = db
+            .get_page_inbound_links_scoped(&pid, &crate::read_scope::ReadScope::Global)
+            .await;
+        assert!(
+            result.is_err(),
+            "get_page_inbound_links_scoped must 404 for a shadow id"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_page_changelog_scoped_rejects_entity_kind_shadow() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Changelog Marker", "person", None, None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+
+        let result = db
+            .get_page_changelog_scoped(&pid, &crate::read_scope::ReadScope::Global)
+            .await;
+        assert!(
+            result.is_err(),
+            "get_page_changelog_scoped must 404 for a shadow id"
         );
     }
 
