@@ -4515,7 +4515,13 @@ async fn validate_entity_extraction_evidence_on_snapshot(
             ]),
         ),
         RepairLintScope::Uncategorized => (
-            " AND space IS NULL".to_string(),
+            // memories.space is NOT NULL since migration 85 — an unscoped
+            // memory carries the reserved sentinel id, not NULL. Match both so
+            // a not-yet-folded legacy NULL row still resolves.
+            format!(
+                " AND (space IS NULL OR space = '{}')",
+                crate::db::UNFILED_SPACE_ID
+            ),
             libsql::params::Params::Positional(vec![libsql::Value::Text(memory_id.to_string())]),
         ),
     };
@@ -5695,7 +5701,13 @@ async fn resolve_target(
             libsql::params::Params::Positional(vec![libsql::Value::Text(space.clone())]),
         ),
         RepairLintScope::Uncategorized => (
-            " AND m.space IS NULL".to_string(),
+            // memories.space is NOT NULL since migration 85 — an unscoped
+            // memory carries the reserved sentinel id, not NULL. Match both so
+            // a not-yet-folded legacy NULL row still resolves.
+            format!(
+                " AND (m.space IS NULL OR m.space = '{}')",
+                crate::db::UNFILED_SPACE_ID
+            ),
             libsql::params::Params::None,
         ),
     };

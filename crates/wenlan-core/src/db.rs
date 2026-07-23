@@ -11826,9 +11826,12 @@ impl MemoryDB {
         match memory_action {
             "keep" => { /* do nothing — orphan memories with space tag intact */ }
             "unassign" => {
+                // memories.space is NOT NULL since migration 85 (DEFAULT is the
+                // reserved sentinel). Unassigning must fold to the sentinel, not
+                // NULL — a `SET space = NULL` here fails the NOT NULL constraint.
                 tx.execute(
-                    "UPDATE memories SET space = NULL WHERE space = ?1",
-                    libsql::params![name],
+                    "UPDATE memories SET space = ?2 WHERE space = ?1",
+                    libsql::params![name, UNFILED_SPACE_ID],
                 )
                 .await
                 .map_err(|e| {
@@ -46075,6 +46078,44 @@ pub(crate) mod tests {
             scoped.workspace.as_deref(),
             Some("new"),
             "delete-space move must update pages.workspace values"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_unassign_folds_memories_to_sentinel_not_null() {
+        // Regression (M3 PR-1 stage e straggler): memories.space is NOT NULL
+        // since migration 85, so `UPDATE memories SET space = NULL` on unassign
+        // would fail the constraint. Unassign must fold to the reserved
+        // sentinel, and the operation must succeed.
+        let (db, _dir) = test_db().await;
+        db.create_space("old", None, false).await.unwrap();
+        db.upsert_documents(vec![make_memory_doc(
+            "mem_unassign",
+            "a fact filed under old",
+            "fact",
+            "old",
+            "claude-code",
+        )])
+        .await
+        .unwrap();
+
+        db.delete_space("old", "unassign")
+            .await
+            .expect("unassign must not fail the memories.space NOT NULL constraint");
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT space FROM memories WHERE source_id = 'mem_unassign' AND source = 'memory'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("memory row must survive");
+        let space: String = row.get(0).unwrap();
+        assert_eq!(
+            space, UNFILED_SPACE_ID,
+            "unassigned memory must carry the sentinel, never NULL"
         );
     }
 

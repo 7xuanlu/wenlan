@@ -361,9 +361,13 @@ async fn entity_extraction_target_still_actionable(
             "repair_target_assertion_unsupported".to_string(),
         ));
     }
-    let mut rows = snapshot
-        .query(
-            "SELECT 1
+    // memories.space is NOT NULL since migration 85 — an unscoped memory
+    // carries the reserved sentinel id, which the RepairScope above translates
+    // back to None. So for an unscoped target ?2 is NULL while the row's space
+    // column is the sentinel: match NULL and sentinel both, else an unscoped
+    // entity-extraction repair reads as non-actionable and is dropped as stale.
+    let actionable_sql = format!(
+        "SELECT 1
                FROM memories m
                JOIN enrichment_steps s
                  ON s.source_id=m.source_id
@@ -371,8 +375,13 @@ async fn entity_extraction_target_still_actionable(
                 AND s.status='failed'
               WHERE m.source='memory'
                 AND m.source_id=?1
-                AND ((?2 IS NULL AND m.space IS NULL) OR m.space=?2)
+                AND ((?2 IS NULL AND (m.space IS NULL OR m.space = '{sentinel}')) OR m.space=?2)
               LIMIT 2",
+        sentinel = crate::db::UNFILED_SPACE_ID
+    );
+    let mut rows = snapshot
+        .query(
+            &actionable_sql,
             libsql::params::Params::Positional(vec![
                 libsql::Value::Text(memory_id.clone()),
                 target_scope
