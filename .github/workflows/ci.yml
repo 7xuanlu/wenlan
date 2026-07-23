@@ -338,7 +338,10 @@ jobs:
     needs: [detect-changes]
     if: "needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.macos == 'true' || needs.detect-changes.outputs.windows == 'true' || github.event_name != 'pull_request'"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Pull requests keep a hard wall-clock budget. Non-PR runs add the
+    # main-only canary/full-platform backstop, so they need a proof budget
+    # large enough to finish rather than being cancelled at the PR boundary.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 30 || 60 }}
     strategy:
       # Cancel the rest of the matrix when one OS fails. Saves ~20-30min
       # per PR when a real bug breaks all platforms — Linux/macOS catch
@@ -717,7 +720,7 @@ jobs:
     needs: [detect-changes]
     if: "github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true'"
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 30 || 60 }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
@@ -750,9 +753,7 @@ jobs:
             Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Build Windows release binaries
         shell: pwsh
-        run: |
-          cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp
-          cargo build --release -p wenlan-core --bin model_probe
+        run: cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp -p wenlan-core --bin wenlan --bin wenlan-server --bin wenlan-mcp --bin model_probe
       - name: Native ORT smoke (Windows; release profile)
         shell: pwsh
         run: |

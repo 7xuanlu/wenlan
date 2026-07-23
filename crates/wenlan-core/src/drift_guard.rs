@@ -1520,9 +1520,12 @@ fn ci_routing_contract_violations(
             ));
         }
     }
+    let differential_timeout = "${{ github.event_name == 'pull_request' && 30 || 60 }}";
     for job in ["test", "windows-release-proof"] {
-        if ci["jobs"][job]["timeout-minutes"].as_u64() != Some(30) {
-            violations.push(format!("{job} does not enforce the 30-minute CI budget"));
+        if ci["jobs"][job]["timeout-minutes"].as_str() != Some(differential_timeout) {
+            violations.push(format!(
+                "{job} does not enforce the 30-minute PR budget while allowing a 60-minute non-PR backstop"
+            ));
         }
     }
     let windows_release_condition = ci["jobs"]["windows-release-proof"]["if"]
@@ -1683,11 +1686,34 @@ fn ci_routing_contract_violations(
     )
     .and_then(|step| step["run"].as_str())
     .unwrap_or_default();
-    if !windows_release_build.contains("--release")
-        || !windows_release_build.contains("-p wenlan")
-        || !windows_release_build.contains("-p wenlan-server")
-        || !windows_release_build.contains("-p wenlan-mcp")
-        || !windows_release_build.contains("--bin model_probe")
+    let release_build_commands = windows_release_build
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("cargo build --release"))
+        .collect::<Vec<_>>();
+    if release_build_commands.len() != 1 {
+        violations.push(format!(
+            "Windows release proof uses {} Cargo release build invocations, expected a single Cargo invocation",
+            release_build_commands.len()
+        ));
+    }
+    let release_build_args = release_build_commands
+        .first()
+        .map(|command| command.split_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let has_arg_pair = |flag: &str, value: &str| {
+        release_build_args
+            .windows(2)
+            .any(|args| args == [flag, value])
+    };
+    if !has_arg_pair("-p", "wenlan")
+        || !has_arg_pair("-p", "wenlan-server")
+        || !has_arg_pair("-p", "wenlan-mcp")
+        || !has_arg_pair("-p", "wenlan-core")
+        || !has_arg_pair("--bin", "wenlan")
+        || !has_arg_pair("--bin", "wenlan-server")
+        || !has_arg_pair("--bin", "wenlan-mcp")
+        || !has_arg_pair("--bin", "model_probe")
     {
         violations.push("Windows release proof omits a release artifact or model probe".into());
     }
@@ -1961,8 +1987,9 @@ jobs:
         "nextest config",
         "release-profile-sensitive",
         "release-sensitive",
-        "30-minute CI budget",
+        "30-minute PR budget",
         "independent differential job",
+        "single Cargo invocation",
         "release artifact or model probe",
         "native ORT smoke",
         "shared test cache read-only",
