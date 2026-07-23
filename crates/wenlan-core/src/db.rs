@@ -12147,6 +12147,23 @@ impl MemoryDB {
                 .map_err(|e| {
                     WenlanError::VectorDb(format!("delete_space unassign memories: {}", e))
                 })?;
+                // Fold the mapped entity shadows' space columns to the sentinel
+                // (M3 PR-1 dual-write parity). MUST run BEFORE the entities.space
+                // clear below so the join still sees the deleted space. entities
+                // themselves stay NULL (entities never fold -- only the NOT NULL
+                // pages shadow columns fold, matching insert_entity_shadow_page).
+                tx.execute(
+                    "UPDATE pages SET space = ?2, workspace = ?2 \
+                     WHERE kind = 'entity' \
+                       AND id IN (SELECT page_id FROM entity_page_map m \
+                                  JOIN entities e ON e.id = m.entity_id \
+                                  WHERE e.space = ?1)",
+                    libsql::params![name, UNFILED_SPACE_ID],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("delete_space unassign shadow fold: {}", e))
+                })?;
                 tx.execute(
                     "UPDATE entities SET space = NULL WHERE space = ?1",
                     libsql::params![name],
@@ -46534,6 +46551,70 @@ pub(crate) mod tests {
         assert_eq!(
             space, UNFILED_SPACE_ID,
             "unassigned memory must carry the sentinel, never NULL"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_space_unassign_folds_entity_shadow_space_to_sentinel() {
+        // rework2 ITEM 2 (M3 PR-1): unassign clears entities.space to NULL
+        // (entities never fold), but the mapped kind='entity' shadow's NOT NULL
+        // space/workspace must fold to the sentinel -- not keep the deleted
+        // space name -- matching insert_entity_shadow_page's fold rule.
+        let (db, _dir) = test_db().await;
+        db.create_space("old", None, false).await.unwrap();
+        let id = db
+            .store_entity(
+                "Katherine Johnson",
+                "person",
+                Some("old"),
+                Some("test"),
+                None,
+            )
+            .await
+            .unwrap();
+
+        db.delete_space("old", "unassign").await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let entity_space_null: i64 = {
+            let mut rows = conn
+                .query(
+                    "SELECT space IS NULL FROM entities WHERE id = ?1",
+                    libsql::params![id.clone()],
+                )
+                .await
+                .unwrap();
+            rows.next().await.unwrap().unwrap().get(0).unwrap()
+        };
+        assert_eq!(
+            entity_space_null, 1,
+            "entities.space must be NULL after unassign (entities never fold)"
+        );
+
+        let (space, workspace): (String, String) = {
+            let mut rows = conn
+                .query(
+                    "SELECT p.space, p.workspace FROM pages p \
+                     JOIN entity_page_map m ON m.page_id = p.id \
+                     WHERE m.entity_id = ?1 AND p.kind = 'entity'",
+                    libsql::params![id],
+                )
+                .await
+                .unwrap();
+            let row = rows
+                .next()
+                .await
+                .unwrap()
+                .expect("shadow page must survive unassign");
+            (row.get(0).unwrap(), row.get(1).unwrap())
+        };
+        assert_eq!(
+            space, UNFILED_SPACE_ID,
+            "shadow space must fold to the sentinel, not keep the deleted space name"
+        );
+        assert_eq!(
+            workspace, UNFILED_SPACE_ID,
+            "shadow workspace must fold to the sentinel"
         );
     }
 
