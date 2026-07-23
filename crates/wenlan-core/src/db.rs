@@ -2518,8 +2518,8 @@ CREATE TABLE IF NOT EXISTS relations (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_id);
-CREATE INDEX IF NOT EXISTS idx_observations_source_memory
-    ON observations(source_memory_id) WHERE source_memory_id IS NOT NULL;
+-- idx_observations_source_memory is created by migration 79/85 after
+-- reconciling legacy observations tables that do not have source_memory_id.
 CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity, to_entity);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity, from_entity);
 
@@ -71271,6 +71271,104 @@ pub(crate) mod tests {
             i64::from(SCHEMA_VERSION),
             "the post-merge reconciliation must migrate a v76 database all the way \
              to the current terminal schema version"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_reconciles_v79_observations_without_source_memory_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_file = dir.path().join("origin_memory.db");
+        let raw_db = libsql::Builder::new_local(db_file.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let conn = raw_db.connect().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").await.unwrap();
+        conn.execute_batch(SCHEMA).await.unwrap();
+
+        let lint_freshness = Arc::new(
+            crate::lint::snapshot::LintFreshnessClock::new(&raw_db)
+                .expect("lint freshness observer"),
+        );
+        let db = MemoryDB {
+            _db: raw_db,
+            conn: tokio::sync::Mutex::new(conn),
+            lint_freshness,
+            page_projection_tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            derived_artifact_state: crate::derived_artifact_state::DerivedArtifactState::new(),
+            embedder: None,
+            chunker: ChunkingEngine::default(),
+            embedding_cache: std::sync::Mutex::new(EmbeddingCache::new(200)),
+        };
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("fixture must start from a complete current schema");
+        {
+            let conn = db.conn.lock().await;
+            conn.execute_batch(
+                "DROP INDEX idx_observations_source_memory;
+                 ALTER TABLE observations DROP COLUMN source_memory_id;
+                 PRAGMA user_version=79;",
+            )
+            .await
+            .unwrap();
+            conn.execute_batch(SCHEMA)
+                .await
+                .expect("startup schema must not reference columns before migrations add them");
+        }
+
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 85 must repair the colliding v79 lineage");
+
+        let conn = db.conn.lock().await;
+        let mut column_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('observations')
+                  WHERE name='source_memory_id'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            column_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            1
+        );
+        let mut index_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND name='idx_observations_source_memory'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            index_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            1
+        );
+        let mut version_rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            version_rows
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<i64>(0)
+                .unwrap(),
+            i64::from(SCHEMA_VERSION)
         );
     }
 
