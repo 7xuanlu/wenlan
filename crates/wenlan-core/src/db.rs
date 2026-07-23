@@ -521,6 +521,20 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("fold_entity_type: {e}")))?;
 
+            // Mirror the fold into the entity shadows (M3 PR-1 item C). This
+            // fold only touches `entity_type`, so a set-based UPDATE of every
+            // `kind='entity'` page still carrying `old_type` is exact parity
+            // with the entities UPDATE above -- and self-heals any drift --
+            // without needing to iterate the captured id list.
+            let now_iso = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE pages SET entity_type = ?1, last_modified = ?2 \
+                 WHERE kind = 'entity' AND entity_type = ?3",
+                libsql::params![canonical.to_string(), now_iso, old_type.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("fold_entity_type shadow: {e}")))?;
+
             let ledger_id = format!("vheal-{}", uuid::Uuid::new_v4());
             let now = chrono::Utc::now().timestamp();
             conn.execute(
@@ -554,7 +568,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Current DB schema version (highest `PRAGMA user_version` applied by `migrate()`).
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
-pub const SCHEMA_VERSION: u32 = 86;
+pub const SCHEMA_VERSION: u32 = 87;
 
 /// Reserved id AND name of the uncategorized-page sentinel space (M1 honest
 /// columns). Uncategorized pages store this value in `pages.space`/`workspace`
@@ -7579,6 +7593,15 @@ impl MemoryDB {
             if version < 86 {
                 self.migrate_86_entity_shadow_pages(version).await?;
             }
+
+            // Migration 87 (M3 PR-1, item C): add `pages.aliases` (a JSON array
+            // of the entity's alias names) so the update-path shadow re-sync
+            // (`update_entity_shadow_page`) has a column to mirror into, then
+            // backfill it for the shadows migration 86 created. See
+            // migrate_87_page_aliases.
+            if version < 87 {
+                self.migrate_87_page_aliases(version).await?;
+            }
         }
 
         Ok(())
@@ -8923,6 +8946,46 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Re-sync a `kind='entity'` page shadow's mirrored columns from its live
+    /// `entities` row (M3 PR-1 item C, update-path parity). Every entity
+    /// mutator that changes a shadowed field (`store_entity`, `add_entity_alias`,
+    /// `confirm_entity`, `refresh_entity_embedding`, `merge_entities`) calls
+    /// this inside its own transaction after the `entities` write, so the
+    /// shadow never drifts from the row it mirrors. Unlike
+    /// `insert_entity_shadow_page`, this also refreshes `aliases` -- the
+    /// `entity_aliases` JSON array added to `pages` in migration 87 -- which
+    /// the insert path deliberately leaves untouched: migration 86's backfill
+    /// calls `insert_entity_shadow_page` BEFORE migration 87 adds the
+    /// `pages.aliases` column, so the insert SQL cannot reference it. A no-op
+    /// when the entity has no mapped shadow (the `WHERE` finds no row).
+    async fn update_entity_shadow_page(
+        conn: &libsql::Connection,
+        entity_id: &str,
+        now_iso: &str,
+    ) -> Result<(), WenlanError> {
+        conn.execute(
+            "UPDATE pages SET
+                title = (SELECT name FROM entities WHERE id = ?1),
+                entity_type = (SELECT entity_type FROM entities WHERE id = ?1),
+                confidence = (SELECT confidence FROM entities WHERE id = ?1),
+                entity_confirmed = (SELECT confirmed FROM entities WHERE id = ?1),
+                embedding = (SELECT embedding FROM entities WHERE id = ?1),
+                space = COALESCE((SELECT space FROM entities WHERE id = ?1), ?2),
+                workspace = COALESCE((SELECT space FROM entities WHERE id = ?1), ?2),
+                aliases = (SELECT json_group_array(alias_name)
+                           FROM (SELECT alias_name FROM entity_aliases
+                                 WHERE canonical_entity_id = ?1 ORDER BY alias_name)),
+                last_modified = ?3
+             WHERE kind = 'entity'
+               AND id = (SELECT page_id FROM entity_page_map WHERE entity_id = ?1)",
+            libsql::params![entity_id, UNFILED_SPACE_ID, now_iso],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("update_entity_shadow_page: {e}")))?;
+
+        Ok(())
+    }
+
     // Migration 86 (M3 PR-1, stage f): dual-write entities as `kind='entity'`
     // page shadows. Adds `pages.entity_type`/`pages.confidence`/
     // `pages.entity_confirmed` (mirroring the matching `entities` columns),
@@ -9279,6 +9342,170 @@ impl MemoryDB {
                     .to_string(),
             ));
         }
+        Ok(())
+    }
+
+    // Migration 87 (M3 PR-1, item C): the update-path shadow re-sync
+    // (`update_entity_shadow_page`) mirrors every shadowed entity field into
+    // its `kind='entity'` page, INCLUDING the alias set. Migration 86's
+    // backfill could not populate aliases because it runs before this
+    // migration exists (its `insert_entity_shadow_page` helper is shared with
+    // the live create path and must stay column-agnostic), so this migration
+    // adds `pages.aliases` (a JSON array of `entity_aliases.alias_name`, the
+    // same shape `update_entity_shadow_page` writes) and backfills it for the
+    // shadows migration 86 created. `aliases` is left NULL on non-entity
+    // pages -- it is an entity-shadow-only column, fenced from every reader in
+    // PR-1 like the rest of the shadow.
+    async fn migrate_87_page_aliases(&self, prior_version: i64) -> Result<(), WenlanError> {
+        // §6.9: pre-migration online backup + integrity receipt BEFORE any
+        // DDL, mirroring migrations 83/85/86 -- this migration ALTERs `pages`
+        // and batch-UPDATEs its entity shadows, so a botched run has a restore
+        // point.
+        self.backup_before_migration(87, prior_version).await?;
+
+        // Same table + per-row UPDATE cost class as migration 83's `pages`
+        // backfill; same lock-duration budget.
+        const BATCH_SIZE: i64 = 10_000;
+
+        // Step 1: add the column (guarded, resumable -- a crash before the
+        // user_version bump re-fires this function, and the guard skips the
+        // ALTER so it does not hit "duplicate column name"). Nullable: only
+        // entity shadows carry an alias array; the backfill fills them, and
+        // future shadows get theirs from `update_entity_shadow_page`.
+        {
+            let conn = self.conn.lock().await;
+            let has_col: bool = {
+                let mut rows = conn
+                    .query(
+                        "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'aliases'",
+                        (),
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m87 col check: {e}")))?;
+                match rows.next().await {
+                    Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
+                    _ => false,
+                }
+            };
+            if !has_col {
+                conn.execute("ALTER TABLE pages ADD COLUMN aliases TEXT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m87 add aliases column: {e}")))?;
+            }
+        }
+
+        // Step 2: backfill `aliases` for every entity shadow in rowid-range
+        // batches, one commit per batch, mirroring migration 83's lock budget.
+        // The UPDATE is idempotent (it recomputes the same JSON array from the
+        // current `entity_aliases`), so `cursor` restarts at `i64::MIN` each
+        // run -- a kill mid-run just re-does already-correct rows on resume.
+        // `json_group_array` over an empty alias set yields '[]' (never NULL),
+        // and a `kind='entity'` page with no map row (orphan) resolves the
+        // correlated `entity_id` subquery to NULL -> matches no alias -> '[]',
+        // so no entity shadow is left NULL. Only `kind='entity'` rows are
+        // touched; concept/source/overview/authored pages keep `aliases` NULL.
+        let mut cursor: i64 = i64::MIN;
+        loop {
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m87 begin batch: {e}")))?;
+            let result: Result<Option<i64>, WenlanError> = async {
+                let hi: Option<i64> =
+                    {
+                        let mut rows = conn
+                            .query(
+                                "SELECT MAX(rowid) FROM \
+                             (SELECT rowid FROM pages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)",
+                                libsql::params![cursor, BATCH_SIZE],
+                            )
+                            .await
+                            .map_err(|e| WenlanError::VectorDb(format!("m87 batch bound: {e}")))?;
+                        match rows.next().await.map_err(|e| {
+                            WenlanError::VectorDb(format!("m87 batch bound row: {e}"))
+                        })? {
+                            Some(row) => row.get::<Option<i64>>(0).map_err(|e| {
+                                WenlanError::VectorDb(format!("m87 batch bound col: {e}"))
+                            })?,
+                            None => None,
+                        }
+                    };
+                let Some(hi) = hi else {
+                    return Ok(None);
+                };
+                conn.execute(
+                    "UPDATE pages SET aliases = (
+                        SELECT json_group_array(alias_name) FROM (
+                            SELECT alias_name FROM entity_aliases
+                            WHERE canonical_entity_id =
+                                (SELECT entity_id FROM entity_page_map WHERE page_id = pages.id)
+                            ORDER BY alias_name
+                        )
+                     )
+                     WHERE kind = 'entity' AND rowid > ?1 AND rowid <= ?2",
+                    libsql::params![cursor, hi],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m87 backfill aliases: {e}")))?;
+                Ok(Some(hi))
+            }
+            .await;
+            match result {
+                Ok(Some(hi)) => {
+                    conn.execute("COMMIT", ())
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m87 commit batch: {e}")))?;
+                    cursor = hi;
+                }
+                Ok(None) => {
+                    conn.execute("COMMIT", ()).await.map_err(|e| {
+                        WenlanError::VectorDb(format!("m87 commit final batch: {e}"))
+                    })?;
+                    break;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // Step 3: refuse to mark complete over a lie -- every `kind='entity'`
+        // page must carry a non-NULL alias array after the backfill (mirroring
+        // migration 86's `assert_entities_have_shadow_pages` shape).
+        let conn = self.conn.lock().await;
+        let unresolved: bool = {
+            let mut rows = conn
+                .query(
+                    "SELECT EXISTS(SELECT 1 FROM pages WHERE kind = 'entity' AND aliases IS NULL)",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m87 assert query: {e}")))?;
+            match rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m87 assert row: {e}")))?
+            {
+                Some(row) => {
+                    row.get::<i64>(0)
+                        .map_err(|e| WenlanError::VectorDb(format!("m87 assert col: {e}")))?
+                        != 0
+                }
+                None => false,
+            }
+        };
+        if unresolved {
+            return Err(WenlanError::VectorDb(
+                "m87: a kind='entity' page still has NULL aliases after backfill -- \
+                 refusing to mark the migration complete"
+                    .to_string(),
+            ));
+        }
+        conn.execute("PRAGMA user_version = 87", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("m87 bump: {e}")))?;
+        log::info!("[migration] Migration 87 applied: pages.aliases added + entity shadows backfilled, M3 PR-1 item C");
         Ok(())
     }
 }
@@ -20227,6 +20454,12 @@ impl MemoryDB {
 
             let page_id = crate::pages::new_page_id();
             Self::insert_entity_shadow_page(&conn, &id, &page_id, &now_iso).await?;
+            // The insert path leaves `aliases` NULL (it is shared with
+            // migration 86, which predates the `pages.aliases` column); the
+            // self-alias inserted just above is now visible, so re-sync the
+            // shadow to fold it in. Same transaction -> the shadow never
+            // observes a NULL-aliases state.
+            Self::update_entity_shadow_page(&conn, &id, &now_iso).await?;
 
             Ok(())
         }
@@ -20530,14 +20763,37 @@ impl MemoryDB {
         entity_id: &str,
         source: &str,
     ) -> Result<(), WenlanError> {
+        let now_iso = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
-        conn.execute(
-            "INSERT OR IGNORE INTO entity_aliases (alias_name, canonical_entity_id, created_at, source) VALUES (?1, ?2, unixepoch(), ?3)",
-            libsql::params![alias.to_lowercase(), entity_id.to_string(), source.to_string()],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("add alias: {}", e)))?;
-        Ok(())
+        // Transaction so the alias insert and the shadow-page alias re-sync
+        // (M3 PR-1 item C) commit atomically -- the shadow's `aliases` array
+        // never lags the `entity_aliases` table.
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("add alias begin: {}", e)))?;
+        let result: Result<(), WenlanError> = async {
+            conn.execute(
+                "INSERT OR IGNORE INTO entity_aliases (alias_name, canonical_entity_id, created_at, source) VALUES (?1, ?2, unixepoch(), ?3)",
+                libsql::params![alias.to_lowercase(), entity_id.to_string(), source.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("add alias: {}", e)))?;
+            Self::update_entity_shadow_page(&conn, entity_id, &now_iso).await?;
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("add alias commit: {}", e)))?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
     }
 
     /// Resolve a relation type string against the vocabulary (case-insensitive).
@@ -20743,14 +20999,37 @@ impl MemoryDB {
         }
         let vec_str = Self::vec_to_sql(&embeddings[0]);
         let now = chrono::Utc::now().timestamp();
+        let now_iso = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE entities SET embedding = vector32(?1), embedding_updated_at = ?2, updated_at = ?2 WHERE id = ?3",
-            libsql::params![vec_str, now, entity_id.to_string()],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("refresh_entity_embedding: {}", e)))?;
-        Ok(())
+        // Transaction so the entity embedding update and the shadow-page
+        // re-sync (M3 PR-1 item C -- the shadow mirrors `embedding`) commit
+        // atomically.
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("refresh_entity_embedding begin: {}", e)))?;
+        let result: Result<(), WenlanError> = async {
+            conn.execute(
+                "UPDATE entities SET embedding = vector32(?1), embedding_updated_at = ?2, updated_at = ?2 WHERE id = ?3",
+                libsql::params![vec_str, now, entity_id.to_string()],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("refresh_entity_embedding: {}", e)))?;
+            Self::update_entity_shadow_page(&conn, entity_id, &now_iso).await?;
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    WenlanError::VectorDb(format!("refresh_entity_embedding commit: {}", e))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
     }
 
     /// Add an observation to an entity.
@@ -20912,6 +21191,7 @@ impl MemoryDB {
             )
         };
         let should_promote = is_generic(&canonical_type) && !is_generic(&alias_type);
+        let now_iso = chrono::Utc::now().to_rfc3339();
 
         conn.execute("BEGIN TRANSACTION", ())
             .await
@@ -21016,12 +21296,30 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("merge_entities alias cleanup: {e}")))?;
 
+            // M3 PR-1 item C (beyond Sol's enumerated list): the loser's shadow
+            // page would otherwise be orphaned by the entity delete below (the
+            // map row cascades on the entity FK, never the page). Delete it
+            // first so its own ON DELETE CASCADE drops the map row.
+            conn.execute(
+                "DELETE FROM pages WHERE kind = 'entity' \
+                 AND id IN (SELECT page_id FROM entity_page_map WHERE entity_id = ?1)",
+                libsql::params![alias_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("merge_entities loser shadow: {e}")))?;
+
             conn.execute(
                 "DELETE FROM entities WHERE id = ?1",
                 libsql::params![alias_id],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("merge_entities delete alias: {e}")))?;
+
+            // The canonical's shadowed fields drifted in this merge: aliases
+            // were redirected + the loser's name registered, and its
+            // entity_type may have been promoted. Re-sync the canonical shadow
+            // to the final entity state (M3 PR-1 item C).
+            Self::update_entity_shadow_page(&conn, canonical_id, &now_iso).await?;
 
             Ok(())
         }
@@ -21573,6 +21871,20 @@ impl MemoryDB {
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_entity aliases: {e}")))?;
+
+            // Delete the entity's shadow page (M3 PR-1 item C). The
+            // `entity_page_map` row has an ON DELETE CASCADE FK to `pages`, so
+            // deleting the shadow removes the map row too; the subsequent
+            // `DELETE FROM entities` then finds no dangling map row. Without
+            // this the shadow would be orphaned (the map's entity-side cascade
+            // drops the map row on entity delete, but never the page itself).
+            conn.execute(
+                "DELETE FROM pages WHERE kind = 'entity' \
+                 AND id IN (SELECT page_id FROM entity_page_map WHERE entity_id = ?1)",
+                libsql::params![entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("delete_entity shadow: {e}")))?;
 
             conn.execute(
                 "DELETE FROM entities WHERE id = ?1",
@@ -22290,14 +22602,37 @@ impl MemoryDB {
         entity_id: &str,
         confirmed: bool,
     ) -> Result<(), WenlanError> {
+        let now_iso = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE entities SET confirmed = ?1 WHERE id = ?2",
-            libsql::params![if confirmed { 1i64 } else { 0i64 }, entity_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("confirm_entity: {}", e)))?;
-        Ok(())
+        // Transaction so the entity confirm and the shadow-page re-sync
+        // (M3 PR-1 item C -- the shadow mirrors `entity_confirmed`) commit
+        // atomically.
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("confirm_entity begin: {}", e)))?;
+        let result: Result<(), WenlanError> = async {
+            conn.execute(
+                "UPDATE entities SET confirmed = ?1 WHERE id = ?2",
+                libsql::params![if confirmed { 1i64 } else { 0i64 }, entity_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("confirm_entity: {}", e)))?;
+            Self::update_entity_shadow_page(&conn, entity_id, &now_iso).await?;
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("confirm_entity commit: {}", e)))?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
     }
 
     pub async fn confirm_observation(
@@ -65249,6 +65584,285 @@ pub(crate) mod tests {
         assert!(
             result.is_err(),
             "get_page_changelog_scoped must 404 for a shadow id"
+        );
+    }
+
+    // -- M3 PR-1 item C: update-path shadow parity (migration 87 + mutators) --
+
+    /// Read the `aliases` JSON array off an entity's shadow page (NULL -> None).
+    async fn shadow_aliases(db: &MemoryDB, entity_id: &str) -> Option<String> {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT p.aliases FROM pages p \
+                 JOIN entity_page_map m ON m.page_id = p.id WHERE m.entity_id = ?1",
+                libsql::params![entity_id],
+            )
+            .await
+            .unwrap();
+        rows.next()
+            .await
+            .unwrap()
+            .and_then(|r| r.get::<Option<String>>(0).unwrap())
+    }
+
+    #[tokio::test]
+    async fn migration_87_adds_pages_aliases_column() {
+        let (db, _dir) = test_db().await;
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('pages') WHERE name = 'aliases'",
+                (),
+            )
+            .await
+            .unwrap();
+        let present: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(present, 1, "pages.aliases must exist after migration 87");
+    }
+
+    #[tokio::test]
+    async fn migration_87_backfills_null_shadow_aliases() {
+        // Backfill + Step-3 assertion teeth: a `kind='entity'` shadow whose
+        // `aliases` is NULL (a migration-86 shadow, which predates the column)
+        // must be backfilled from `entity_aliases`, and the migration refuses
+        // to complete if any entity shadow is still NULL. Simulate a pre-87
+        // shadow by NULLing aliases + rewinding user_version, then re-firing.
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Backfill Target", "person", None, None, None)
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("UPDATE pages SET aliases = NULL WHERE kind = 'entity'", ())
+                .await
+                .unwrap();
+            conn.execute("PRAGMA user_version = 86", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 87 re-fires and backfills");
+
+        let aliases = shadow_aliases(&db, &eid)
+            .await
+            .expect("aliases must be backfilled non-null");
+        let parsed: Vec<String> = serde_json::from_str(&aliases).unwrap();
+        assert!(
+            parsed.contains(&"backfill target".to_string()),
+            "the entity's self-alias must be backfilled into the shadow: {aliases}"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_entity_shadow_carries_self_alias() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Ada Lovelace", "person", None, None, None)
+            .await
+            .unwrap();
+        let aliases = shadow_aliases(&db, &eid)
+            .await
+            .expect("a freshly stored entity's shadow must carry a non-null alias array");
+        let parsed: Vec<String> = serde_json::from_str(&aliases).unwrap();
+        assert_eq!(
+            parsed,
+            vec!["ada lovelace".to_string()],
+            "store_entity must fold the self-alias into the shadow"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_entity_alias_syncs_shadow_aliases() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Ada Lovelace", "person", None, None, None)
+            .await
+            .unwrap();
+        db.add_entity_alias("Countess Lovelace", &eid, "manual")
+            .await
+            .unwrap();
+
+        let aliases = shadow_aliases(&db, &eid).await.unwrap();
+        let parsed: Vec<String> = serde_json::from_str(&aliases).unwrap();
+        assert!(
+            parsed.contains(&"countess lovelace".to_string()),
+            "add_entity_alias must re-sync the shadow's alias array: {aliases}"
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_entity_syncs_shadow_confirmed() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Confirm Me", "person", None, None, None)
+            .await
+            .unwrap();
+        db.confirm_entity(&eid, true).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT p.entity_confirmed FROM pages p \
+                 JOIN entity_page_map m ON m.page_id = p.id WHERE m.entity_id = ?1",
+                libsql::params![eid],
+            )
+            .await
+            .unwrap();
+        let confirmed: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            confirmed, 1,
+            "confirm_entity must mirror confirmed into the shadow's entity_confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_entity_embedding_syncs_shadow_embedding() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Embedding Target", "person", None, None, None)
+            .await
+            .unwrap();
+        // Refresh from text DIFFERENT from the name so the entity embedding
+        // changes off its store-time value: if the shadow did not re-sync, the
+        // two blobs would now differ.
+        db.refresh_entity_embedding(&eid, "a completely different descriptive phrase")
+            .await
+            .unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT (e.embedding = p.embedding) FROM entities e \
+                 JOIN entity_page_map m ON m.entity_id = e.id \
+                 JOIN pages p ON p.id = m.page_id WHERE e.id = ?1",
+                libsql::params![eid],
+            )
+            .await
+            .unwrap();
+        let equal: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            equal, 1,
+            "refresh_entity_embedding must mirror the new embedding into the shadow"
+        );
+    }
+
+    #[tokio::test]
+    async fn fold_entity_type_syncs_shadow_entity_type() {
+        let (db, _dir) = test_db().await;
+        let e1 = db
+            .store_entity("Folder One", "org", None, None, None)
+            .await
+            .unwrap();
+        let e2 = db
+            .store_entity("Folder Two", "org", None, None, None)
+            .await
+            .unwrap();
+        let n = db.fold_entity_type("org", "organization").await.unwrap();
+        assert_eq!(n, 2, "both entities of the folded type must be counted");
+
+        let conn = db.conn.lock().await;
+        for eid in [&e1, &e2] {
+            let mut rows = conn
+                .query(
+                    "SELECT p.entity_type FROM pages p \
+                     JOIN entity_page_map m ON m.page_id = p.id WHERE m.entity_id = ?1",
+                    libsql::params![eid.as_str()],
+                )
+                .await
+                .unwrap();
+            let et: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(
+                et, "organization",
+                "fold_entity_type must mirror the new type into the shadow"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_entity_deletes_shadow_page() {
+        let (db, _dir) = test_db().await;
+        let eid = db
+            .store_entity("Delete Shadow Target", "person", None, None, None)
+            .await
+            .unwrap();
+        let pid = shadow_page_id(&db, &eid).await;
+        db.delete_entity(&eid).await.unwrap();
+
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT \
+                    (SELECT COUNT(*) FROM pages WHERE id = ?1), \
+                    (SELECT COUNT(*) FROM entity_page_map WHERE page_id = ?1)",
+                libsql::params![pid],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(
+            row.get::<i64>(0).unwrap(),
+            0,
+            "delete_entity must delete the entity's shadow page"
+        );
+        assert_eq!(
+            row.get::<i64>(1).unwrap(),
+            0,
+            "the entity_page_map row must be gone (ON DELETE CASCADE on the page)"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_entities_deletes_loser_shadow_and_resyncs_canonical() {
+        let (db, _dir) = test_db().await;
+        let canonical = db
+            .store_entity("Canonical Name", "entity", None, None, None)
+            .await
+            .unwrap();
+        let loser = db
+            .store_entity("Loser Name", "person", None, None, None)
+            .await
+            .unwrap();
+        let loser_pid = shadow_page_id(&db, &loser).await;
+
+        db.merge_entities(&canonical, &loser).await.unwrap();
+
+        // Loser shadow gone.
+        {
+            let conn = db.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM pages WHERE id = ?1",
+                    libsql::params![loser_pid],
+                )
+                .await
+                .unwrap();
+            let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(n, 0, "merge_entities must delete the loser's shadow page");
+        }
+
+        // Canonical shadow re-synced: the loser's name is now one of its
+        // aliases, and its type was promoted from the generic 'entity' to the
+        // loser's concrete 'person'.
+        let aliases = shadow_aliases(&db, &canonical).await.unwrap();
+        let parsed: Vec<String> = serde_json::from_str(&aliases).unwrap();
+        assert!(
+            parsed.contains(&"loser name".to_string()),
+            "the canonical shadow must fold in the merged-in alias: {aliases}"
+        );
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT p.entity_type FROM pages p \
+                 JOIN entity_page_map m ON m.page_id = p.id WHERE m.entity_id = ?1",
+                libsql::params![canonical],
+            )
+            .await
+            .unwrap();
+        let et: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            et, "person",
+            "the canonical shadow must reflect the promoted entity_type"
         );
     }
 
