@@ -8173,6 +8173,20 @@ impl MemoryDB {
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."));
         let dest = dir.join(format!("pre_migration_{migration}_backup.db"));
+        // Preserve the ORIGINAL restore point across retries. A migration runs
+        // once (user_version gate), so a pre-existing `dest` can only come from
+        // an earlier failed/killed attempt at THIS same migration. Re-snapshotting
+        // would have `online_backup` delete that pristine file and copy the
+        // now-partially-migrated live DB over it -- destroying the very
+        // pre-migration state this backup exists to provide. Skip instead.
+        if dest.exists() {
+            log::info!(
+                "[migration] pre-migration {migration} backup already exists at {}; preserving \
+                 the original restore point (skipping re-snapshot)",
+                dest.display()
+            );
+            return Ok(());
+        }
         let receipt = self.online_backup(&dest).await?;
         if !receipt.integrity_ok {
             return Err(WenlanError::VectorDb(format!(
@@ -8309,12 +8323,18 @@ impl MemoryDB {
         // same per-row UPDATE cost class).
         const BATCH_SIZE: i64 = 10_000;
 
-        // Step 1: add the column (guarded, resumable) + create and populate
-        // the fold ledger from pre-backfill state, together in one
-        // transaction, before any backfill batch runs. The Overview
-        // title check comes FIRST in the CASE so it wins over
-        // creation_kind='research' (Overview is indistinguishable from any
-        // other research page by creation_kind alone).
+        // Step 1: add the column (guarded, resumable) + create the fold-ledger
+        // table, together in one transaction, before any backfill batch runs.
+        // The ledger is POPULATED in the Step-2 batch loop (per rowid range,
+        // one commit per batch) rather than in a single unbatched
+        // `INSERT ... FROM pages`, so a large table's ledger populate does not
+        // hold the write lock for the whole scan -- mirroring the same
+        // lock-duration budget the kind backfill already respects. The ledger
+        // reads only `creation_kind`/`title`/`status`, which the backfill never
+        // mutates, so populating it alongside the backfill still records
+        // pre-backfill state. The Overview title check comes FIRST in the CASE
+        // so it wins over creation_kind='research' (Overview is indistinguishable
+        // from any other research page by creation_kind alone).
         {
             let conn = self.conn.lock().await;
             conn.execute("BEGIN", ())
@@ -8355,25 +8375,6 @@ impl MemoryDB {
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("m83 create ledger: {e}")))?;
-
-                conn.execute(
-                    "INSERT OR IGNORE INTO page_kind_fold_ledger \
-                        (page_id, prior_creation_kind, assigned_kind, rule, migrated_at) \
-                     SELECT id, creation_kind, \
-                        CASE WHEN LOWER(title) = 'overview' AND status = 'active' THEN 'overview' \
-                             WHEN creation_kind = 'authored' THEN 'authored' \
-                             WHEN creation_kind = 'imported' THEN 'source' \
-                             ELSE 'concept' END, \
-                        CASE WHEN LOWER(title) = 'overview' AND status = 'active' THEN 'overview_title' \
-                             WHEN creation_kind = 'authored' THEN 'authored' \
-                             WHEN creation_kind = 'imported' THEN 'source' \
-                             ELSE 'concept' END, \
-                        ?1 \
-                     FROM pages",
-                    libsql::params![chrono::Utc::now().to_rfc3339()],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("m83 populate ledger: {e}")))?;
                 Ok(())
             }
             .await;
@@ -8390,12 +8391,16 @@ impl MemoryDB {
             }
         }
 
-        // Step 2: backfill in rowid-range batches, one commit per batch,
-        // mirroring migration 80's lock-duration budget. Every row is
-        // already NOT NULL 'concept' from the column DEFAULT the moment step
-        // 1 commits, so a kill mid-run never leaves a lying/uncovered row;
-        // resuming just re-applies the same CASE to already-folded rows,
-        // which is a no-op.
+        // Step 2: populate the fold ledger AND backfill `kind` in rowid-range
+        // batches, one commit per batch, mirroring migration 80's lock-duration
+        // budget. Each batch inserts the ledger rows for its range (INSERT OR
+        // IGNORE -- idempotent on resume) then applies the identical CASE to
+        // `kind` over the same range, in one transaction. Every row is already
+        // NOT NULL 'concept' from the column DEFAULT the moment step 1 commits,
+        // so a kill mid-run never leaves a lying/uncovered row; resuming
+        // re-inserts the same ledger rows (no-op) and re-applies the same CASE
+        // to already-folded rows (no-op). One `migrated_at` for the whole run.
+        let migrated_at = chrono::Utc::now().to_rfc3339();
         let mut cursor: i64 = i64::MIN;
         loop {
             let conn = self.conn.lock().await;
@@ -8425,6 +8430,24 @@ impl MemoryDB {
                 let Some(hi) = hi else {
                     return Ok(None);
                 };
+                conn.execute(
+                    "INSERT OR IGNORE INTO page_kind_fold_ledger \
+                        (page_id, prior_creation_kind, assigned_kind, rule, migrated_at) \
+                     SELECT id, creation_kind, \
+                        CASE WHEN LOWER(title) = 'overview' AND status = 'active' THEN 'overview' \
+                             WHEN creation_kind = 'authored' THEN 'authored' \
+                             WHEN creation_kind = 'imported' THEN 'source' \
+                             ELSE 'concept' END, \
+                        CASE WHEN LOWER(title) = 'overview' AND status = 'active' THEN 'overview_title' \
+                             WHEN creation_kind = 'authored' THEN 'authored' \
+                             WHEN creation_kind = 'imported' THEN 'source' \
+                             ELSE 'concept' END, \
+                        ?3 \
+                     FROM pages WHERE rowid > ?1 AND rowid <= ?2",
+                    libsql::params![cursor, hi, migrated_at.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("m83 populate ledger: {e}")))?;
                 conn.execute(
                     "UPDATE pages SET kind = CASE \
                         WHEN LOWER(title) = 'overview' AND status = 'active' THEN 'overview' \
@@ -8787,15 +8810,22 @@ impl MemoryDB {
                 conn.execute("PRAGMA writable_schema=ON", ())
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m85 writable on: {e}")))?;
-                conn.execute(
-                    "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='memories'",
-                    libsql::params![patched],
-                )
-                .await
-                .map_err(|e| WenlanError::VectorDb(format!("m85 patch schema: {e}")))?;
+                // Always turn writable_schema back OFF, even if the patch fails:
+                // the shared process-lifetime connection must never be left in
+                // the schema-writable state (a later write could corrupt the
+                // schema). Capture the patch result, RESET unconditionally, then
+                // propagate the patch error.
+                let patch = conn
+                    .execute(
+                        "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='memories'",
+                        libsql::params![patched],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m85 patch schema: {e}")));
                 conn.execute("PRAGMA writable_schema=RESET", ())
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m85 writable reset: {e}")))?;
+                patch?;
             }
         }
 
@@ -9026,15 +9056,22 @@ impl MemoryDB {
                     conn.execute("PRAGMA writable_schema=ON", ())
                         .await
                         .map_err(|e| WenlanError::VectorDb(format!("m86 writable on: {e}")))?;
-                    conn.execute(
-                        "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
-                        libsql::params![patched],
-                    )
-                    .await
-                    .map_err(|e| WenlanError::VectorDb(format!("m86 patch schema: {e}")))?;
+                    // Always turn writable_schema back OFF, even if the patch
+                    // fails: the shared process-lifetime connection must never be
+                    // left schema-writable (a later write could corrupt the
+                    // schema). Capture the patch result, RESET unconditionally,
+                    // then propagate the patch error.
+                    let patch = conn
+                        .execute(
+                            "UPDATE sqlite_master SET sql=?1 WHERE type='table' AND name='pages'",
+                            libsql::params![patched],
+                        )
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("m86 patch schema: {e}")));
                     conn.execute("PRAGMA writable_schema=RESET", ())
                         .await
                         .map_err(|e| WenlanError::VectorDb(format!("m86 writable reset: {e}")))?;
+                    patch?;
                 }
             }
         }
@@ -64533,6 +64570,34 @@ pub(crate) mod tests {
             mapped("e_below").await,
             0,
             "the entity at/below the stored cursor must be skipped by resume"
+        );
+    }
+
+    #[tokio::test]
+    async fn backup_before_migration_preserves_existing_restore_point() {
+        // 7b (M3 PR-1 stage f): a retried migration must NOT re-snapshot over an
+        // existing pre-migration backup. `online_backup` deletes `dest` before
+        // copying, so a re-fire would clobber the pristine restore point with an
+        // already-partially-migrated DB. Prove the skip by planting a sentinel at
+        // the dest path and asserting a re-fired migration leaves it byte-intact.
+        let (db, dir) = test_db().await;
+        let dest = dir.path().join("pre_migration_86_backup.db");
+        let sentinel: &[u8] = b"SENTINEL pre-migration backup -- must survive a retry";
+        std::fs::write(&dest, sentinel).unwrap();
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("PRAGMA user_version = 85", ()).await.unwrap();
+        }
+        db.run_migrations(&crate::events::NoopEmitter)
+            .await
+            .expect("migration 86 re-fires");
+
+        let after = std::fs::read(&dest).unwrap();
+        assert_eq!(
+            after.as_slice(),
+            sentinel,
+            "an existing pre-migration backup must be preserved across a retry, not re-snapshotted"
         );
     }
 
