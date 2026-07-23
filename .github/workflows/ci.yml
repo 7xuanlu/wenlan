@@ -67,6 +67,7 @@ jobs:
               - 'crates/*/resources/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'clippy.toml'
               - 'rust-toolchain.toml'
               - '.config/nextest.toml'
               - '.github/workflows/ci.yml'
@@ -337,6 +338,7 @@ jobs:
     needs: [detect-changes]
     if: "needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.macos == 'true' || needs.detect-changes.outputs.windows == 'true' || github.event_name != 'pull_request'"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       # Cancel the rest of the matrix when one OS fails. Saves ~20-30min
       # per PR when a real bug breaks all platforms — Linux/macOS catch
@@ -372,6 +374,17 @@ jobs:
         if: matrix.os == 'windows-2022'
         shell: bash
         run: bash scripts/stabilize-rust-cache-toolchains.sh
+      - name: Configure rust-lld linker (Windows tests)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $sysroot = (rustc --print sysroot).Trim()
+          $lld = Join-Path $sysroot "lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe"
+          if (-not (Test-Path $lld)) {
+            throw "rust-lld.exe missing at $lld"
+          }
+          "RUSTFLAGS=-C linker=$lld -C linker-flavor=lld-link" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Set up sccache
         if: matrix.os == 'ubuntu-24.04'
         uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
@@ -431,8 +444,8 @@ jobs:
       # Workspace lib tests skipped on Windows — Linux + macOS catch the
       # same cross-platform unit logic in ~5-15min vs 25min on Windows.
       # Windows-specific behavior (paths, mcp_add, schtasks) is covered
-      # by `Integration tests wenlan-cli + wenlan-server` + the schtasks
-      # install round-trip E2E further down.
+      # by the Windows CLI/server integration step + the schtasks install
+      # round-trip E2E further down.
       - name: Workspace lib tests (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: cargo nextest run --workspace --lib
@@ -440,7 +453,7 @@ jobs:
         if: matrix.os == 'macos-14'
         # nextest spawns one process per test by default — sidesteps the
         # ONNX atexit FFI race that required --test-threads=1 with cargo test.
-        # .config/nextest.toml still serializes wenlan-core's model/cache tests.
+        # FastEmbed initialization has its own cross-process file lock.
         run: cargo nextest run --workspace --lib
       - name: Page lint scale gate (Linux time + RSS)
         if: matrix.os == 'ubuntu-24.04'
@@ -513,18 +526,12 @@ jobs:
       # three carry the cross-workspace-leak security tests and the P3
       # demotion regression; folder_ingest_e2e covers the full folder
       # sync/enrich/delete lifecycle in-process).
-      - name: Integration tests wenlan-cli + wenlan-server
+      - name: Integration tests wenlan-cli + wenlan-server (shared integration only)
+        if: matrix.os != 'windows-2022'
+        run: cargo nextest run -p wenlan -p wenlan-server -E 'kind(test)'
+      - name: Integration tests wenlan-cli + wenlan-server (Windows)
+        if: matrix.os == 'windows-2022'
         run: cargo nextest run -p wenlan -p wenlan-server
-      # Release-profile proof remains on every non-PR backstop and on PRs whose
-      # diff can change native linkage, Cargo/build inputs, or packaging. Run
-      # functional integration first, then prioritize release-only failures
-      # ahead of the MCP runtime and debug artifact builds.
-      - name: Build Windows release binaries
-        if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true')
-        shell: pwsh
-        run: |
-          cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp
-          cargo build --release -p wenlan-core --bin model_probe
       # The MCP runtime has platform-specific token/transport code, while its
       # test suite remains quarantined below. Compile the shipped lib/bin on
       # both platform owners; Linux quarantine owns test/dev-dependency targets.
@@ -621,15 +628,6 @@ jobs:
         shell: pwsh
         run: cargo test -p wenlan-core --bin model_probe
 
-      - name: Native ORT smoke (Windows; release profile)
-        if: matrix.os == 'windows-2022' && (github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true')
-        shell: pwsh
-        run: |
-          & scripts/stage-onnxruntime-windows.ps1 `
-            -DestinationDirectory "target\release"
-          & scripts/smoke-windows.ps1 `
-            -ExePath "target\release\wenlan-server.exe"
-
       # `wenlan background on` on Windows registers a per-user Task Scheduler
       # ONLOGON entry via schtasks.exe and triggers it immediately. We
       # verify the full round-trip: background on registers the task, daemon
@@ -709,6 +707,60 @@ jobs:
             $global:LASTEXITCODE = 0
           }
 
+  # Release-profile proof runs beside the ordinary Windows contract instead of
+  # adding ~25-30 minutes to its critical path. It is required for native,
+  # Cargo/build, packaging, and release workflow diffs, plus every non-PR
+  # backstop. A read-only restore may make it faster, but correctness never
+  # depends on another parallel job winning a cache write race.
+  windows-release-proof:
+    name: windows-release-proof
+    needs: [detect-changes]
+    if: "github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true'"
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-05-13
+        with:
+          toolchain: 1.95.0
+      - name: Stabilize Windows Rust cache toolchain inputs
+        shell: bash
+        run: bash scripts/stabilize-rust-cache-toolchains.sh
+      - name: Configure rust-lld linker (Windows release)
+        shell: pwsh
+        run: |
+          $sysroot = (rustc --print sysroot).Trim()
+          $lld = Join-Path $sysroot "lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe"
+          if (-not (Test-Path $lld)) {
+            throw "rust-lld.exe missing at $lld"
+          }
+          "RUSTFLAGS=-C linker=$lld -C linker-flavor=lld-link" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Restore Rust cache (read-only)
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: test
+          cache-all-crates: "true"
+          save-if: "false"
+      - name: Install sqlite3 (Windows only)
+        shell: pwsh
+        run: |
+          vcpkg install sqlite3:x64-windows-static-md
+          "LIB=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib;$env:LIB" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build Windows release binaries
+        shell: pwsh
+        run: |
+          cargo build --release -p wenlan -p wenlan-server -p wenlan-mcp
+          cargo build --release -p wenlan-core --bin model_probe
+      - name: Native ORT smoke (Windows; release profile)
+        shell: pwsh
+        run: |
+          & scripts/stage-onnxruntime-windows.ps1 `
+            -DestinationDirectory "target\release"
+          & scripts/smoke-windows.ps1 `
+            -ExePath "target\release\wenlan-server.exe"
+
   # Quarantine lane: exercises test files present in the tree but not wired
   # into the required `test` job (dormant wenlan-mcp / wenlan-types
   # integration suites). Excluded from `conclusion.needs` so it can never
@@ -780,7 +832,7 @@ jobs:
   # with no matching diff must be skipped.
   conclusion:
     name: conclusion
-    needs: [detect-changes, fmt, lint, test, docs, plugin, npm]
+    needs: [detect-changes, fmt, lint, test, windows-release-proof, docs, plugin, npm]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -811,6 +863,7 @@ jobs:
           expect_job fmt "$run_rust" '${{ needs.fmt.result }}'
           expect_job lint "$run_rust" '${{ needs.lint.result }}'
           expect_job test "$run_rust" '${{ needs.test.result }}'
+          expect_job windows-release-proof '${{ github.event_name != 'pull_request' || needs.detect-changes.outputs.windows-release == 'true' }}' '${{ needs.windows-release-proof.result }}'
           expect_job docs '${{ needs.detect-changes.outputs.docs == 'true' }}' '${{ needs.docs.result }}'
           expect_job plugin '${{ needs.detect-changes.outputs.plugin == 'true' }}' '${{ needs.plugin.result }}'
           expect_job npm '${{ needs.detect-changes.outputs.npm == 'true' }}' '${{ needs.npm.result }}'

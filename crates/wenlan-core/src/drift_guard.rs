@@ -265,32 +265,41 @@ fn release_rust_cache_violations(workflow: &str) -> Vec<String> {
     violations
 }
 
-fn nextest_core_serialization_violations(config: &str) -> Vec<String> {
+fn nextest_whole_core_serialization_violations(config: &str) -> Vec<String> {
     let parsed: toml::Value = toml::from_str(config).expect("parse nextest.toml");
     let mut violations = Vec::new();
-    let max_threads = parsed["test-groups"]["wenlan-core"]["max-threads"].as_integer();
-    if max_threads != Some(1) {
-        violations.push(format!(
-            "wenlan-core nextest group max-threads={max_threads:?}, expected 1"
-        ));
-    }
-
-    let has_override = parsed["profile"]["default"]["overrides"]
-        .as_array()
-        .is_some_and(|overrides| {
-            overrides.iter().any(|override_| {
-                override_["filter"].as_str() == Some("package(wenlan-core)")
-                    && override_["test-group"].as_str() == Some("wenlan-core")
-            })
-        });
-    if !has_override {
-        violations.push(
-            "nextest default profile does not assign package(wenlan-core) to its serialized group"
-                .into(),
-        );
+    let Some(overrides) = parsed["profile"]["default"]["overrides"].as_array() else {
+        return violations;
+    };
+    for override_ in overrides {
+        if override_["filter"].as_str() != Some("package(wenlan-core)") {
+            continue;
+        }
+        let Some(group) = override_["test-group"].as_str() else {
+            continue;
+        };
+        let max_threads = parsed["test-groups"][group]["max-threads"].as_integer();
+        if max_threads == Some(1) {
+            violations.push(format!(
+                "nextest serializes the entire wenlan-core package through group {group:?}"
+            ));
+        }
     }
 
     violations
+}
+
+fn text_embedding_initializer_sites(path: &str, source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || !trimmed.contains("TextEmbedding::try_new(") {
+                return None;
+            }
+            Some(format!("{path}:{trimmed}"))
+        })
+        .collect()
 }
 
 #[test]
@@ -382,36 +391,80 @@ jobs:
 }
 
 #[test]
-fn nextest_keeps_core_isolated_while_other_macos_tests_parallelize() {
+fn nextest_does_not_serialize_the_entire_core_package() {
     let config = std::fs::read_to_string(repo_root().join(".config/nextest.toml"))
         .expect("read nextest.toml");
-    let violations = nextest_core_serialization_violations(&config);
+    let violations = nextest_whole_core_serialization_violations(&config);
     assert!(
         violations.is_empty(),
-        "nextest core serialization contract drift:\n{}",
+        "nextest whole-package serialization contract drift:\n{}",
         violations.join("\n")
     );
 }
 
 #[test]
-fn nextest_core_serialization_contract_rejects_missing_group() {
+fn nextest_parallelism_contract_rejects_whole_core_serialization() {
     let config = r#"
 [test-groups]
-wenlan-core = { max-threads = 3 }
+wenlan-core = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(other)'
+filter = 'package(wenlan-core)'
 test-group = 'wenlan-core'
 "#;
-    let violations = nextest_core_serialization_violations(config);
-    for expected in ["max-threads", "package(wenlan-core)"] {
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.contains(expected)),
-            "fixture must exercise {expected:?}: {violations:?}"
-        );
+    let violations = nextest_whole_core_serialization_violations(config);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("entire wenlan-core package")),
+        "fixture must exercise whole-package serialization: {violations:?}"
+    );
+}
+
+#[test]
+fn all_text_embedding_initializers_use_the_cross_process_lock() {
+    let root = repo_root();
+    let mut sites = Vec::new();
+    for path in git_ls_files(&root, "*.rs").into_iter().filter(|path| {
+        path.starts_with("crates/wenlan-core/src/")
+            && path != "crates/wenlan-core/src/drift_guard.rs"
+    }) {
+        let source = std::fs::read_to_string(root.join(&path)).expect("read Rust source");
+        sites.extend(text_embedding_initializer_sites(&path, &source));
     }
+    assert_eq!(
+        sites,
+        ["crates/wenlan-core/src/db.rs:TextEmbedding::try_new(options)"],
+        "FastEmbed text initialization bypasses db::init_text_embedding: {sites:?}"
+    );
+}
+
+#[test]
+fn text_embedding_initializer_guard_detects_a_direct_call() {
+    let sites = text_embedding_initializer_sites(
+        "crates/wenlan-core/src/new_model.rs",
+        "let model = fastembed::TextEmbedding::try_new(options)?;",
+    );
+    assert_eq!(sites.len(), 1, "positive control must detect direct init");
+}
+
+#[test]
+fn clippy_syntax_guard_forbids_direct_text_embedding_initializers() {
+    let config =
+        std::fs::read_to_string(repo_root().join("clippy.toml")).expect("read clippy.toml");
+    let parsed: toml::Value = toml::from_str(&config).expect("parse clippy.toml");
+    let guarded = parsed["disallowed-methods"]
+        .as_array()
+        .is_some_and(|methods| {
+            methods.iter().any(|method| {
+                method["path"].as_str() == Some("fastembed::TextEmbedding::try_new")
+                    && method["replacement"].as_str() == Some("crate::db::init_text_embedding")
+            })
+        });
+    assert!(
+        guarded,
+        "clippy.toml must syntax-check every TextEmbedding initializer"
+    );
 }
 
 #[test]
@@ -1292,6 +1345,12 @@ fn ci_routing_contract_violations(
             "coverage workflow cannot bootstrap its FastEmbed cache contract through rust".into(),
         );
     }
+    if !rust_paths.contains("clippy.toml") {
+        violations.push(
+            "clippy configuration cannot bootstrap its syntax-aware FastEmbed guard through rust"
+                .into(),
+        );
+    }
     for (path, platform, filter) in platform_sensitive_paths {
         let routed = detect_change_filter_paths(&ci, filter);
         if !filter_routes_path(&routed, path) {
@@ -1323,7 +1382,7 @@ fn ci_routing_contract_violations(
     ] {
         if !paths.contains(".config/nextest.toml") {
             violations.push(format!(
-                "{filter} routing omits nextest config that guards macOS core-test isolation"
+                "{filter} routing omits nextest config that guards core-test parallelism"
             ));
         }
     }
@@ -1461,6 +1520,24 @@ fn ci_routing_contract_violations(
             ));
         }
     }
+    for job in ["test", "windows-release-proof"] {
+        if ci["jobs"][job]["timeout-minutes"].as_u64() != Some(30) {
+            violations.push(format!("{job} does not enforce the 30-minute CI budget"));
+        }
+    }
+    let windows_release_condition = ci["jobs"]["windows-release-proof"]["if"]
+        .as_str()
+        .unwrap_or_default();
+    if job_needs(&ci, "windows-release-proof") != ["detect-changes"]
+        || !windows_release_condition
+            .contains("needs.detect-changes.outputs.windows-release == 'true'")
+        || !windows_release_condition.contains("github.event_name != 'pull_request'")
+    {
+        violations.push(
+            "Windows release proof is not an independent differential job after detect-changes"
+                .into(),
+        );
+    }
     for profile in ["DEV", "TEST"] {
         let key = format!("CARGO_PROFILE_{profile}_DEBUG");
         let actual = ci["jobs"]["test"]["env"][&key].as_str();
@@ -1559,10 +1636,20 @@ fn ci_routing_contract_violations(
                 .into(),
         );
     }
+    if !job_needs(&ci, "conclusion")
+        .iter()
+        .any(|job| job == "windows-release-proof")
+    {
+        violations.push("conclusion.needs omits the Windows release proof".into());
+    }
     for (job, expected) in [
         ("fmt", "\"$run_rust\""),
         ("lint", "\"$run_rust\""),
         ("test", "\"$run_rust\""),
+        (
+            "windows-release-proof",
+            "needs.detect-changes.outputs.windows-release",
+        ),
         ("docs", "needs.detect-changes.outputs.docs"),
         ("plugin", "needs.detect-changes.outputs.plugin"),
         ("npm", "needs.detect-changes.outputs.npm"),
@@ -1583,24 +1670,76 @@ fn ci_routing_contract_violations(
         "Build Windows release binaries",
         "Native ORT smoke (Windows; release profile)",
     ] {
-        let condition = job_step(&ci, "test", step_name)
-            .and_then(|step| step["if"].as_str())
-            .unwrap_or_default();
-        if !condition.contains("needs.detect-changes.outputs.windows-release == 'true'")
-            || !condition.contains("github.event_name != 'pull_request'")
-        {
+        if job_step(&ci, "test", step_name).is_some() {
             violations.push(format!(
-                "{step_name} is not gated to release-sensitive PRs plus non-PR backstops"
+                "{step_name} still serializes release proof inside the Windows test matrix"
             ));
         }
     }
-    let windows_release_build = job_step(&ci, "test", "Build Windows release binaries")
-        .and_then(|step| step["run"].as_str())
-        .unwrap_or_default();
-    if !windows_release_build.contains("-p wenlan-mcp") {
-        violations.push(
-            "Windows release proof omits the wenlan-mcp artifact built by release.yml".into(),
-        );
+    let windows_release_build = job_step(
+        &ci,
+        "windows-release-proof",
+        "Build Windows release binaries",
+    )
+    .and_then(|step| step["run"].as_str())
+    .unwrap_or_default();
+    if !windows_release_build.contains("--release")
+        || !windows_release_build.contains("-p wenlan")
+        || !windows_release_build.contains("-p wenlan-server")
+        || !windows_release_build.contains("-p wenlan-mcp")
+        || !windows_release_build.contains("--bin model_probe")
+    {
+        violations.push("Windows release proof omits a release artifact or model probe".into());
+    }
+    let windows_release_smoke = job_step(
+        &ci,
+        "windows-release-proof",
+        "Native ORT smoke (Windows; release profile)",
+    )
+    .and_then(|step| step["run"].as_str())
+    .unwrap_or_default();
+    if !windows_release_smoke.contains("scripts/stage-onnxruntime-windows.ps1")
+        || !windows_release_smoke.contains("scripts/smoke-windows.ps1")
+        || !windows_release_smoke.contains(r"target\release")
+    {
+        violations.push("Windows release proof omits the native ORT smoke".into());
+    }
+    let release_cache = job_step(
+        &ci,
+        "windows-release-proof",
+        "Restore Rust cache (read-only)",
+    );
+    if release_cache
+        .and_then(|step| step["uses"].as_str())
+        .is_none_or(|uses| !uses.contains("Swatinem/rust-cache"))
+        || release_cache.and_then(|step| step["with"]["shared-key"].as_str()) != Some("test")
+        || release_cache.and_then(|step| step["with"]["cache-all-crates"].as_str()) != Some("true")
+        || release_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some("false")
+    {
+        violations
+            .push("Windows release proof does not restore the shared test cache read-only".into());
+    }
+    for (job, step_name) in [
+        ("test", "Configure rust-lld linker (Windows tests)"),
+        (
+            "windows-release-proof",
+            "Configure rust-lld linker (Windows release)",
+        ),
+    ] {
+        let linker = job_step(&ci, job, step_name);
+        let condition = linker
+            .and_then(|step| step["if"].as_str())
+            .unwrap_or_default();
+        let run = linker
+            .and_then(|step| step["run"].as_str())
+            .unwrap_or_default();
+        if (job == "test" && !condition.contains("matrix.os == 'windows-2022'"))
+            || !run.contains("rust-lld.exe")
+            || !run.contains("RUSTFLAGS=")
+            || !run.contains("$env:GITHUB_ENV")
+        {
+            violations.push(format!("{job} does not configure rust-lld for Windows"));
+        }
     }
 
     let windows_lint_condition = job_step(&ci, "test", "Page lint scale gate (Windows functional)")
@@ -1668,6 +1807,40 @@ fn ci_routing_contract_violations(
     {
         violations.push("macOS nextest workspace proof is unnecessarily single-threaded".into());
     }
+    let shared_integration = job_step(
+        &ci,
+        "test",
+        "Integration tests wenlan-cli + wenlan-server (shared integration only)",
+    );
+    let shared_integration_condition = shared_integration
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    let shared_integration_run = shared_integration
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    if !shared_integration_condition.contains("matrix.os != 'windows-2022'")
+        || !shared_integration_run.contains("-E 'kind(test)'")
+    {
+        violations
+            .push("Linux/macOS integration step duplicates wenlan CLI/server lib tests".into());
+    }
+    let windows_integration = job_step(
+        &ci,
+        "test",
+        "Integration tests wenlan-cli + wenlan-server (Windows)",
+    );
+    if windows_integration
+        .and_then(|step| step["if"].as_str())
+        .is_none_or(|condition| !condition.contains("matrix.os == 'windows-2022'"))
+        || windows_integration
+            .and_then(|step| step["run"].as_str())
+            .is_none_or(|run| {
+                !run.contains("cargo nextest run -p wenlan -p wenlan-server")
+                    || run.contains("kind(test)")
+            })
+    {
+        violations.push("Windows does not retain its full CLI/server platform contract".into());
+    }
 
     let Some(test_steps) = ci["jobs"]["test"]["steps"].as_sequence() else {
         violations.push("test job has no steps for fail-fast ordering".into());
@@ -1678,7 +1851,7 @@ fn ci_routing_contract_violations(
             .iter()
             .position(|step| step["name"].as_str() == Some(name))
     };
-    let integration_index = step_index("Integration tests wenlan-cli + wenlan-server");
+    let integration_index = step_index("Integration tests wenlan-cli + wenlan-server (Windows)");
     match (
         step_index("Validate Windows smoke harness"),
         integration_index,
@@ -1689,16 +1862,12 @@ fn ci_routing_contract_violations(
     }
     match (
         integration_index,
-        step_index("Build Windows release binaries"),
         step_index("Compile platform-owned MCP runtime"),
         step_index("Build Windows contract binaries"),
     ) {
-        (Some(integration), Some(release), Some(mcp), Some(debug))
-            if integration < release && release < mcp && release < debug => {}
-        _ => violations.push(
-            "Windows steps do not prioritize integration then release proof before later compilation"
-                .into(),
-        ),
+        (Some(integration), Some(mcp), Some(debug)) if integration < mcp && mcp < debug => {}
+        _ => violations
+            .push("Windows steps do not fail fast from integration into later compilation".into()),
     }
 
     violations
@@ -1788,17 +1957,25 @@ jobs:
         "proven Linux lane",
         "condition omits CI scheduling trigger",
         "coverage workflow",
+        "clippy configuration",
         "nextest config",
         "release-profile-sensitive",
         "release-sensitive",
-        "wenlan-mcp artifact",
+        "30-minute CI budget",
+        "independent differential job",
+        "release artifact or model probe",
+        "native ORT smoke",
+        "shared test cache read-only",
+        "rust-lld",
         "does not also schedule",
         "debug runtime artifacts",
         "differentially compile every wenlan-mcp target",
         "mcp-platform routing",
         "single-threaded",
+        "duplicates wenlan CLI/server lib tests",
+        "full CLI/server platform contract",
         "fail fast before integration",
-        "release proof before later compilation",
+        "fail fast from integration",
         "root installer",
     ] {
         assert!(
