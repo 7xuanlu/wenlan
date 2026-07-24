@@ -699,6 +699,24 @@ fn acquire_embedder_init_file_lock(cache_dir: Option<&std::path::Path>) -> Optio
     Some(file)
 }
 
+/// Construct a FastEmbed text model behind the shared process + filesystem
+/// locks. Every `TextEmbedding` initializer in this crate must use this seam:
+/// nextest runs tests in separate processes, so a process-local singleton does
+/// not protect a cold shared model cache.
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn init_text_embedding(options: InitOptions) -> anyhow::Result<TextEmbedding> {
+    // fastembed 5.13.1 gives HF_HOME precedence over options.cache_dir in
+    // pull_from_hf(). Derive the lock domain from the same inputs here so a
+    // caller cannot accidentally lock one directory while hf-hub mutates
+    // another.
+    let effective_cache_dir = std::env::var_os("HF_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| options.cache_dir.clone());
+    let _file_lock = acquire_embedder_init_file_lock(Some(&effective_cache_dir));
+    let _guard = EMBEDDER_INIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    TextEmbedding::try_new(options)
+}
+
 /// Known-client registry — maps canonical technical IDs (what clients send in
 /// `x-agent-name`) to human-friendly display names (what users see in UI).
 ///
@@ -2953,23 +2971,16 @@ impl MemoryDB {
                 .unwrap_or_else(|| "<default>".into())
         );
         let (embed_tx, embed_rx) = tokio::sync::oneshot::channel();
-        let embed_cache_for_lock = embed_cache_dir.clone();
         std::thread::Builder::new()
             .name("embedder-init".into())
             .spawn(move || {
-                // Cross-process serialization first (covers nextest forked test
-                // processes). Process-local mutex second (covers parallel inits
-                // within the same process). Lock-ordering: outer file lock,
-                // inner process mutex — both protect the same try_new call.
-                let _file_lock = acquire_embedder_init_file_lock(embed_cache_for_lock.as_deref());
-                let _guard = EMBEDDER_INIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
                 log::info!("[memory_db] embedder thread: loading ONNX model...");
                 let mut opts = InitOptions::new(EmbeddingModel::BGEBaseENV15Q)
                     .with_show_download_progress(true);
                 if let Some(cache) = embed_cache_dir {
                     opts = opts.with_cache_dir(cache);
                 }
-                let result = TextEmbedding::try_new(opts);
+                let result = init_text_embedding(opts);
                 let _ = embed_tx.send(result);
             })
             .map_err(|e| WenlanError::Embedding(format!("spawn embedder thread: {}", e)))?;
@@ -3089,15 +3100,9 @@ impl MemoryDB {
         std::thread::Builder::new()
             .name("embedder-init-shared".into())
             .spawn(move || {
-                // Cross-process serialization first (covers nextest forked test
-                // processes). Process-local mutex second. No `embed_cache_dir`
-                // here — caller doesn't supply one, so the lock falls back to
-                // `dirs::data_dir()/wenlan/memorydb/.embedder_init.lock`.
-                let _file_lock = acquire_embedder_init_file_lock(None);
-                let _guard = EMBEDDER_INIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
                 let opts = InitOptions::new(EmbeddingModel::BGEBaseENV15Q)
                     .with_show_download_progress(true);
-                let result = TextEmbedding::try_new(opts);
+                let result = init_text_embedding(opts);
                 let _ = tx.send(result);
             })
             .map_err(|e| WenlanError::Embedding(format!("spawn embedder: {}", e)))?;
@@ -41558,12 +41563,12 @@ pub(crate) mod tests {
                 // empty) and walk the env + shared-host candidates.
                 let mut opts = InitOptions::new(EmbeddingModel::BGEBaseENV15Q)
                     .with_show_download_progress(false);
-                if let Some(cache) =
-                    resolve_fastembed_cache_dir(std::path::Path::new(".nonexistent"))
-                {
-                    opts = opts.with_cache_dir(cache);
+                let cache_dir =
+                    resolve_fastembed_cache_dir(std::path::Path::new(".nonexistent"));
+                if let Some(cache) = &cache_dir {
+                    opts = opts.with_cache_dir(cache.clone());
                 }
-                let emb = TextEmbedding::try_new(opts).expect(
+                let emb = init_text_embedding(opts).expect(
                     "failed to init embedder for tests (set WENLAN_TEST_FASTEMBED_CACHE or run the daemon once to populate the shared cache)",
                 );
                 Arc::new(std::sync::Mutex::new(emb))

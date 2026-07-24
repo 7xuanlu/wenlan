@@ -103,6 +103,7 @@ fn fastembed_ci_cache_violations(workflow: &str) -> Vec<String> {
     const CACHE_STEP: &str = "Cache fastembed model (Linux)";
     const CACHE_DIR: &str = "${{ github.workspace }}/.fastembed_cache";
     const CACHE_PATH: &str = "${{ env.FASTEMBED_CACHE_DIR }}";
+    const CACHE_KEY: &str = "fastembed-bge-base-en-v1.5-q-v2";
     const JOBS: &[(&str, &str)] = &[
         ("test", "Workspace lib tests (Linux)"),
         (
@@ -157,6 +158,12 @@ fn fastembed_ci_cache_violations(workflow: &str) -> Vec<String> {
                 "job {job_name} caches {actual_path:?}, expected {CACHE_PATH:?}"
             ));
         }
+        let actual_key = steps[cache_index]["with"]["key"].as_str();
+        if actual_key != Some(CACHE_KEY) {
+            violations.push(format!(
+                "job {job_name} uses FastEmbed cache key {actual_key:?}, expected {CACHE_KEY:?}"
+            ));
+        }
 
         let consumer_index = steps
             .iter()
@@ -175,6 +182,126 @@ fn fastembed_ci_cache_violations(workflow: &str) -> Vec<String> {
     violations
 }
 
+fn coverage_fastembed_cache_violations(workflow: &str) -> Vec<String> {
+    const CACHE_STEP: &str = "Cache fastembed model (Linux)";
+    const CACHE_DIR: &str = "${{ github.workspace }}/.fastembed_cache";
+    const CACHE_PATH: &str = "${{ env.FASTEMBED_CACHE_DIR }}";
+    const CACHE_KEY: &str = "fastembed-bge-base-en-v1.5-q-v2";
+
+    let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse coverage.yml");
+    let mut violations = Vec::new();
+    let actual_cache_dir = parsed["jobs"]["coverage"]["env"]["FASTEMBED_CACHE_DIR"].as_str();
+    if actual_cache_dir != Some(CACHE_DIR) {
+        violations.push(format!(
+            "coverage sets FASTEMBED_CACHE_DIR={actual_cache_dir:?}, expected {CACHE_DIR:?}"
+        ));
+    }
+
+    let Some(steps) = parsed["jobs"]["coverage"]["steps"].as_sequence() else {
+        violations.push("coverage job has no steps".into());
+        return violations;
+    };
+    let cache_steps: Vec<&serde_yaml::Value> = steps
+        .iter()
+        .filter(|step| step["name"].as_str() == Some(CACHE_STEP))
+        .collect();
+    if cache_steps.len() != 1 {
+        violations.push(format!(
+            "coverage has {} {CACHE_STEP:?} steps, expected 1",
+            cache_steps.len()
+        ));
+        return violations;
+    }
+    let cache_step = cache_steps[0];
+    let actual_path = cache_step["with"]["path"].as_str();
+    if actual_path != Some(CACHE_PATH) {
+        violations.push(format!(
+            "coverage caches {actual_path:?}, expected {CACHE_PATH:?}"
+        ));
+    }
+    let actual_key = cache_step["with"]["key"].as_str();
+    if actual_key != Some(CACHE_KEY) {
+        violations.push(format!(
+            "coverage uses FastEmbed cache key {actual_key:?}, expected {CACHE_KEY:?}"
+        ));
+    }
+
+    violations
+}
+
+fn release_rust_cache_violations(workflow: &str) -> Vec<String> {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse release.yml");
+    let mut violations = Vec::new();
+    let Some(steps) = parsed["jobs"]["release"]["steps"].as_sequence() else {
+        return vec!["release job has no steps".into()];
+    };
+
+    if steps.iter().any(|step| {
+        step["uses"]
+            .as_str()
+            .is_some_and(|uses| uses.contains("sccache-action"))
+    }) {
+        violations.push(
+            "release tag builds install sccache despite near-zero cross-tag cache reuse".into(),
+        );
+    }
+    let build = steps
+        .iter()
+        .find(|step| step["name"].as_str() == Some("Build"));
+    if build.is_none_or(|step| {
+        step["env"]["RUSTC_WRAPPER"].as_str() == Some("sccache")
+            || step["env"]["SCCACHE_GHA_ENABLED"].as_str() == Some("true")
+    }) {
+        violations.push("release Build still depends on sccache GHA state".into());
+    }
+    if !steps.iter().any(|step| {
+        step["uses"]
+            .as_str()
+            .is_some_and(|uses| uses.contains("Swatinem/rust-cache"))
+    }) {
+        violations.push("release job removed its target-level rust-cache fallback".into());
+    }
+
+    violations
+}
+
+fn nextest_whole_core_serialization_violations(config: &str) -> Vec<String> {
+    let parsed: toml::Value = toml::from_str(config).expect("parse nextest.toml");
+    let mut violations = Vec::new();
+    let Some(overrides) = parsed["profile"]["default"]["overrides"].as_array() else {
+        return violations;
+    };
+    for override_ in overrides {
+        if override_["filter"].as_str() != Some("package(wenlan-core)") {
+            continue;
+        }
+        let Some(group) = override_["test-group"].as_str() else {
+            continue;
+        };
+        let max_threads = parsed["test-groups"][group]["max-threads"].as_integer();
+        if max_threads == Some(1) {
+            violations.push(format!(
+                "nextest serializes the entire wenlan-core package through group {group:?}"
+            ));
+        }
+    }
+
+    violations
+}
+
+fn text_embedding_initializer_sites(path: &str, source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || !trimmed.contains("TextEmbedding::try_new(") {
+                return None;
+            }
+            Some(format!("{path}:{trimmed}"))
+        })
+        .collect()
+}
+
 #[test]
 fn fastembed_ci_cache_is_restored_before_model_consumers() {
     let workflow =
@@ -184,6 +311,159 @@ fn fastembed_ci_cache_is_restored_before_model_consumers() {
         violations.is_empty(),
         "FastEmbed CI cache contract drift:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn coverage_and_ci_share_the_fastembed_cache_contract() {
+    let workflow = std::fs::read_to_string(repo_root().join(".github/workflows/coverage.yml"))
+        .expect("read coverage.yml");
+    let violations = coverage_fastembed_cache_violations(&workflow);
+    assert!(
+        violations.is_empty(),
+        "Coverage FastEmbed cache contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn coverage_fastembed_cache_contract_detects_non_sharing_path() {
+    let workflow = r#"
+jobs:
+  coverage:
+    env: {}
+    steps:
+      - name: Cache fastembed model (Linux)
+        with:
+          path: ~/.local/share/wenlan/memorydb/fastembed_cache
+          key: fastembed-bge-base-en-v1.5-q-v1
+"#;
+    let violations = coverage_fastembed_cache_violations(workflow);
+    for expected in ["FASTEMBED_CACHE_DIR", "coverage caches", "cache key"] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "fixture must exercise {expected:?}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn release_uses_target_cache_without_tag_scoped_sccache_writes() {
+    let workflow = std::fs::read_to_string(repo_root().join(".github/workflows/release.yml"))
+        .expect("read release.yml");
+    let violations = release_rust_cache_violations(&workflow);
+    assert!(
+        violations.is_empty(),
+        "Release cache contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn release_cache_contract_rejects_sccache_only_fixture() {
+    let workflow = r#"
+jobs:
+  release:
+    steps:
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@sha
+      - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+        run: cargo build --release
+"#;
+    let violations = release_rust_cache_violations(workflow);
+    for expected in [
+        "install sccache",
+        "depends on sccache",
+        "rust-cache fallback",
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "fixture must exercise {expected:?}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn nextest_does_not_serialize_the_entire_core_package() {
+    let config = std::fs::read_to_string(repo_root().join(".config/nextest.toml"))
+        .expect("read nextest.toml");
+    let violations = nextest_whole_core_serialization_violations(&config);
+    assert!(
+        violations.is_empty(),
+        "nextest whole-package serialization contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn nextest_parallelism_contract_rejects_whole_core_serialization() {
+    let config = r#"
+[test-groups]
+wenlan-core = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(wenlan-core)'
+test-group = 'wenlan-core'
+"#;
+    let violations = nextest_whole_core_serialization_violations(config);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("entire wenlan-core package")),
+        "fixture must exercise whole-package serialization: {violations:?}"
+    );
+}
+
+#[test]
+fn all_text_embedding_initializers_use_the_cross_process_lock() {
+    let root = repo_root();
+    let mut sites = Vec::new();
+    for path in git_ls_files(&root, "*.rs").into_iter().filter(|path| {
+        path.starts_with("crates/wenlan-core/src/")
+            && path != "crates/wenlan-core/src/drift_guard.rs"
+    }) {
+        let source = std::fs::read_to_string(root.join(&path)).expect("read Rust source");
+        sites.extend(text_embedding_initializer_sites(&path, &source));
+    }
+    assert_eq!(
+        sites,
+        ["crates/wenlan-core/src/db.rs:TextEmbedding::try_new(options)"],
+        "FastEmbed text initialization bypasses db::init_text_embedding: {sites:?}"
+    );
+}
+
+#[test]
+fn text_embedding_initializer_guard_detects_a_direct_call() {
+    let sites = text_embedding_initializer_sites(
+        "crates/wenlan-core/src/new_model.rs",
+        "let model = fastembed::TextEmbedding::try_new(options)?;",
+    );
+    assert_eq!(sites.len(), 1, "positive control must detect direct init");
+}
+
+#[test]
+fn clippy_syntax_guard_forbids_direct_text_embedding_initializers() {
+    let config =
+        std::fs::read_to_string(repo_root().join("clippy.toml")).expect("read clippy.toml");
+    let parsed: toml::Value = toml::from_str(&config).expect("parse clippy.toml");
+    let guarded = parsed["disallowed-methods"]
+        .as_array()
+        .is_some_and(|methods| {
+            methods.iter().any(|method| {
+                method["path"].as_str() == Some("fastembed::TextEmbedding::try_new")
+                    && method["replacement"].as_str() == Some("crate::db::init_text_embedding")
+            })
+        });
+    assert!(
+        guarded,
+        "clippy.toml must syntax-check every TextEmbedding initializer"
     );
 }
 
@@ -227,6 +507,12 @@ jobs:
             .iter()
             .any(|violation| violation.contains("WENLAN_TEST_FASTEMBED_CACHE")),
         "fixture must reject per-step cache overrides: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("cache key")),
+        "fixture must reject a missing or stale cache key: {violations:?}"
     );
 }
 
@@ -620,6 +906,1085 @@ jobs:
             .any(|violation| violation.contains("before inference-capable tests")),
         "fixture must reject a late ORT bootstrap: {violations:?}"
     );
+}
+
+// ── Teeth #8: differential CI routing stays fail-closed ──
+
+fn detect_change_filter_paths(workflow: &serde_yaml::Value, filter_name: &str) -> BTreeSet<String> {
+    let Some(steps) = workflow["jobs"]["detect-changes"]["steps"].as_sequence() else {
+        return BTreeSet::new();
+    };
+    let Some(filters_yaml) = steps
+        .iter()
+        .find(|step| step["id"].as_str() == Some("filter"))
+        .and_then(|step| step["with"]["filters"].as_str())
+    else {
+        return BTreeSet::new();
+    };
+    let Ok(filters) = serde_yaml::from_str::<serde_yaml::Value>(filters_yaml) else {
+        return BTreeSet::new();
+    };
+    filters[filter_name]
+        .as_sequence()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_yaml::Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn job_needs(workflow: &serde_yaml::Value, job_name: &str) -> Vec<String> {
+    let needs = &workflow["jobs"][job_name]["needs"];
+    if let Some(single) = needs.as_str() {
+        return vec![single.to_string()];
+    }
+    needs
+        .as_sequence()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_yaml::Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn job_step<'a>(
+    workflow: &'a serde_yaml::Value,
+    job_name: &str,
+    step_name: &str,
+) -> Option<&'a serde_yaml::Value> {
+    workflow["jobs"][job_name]["steps"]
+        .as_sequence()?
+        .iter()
+        .find(|step| step["name"].as_str() == Some(step_name))
+}
+
+fn native_platform_markers() -> Vec<(&'static str, &'static str, regex::Regex)> {
+    vec![
+        (
+            "windows",
+            "windows",
+            regex::Regex::new(r#"\b(?:_WIN32|_WIN64|WIN32)\b"#).unwrap(),
+        ),
+        (
+            "macos",
+            "macos",
+            regex::Regex::new(r#"\b(?:__APPLE__|__MACH__|TARGET_OS_OSX)\b"#).unwrap(),
+        ),
+        (
+            "linux",
+            "rust",
+            regex::Regex::new(r#"\b__linux__\b"#).unwrap(),
+        ),
+        (
+            "unix",
+            "macos",
+            regex::Regex::new(r#"\b(?:__unix__|__unix)\b"#).unwrap(),
+        ),
+        (
+            "unix",
+            "windows",
+            regex::Regex::new(r#"\b(?:__unix__|__unix)\b"#).unwrap(),
+        ),
+    ]
+}
+
+fn rust_cfg_expression_ranges(contents: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut search_from = 0;
+    while let Some(relative) = contents[search_from..].find("cfg") {
+        let start = search_from + relative;
+        let previous_is_identifier = contents[..start]
+            .bytes()
+            .next_back()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+        if previous_is_identifier {
+            search_from = start + 3;
+            continue;
+        }
+
+        let mut cursor = start + 3;
+        if contents[cursor..].starts_with("_attr") {
+            cursor += "_attr".len();
+        } else if contents[cursor..].starts_with('!') {
+            cursor += 1;
+        }
+        while contents
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            cursor += 1;
+        }
+        if contents.as_bytes().get(cursor) != Some(&b'(') {
+            search_from = start + 3;
+            continue;
+        }
+
+        let expression_start = cursor + 1;
+        let mut depth = 0_u32;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut expression_end = None;
+        for (relative, character) in contents[cursor..].char_indices() {
+            let absolute = cursor + relative;
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            if character == '"' {
+                in_string = true;
+                continue;
+            }
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        expression_end = Some(absolute);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(end) = expression_end {
+            ranges.push((expression_start, end));
+            search_from = end + 1;
+        } else {
+            search_from = start + 3;
+        }
+    }
+    ranges
+}
+
+fn cfg_expression_has_word(expression: &str, expected: &str) -> bool {
+    expression
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .any(|word| word == expected)
+}
+
+fn source_platform_routes(
+    path: &str,
+    contents: &str,
+    markers: &[(&'static str, &'static str, regex::Regex)],
+) -> BTreeSet<(&'static str, &'static str)> {
+    let mut routes = BTreeSet::new();
+    if [".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+    {
+        routes.insert(("native", "macos"));
+        routes.insert(("native", "windows"));
+    }
+    if path.ends_with(".m") || path.ends_with(".mm") {
+        routes.insert(("macos", "macos"));
+    }
+    for (start, end) in rust_cfg_expression_ranges(contents) {
+        let expression = &contents[start..end];
+        if cfg_expression_has_word(expression, "windows") {
+            routes.insert(("windows", "windows"));
+        }
+        if cfg_expression_has_word(expression, "macos") {
+            routes.insert(("macos", "macos"));
+        }
+        if cfg_expression_has_word(expression, "linux") {
+            routes.insert(("linux", "rust"));
+        }
+        if cfg_expression_has_word(expression, "unix") {
+            routes.insert(("unix", "macos"));
+            routes.insert(("unix", "windows"));
+        }
+    }
+    for (platform, filter, path_marker) in [
+        ("windows", "windows", "std::os::windows"),
+        ("macos", "macos", "std::os::macos"),
+        ("linux", "rust", "std::os::linux"),
+        ("unix", "macos", "std::os::unix"),
+        ("unix", "windows", "std::os::unix"),
+    ] {
+        if contents.contains(path_marker) {
+            routes.insert((platform, filter));
+        }
+    }
+    for (platform, filter, marker) in markers {
+        if marker.is_match(contents) {
+            routes.insert((*platform, *filter));
+        }
+    }
+    routes
+}
+
+#[test]
+fn platform_source_markers_cover_native_positive_controls() {
+    let markers = native_platform_markers();
+    let nested_rust_cfg = source_platform_routes(
+        "crates/platform.rs",
+        r#"
+#[cfg(all(not(feature = "portable"), windows))]
+fn windows_only() {}
+#[cfg(all(not(feature = "portable"), macos))]
+fn macos_only() {}
+#[cfg(all(not(feature = "portable"), linux))]
+fn linux_only() {}
+#[cfg(all(not(feature = "portable"), unix))]
+fn unix_only() {}
+"#,
+        &markers,
+    );
+    assert!(nested_rust_cfg.contains(&("windows", "windows")));
+    assert!(nested_rust_cfg.contains(&("macos", "macos")));
+    assert!(nested_rust_cfg.contains(&("linux", "rust")));
+    assert!(nested_rust_cfg.contains(&("unix", "macos")));
+    assert!(nested_rust_cfg.contains(&("unix", "windows")));
+
+    let windows = source_platform_routes("crates/native.c", "#if defined(_WIN32)", &markers);
+    assert!(windows.contains(&("windows", "windows")));
+
+    let shared_native = source_platform_routes(
+        "crates/native.cpp",
+        "void platform_neutral(void);",
+        &markers,
+    );
+    assert!(shared_native.contains(&("native", "macos")));
+    assert!(shared_native.contains(&("native", "windows")));
+
+    let alternate_cpp = source_platform_routes(
+        "crates/native.cxx",
+        "void platform_neutral(void);",
+        &markers,
+    );
+    assert!(alternate_cpp.contains(&("native", "macos")));
+    assert!(alternate_cpp.contains(&("native", "windows")));
+
+    let apple = source_platform_routes("crates/native.h", "#ifdef __APPLE__", &markers);
+    assert!(apple.contains(&("macos", "macos")));
+
+    let linux = source_platform_routes("crates/native.cc", "#ifdef __linux__", &markers);
+    assert!(linux.contains(&("linux", "rust")));
+
+    let unix = source_platform_routes("crates/native.cpp", "#ifdef __unix__", &markers);
+    assert!(unix.contains(&("unix", "macos")));
+    assert!(unix.contains(&("unix", "windows")));
+
+    let objective_c =
+        source_platform_routes("crates/native.m", "void platform_neutral(void);", &markers);
+    assert!(objective_c.contains(&("macos", "macos")));
+}
+
+fn platform_sensitive_paths(root: &Path) -> Vec<(String, &'static str, &'static str)> {
+    let markers = native_platform_markers();
+    let mut paths = BTreeSet::new();
+    let mut native_sources = BTreeSet::new();
+    for pattern in [
+        "*.rs", "*.c", "*.cc", "*.cpp", "*.cxx", "*.h", "*.hh", "*.hpp", "*.hxx", "*.m", "*.mm",
+    ] {
+        native_sources.extend(git_ls_files(root, pattern));
+    }
+    for path in native_sources
+        .into_iter()
+        .filter(|path| path.starts_with("crates/"))
+    {
+        let contents = std::fs::read_to_string(root.join(&path)).unwrap_or_default();
+        for (platform, filter) in source_platform_routes(&path, &contents, &markers) {
+            paths.insert((path.clone(), platform, filter));
+        }
+    }
+
+    for path in git_ls_files(root, "scripts/*") {
+        let lower = path.to_ascii_lowercase();
+        if lower.contains("windows") || lower.ends_with(".ps1") {
+            paths.insert((path.clone(), "windows", "windows"));
+        }
+        if lower.contains("macos") {
+            paths.insert((path.clone(), "macos", "macos"));
+        }
+        if lower.contains("linux") {
+            paths.insert((path, "linux", "rust"));
+        }
+    }
+    for path in git_ls_files(root, "docker/*") {
+        paths.insert((path, "linux", "rust"));
+    }
+
+    paths.into_iter().collect()
+}
+
+fn release_profile_sensitive_paths(root: &Path) -> Vec<String> {
+    let core_lib =
+        std::fs::read_to_string(root.join("crates/wenlan-core/src/lib.rs")).expect("read core lib");
+    assert!(
+        core_lib.contains("#[cfg(test)]\nmod drift_guard;"),
+        "drift_guard.rs exclusion is valid only while the whole module is test-only"
+    );
+    git_ls_files(root, "*.rs")
+        .into_iter()
+        .filter(|path| {
+            path.starts_with("crates/")
+                && path.contains("/src/")
+                // The whole module is imported behind #[cfg(test)] in lib.rs.
+                && path != "crates/wenlan-core/src/drift_guard.rs"
+        })
+        .filter(|path| {
+            std::fs::read_to_string(root.join(path))
+                .is_ok_and(|contents| has_production_release_marker(&contents))
+        })
+        .collect()
+}
+
+fn has_production_release_marker(contents: &str) -> bool {
+    rust_cfg_expression_ranges(contents)
+        .into_iter()
+        .filter(|(start, end)| cfg_expression_has_word(&contents[*start..*end], "debug_assertions"))
+        .any(|(start, end)| {
+            let line_start = contents[..start]
+                .rfind('\n')
+                .map_or(0, |newline| newline + 1);
+            let line_end = contents[end..]
+                .find('\n')
+                .map_or(contents.len(), |newline| end + newline);
+            let adjacent_attributes = contents[..line_start]
+                .lines()
+                .rev()
+                .take_while(|line| line.trim_start().starts_with("#["))
+                .chain(
+                    contents[line_end..]
+                        .lines()
+                        .skip(1)
+                        .take_while(|line| line.trim_start().starts_with("#[")),
+                );
+            !adjacent_attributes.into_iter().any(|line| {
+                let attribute = line.trim();
+                attribute == "#[test]" || attribute.contains("::test")
+            })
+        })
+}
+
+#[test]
+fn release_profile_marker_scan_is_fail_closed_after_test_modules() {
+    let test_only = r#"
+#[test]
+#[cfg(debug_assertions)]
+fn debug_only_assertion() {}
+"#;
+    assert!(!has_production_release_marker(test_only));
+
+    let nonterminal_test_module = r#"
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[cfg(debug_assertions)]
+    fn debug_only_assertion() {}
+}
+
+#[cfg(not(debug_assertions))]
+pub fn release_only_runtime() {}
+"#;
+    assert!(has_production_release_marker(nonterminal_test_module));
+
+    let nested_release_predicate = r#"
+#[cfg(all(not(feature = "portable"), debug_assertions))]
+pub fn nested_release_sensitive_runtime() {}
+"#;
+    assert!(has_production_release_marker(nested_release_predicate));
+}
+
+fn filter_routes_path(patterns: &BTreeSet<String>, path: &str) -> bool {
+    patterns.contains(path)
+        || patterns.iter().any(|pattern| {
+            pattern
+                .strip_suffix("/**")
+                .is_some_and(|prefix| path.starts_with(&format!("{prefix}/")))
+        })
+        || patterns.iter().any(|pattern| {
+            pattern
+                .strip_prefix("crates/**/*.")
+                .is_some_and(|extension| {
+                    path.starts_with("crates/") && path.ends_with(&format!(".{extension}"))
+                })
+        })
+}
+
+fn ci_routing_contract_violations(
+    workflow: &str,
+    platform_sensitive_paths: &[(String, &'static str, &'static str)],
+    release_profile_sensitive_paths: &[String],
+) -> Vec<String> {
+    let ci: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse ci.yml");
+    let mut violations = Vec::new();
+
+    for output in [
+        "macos",
+        "windows",
+        "windows-lint",
+        "windows-release",
+        "mcp-platform",
+    ] {
+        if ci["jobs"]["detect-changes"]["outputs"][output]
+            .as_str()
+            .is_none()
+        {
+            violations.push(format!("detect-changes does not expose {output} routing"));
+        }
+    }
+
+    let rust_paths = detect_change_filter_paths(&ci, "rust");
+    if !rust_paths.contains("crates/**/*.rs") {
+        violations.push(
+            "Linux canonical routing is not a fail-closed catch-all for tracked Rust sources"
+                .into(),
+        );
+    }
+    if !rust_paths.contains(".github/workflows/coverage.yml") {
+        violations.push(
+            "coverage workflow cannot bootstrap its FastEmbed cache contract through rust".into(),
+        );
+    }
+    if !rust_paths.contains("clippy.toml") {
+        violations.push(
+            "clippy configuration cannot bootstrap its syntax-aware FastEmbed guard through rust"
+                .into(),
+        );
+    }
+    for (path, platform, filter) in platform_sensitive_paths {
+        let routed = detect_change_filter_paths(&ci, filter);
+        if !filter_routes_path(&routed, path) {
+            violations.push(format!(
+                "platform-sensitive {platform} path is not fail-closed through {filter}: {path}"
+            ));
+        }
+        if !filter_routes_path(&rust_paths, path) {
+            violations.push(format!(
+                "platform-sensitive {platform} path cannot bootstrap the CI contract through rust: {path}"
+            ));
+        }
+    }
+
+    let release_sensitive = detect_change_filter_paths(&ci, "windows-release");
+    for path in release_profile_sensitive_paths {
+        if !filter_routes_path(&release_sensitive, path) {
+            violations.push(format!(
+                "release-profile-sensitive source is not routed through windows-release: {path}"
+            ));
+        }
+    }
+    let windows_paths = detect_change_filter_paths(&ci, "windows");
+    let macos_paths = detect_change_filter_paths(&ci, "macos");
+    for (filter, paths) in [
+        ("rust", &rust_paths),
+        ("macos", &macos_paths),
+        ("windows", &windows_paths),
+    ] {
+        if !paths.contains(".config/nextest.toml") {
+            violations.push(format!(
+                "{filter} routing omits nextest config that guards core-test parallelism"
+            ));
+        }
+    }
+    for extension in ["c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx"] {
+        let path = format!("crates/**/*.{extension}");
+        for (filter, paths) in [
+            ("rust", &rust_paths),
+            ("macos", &macos_paths),
+            ("windows", &windows_paths),
+            ("windows-release", &release_sensitive),
+        ] {
+            if !paths.contains(&path) {
+                violations.push(format!(
+                    "{filter} routing omits shared native source glob {path}"
+                ));
+            }
+        }
+    }
+    for path in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        "crates/**/Cargo.toml",
+        "crates/**/build.rs",
+        "crates/**/*.c",
+        "crates/**/*.cc",
+        "crates/**/*.cpp",
+        "crates/**/*.cxx",
+        "crates/**/*.h",
+        "crates/**/*.hh",
+        "crates/**/*.hpp",
+        "crates/**/*.hxx",
+        "crates/*/npm/**",
+        "install.sh",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "scripts/stage-onnxruntime-windows.ps1",
+        "scripts/smoke-windows.ps1",
+        "version.txt",
+        ".release-please-manifest.json",
+        "CHANGELOG.md",
+    ] {
+        if !release_sensitive.contains(path) {
+            violations.push(format!(
+                "windows-release routing omits release-sensitive path {path}"
+            ));
+        }
+    }
+    for (platform, paths) in [("macos", &macos_paths), ("windows", &windows_paths)] {
+        if !filter_routes_path(paths, "install.sh") {
+            violations.push(format!(
+                "{platform} routing omits the root installer install.sh"
+            ));
+        }
+        for path in [
+            "crates/wenlan-server/src/**",
+            "crates/wenlan-server/tests/**",
+        ] {
+            if !paths.contains(path) {
+                violations.push(format!(
+                    "{platform} routing omits shared server runtime boundary {path}"
+                ));
+            }
+        }
+        for path in [
+            "version.txt",
+            ".release-please-manifest.json",
+            "CHANGELOG.md",
+        ] {
+            if !paths.contains(path) {
+                violations.push(format!(
+                    "{platform} routing omits pre-release full-platform trigger {path}"
+                ));
+            }
+        }
+    }
+    let windows_lint = detect_change_filter_paths(&ci, "windows-lint");
+    for path in [
+        "crates/wenlan-core/src/lint/**",
+        "scripts/lint-scale-gate.sh",
+    ] {
+        if !windows_lint.contains(path) {
+            violations.push(format!(
+                "windows-lint routing omits lint-sensitive path {path}"
+            ));
+        }
+    }
+    for (child_name, child_paths) in [
+        ("release-sensitive", &release_sensitive),
+        ("lint-sensitive", &windows_lint),
+    ] {
+        for path in child_paths {
+            if !filter_routes_path(&windows_paths, path) {
+                violations.push(format!(
+                    "{child_name} Windows path does not also schedule the Windows job: {path}"
+                ));
+            }
+        }
+    }
+    let mcp_platform = detect_change_filter_paths(&ci, "mcp-platform");
+    for path in [
+        "crates/wenlan-mcp/src/**",
+        "crates/wenlan-mcp/Cargo.toml",
+        "crates/wenlan-mcp/build.rs",
+        "crates/wenlan-types/src/**",
+        "crates/wenlan-types/Cargo.toml",
+        "crates/wenlan-types/build.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+    ] {
+        if !mcp_platform.contains(path) {
+            violations.push(format!(
+                "mcp-platform routing omits platform-compile-sensitive path {path}"
+            ));
+        }
+    }
+    for path in &mcp_platform {
+        for (platform, platform_paths) in [("macos", &macos_paths), ("windows", &windows_paths)] {
+            if !filter_routes_path(platform_paths, path) {
+                violations.push(format!(
+                    "mcp-platform path does not also schedule {platform}: {path}"
+                ));
+            }
+        }
+    }
+
+    for job in ["lint", "test"] {
+        let actual = job_needs(&ci, job);
+        if actual != ["detect-changes"] {
+            violations.push(format!(
+                "{job} is unnecessarily serialized; needs={actual:?}, expected [\"detect-changes\"]"
+            ));
+        }
+    }
+    for job in ["test", "windows-release-proof"] {
+        if ci["jobs"][job]["timeout-minutes"].as_u64() != Some(30) {
+            violations.push(format!("{job} does not enforce the 30-minute CI budget"));
+        }
+    }
+    let windows_release_condition = ci["jobs"]["windows-release-proof"]["if"]
+        .as_str()
+        .unwrap_or_default();
+    if job_needs(&ci, "windows-release-proof") != ["detect-changes"]
+        || !windows_release_condition
+            .contains("needs.detect-changes.outputs.windows-release == 'true'")
+        || !windows_release_condition.contains("github.event_name != 'pull_request'")
+    {
+        violations.push(
+            "Windows release proof is not an independent differential job after detect-changes"
+                .into(),
+        );
+    }
+    for profile in ["DEV", "TEST"] {
+        let key = format!("CARGO_PROFILE_{profile}_DEBUG");
+        let actual = ci["jobs"]["test"]["env"][&key].as_str();
+        if actual != Some("0") {
+            violations.push(format!(
+                "test job sets {key}={actual:?}, expected \"0\" for dev/test artifact reuse"
+            ));
+        }
+    }
+    let setup_sccache = job_step(&ci, "test", "Set up sccache");
+    let setup_condition = setup_sccache
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    let enable_sccache = job_step(&ci, "test", "Enable sccache (Linux)");
+    let enable_condition = enable_sccache
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    let enable_run = enable_sccache
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    if setup_condition != "matrix.os == 'ubuntu-24.04'"
+        || enable_condition != "matrix.os == 'ubuntu-24.04'"
+        || !enable_run.contains("SCCACHE_GHA_ENABLED=true")
+        || !enable_run.contains("RUSTC_WRAPPER=sccache")
+        || ci["jobs"]["test"]["env"]["RUSTC_WRAPPER"].as_str() == Some("sccache")
+    {
+        violations.push(
+            "test matrix does not restrict sccache reads/writes to the proven Linux lane".into(),
+        );
+    }
+    for job in ["fmt", "lint", "test", "test-quarantine"] {
+        let condition = ci["jobs"][job]["if"].as_str().unwrap_or_default();
+        for required in [
+            "needs.detect-changes.outputs.rust",
+            "needs.detect-changes.outputs.macos",
+            "needs.detect-changes.outputs.windows",
+            "github.event_name != 'pull_request'",
+        ] {
+            if !condition.contains(required) {
+                violations.push(format!(
+                    "{job} condition omits CI scheduling trigger {required}"
+                ));
+            }
+        }
+        if condition.contains("github.event.head_commit.message") {
+            violations.push(format!(
+                "{job} can skip a non-PR full backstop based on the head commit message"
+            ));
+        }
+    }
+
+    let matrix_run = ci["jobs"]["detect-changes"]["steps"]
+        .as_sequence()
+        .into_iter()
+        .flatten()
+        .find(|step| step["id"].as_str() == Some("matrix"))
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    for required in [
+        "github.event_name",
+        "pull_request",
+        "ubuntu-24.04",
+        "steps.filter.outputs.macos",
+        "steps.filter.outputs.windows",
+    ] {
+        if !matrix_run.contains(required) {
+            violations.push(format!(
+                "dynamic OS matrix is missing differential/backstop routing marker {required:?}"
+            ));
+        }
+    }
+
+    let conclusion_run =
+        workflow_step_run(&ci, "Aggregate expected CI results").unwrap_or_default();
+    if !conclusion_run.contains("expect_job") || conclusion_run.contains("success|skipped") {
+        violations.push(
+            "conclusion has no expected-vs-actual contract and accepts skipped jobs generically"
+                .into(),
+        );
+    }
+    for required in [
+        "needs.detect-changes.outputs.rust",
+        "needs.detect-changes.outputs.macos",
+        "needs.detect-changes.outputs.windows",
+        "github.event_name != 'pull_request'",
+    ] {
+        if !conclusion_run.contains(required) {
+            violations.push(format!(
+                "conclusion expectation omits CI scheduling trigger {required}"
+            ));
+        }
+    }
+    if conclusion_run.contains("github.event.head_commit.message") {
+        violations.push(
+            "conclusion can accept skipped non-PR backstops based on the head commit message"
+                .into(),
+        );
+    }
+    if !job_needs(&ci, "conclusion")
+        .iter()
+        .any(|job| job == "windows-release-proof")
+    {
+        violations.push("conclusion.needs omits the Windows release proof".into());
+    }
+    for (job, expected) in [
+        ("fmt", "\"$run_rust\""),
+        ("lint", "\"$run_rust\""),
+        ("test", "\"$run_rust\""),
+        (
+            "windows-release-proof",
+            "needs.detect-changes.outputs.windows-release",
+        ),
+        ("docs", "needs.detect-changes.outputs.docs"),
+        ("plugin", "needs.detect-changes.outputs.plugin"),
+        ("npm", "needs.detect-changes.outputs.npm"),
+    ] {
+        let result = format!("needs.{job}.result");
+        if !conclusion_run.lines().any(|line| {
+            line.contains(&format!("expect_job {job}"))
+                && line.contains(expected)
+                && line.contains(&result)
+        }) {
+            violations.push(format!(
+                "conclusion does not compare expected-vs-actual result for {job}"
+            ));
+        }
+    }
+
+    for step_name in [
+        "Build Windows release binaries",
+        "Native ORT smoke (Windows; release profile)",
+    ] {
+        if job_step(&ci, "test", step_name).is_some() {
+            violations.push(format!(
+                "{step_name} still serializes release proof inside the Windows test matrix"
+            ));
+        }
+    }
+    let windows_release_build = job_step(
+        &ci,
+        "windows-release-proof",
+        "Build Windows release binaries",
+    )
+    .and_then(|step| step["run"].as_str())
+    .unwrap_or_default();
+    if !windows_release_build.contains("--release")
+        || !windows_release_build.contains("-p wenlan")
+        || !windows_release_build.contains("-p wenlan-server")
+        || !windows_release_build.contains("-p wenlan-mcp")
+        || !windows_release_build.contains("--bin model_probe")
+    {
+        violations.push("Windows release proof omits a release artifact or model probe".into());
+    }
+    let windows_release_smoke = job_step(
+        &ci,
+        "windows-release-proof",
+        "Native ORT smoke (Windows; release profile)",
+    )
+    .and_then(|step| step["run"].as_str())
+    .unwrap_or_default();
+    if !windows_release_smoke.contains("scripts/stage-onnxruntime-windows.ps1")
+        || !windows_release_smoke.contains("scripts/smoke-windows.ps1")
+        || !windows_release_smoke.contains(r"target\release")
+    {
+        violations.push("Windows release proof omits the native ORT smoke".into());
+    }
+    let release_cache = job_step(
+        &ci,
+        "windows-release-proof",
+        "Restore Rust cache (read-only)",
+    );
+    if release_cache
+        .and_then(|step| step["uses"].as_str())
+        .is_none_or(|uses| !uses.contains("Swatinem/rust-cache"))
+        || release_cache.and_then(|step| step["with"]["shared-key"].as_str()) != Some("test")
+        || release_cache.and_then(|step| step["with"]["cache-all-crates"].as_str()) != Some("true")
+        || release_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some("false")
+    {
+        violations
+            .push("Windows release proof does not restore the shared test cache read-only".into());
+    }
+    for (job, step_name) in [
+        ("test", "Configure rust-lld linker (Windows tests)"),
+        (
+            "windows-release-proof",
+            "Configure rust-lld linker (Windows release)",
+        ),
+    ] {
+        let linker = job_step(&ci, job, step_name);
+        let condition = linker
+            .and_then(|step| step["if"].as_str())
+            .unwrap_or_default();
+        let run = linker
+            .and_then(|step| step["run"].as_str())
+            .unwrap_or_default();
+        if (job == "test" && !condition.contains("matrix.os == 'windows-2022'"))
+            || !run.contains("rust-lld.exe")
+            || !run.contains("RUSTFLAGS=")
+            || !run.contains("$env:GITHUB_ENV")
+        {
+            violations.push(format!("{job} does not configure rust-lld for Windows"));
+        }
+    }
+
+    let windows_lint_condition = job_step(&ci, "test", "Page lint scale gate (Windows functional)")
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    if !windows_lint_condition.contains("needs.detect-changes.outputs.windows-lint == 'true'")
+        || !windows_lint_condition.contains("github.event_name != 'pull_request'")
+    {
+        violations.push(
+            "Windows page-lint proof is not gated to lint-sensitive PRs plus non-PR backstops"
+                .into(),
+        );
+    }
+
+    let debug_build = job_step(&ci, "test", "Build Windows contract binaries");
+    if debug_build
+        .and_then(|step| step["run"].as_str())
+        .is_none_or(|run| {
+            !run.contains("cargo build -p wenlan -p wenlan-server")
+                || !run.contains("target\\debug")
+                || run.contains("--release")
+        })
+    {
+        violations.push(
+            "ordinary Windows contract does not build and stage debug runtime artifacts".into(),
+        );
+    }
+    let schtasks = job_step(
+        &ci,
+        "test",
+        "E2E wenlan background on/off round-trip (Windows; schtasks)",
+    )
+    .and_then(|step| step["run"].as_str())
+    .unwrap_or_default();
+    if !schtasks.contains(r"target\debug\wenlan.exe") {
+        violations.push("ordinary Windows schtasks contract does not use debug binaries".into());
+    }
+
+    let mcp_compile = job_step(&ci, "test", "Compile platform-owned MCP runtime");
+    let mcp_condition = mcp_compile
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    let mcp_run = mcp_compile
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    if !mcp_condition.contains("matrix.os == 'macos-14'")
+        || !mcp_condition.contains("matrix.os == 'windows-2022'")
+        || !mcp_condition.contains("needs.detect-changes.outputs.mcp-platform == 'true'")
+        || !mcp_condition.contains("github.event_name != 'pull_request'")
+        || !mcp_run.contains("cargo check -p wenlan-mcp --lib --bins")
+        || mcp_run.contains("--all-targets")
+    {
+        violations.push(
+            "macOS/Windows ownership does not differentially compile every wenlan-mcp target"
+                .into(),
+        );
+    }
+
+    let macos_lib = job_step(&ci, "test", "Workspace lib tests (macOS)");
+    let macos_lib_run = macos_lib
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    if !macos_lib_run.contains("cargo nextest run --workspace --lib")
+        || macos_lib_run.contains("--test-threads=1")
+    {
+        violations.push("macOS nextest workspace proof is unnecessarily single-threaded".into());
+    }
+    let shared_integration = job_step(
+        &ci,
+        "test",
+        "Integration tests wenlan-cli + wenlan-server (shared integration only)",
+    );
+    let shared_integration_condition = shared_integration
+        .and_then(|step| step["if"].as_str())
+        .unwrap_or_default();
+    let shared_integration_run = shared_integration
+        .and_then(|step| step["run"].as_str())
+        .unwrap_or_default();
+    if !shared_integration_condition.contains("matrix.os != 'windows-2022'")
+        || !shared_integration_run.contains("-E 'kind(test)'")
+    {
+        violations
+            .push("Linux/macOS integration step duplicates wenlan CLI/server lib tests".into());
+    }
+    let windows_integration = job_step(
+        &ci,
+        "test",
+        "Integration tests wenlan-cli + wenlan-server (Windows)",
+    );
+    if windows_integration
+        .and_then(|step| step["if"].as_str())
+        .is_none_or(|condition| !condition.contains("matrix.os == 'windows-2022'"))
+        || windows_integration
+            .and_then(|step| step["run"].as_str())
+            .is_none_or(|run| {
+                !run.contains("cargo nextest run -p wenlan -p wenlan-server")
+                    || run.contains("kind(test)")
+            })
+    {
+        violations.push("Windows does not retain its full CLI/server platform contract".into());
+    }
+
+    let Some(test_steps) = ci["jobs"]["test"]["steps"].as_sequence() else {
+        violations.push("test job has no steps for fail-fast ordering".into());
+        return violations;
+    };
+    let step_index = |name: &str| {
+        test_steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some(name))
+    };
+    let integration_index = step_index("Integration tests wenlan-cli + wenlan-server (Windows)");
+    match (
+        step_index("Validate Windows smoke harness"),
+        integration_index,
+    ) {
+        (Some(harness), Some(integration)) if harness < integration => {}
+        _ => violations
+            .push("Validate Windows smoke harness does not fail fast before integration".into()),
+    }
+    match (
+        integration_index,
+        step_index("Compile platform-owned MCP runtime"),
+        step_index("Build Windows contract binaries"),
+    ) {
+        (Some(integration), Some(mcp), Some(debug)) if integration < mcp && mcp < debug => {}
+        _ => violations
+            .push("Windows steps do not fail fast from integration into later compilation".into()),
+    }
+
+    violations
+}
+
+#[test]
+fn ci_routing_is_fail_closed_and_differential() {
+    let root = repo_root();
+    let workflow =
+        std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read ci.yml");
+    let platform_sensitive_paths = platform_sensitive_paths(&root);
+    let release_profile_sensitive_paths = release_profile_sensitive_paths(&root);
+    let violations = ci_routing_contract_violations(
+        &workflow,
+        &platform_sensitive_paths,
+        &release_profile_sensitive_paths,
+    );
+    assert!(
+        violations.is_empty(),
+        "CI routing contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn ci_routing_contract_rejects_fail_open_fixture() {
+    let workflow = r#"
+jobs:
+  detect-changes:
+    outputs:
+      windows: ${{ steps.filter.outputs.windows }}
+      windows-release: ${{ steps.filter.outputs.windows-release }}
+    steps:
+      - id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**/*.rs'
+            windows: []
+            windows-release:
+              - 'Cargo.toml'
+      - id: matrix
+        run: echo 'json=["ubuntu-24.04", "macos-14"]'
+  lint:
+    needs: [detect-changes, fmt]
+  test:
+    needs: [detect-changes, fmt, lint]
+    steps:
+      - name: Build Windows release binaries
+        if: matrix.os == 'windows-2022'
+        run: cargo build --release
+      - name: Native ORT smoke (Windows; release profile)
+        if: matrix.os == 'windows-2022'
+        run: smoke
+      - name: Workspace lib tests (macOS, single-threaded)
+        if: matrix.os == 'macos-14'
+        run: cargo nextest run --workspace --lib --test-threads=1
+      - name: Compile platform-owned MCP runtime
+        if: matrix.os == 'macos-14' || matrix.os == 'windows-2022'
+        run: cargo check -p wenlan-mcp --all-targets
+  conclusion:
+    steps:
+      - name: Aggregate
+        run: |
+          case "$result" in
+            success|skipped) ;;
+          esac
+"#;
+    let platform_sensitive_paths = vec![
+        ("crates/new_windows.rs".to_string(), "windows", "windows"),
+        ("crates/new_macos.rs".to_string(), "macos", "macos"),
+        ("scripts/new-windows.ps1".to_string(), "windows", "windows"),
+    ];
+    let release_profile_sensitive_paths = vec!["crates/release_only.rs".to_string()];
+    let violations = ci_routing_contract_violations(
+        workflow,
+        &platform_sensitive_paths,
+        &release_profile_sensitive_paths,
+    );
+    for expected in [
+        "platform-sensitive windows",
+        "platform-sensitive macos",
+        "bootstrap the CI contract",
+        "expected-vs-actual",
+        "unnecessarily serialized",
+        "dev/test artifact reuse",
+        "proven Linux lane",
+        "condition omits CI scheduling trigger",
+        "coverage workflow",
+        "clippy configuration",
+        "nextest config",
+        "release-profile-sensitive",
+        "release-sensitive",
+        "30-minute CI budget",
+        "independent differential job",
+        "release artifact or model probe",
+        "native ORT smoke",
+        "shared test cache read-only",
+        "rust-lld",
+        "does not also schedule",
+        "debug runtime artifacts",
+        "differentially compile every wenlan-mcp target",
+        "mcp-platform routing",
+        "single-threaded",
+        "duplicates wenlan CLI/server lib tests",
+        "full CLI/server platform contract",
+        "fail fast before integration",
+        "fail fast from integration",
+        "root installer",
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "fixture must exercise {expected:?}: {violations:?}"
+        );
+    }
 }
 
 // ── Teeth #1: repo pointer/path resolver ──
