@@ -119,6 +119,112 @@ fn resolve_startup_port(configured_port: u16, startup_repair_claimed: bool) -> a
     Ok(configured_port)
 }
 
+const SERVER_LOG_MAX_BYTES: usize = 10 * 1024 * 1024;
+const SERVER_LOG_BACKUPS: usize = 5;
+#[cfg(any(target_os = "macos", test))]
+const BOOTSTRAP_LOG_MAX_BYTES: usize = 256 * 1024;
+#[cfg(any(target_os = "macos", test))]
+const BOOTSTRAP_LOG_BACKUPS: usize = 1;
+
+fn resolve_wenlan_root() -> std::path::PathBuf {
+    wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("wenlan")
+        })
+}
+
+fn new_server_log_writer(
+    wenlan_root: &std::path::Path,
+    max_bytes: usize,
+    backups: usize,
+) -> file_rotate::FileRotate<file_rotate::suffix::AppendCount> {
+    file_rotate::FileRotate::new(
+        wenlan_root.join("logs/wenlan-server.log"),
+        file_rotate::suffix::AppendCount::new(backups),
+        file_rotate::ContentLimit::Bytes(max_bytes),
+        file_rotate::compression::Compression::None,
+        None,
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn new_bootstrap_log_writer(
+    wenlan_root: &std::path::Path,
+    max_bytes: usize,
+    backups: usize,
+) -> file_rotate::FileRotate<file_rotate::suffix::AppendCount> {
+    file_rotate::FileRotate::new(
+        wenlan_root.join("logs/wenlan-server.bootstrap.log"),
+        file_rotate::suffix::AppendCount::new(backups),
+        file_rotate::ContentLimit::Bytes(max_bytes),
+        file_rotate::compression::Compression::None,
+        None,
+    )
+}
+
+fn report_bootstrap_error(wenlan_root: &std::path::Path, message: &str) {
+    eprintln!("{message}");
+    tracing::error!("{message}");
+
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
+        use std::io::Write as _;
+
+        let mut writer =
+            new_bootstrap_log_writer(wenlan_root, BOOTSTRAP_LOG_MAX_BYTES, BOOTSTRAP_LOG_BACKUPS);
+        if let Err(error) = writeln!(writer, "{message}") {
+            eprintln!("Failed to write bootstrap log: {error}");
+        }
+    }
+}
+
+fn install_bootstrap_panic_hook(wenlan_root: std::path::PathBuf) {
+    std::panic::set_hook(Box::new(move |panic| {
+        report_bootstrap_error(
+            &wenlan_root,
+            &format!("panic during daemon bootstrap: {panic}"),
+        );
+    }));
+}
+
+fn new_server_log_rate_limit() -> tracing_throttle::TracingRateLimitLayer {
+    tracing_throttle::TracingRateLimitLayer::new()
+}
+
+fn init_logging(wenlan_root: &std::path::Path) -> anyhow::Result<()> {
+    use tracing_subscriber::prelude::*;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,wenlan_core=info,wenlan_server=info".into());
+
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
+        let writer = std::sync::Mutex::new(new_server_log_writer(
+            wenlan_root,
+            SERVER_LOG_MAX_BYTES,
+            SERVER_LOG_BACKUPS,
+        ));
+        let fmt = tracing_subscriber::fmt::layer()
+            .with_writer(writer)
+            .with_filter(new_server_log_rate_limit());
+        return tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt)
+            .try_init()
+            .map_err(|error| anyhow::anyhow!("initialize rotating file logging: {error}"));
+    }
+
+    let fmt = tracing_subscriber::fmt::layer().with_filter(new_server_log_rate_limit());
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt)
+        .try_init()
+        .map_err(|error| anyhow::anyhow!("initialize console logging: {error}"))
+}
+
 fn startup_projection_writes_allowed(repair_recovery_pending: bool) -> bool {
     !repair_recovery_pending
 }
@@ -293,6 +399,95 @@ mod bind_addr_tests {
         let _guard = env_lock().lock().unwrap();
         std::env::remove_var("WENLAN_BIND_ADDR");
         assert_eq!(resolve_bind_addr(7878), "127.0.0.1:7878");
+    }
+
+    #[test]
+    fn server_log_writer_rotates_at_byte_cap_and_bounds_retention() {
+        use std::io::Write as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut writer = new_server_log_writer(root.path(), 64, 2);
+        for index in 0..20 {
+            writeln!(writer, "bounded log line {index:02}").unwrap();
+        }
+        drop(writer);
+
+        let log_dir = root.path().join("logs");
+        let mut logs = std::fs::read_dir(&log_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("wenlan-server.log"))
+            })
+            .collect::<Vec<_>>();
+        logs.sort();
+
+        assert_eq!(
+            logs.len(),
+            3,
+            "current log plus exactly two retained rotations: {logs:?}"
+        );
+        assert!(
+            logs.iter().all(|path| path.metadata().unwrap().len() <= 64),
+            "a rotated log exceeded the byte cap: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn bootstrap_log_writer_rotates_at_byte_cap_and_bounds_retention() {
+        use std::io::Write as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut writer = new_bootstrap_log_writer(root.path(), 64, 1);
+        for index in 0..20 {
+            writeln!(writer, "bootstrap failure line {index:02}").unwrap();
+        }
+        drop(writer);
+
+        let log_dir = root.path().join("logs");
+        let mut logs = std::fs::read_dir(&log_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("wenlan-server.bootstrap.log"))
+            })
+            .collect::<Vec<_>>();
+        logs.sort();
+
+        assert_eq!(logs.len(), 2, "current log plus one rotation: {logs:?}");
+        assert!(
+            logs.iter().all(|path| path.metadata().unwrap().len() <= 64),
+            "a bootstrap log exceeded the byte cap: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn server_log_rate_limit_suppresses_duplicate_bursts() {
+        use tracing_subscriber::prelude::*;
+
+        let rate_limit = new_server_log_rate_limit();
+        let metrics_layer = rate_limit.clone();
+        let metrics = metrics_layer.metrics();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(Vec::<u8>::new()))
+                .with_filter(rate_limit),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            for _ in 0..100 {
+                tracing::warn!("identical repeatable failure");
+            }
+        });
+
+        assert!(
+            metrics.events_suppressed() > 0,
+            "an identical 100-event burst must be throttled"
+        );
     }
 
     #[test]
@@ -722,15 +917,7 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
     // instead of taking the process down through the platform default path.
     let termination_signals = install_termination_signals()
         .map_err(|error| anyhow::anyhow!("install termination signal handlers: {error}"))?;
-    // Logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,wenlan_core=info,wenlan_server=info".into()),
-        )
-        .init();
-
-    tracing::info!("wenlan-server v{}", wenlan_core::version());
+    let wenlan_root = resolve_wenlan_root();
 
     // Port (clap `--port`/`WENLAN_PORT` → env var set by main(); read here)
     let configured_port: u16 = wenlan_core::env_compat::var_compat("WENLAN_PORT")
@@ -756,7 +943,7 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
                 ));
             }
             // Check if existing daemon is healthy
-            tracing::warn!("Failed to bind {}: {}", addr, e);
+            eprintln!("Failed to bind {addr}: {e}");
             let url = format!("http://127.0.0.1:{}/api/health", port);
             // Bounded probe: a mute port-holder (accepts, never responds)
             // must not hang this process forever — under launchd KeepAlive
@@ -776,13 +963,12 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
                     // = false treats exit-0 as success). For sidecar invocation
                     // by the app, exit 0 is the right answer.
                     if std::env::var_os("XPC_SERVICE_NAME").is_some() {
-                        tracing::info!(
-                            "Existing healthy daemon on port {} — exiting 75 (launchd retry)",
-                            port
+                        eprintln!(
+                            "Existing healthy daemon on port {port} — exiting 75 (launchd retry)"
                         );
                         std::process::exit(75);
                     }
-                    tracing::info!("Existing healthy daemon on port {} — exiting cleanly", port);
+                    eprintln!("Existing healthy daemon on port {port} — exiting cleanly");
                     return Ok(());
                 }
                 _ => {
@@ -795,17 +981,16 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
         }
     };
 
+    init_logging(&wenlan_root)?;
+    std::panic::set_hook(Box::new(|panic| {
+        tracing::error!("panic: {panic}");
+    }));
+    tracing::info!("wenlan-server v{}", wenlan_core::version());
+
     #[cfg(debug_assertions)]
     wait_at_startup_signal_test_barrier().await?;
     // Data directory. `WENLAN_DATA_DIR` (set by `--data-dir` flag) overrides the
     // default, enabling isolated dev/demo runs (e.g. `--data-dir /tmp/wenlan-demo`).
-    let wenlan_root = wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::data_local_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("wenlan")
-        });
     let data_dir = wenlan_root.join("memorydb");
     tracing::info!("Wenlan data root: {}", wenlan_root.display());
     let _data_root_lock = DaemonDataLock::acquire(&wenlan_root, startup_repair_claimed)?;
@@ -1830,14 +2015,6 @@ async fn ingest_batch_process(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let startup_repair_claim = StartupRepairClaim::try_new(
-        cli.repair_manifest_id.clone(),
-        cli.repair_manifest_digest.clone(),
-    )?;
-
-    if cli.command.is_some() && startup_repair_claim.is_some() {
-        anyhow::bail!("startup repair claim is only valid when running the daemon");
-    }
 
     // Propagate flags through env vars so both wenlan-server's own path logic
     // and wenlan-core's config loader (`wenlan_core::config::config_path`) see
@@ -1849,8 +2026,34 @@ async fn main() -> anyhow::Result<()> {
         std::env::set_var("WENLAN_PORT", port.to_string());
     }
 
-    match cli.command {
-        Some(Command::BackfillStalePages { dry_run }) => cmd_backfill::run(dry_run).await,
-        None => run_daemon(startup_repair_claim).await,
+    // Resolving the path is read-only. Before rotating tracing is available,
+    // a bounded bootstrap file keeps launchd failures and panics observable
+    // even though the plist intentionally redirects stdout/stderr to /dev/null.
+    let wenlan_root = resolve_wenlan_root();
+    install_bootstrap_panic_hook(wenlan_root.clone());
+
+    let result = async {
+        let startup_repair_claim = StartupRepairClaim::try_new(
+            cli.repair_manifest_id.clone(),
+            cli.repair_manifest_digest.clone(),
+        )?;
+
+        if cli.command.is_some() && startup_repair_claim.is_some() {
+            anyhow::bail!("startup repair claim is only valid when running the daemon");
+        }
+
+        match cli.command {
+            Some(Command::BackfillStalePages { dry_run }) => cmd_backfill::run(dry_run).await,
+            None => run_daemon(startup_repair_claim).await,
+        }
     }
+    .await;
+
+    if let Err(error) = &result {
+        report_bootstrap_error(
+            &wenlan_root,
+            &format!("wenlan-server terminated with an error: {error:#}"),
+        );
+    }
+    result
 }
