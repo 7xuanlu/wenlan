@@ -229,6 +229,78 @@ fn coverage_fastembed_cache_violations(workflow: &str) -> Vec<String> {
     violations
 }
 
+fn coverage_single_test_execution_violations(workflow: &str) -> Vec<String> {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse coverage.yml");
+    let main_owned_cache = "${{ github.ref == 'refs/heads/main' }}";
+    let rust_cache = job_step_using(&parsed, "coverage", "Swatinem/rust-cache");
+    let mut violations = Vec::new();
+    if rust_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some(main_owned_cache) {
+        violations.push("coverage cache writes are not restricted to main".into());
+    }
+    let Some(run) = parsed["jobs"]["coverage"]["steps"]
+        .as_sequence()
+        .into_iter()
+        .flatten()
+        .find(|step| {
+            step["name"].as_str() == Some("Run Rust coverage (wenlan-core + wenlan-server)")
+        })
+        .and_then(|step| step["run"].as_str())
+    else {
+        violations.push("coverage job is missing its Rust coverage step".into());
+        return violations;
+    };
+
+    let lines = run.lines().collect::<Vec<_>>();
+    let starts = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            line.trim_start()
+                .starts_with("cargo llvm-cov")
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let commands = starts
+        .iter()
+        .enumerate()
+        .map(|(position, start)| {
+            let end = starts.get(position + 1).copied().unwrap_or(lines.len());
+            lines[*start..end].join(" ")
+        })
+        .collect::<Vec<_>>();
+    let test_commands = commands
+        .iter()
+        .filter(|command| !command.trim_start().starts_with("cargo llvm-cov report"))
+        .collect::<Vec<_>>();
+    let report_commands = commands
+        .iter()
+        .filter(|command| command.trim_start().starts_with("cargo llvm-cov report"))
+        .collect::<Vec<_>>();
+
+    if test_commands.len() != 1 || !test_commands[0].contains("--no-report") {
+        violations.push(format!(
+            "coverage must execute instrumented tests exactly once with --no-report; found {} test commands",
+            test_commands.len()
+        ));
+    }
+    if report_commands.len() != 2
+        || !report_commands.iter().any(|command| {
+            command.contains("--summary-only")
+                && command.contains("--json")
+                && command.contains("--output-path rust-coverage.json")
+        })
+        || !report_commands
+            .iter()
+            .any(|command| command.trim() == "cargo llvm-cov report")
+    {
+        violations.push(
+            "coverage must render JSON and text summaries with two report-only commands".into(),
+        );
+    }
+
+    violations
+}
+
 fn release_rust_cache_violations(workflow: &str) -> Vec<String> {
     let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse release.yml");
     let mut violations = Vec::new();
@@ -340,6 +412,40 @@ jobs:
 "#;
     let violations = coverage_fastembed_cache_violations(workflow);
     for expected in ["FASTEMBED_CACHE_DIR", "coverage caches", "cache key"] {
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains(expected)),
+            "fixture must exercise {expected:?}: {violations:?}"
+        );
+    }
+}
+
+#[test]
+fn coverage_executes_instrumented_tests_once_then_reports_twice() {
+    let workflow = std::fs::read_to_string(repo_root().join(".github/workflows/coverage.yml"))
+        .expect("read coverage.yml");
+    let violations = coverage_single_test_execution_violations(&workflow);
+    assert!(
+        violations.is_empty(),
+        "Coverage execution contract drift:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn coverage_execution_contract_rejects_two_test_runs_fixture() {
+    let workflow = r#"
+jobs:
+  coverage:
+    steps:
+      - name: Run Rust coverage (wenlan-core + wenlan-server)
+        run: |
+          cargo llvm-cov --package wenlan-core --summary-only --json
+          cargo llvm-cov --package wenlan-core --summary-only
+"#;
+    let violations = coverage_single_test_execution_violations(workflow);
+    for expected in ["cache writes", "exactly once", "report-only commands"] {
         assert!(
             violations
                 .iter()
@@ -958,6 +1064,21 @@ fn job_step<'a>(
         .find(|step| step["name"].as_str() == Some(step_name))
 }
 
+fn job_step_using<'a>(
+    workflow: &'a serde_yaml::Value,
+    job_name: &str,
+    action: &str,
+) -> Option<&'a serde_yaml::Value> {
+    workflow["jobs"][job_name]["steps"]
+        .as_sequence()?
+        .iter()
+        .find(|step| {
+            step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.contains(action))
+        })
+}
+
 fn native_platform_markers() -> Vec<(&'static str, &'static str, regex::Regex)> {
     vec![
         (
@@ -1520,9 +1641,12 @@ fn ci_routing_contract_violations(
             ));
         }
     }
+    let differential_timeout = "${{ github.event_name == 'pull_request' && 30 || 60 }}";
     for job in ["test", "windows-release-proof"] {
-        if ci["jobs"][job]["timeout-minutes"].as_u64() != Some(30) {
-            violations.push(format!("{job} does not enforce the 30-minute CI budget"));
+        if ci["jobs"][job]["timeout-minutes"].as_str() != Some(differential_timeout) {
+            violations.push(format!(
+                "{job} does not enforce the 30-minute PR budget while allowing a 60-minute non-PR backstop"
+            ));
         }
     }
     let windows_release_condition = ci["jobs"]["windows-release-proof"]["if"]
@@ -1567,6 +1691,31 @@ fn ci_routing_contract_violations(
         violations.push(
             "test matrix does not restrict sccache reads/writes to the proven Linux lane".into(),
         );
+    }
+    let main_owned_cache = "${{ github.ref == 'refs/heads/main' }}";
+    for job in ["lint", "test", "test-quarantine", "windows-release-proof"] {
+        let rust_cache = job_step_using(&ci, job, "Swatinem/rust-cache");
+        if rust_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some(main_owned_cache) {
+            violations.push(format!("{job} cache writes are not restricted to main"));
+        }
+    }
+    let test_rust_cache = job_step_using(&ci, "test", "Swatinem/rust-cache");
+    if test_rust_cache.and_then(|step| step["with"]["cache-targets"].as_str())
+        != Some("${{ matrix.os != 'ubuntu-24.04' }}")
+    {
+        violations.push("Linux sccache lane duplicates target artifacts in rust-cache".into());
+    }
+    let quarantine_rust_cache = job_step_using(&ci, "test-quarantine", "Swatinem/rust-cache");
+    if quarantine_rust_cache.and_then(|step| step["with"]["cache-targets"].as_str())
+        != Some("false")
+    {
+        violations.push("test-quarantine duplicates sccache target artifacts in rust-cache".into());
+    }
+    let sccache_mode = "${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}";
+    for job in ["test", "test-quarantine"] {
+        if ci["jobs"][job]["env"]["SCCACHE_GHA_RW_MODE"].as_str() != Some(sccache_mode) {
+            violations.push(format!("{job} sccache PR mode is not read-only"));
+        }
     }
     for job in ["fmt", "lint", "test", "test-quarantine"] {
         let condition = ci["jobs"][job]["if"].as_str().unwrap_or_default();
@@ -1683,11 +1832,34 @@ fn ci_routing_contract_violations(
     )
     .and_then(|step| step["run"].as_str())
     .unwrap_or_default();
-    if !windows_release_build.contains("--release")
-        || !windows_release_build.contains("-p wenlan")
-        || !windows_release_build.contains("-p wenlan-server")
-        || !windows_release_build.contains("-p wenlan-mcp")
-        || !windows_release_build.contains("--bin model_probe")
+    let release_build_commands = windows_release_build
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("cargo build --release"))
+        .collect::<Vec<_>>();
+    if release_build_commands.len() != 1 {
+        violations.push(format!(
+            "Windows release proof uses {} Cargo release build invocations, expected a single Cargo invocation",
+            release_build_commands.len()
+        ));
+    }
+    let release_build_args = release_build_commands
+        .first()
+        .map(|command| command.split_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let has_arg_pair = |flag: &str, value: &str| {
+        release_build_args
+            .windows(2)
+            .any(|args| args == [flag, value])
+    };
+    if !has_arg_pair("-p", "wenlan")
+        || !has_arg_pair("-p", "wenlan-server")
+        || !has_arg_pair("-p", "wenlan-mcp")
+        || !has_arg_pair("-p", "wenlan-core")
+        || !has_arg_pair("--bin", "wenlan")
+        || !has_arg_pair("--bin", "wenlan-server")
+        || !has_arg_pair("--bin", "wenlan-mcp")
+        || !has_arg_pair("--bin", "model_probe")
     {
         violations.push("Windows release proof omits a release artifact or model probe".into());
     }
@@ -1704,20 +1876,17 @@ fn ci_routing_contract_violations(
     {
         violations.push("Windows release proof omits the native ORT smoke".into());
     }
-    let release_cache = job_step(
-        &ci,
-        "windows-release-proof",
-        "Restore Rust cache (read-only)",
-    );
+    let release_cache = job_step_using(&ci, "windows-release-proof", "Swatinem/rust-cache");
     if release_cache
         .and_then(|step| step["uses"].as_str())
         .is_none_or(|uses| !uses.contains("Swatinem/rust-cache"))
-        || release_cache.and_then(|step| step["with"]["shared-key"].as_str()) != Some("test")
+        || release_cache.and_then(|step| step["with"]["shared-key"].as_str())
+            != Some("windows-release")
         || release_cache.and_then(|step| step["with"]["cache-all-crates"].as_str()) != Some("true")
-        || release_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some("false")
+        || release_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some(main_owned_cache)
     {
         violations
-            .push("Windows release proof does not restore the shared test cache read-only".into());
+            .push("Windows release cache is not main-owned under a dedicated release key".into());
     }
     for (job, step_name) in [
         ("test", "Configure rust-lld linker (Windows tests)"),
@@ -1955,17 +2124,22 @@ jobs:
         "unnecessarily serialized",
         "dev/test artifact reuse",
         "proven Linux lane",
+        "cache writes",
+        "duplicates target artifacts",
+        "duplicates sccache target artifacts",
+        "sccache PR mode",
         "condition omits CI scheduling trigger",
         "coverage workflow",
         "clippy configuration",
         "nextest config",
         "release-profile-sensitive",
         "release-sensitive",
-        "30-minute CI budget",
+        "30-minute PR budget",
         "independent differential job",
+        "single Cargo invocation",
         "release artifact or model probe",
         "native ORT smoke",
-        "shared test cache read-only",
+        "release cache is not main-owned",
         "rust-lld",
         "does not also schedule",
         "debug runtime artifacts",
