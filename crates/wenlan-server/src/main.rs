@@ -119,7 +119,9 @@ fn resolve_startup_port(configured_port: u16, startup_repair_claimed: bool) -> a
     Ok(configured_port)
 }
 
+#[cfg(target_os = "macos")]
 const SERVER_LOG_MAX_BYTES: usize = 10 * 1024 * 1024;
+#[cfg(target_os = "macos")]
 const SERVER_LOG_BACKUPS: usize = 5;
 #[cfg(any(target_os = "macos", test))]
 const BOOTSTRAP_LOG_MAX_BYTES: usize = 256 * 1024;
@@ -136,6 +138,7 @@ fn resolve_wenlan_root() -> std::path::PathBuf {
         })
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn new_server_log_writer(
     wenlan_root: &std::path::Path,
     max_bytes: usize,
@@ -166,6 +169,9 @@ fn new_bootstrap_log_writer(
 }
 
 fn report_bootstrap_error(wenlan_root: &std::path::Path, message: &str) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = wenlan_root;
+
     eprintln!("{message}");
     tracing::error!("{message}");
 
@@ -196,6 +202,9 @@ fn new_server_log_rate_limit() -> tracing_throttle::TracingRateLimitLayer {
 
 fn init_logging(wenlan_root: &std::path::Path) -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = wenlan_root;
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "info,wenlan_core=info,wenlan_server=info".into());
