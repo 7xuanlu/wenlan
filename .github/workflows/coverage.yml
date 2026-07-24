@@ -76,9 +76,10 @@ jobs:
       - name: Run Rust coverage (wenlan-core + wenlan-server)
         run: |
           cargo llvm-cov --package wenlan-core --package wenlan-server \
+            --no-report
+          cargo llvm-cov report \
             --summary-only --json --output-path rust-coverage.json
-          cargo llvm-cov --package wenlan-core --package wenlan-server \
-            --summary-only
+          cargo llvm-cov report
 
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
