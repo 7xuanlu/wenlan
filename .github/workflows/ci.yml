@@ -322,6 +322,10 @@ jobs:
           # Cache the full crates.io registry. Cold cache pulls thousands of
           # small files otherwise; cached restore is ~2-3min faster.
           cache-all-crates: "true"
+          # PR-scoped caches cannot serve main or another PR. Keep the stable
+          # non-PR backstop as the only producer so required PRs never churn
+          # the repository cache budget.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Verify wenlan-mcp uses path dep for wenlan-types
         run: |
@@ -360,6 +364,9 @@ jobs:
       # builds reuse more artifacts while trimming linker time + cache size.
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      # Pull requests may restore the default-branch cache but never create
+      # ref-scoped sccache entries that another PR cannot reuse.
+      SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
       FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -401,6 +408,11 @@ jobs:
         with:
           shared-key: test
           cache-all-crates: "true"
+          # sccache is the single Linux owner of compiler outputs. rust-cache
+          # still restores registry/git data there, but does not duplicate
+          # target artifacts in the same 10 GB repository cache budget.
+          cache-targets: ${{ matrix.os != 'ubuntu-24.04' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Verify ort-sys source pin
         if: matrix.os == 'ubuntu-24.04'
         run: |
@@ -713,8 +725,8 @@ jobs:
   # Release-profile proof runs beside the ordinary Windows contract instead of
   # adding ~25-30 minutes to its critical path. It is required for native,
   # Cargo/build, packaging, and release workflow diffs, plus every non-PR
-  # backstop. A read-only restore may make it faster, but correctness never
-  # depends on another parallel job winning a cache write race.
+  # backstop. PRs restore the cache produced by the latest non-PR backstop;
+  # correctness never depends on a warm restore.
   windows-release-proof:
     name: windows-release-proof
     needs: [detect-changes]
@@ -739,12 +751,12 @@ jobs:
           }
           "RUSTFLAGS=-C linker=$lld -C linker-flavor=lld-link" |
             Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Restore Rust cache (read-only)
+      - name: Cache Windows release artifacts (main-owned)
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          shared-key: test
+          shared-key: windows-release
           cache-all-crates: "true"
-          save-if: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install sqlite3 (Windows only)
         shell: pwsh
         run: |
@@ -776,6 +788,7 @@ jobs:
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
       RUSTC_WRAPPER: "sccache"
       FASTEMBED_CACHE_DIR: ${{ github.workspace }}/.fastembed_cache
     steps:
@@ -791,6 +804,8 @@ jobs:
           # `test`/`lint` caches.
           shared-key: quarantine
           cache-all-crates: "true"
+          cache-targets: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-nextest
         uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:

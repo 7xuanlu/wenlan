@@ -958,6 +958,21 @@ fn job_step<'a>(
         .find(|step| step["name"].as_str() == Some(step_name))
 }
 
+fn job_step_using<'a>(
+    workflow: &'a serde_yaml::Value,
+    job_name: &str,
+    action: &str,
+) -> Option<&'a serde_yaml::Value> {
+    workflow["jobs"][job_name]["steps"]
+        .as_sequence()?
+        .iter()
+        .find(|step| {
+            step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.contains(action))
+        })
+}
+
 fn native_platform_markers() -> Vec<(&'static str, &'static str, regex::Regex)> {
     vec![
         (
@@ -1571,6 +1586,31 @@ fn ci_routing_contract_violations(
             "test matrix does not restrict sccache reads/writes to the proven Linux lane".into(),
         );
     }
+    let main_owned_cache = "${{ github.ref == 'refs/heads/main' }}";
+    for job in ["lint", "test", "test-quarantine", "windows-release-proof"] {
+        let rust_cache = job_step_using(&ci, job, "Swatinem/rust-cache");
+        if rust_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some(main_owned_cache) {
+            violations.push(format!("{job} cache writes are not restricted to main"));
+        }
+    }
+    let test_rust_cache = job_step_using(&ci, "test", "Swatinem/rust-cache");
+    if test_rust_cache.and_then(|step| step["with"]["cache-targets"].as_str())
+        != Some("${{ matrix.os != 'ubuntu-24.04' }}")
+    {
+        violations.push("Linux sccache lane duplicates target artifacts in rust-cache".into());
+    }
+    let quarantine_rust_cache = job_step_using(&ci, "test-quarantine", "Swatinem/rust-cache");
+    if quarantine_rust_cache.and_then(|step| step["with"]["cache-targets"].as_str())
+        != Some("false")
+    {
+        violations.push("test-quarantine duplicates sccache target artifacts in rust-cache".into());
+    }
+    let sccache_mode = "${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}";
+    for job in ["test", "test-quarantine"] {
+        if ci["jobs"][job]["env"]["SCCACHE_GHA_RW_MODE"].as_str() != Some(sccache_mode) {
+            violations.push(format!("{job} sccache PR mode is not read-only"));
+        }
+    }
     for job in ["fmt", "lint", "test", "test-quarantine"] {
         let condition = ci["jobs"][job]["if"].as_str().unwrap_or_default();
         for required in [
@@ -1730,20 +1770,17 @@ fn ci_routing_contract_violations(
     {
         violations.push("Windows release proof omits the native ORT smoke".into());
     }
-    let release_cache = job_step(
-        &ci,
-        "windows-release-proof",
-        "Restore Rust cache (read-only)",
-    );
+    let release_cache = job_step_using(&ci, "windows-release-proof", "Swatinem/rust-cache");
     if release_cache
         .and_then(|step| step["uses"].as_str())
         .is_none_or(|uses| !uses.contains("Swatinem/rust-cache"))
-        || release_cache.and_then(|step| step["with"]["shared-key"].as_str()) != Some("test")
+        || release_cache.and_then(|step| step["with"]["shared-key"].as_str())
+            != Some("windows-release")
         || release_cache.and_then(|step| step["with"]["cache-all-crates"].as_str()) != Some("true")
-        || release_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some("false")
+        || release_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some(main_owned_cache)
     {
         violations
-            .push("Windows release proof does not restore the shared test cache read-only".into());
+            .push("Windows release cache is not main-owned under a dedicated release key".into());
     }
     for (job, step_name) in [
         ("test", "Configure rust-lld linker (Windows tests)"),
@@ -1981,6 +2018,10 @@ jobs:
         "unnecessarily serialized",
         "dev/test artifact reuse",
         "proven Linux lane",
+        "cache writes",
+        "duplicates target artifacts",
+        "duplicates sccache target artifacts",
+        "sccache PR mode",
         "condition omits CI scheduling trigger",
         "coverage workflow",
         "clippy configuration",
@@ -1992,7 +2033,7 @@ jobs:
         "single Cargo invocation",
         "release artifact or model probe",
         "native ORT smoke",
-        "shared test cache read-only",
+        "release cache is not main-owned",
         "rust-lld",
         "does not also schedule",
         "debug runtime artifacts",
