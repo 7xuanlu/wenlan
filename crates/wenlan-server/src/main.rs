@@ -123,9 +123,9 @@ fn resolve_startup_port(configured_port: u16, startup_repair_claimed: bool) -> a
 const SERVER_LOG_MAX_BYTES: usize = 10 * 1024 * 1024;
 #[cfg(target_os = "macos")]
 const SERVER_LOG_BACKUPS: usize = 5;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const BOOTSTRAP_LOG_MAX_BYTES: usize = 256 * 1024;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const BOOTSTRAP_LOG_BACKUPS: usize = 1;
 
 fn resolve_wenlan_root() -> std::path::PathBuf {
