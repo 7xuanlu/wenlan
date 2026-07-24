@@ -231,6 +231,12 @@ fn coverage_fastembed_cache_violations(workflow: &str) -> Vec<String> {
 
 fn coverage_single_test_execution_violations(workflow: &str) -> Vec<String> {
     let parsed: serde_yaml::Value = serde_yaml::from_str(workflow).expect("parse coverage.yml");
+    let main_owned_cache = "${{ github.ref == 'refs/heads/main' }}";
+    let rust_cache = job_step_using(&parsed, "coverage", "Swatinem/rust-cache");
+    let mut violations = Vec::new();
+    if rust_cache.and_then(|step| step["with"]["save-if"].as_str()) != Some(main_owned_cache) {
+        violations.push("coverage cache writes are not restricted to main".into());
+    }
     let Some(run) = parsed["jobs"]["coverage"]["steps"]
         .as_sequence()
         .into_iter()
@@ -240,7 +246,8 @@ fn coverage_single_test_execution_violations(workflow: &str) -> Vec<String> {
         })
         .and_then(|step| step["run"].as_str())
     else {
-        return vec!["coverage job is missing its Rust coverage step".into()];
+        violations.push("coverage job is missing its Rust coverage step".into());
+        return violations;
     };
 
     let lines = run.lines().collect::<Vec<_>>();
@@ -270,7 +277,6 @@ fn coverage_single_test_execution_violations(workflow: &str) -> Vec<String> {
         .filter(|command| command.trim_start().starts_with("cargo llvm-cov report"))
         .collect::<Vec<_>>();
 
-    let mut violations = Vec::new();
     if test_commands.len() != 1 || !test_commands[0].contains("--no-report") {
         violations.push(format!(
             "coverage must execute instrumented tests exactly once with --no-report; found {} test commands",
@@ -439,7 +445,7 @@ jobs:
           cargo llvm-cov --package wenlan-core --summary-only
 "#;
     let violations = coverage_single_test_execution_violations(workflow);
-    for expected in ["exactly once", "report-only commands"] {
+    for expected in ["cache writes", "exactly once", "report-only commands"] {
         assert!(
             violations
                 .iter()
