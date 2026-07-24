@@ -28260,7 +28260,7 @@ impl MemoryDB {
              FROM vector_top_k('memories_vec_idx', vector32(?1), ?2) AS vt \
              JOIN memories c ON c.rowid = vt.id \
              WHERE {side_predicate} \
-               AND ((?3 IS NULL AND c.space IS NULL) OR c.space = ?3) \
+               AND ((?3 IS NULL AND (c.space IS NULL OR c.space = '00000000-0000-4000-8000-000000000001')) OR c.space = ?3) \
                AND c.source_id != ?4 \
              ORDER BY dist ASC"
         );
@@ -29492,7 +29492,8 @@ impl MemoryDB {
         } else {
             (
                 "SELECT source_id, structured_fields, content FROM memories
-                 WHERE source = 'memory' AND memory_type = ?1 AND space IS NULL
+                 WHERE source = 'memory' AND memory_type = ?1
+                 AND (space IS NULL OR space = '00000000-0000-4000-8000-000000000001')
                  AND source_id != ?2 AND is_recap = 0
                  AND chunk_index = 0
                  ORDER BY last_modified DESC LIMIT ?3"
