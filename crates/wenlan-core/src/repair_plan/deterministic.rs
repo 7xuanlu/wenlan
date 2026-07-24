@@ -361,7 +361,7 @@ async fn entity_extraction_target_still_actionable(
             "repair_target_assertion_unsupported".to_string(),
         ));
     }
-    // memories.space is NOT NULL since migration 85 — an unscoped memory
+    // memories.space is NOT NULL since migration 91 — an unscoped memory
     // carries the reserved sentinel id, which the RepairScope above translates
     // back to None. So for an unscoped target ?2 is NULL while the row's space
     // column is the sentinel: match NULL and sentinel both, else an unscoped
@@ -797,7 +797,7 @@ async fn resolve_memories(
     scope: &RepairLintScope,
 ) -> Result<Vec<DeterministicResolution>, WenlanError> {
     let (scope_clause, params) = scoped_memory_clause(scope);
-    // M3 PR-1 stage e: memories.space is NOT NULL as of migration 85, so an
+    // M3 PR-1 stage e: memories.space is NOT NULL as of migration 91, so an
     // unscoped memory carries the reserved sentinel id rather than NULL --
     // the sentinel check below (was `m.space IS NULL`) keeps space_exists
     // from false-flagging every unfiled memory as "references a missing

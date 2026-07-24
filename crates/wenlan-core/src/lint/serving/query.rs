@@ -22,7 +22,7 @@ pub(super) async fn load(context: &LintContext<'_, '_>) -> Result<Counts, ()> {
             libsql::params::Params::Positional(vec![libsql::Value::Text(scope.clone())]),
         ),
         ScopeFilter::Uncategorized => (
-            // M3 PR-1 stage e: memories.space is NOT NULL as of migration 85,
+            // M3 PR-1 stage e: memories.space is NOT NULL as of migration 91,
             // same honest-columns treatment pages.workspace already got in M1
             // (see the page_filter arm above) -- an unscoped memory now
             // carries the reserved sentinel id, never NULL.

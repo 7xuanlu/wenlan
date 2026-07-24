@@ -68,7 +68,7 @@ pub struct Page {
     /// Empty for pages never citation-distilled or citation-backfilled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub citations: Vec<PageCitation>,
-    /// Unified page-kind discriminator (migration 83). One of:
+    /// Unified page-kind discriminator (migration 89). One of:
     /// "entity" | "concept" | "source" | "overview" | "authored".
     /// `kind = "entity"` marks the M3 dual-write shadow pages that mirror
     /// `entities` rows -- write-only in PR-1 (spec's fail-closed visibility

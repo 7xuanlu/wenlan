@@ -4515,7 +4515,7 @@ async fn validate_entity_extraction_evidence_on_snapshot(
             ]),
         ),
         RepairLintScope::Uncategorized => (
-            // memories.space is NOT NULL since migration 85 — an unscoped
+            // memories.space is NOT NULL since migration 91 — an unscoped
             // memory carries the reserved sentinel id, not NULL. Match both so
             // a not-yet-folded legacy NULL row still resolves.
             format!(
@@ -5594,7 +5594,7 @@ pub(crate) async fn validate_target_space_on_connection(
         .map_err(database_error)?;
     let mut seen = 0_u64;
     while let Some(row) = rows.next().await.map_err(database_error)? {
-        // M3 PR-1 stage e: memories.space is NOT NULL as of migration 85, so
+        // M3 PR-1 stage e: memories.space is NOT NULL as of migration 91, so
         // an unscoped memory carries the reserved sentinel id rather than
         // NULL -- translate it back to None here so it still matches an
         // Uncategorized target's `expected_space == None`, the same
@@ -5701,7 +5701,7 @@ async fn resolve_target(
             libsql::params::Params::Positional(vec![libsql::Value::Text(space.clone())]),
         ),
         RepairLintScope::Uncategorized => (
-            // memories.space is NOT NULL since migration 85 — an unscoped
+            // memories.space is NOT NULL since migration 91 — an unscoped
             // memory carries the reserved sentinel id, not NULL. Match both so
             // a not-yet-folded legacy NULL row still resolves.
             format!(

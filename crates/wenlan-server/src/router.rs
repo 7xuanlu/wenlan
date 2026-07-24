@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Axum router construction — wires all HTTP and WebSocket routes.
 
+use crate::lifecycle::ShutdownHandle;
 pub use crate::route_registry::AppRouter;
 use crate::route_registry::{delete, get, patch, post, put, TrackedRouter};
 use crate::state::SharedState;
@@ -13,6 +14,19 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 /// Build the shared application router with all routes.
 pub fn build_router(state: SharedState) -> AppRouter {
+    let shutdown = {
+        state
+            .try_read()
+            .expect("build_router requires unlocked initial ServerState")
+            .shutdown
+            .clone()
+    };
+    build_router_with_shutdown(state, shutdown)
+}
+
+/// Build the router with an out-of-band lifecycle handle. The daemon uses this
+/// form so `/api/shutdown` never waits behind the workload-state lock.
+pub fn build_router_with_shutdown(state: SharedState, shutdown: ShutdownHandle) -> AppRouter {
     // Reflect CORS only for local origins so a legit localhost/Tauri browser
     // can read responses; every other origin is refused. The real protection
     // is `security::guard_local_only` below — this just stops browsers from
@@ -531,6 +545,7 @@ pub fn build_router(state: SharedState) -> AppRouter {
         .layer(cors)
         // Outermost: reject cross-origin browser traffic before CORS/handlers.
         .layer(axum::middleware::from_fn(security::guard_local_only))
+        .layer(axum::Extension(shutdown))
         .with_state(state)
 }
 

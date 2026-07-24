@@ -24,3 +24,14 @@ HTTP daemon — owns the Axum router + all routes. All handlers operate on `Arc<
 | `websocket.rs` | `/ws/updates` |
 | `error.rs` | `ServerError` + axum `IntoResponse` impl |
 | `resources/com.wenlan.server.plist` | launchd plist template (embedded via `include_str!`) |
+
+## Manual RB-01 profiling flags
+
+These flags control ignored, target-Mac profiling tests; they are not daemon runtime settings and must not be set in normal service configuration.
+
+| Flag | Contract |
+|---|---|
+| `WENLAN_RB01_BASELINE` | Set to `1` to opt into the five-minute daemon-off resource baseline test. |
+| `WENLAN_RB01_THERMAL_HELPER` | Optional path to the frozen helper executable that prints the macOS `ProcessInfo.thermalState` raw value; the test falls back to `/usr/bin/swift` when absent. |
+| `WENLAN_RB01_CALIBRATION_LOAD_DUTIES` | Comma-separated synthetic-load duty percentages, each `1..=100`, with a total cap of `300`; must be supplied together with the CPU band. |
+| `WENLAN_RB01_CALIBRATION_CPU_BAND` | Required `min:max` observed system-CPU percentage band for a calibrated profile; must be supplied together with load duties. Outside the band, the test records a skipped calibration and performs no inference. |

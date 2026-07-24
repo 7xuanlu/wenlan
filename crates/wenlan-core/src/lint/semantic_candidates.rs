@@ -709,7 +709,7 @@ async fn load_memories(context: &LintContext<'_, '_>) -> Result<LoadedMemories, 
         let chunk_index: i64 = row.get(2).map_err(|_| ())?;
         let content: String = row.get(3).map_err(|_| ())?;
         let memory_type: Option<String> = row.get(4).map_err(|_| ())?;
-        // M3 PR-1 stage e: `memories.space` is NOT NULL as of migration 85,
+        // M3 PR-1 stage e: `memories.space` is NOT NULL as of migration 91,
         // so an unscoped memory now carries the reserved `UNFILED_SPACE_ID`
         // sentinel rather than NULL. Translate it back to None here, same as
         // load_pages already does for `p.workspace` (M1), so uncategorized

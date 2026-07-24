@@ -99,6 +99,11 @@ LINT_SHARED_GUARDRAILS = [
     "Match every line byte-for-byte",
     "no CLI or HTTP fallback",
 ]
+ENRICHMENT_CONSENT_GUARDRAILS = [
+    "wenlan enrichment status",
+    "wenlan enrichment configure --everyday <source> --synthesis <source>",
+    "wenlan enrichment disable",
+]
 
 
 def fail(message: str) -> None:
@@ -459,6 +464,13 @@ def validate_skill_surface(
                 fail(f"{rel(root, skill_path)} must use {resolver}")
         if name == "help" and "/lint [deep|repair] [scope]" not in text:
             fail(f"{rel(root, skill_path)} must advertise the unified lint grammar")
+        if name in {"help", "setup"}:
+            normalized_text = " ".join(text.split())
+            for needle in ENRICHMENT_CONSENT_GUARDRAILS:
+                if needle not in normalized_text:
+                    fail(
+                        f"{rel(root, skill_path)} must delegate background consent through {needle!r}"
+                    )
 
         if surface == "codex" and name in shared_now:
             require_equal(

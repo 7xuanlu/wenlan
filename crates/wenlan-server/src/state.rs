@@ -2,6 +2,7 @@
 //! Server state — shared application state for the standalone HTTP daemon.
 
 use crate::ingest_batcher::IngestBatcher;
+use crate::lifecycle::ShutdownHandle;
 use crate::maintenance_coordinator::MaintenanceCoordinator;
 use crate::reflection_debounce::ReflectionDebouncer;
 use crate::scheduler::WriteSignal;
@@ -72,6 +73,8 @@ impl LintServerConfig {
 /// handlers actually need. It does NOT include Tauri-specific fields (app_handle,
 /// sensors, triggers, ambient overlay, etc.).
 pub struct ServerState {
+    /// Sticky daemon-lifecycle signal shared by HTTP and background workers.
+    pub shutdown: ShutdownHandle,
     pub db: Option<Arc<MemoryDB>>,
     /// On-device LLM provider (Qwen via llama-cpp).
     pub llm: Option<Arc<dyn LlmProvider>>,
@@ -79,6 +82,10 @@ pub struct ServerState {
     /// Set whenever `llm` is populated with an `OnDeviceProvider`. `None` when
     /// the daemon has no on-device model loaded.
     pub loaded_on_device_model: Option<String>,
+    /// Sticky reservation spanning the two-sample admission window and the
+    /// blocking startup model load. The scheduler observes it so no automatic
+    /// heavy turn can race the load after both sampled the same quiet window.
+    pub startup_model_load_reserved: Arc<std::sync::atomic::AtomicBool>,
     /// API-based LLM provider for routine tasks (Anthropic Haiku by default).
     pub api_llm: Option<Arc<dyn LlmProvider>>,
     /// API-based LLM provider for synthesis tasks (Anthropic Sonnet by default).
@@ -142,9 +149,11 @@ pub struct ServerState {
 impl Default for ServerState {
     fn default() -> Self {
         Self {
+            shutdown: ShutdownHandle::default(),
             db: None,
             llm: None,
             loaded_on_device_model: None,
+            startup_model_load_reserved: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             api_llm: None,
             synthesis_llm: None,
             external_llm: None,

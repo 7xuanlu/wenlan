@@ -199,7 +199,7 @@ async fn seed_spaces(db: &crate::db::MemoryDB) {
 }
 
 async fn seed_invalid_memory(db: &crate::db::MemoryDB, id: &str, space: &str) {
-    // M3 PR-1 stage e: memories.space is NOT NULL as of migration 85, so
+    // M3 PR-1 stage e: memories.space is NOT NULL as of migration 91, so
     // "uncategorized" must bind the reserved sentinel id, not NULL.
     let space = if space == "uncategorized" {
         crate::db::UNFILED_SPACE_ID

@@ -34,6 +34,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 futures = { workspace = true }
+sysinfo = { workspace = true }
 fs2 = { workspace = true }
 sha2 = "0.10"
 # Pulls openssl-sys with the vendored feature (declared at workspace level).
@@ -42,8 +43,12 @@ sha2 = "0.10"
 # apply the vendored feature to every transitive consumer.
 openssl-sys = { workspace = true }
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 async-trait = { workspace = true }
 libsql = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true }
+zip = { workspace = true }

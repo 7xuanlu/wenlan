@@ -142,7 +142,7 @@ async fn run_with_flags(
 
 async fn insert_memory(db: &crate::db::MemoryDB, id: &str, space: Option<&str>) {
     // M3 PR-1 stage e honest columns: memories.space is NOT NULL since
-    // migration 85, so a caller who wants "no space" must bind the reserved
+    // migration 91, so a caller who wants "no space" must bind the reserved
     // sentinel id -- binding an explicit NULL now violates the column
     // constraint here too, same as insert_page below has since M1.
     let space = space.unwrap_or(crate::db::UNFILED_SPACE_ID);

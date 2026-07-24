@@ -3,8 +3,9 @@ use crate::error::ServerError;
 use crate::state::ServerState;
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::Json,
+    Extension,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -1183,14 +1184,20 @@ pub async fn handle_test_llm(
     Ok(Json(wenlan_types::requests::TestLlmResponse { response }))
 }
 
-/// POST /api/shutdown — exits the daemon process cleanly.
-/// Returns 200 OK, then exits 0 after a brief delay so the response is delivered.
-pub async fn handle_shutdown() -> &'static str {
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        std::process::exit(0);
-    });
-    "shutting down"
+/// POST /api/shutdown — request cooperative, bounded daemon shutdown.
+/// The lifecycle coordinator stops accepting new HTTP work, drains owned work,
+/// and retains a hard deadline for tasks that cannot cooperate.
+pub async fn handle_shutdown(
+    Extension(shutdown): Extension<crate::lifecycle::ShutdownHandle>,
+) -> (HeaderMap, &'static str) {
+    shutdown.request();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-wenlan-process-id",
+        HeaderValue::from_str(&std::process::id().to_string())
+            .expect("process id is always a valid HTTP header value"),
+    );
+    (headers, "shutting down")
 }
 
 #[cfg(test)]
@@ -1204,6 +1211,54 @@ mod recent_endpoints_tests {
     use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 
     use crate::state::ServerState;
+
+    struct WenlanDataDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl WenlanDataDirGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("WENLAN_DATA_DIR");
+            std::env::set_var("WENLAN_DATA_DIR", tmp.path());
+            Self {
+                previous,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for WenlanDataDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("WENLAN_DATA_DIR", value),
+                None => std::env::remove_var("WENLAN_DATA_DIR"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_control_does_not_wait_for_server_state_lock() {
+        let state = Arc::new(RwLock::new(ServerState::default()));
+        let shutdown = state.read().await.shutdown.clone();
+        let app = crate::router::build_router_with_shutdown(state.clone(), shutdown.clone());
+        let _write_guard = state.write().await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/shutdown")
+            .body(Body::empty())
+            .unwrap();
+        let response =
+            tokio::time::timeout(std::time::Duration::from_millis(100), app.oneshot(request))
+                .await
+                .expect("shutdown control path must bypass the workload-state lock")
+                .unwrap();
+
+        assert!(response.status().is_success());
+        assert!(shutdown.is_requested());
+    }
 
     struct ExternalCompileProvider {
         state: Arc<RwLock<ServerState>>,
@@ -1328,8 +1383,19 @@ mod recent_endpoints_tests {
         assert_eq!(response.status(), 503);
     }
 
-    #[tokio::test]
-    async fn steep_routes_external_provider_without_holding_state_lock_across_compile() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn steep_routes_pinned_external_provider_without_holding_state_lock_across_compile() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = WenlanDataDirGuard::new();
+        let routing = wenlan_core::config::Config {
+            synthesis_source: Some("external".to_string()),
+            ..wenlan_core::config::Config::default()
+        };
+        wenlan_core::config::save_config(&routing).unwrap();
+
         let tmp = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);

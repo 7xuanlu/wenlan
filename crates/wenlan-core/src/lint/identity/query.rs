@@ -114,7 +114,7 @@ SELECT invalid FROM (
  UNION ALL SELECT 'space:'||id, CASE WHEN TRIM(name)='' OR updated_at<created_at THEN 1 ELSE 0 END FROM spaces
 ) ORDER BY key";
 
-// M3 PR-1 stage e: memories.space is NOT NULL as of migration 85, so an
+// M3 PR-1 stage e: memories.space is NOT NULL as of migration 91, so an
 // unscoped memory carries the reserved sentinel id rather than NULL --
 // `!=sentinel` (was `IS NOT NULL`) keeps the "claims a real space name that
 // isn't registered" check from false-flagging every unfiled memory.

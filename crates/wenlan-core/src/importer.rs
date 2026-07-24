@@ -407,7 +407,15 @@ pub async fn import_memories_no_llm(
 
     // Single batch upsert — one embedding generation pass for all docs
     if !docs.is_empty() {
-        db.upsert_documents(docs).await?;
+        db.upsert_documents_with_enrichment_origin(
+            docs,
+            crate::db::EnrichmentOrigin {
+                memory_type_explicit: false,
+                structured_fields_explicit: false,
+                space_rejected: false,
+            },
+        )
+        .await?;
     }
 
     Ok(ImportResult {
@@ -1013,6 +1021,34 @@ mod tests {
         assert_eq!(result.imported, 3);
         assert_eq!(result.skipped, 0);
         assert!(!result.batch_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn generic_import_records_background_owned_enrichment_origin() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let result = import_memories_no_llm(
+            &db,
+            "Imported memories must remain eligible for later classification",
+            "chatgpt",
+            None,
+            &crate::tuning::ConfidenceConfig::default(),
+        )
+        .await
+        .unwrap();
+        let source_id = format!("import_{}_0", result.batch_id);
+
+        let origin = db.resolve_enrichment_origin(&source_id).await.unwrap();
+        assert!(!origin.memory_type_explicit);
+        assert!(!origin.structured_fields_explicit);
+        assert!(!origin.space_rejected);
+
+        let candidate = db
+            .get_classification_candidate(3)
+            .await
+            .unwrap()
+            .expect("generic imports must remain eligible for background classification");
+        assert_eq!(candidate.source_id, source_id);
+        assert_eq!(candidate.origin, origin);
     }
 
     #[tokio::test]
