@@ -139,18 +139,36 @@ fn resolve_wenlan_root() -> std::path::PathBuf {
 }
 
 #[cfg(any(target_os = "macos", test))]
+fn preflight_rotating_log_path(path: &std::path::Path) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "log path has no parent")
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("log path is not a regular file"));
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
 fn new_server_log_writer(
     wenlan_root: &std::path::Path,
     max_bytes: usize,
     backups: usize,
-) -> file_rotate::FileRotate<file_rotate::suffix::AppendCount> {
-    file_rotate::FileRotate::new(
-        wenlan_root.join("logs/wenlan-server.log"),
+) -> std::io::Result<file_rotate::FileRotate<file_rotate::suffix::AppendCount>> {
+    let path = wenlan_root.join("logs/wenlan-server.log");
+    preflight_rotating_log_path(&path)?;
+    Ok(file_rotate::FileRotate::new(
+        path,
         file_rotate::suffix::AppendCount::new(backups),
         file_rotate::ContentLimit::Bytes(max_bytes),
         file_rotate::compression::Compression::None,
         None,
-    )
+    ))
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -158,14 +176,48 @@ fn new_bootstrap_log_writer(
     wenlan_root: &std::path::Path,
     max_bytes: usize,
     backups: usize,
-) -> file_rotate::FileRotate<file_rotate::suffix::AppendCount> {
-    file_rotate::FileRotate::new(
-        wenlan_root.join("logs/wenlan-server.bootstrap.log"),
+) -> std::io::Result<file_rotate::FileRotate<file_rotate::suffix::AppendCount>> {
+    let path = wenlan_root.join("logs/wenlan-server.bootstrap.log");
+    preflight_rotating_log_path(&path)?;
+    Ok(file_rotate::FileRotate::new(
+        path,
         file_rotate::suffix::AppendCount::new(backups),
         file_rotate::ContentLimit::Bytes(max_bytes),
         file_rotate::compression::Compression::None,
         None,
-    )
+    ))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn write_bootstrap_message(
+    wenlan_root: &std::path::Path,
+    fallback_root: &std::path::Path,
+    message: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+
+    let (mut writer, path) =
+        match new_bootstrap_log_writer(wenlan_root, BOOTSTRAP_LOG_MAX_BYTES, BOOTSTRAP_LOG_BACKUPS)
+        {
+            Ok(writer) => (writer, wenlan_root.join("logs/wenlan-server.bootstrap.log")),
+            Err(primary_error) => {
+                eprintln!(
+                    "Primary bootstrap log unavailable at {}: {primary_error}",
+                    wenlan_root.display()
+                );
+                (
+                    new_bootstrap_log_writer(
+                        fallback_root,
+                        BOOTSTRAP_LOG_MAX_BYTES,
+                        BOOTSTRAP_LOG_BACKUPS,
+                    )?,
+                    fallback_root.join("logs/wenlan-server.bootstrap.log"),
+                )
+            }
+        };
+    writeln!(writer, "{message}")?;
+    writer.flush()?;
+    Ok(path)
 }
 
 fn report_bootstrap_error(wenlan_root: &std::path::Path, message: &str) {
@@ -177,11 +229,15 @@ fn report_bootstrap_error(wenlan_root: &std::path::Path, message: &str) {
 
     #[cfg(target_os = "macos")]
     if std::env::var_os("XPC_SERVICE_NAME").is_some() {
-        use std::io::Write as _;
-
-        let mut writer =
-            new_bootstrap_log_writer(wenlan_root, BOOTSTRAP_LOG_MAX_BYTES, BOOTSTRAP_LOG_BACKUPS);
-        if let Err(error) = writeln!(writer, "{message}") {
+        let fallback_root = fallback_log_root();
+        let write_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_bootstrap_message(wenlan_root, &fallback_root, message)
+        }));
+        if let Err(error) = write_result.unwrap_or_else(|_| {
+            Err(std::io::Error::other(
+                "bootstrap log writer panicked while reporting an error",
+            ))
+        }) {
             eprintln!("Failed to write bootstrap log: {error}");
         }
     }
@@ -200,6 +256,13 @@ fn new_server_log_rate_limit() -> tracing_throttle::TracingRateLimitLayer {
     tracing_throttle::TracingRateLimitLayer::new()
 }
 
+#[cfg(target_os = "macos")]
+fn fallback_log_root() -> std::path::PathBuf {
+    dirs::home_dir()
+        .map(|home| home.join("Library/Logs/com.wenlan.server-fallback"))
+        .unwrap_or_else(|| std::env::temp_dir().join("wenlan-server-fallback"))
+}
+
 fn init_logging(wenlan_root: &std::path::Path) -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
 
@@ -210,28 +273,52 @@ fn init_logging(wenlan_root: &std::path::Path) -> anyhow::Result<()> {
         .unwrap_or_else(|_| "info,wenlan_core=info,wenlan_server=info".into());
 
     #[cfg(target_os = "macos")]
-    if std::env::var_os("XPC_SERVICE_NAME").is_some() {
-        let writer = std::sync::Mutex::new(new_server_log_writer(
+    {
+        let writer = match new_server_log_writer(
             wenlan_root,
             SERVER_LOG_MAX_BYTES,
             SERVER_LOG_BACKUPS,
-        ));
+        ) {
+            Ok(writer) => writer,
+            Err(primary_error) => {
+                let fallback_root = fallback_log_root();
+                eprintln!(
+                    "Primary daemon log unavailable at {}: {primary_error}; using {}",
+                    wenlan_root.display(),
+                    fallback_root.display()
+                );
+                new_server_log_writer(
+                    &fallback_root,
+                    SERVER_LOG_MAX_BYTES,
+                    SERVER_LOG_BACKUPS,
+                )
+                .map_err(|fallback_error| {
+                    anyhow::anyhow!(
+                        "initialize rotating file logging: primary={primary_error}; fallback={fallback_error}"
+                    )
+                })?
+            }
+        };
+        let writer = std::sync::Mutex::new(writer);
         let fmt = tracing_subscriber::fmt::layer()
             .with_writer(writer)
             .with_filter(new_server_log_rate_limit());
-        return tracing_subscriber::registry()
+        tracing_subscriber::registry()
             .with(filter)
             .with(fmt)
             .try_init()
-            .map_err(|error| anyhow::anyhow!("initialize rotating file logging: {error}"));
+            .map_err(|error| anyhow::anyhow!("initialize rotating file logging: {error}"))
     }
 
-    let fmt = tracing_subscriber::fmt::layer().with_filter(new_server_log_rate_limit());
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt)
-        .try_init()
-        .map_err(|error| anyhow::anyhow!("initialize console logging: {error}"))
+    #[cfg(not(target_os = "macos"))]
+    {
+        let fmt = tracing_subscriber::fmt::layer().with_filter(new_server_log_rate_limit());
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt)
+            .try_init()
+            .map_err(|error| anyhow::anyhow!("initialize console logging: {error}"))
+    }
 }
 
 fn startup_projection_writes_allowed(repair_recovery_pending: bool) -> bool {
@@ -415,7 +502,7 @@ mod bind_addr_tests {
         use std::io::Write as _;
 
         let root = tempfile::tempdir().unwrap();
-        let mut writer = new_server_log_writer(root.path(), 64, 2);
+        let mut writer = new_server_log_writer(root.path(), 64, 2).unwrap();
         for index in 0..20 {
             writeln!(writer, "bounded log line {index:02}").unwrap();
         }
@@ -449,7 +536,7 @@ mod bind_addr_tests {
         use std::io::Write as _;
 
         let root = tempfile::tempdir().unwrap();
-        let mut writer = new_bootstrap_log_writer(root.path(), 64, 1);
+        let mut writer = new_bootstrap_log_writer(root.path(), 64, 1).unwrap();
         for index in 0..20 {
             writeln!(writer, "bootstrap failure line {index:02}").unwrap();
         }
@@ -497,6 +584,35 @@ mod bind_addr_tests {
             metrics.events_suppressed() > 0,
             "an identical 100-event burst must be throttled"
         );
+    }
+
+    #[test]
+    fn rotating_log_construction_reports_an_unusable_directory_without_panicking() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("logs"), "not a directory").unwrap();
+
+        let result = std::panic::catch_unwind(|| new_server_log_writer(root.path(), 64, 1));
+
+        assert!(result.is_ok(), "logger construction must not panic");
+        assert!(
+            result.unwrap().is_err(),
+            "unusable log paths must fail loud"
+        );
+    }
+
+    #[test]
+    fn bootstrap_logging_falls_back_when_the_data_root_is_unwritable() {
+        let primary = tempfile::tempdir().unwrap();
+        let fallback = tempfile::tempdir().unwrap();
+        std::fs::write(primary.path().join("logs"), "not a directory").unwrap();
+
+        let path =
+            write_bootstrap_message(primary.path(), fallback.path(), "bootstrap sentinel").unwrap();
+
+        assert!(path.starts_with(fallback.path()));
+        assert!(std::fs::read_to_string(path)
+            .unwrap()
+            .contains("bootstrap sentinel"));
     }
 
     #[test]
@@ -972,8 +1088,11 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
                     // = false treats exit-0 as success). For sidecar invocation
                     // by the app, exit 0 is the right answer.
                     if std::env::var_os("XPC_SERVICE_NAME").is_some() {
-                        eprintln!(
-                            "Existing healthy daemon on port {port} — exiting 75 (launchd retry)"
+                        report_bootstrap_error(
+                            &wenlan_root,
+                            &format!(
+                                "Existing healthy daemon on port {port} — exiting 75 (launchd retry)"
+                            ),
                         );
                         std::process::exit(75);
                     }
