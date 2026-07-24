@@ -295,6 +295,10 @@ fn print_daemon_log_paths() {
         data_root.join("logs/wenlan-server.log").display()
     );
     println!(
+        "Bootstrap log: {}",
+        data_root.join("logs/wenlan-server.bootstrap.log").display()
+    );
+    println!(
         "Bootstrap fallback log: {}",
         fallback_root
             .join("logs/wenlan-server.bootstrap.log")
