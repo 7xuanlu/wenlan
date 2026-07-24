@@ -330,7 +330,11 @@ impl MemoryDB {
                 "(m.space IS NULL OR m.space != ?1)",
                 vec![libsql::Value::Text(space.clone())],
             ),
-            ReadScope::Uncategorized => ("m.space IS NULL", "m.space IS NOT NULL", Vec::new()),
+            ReadScope::Uncategorized => (
+                "(m.space IS NULL OR m.space = '00000000-0000-4000-8000-000000000001')",
+                "(m.space IS NOT NULL AND m.space != '00000000-0000-4000-8000-000000000001')",
+                Vec::new(),
+            ),
             ReadScope::Global => unreachable!(),
         };
         let sql = format!(
@@ -545,7 +549,11 @@ impl MemoryDB {
                 format!("AND c.space = ?{scope_index}"),
                 Some(libsql::Value::Text(space.clone())),
             ),
-            ReadScope::Uncategorized => ("AND c.space IS NULL".to_string(), None),
+            ReadScope::Uncategorized => (
+                "AND (c.space IS NULL OR c.space = '00000000-0000-4000-8000-000000000001')"
+                    .to_string(),
+                None,
+            ),
             ReadScope::Global => unreachable!(),
         };
         let sql = format!(

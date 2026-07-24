@@ -1164,6 +1164,8 @@ async fn run_periodic_steep_with_api_scope(
     // the SAME pass but is NEVER gated by `page_map_auto_suggest` — only this
     // background phase is. Bounded to 5 pages per pass. Always Silent (no
     // user-facing nudge; suggestions surface in the map UI, not as a toast).
+    // `runs_phase` (not `trigger.runs_phase`): a phase-sliced background turn
+    // must not leak page_maps into another phase's slice when auto-suggest is on.
     if page_map_auto_suggest && runs_phase(Phase::PageMaps) {
         let phase = run_phase(Phase::PageMaps, || async {
             let improved = crate::page_map_improve::run_proactive_page_maps(db_ref, 5).await?;
