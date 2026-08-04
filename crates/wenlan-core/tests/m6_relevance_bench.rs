@@ -1,13 +1,67 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Frozen-corpus gate for the M6 relevance benchmark.
 //!
-//! C0 ships the corpus and this target only. The relevance sweep it will
-//! measure does not exist yet — that is C1 — and the ordering is deliberate:
-//! §8.6's count limits are hard pass/fail gates, and a gate that arrives after
-//! the code it gates has never once failed. The single proof this target
-//! carries is **corpus reproducibility**: a reviewer regenerates the corpus
-//! byte-for-byte, and a mismatch makes the bench refuse to run rather than
-//! report a number nobody can compare against.
+//! C0 shipped the corpus and this target's reproducibility proof; C1 adds the
+//! two count gates that consume it. The ordering was deliberate: §8.6's count
+//! limits are hard pass/fail gates, and a gate that arrives after the code it
+//! gates has never once failed. The proof C0 carries is **corpus
+//! reproducibility**: a reviewer regenerates the corpus byte-for-byte, and a
+//! mismatch makes the bench refuse to run rather than report a number nobody
+//! can compare against.
+//!
+//! **S0-99 governs every number below: a benchmark failure stops for a
+//! Sol-reviewed contract amendment and may not be answered by tuning a
+//! constant.** `R-BENCH-Q` (4) and `R-BENCH-ROWS` (512) are frozen. If a sweep
+//! breaches them, the thing that moves is the sweep — `SWEEP_ENDPOINTS_PER_TURN`
+//! is the parameter the contract left free, and it exists precisely so the
+//! frozen ones never have to.
+//!
+//! `R-BENCH-MAX`/`P50`/`P99` are wall-clock and are **not** asserted here:
+//! §8.6 rules the count limits into CI and leaves the timing ones to a local
+//! receipt under S0-98's specified conditions (warm cache, one evaluation at a
+//! time, no concurrent refinery turn), which a hosted runner does not provide.
+//! The `sweep_turn_*_ms` fields the receipt prints are also not `R-BENCH-MAX`:
+//! that limit times the *route evaluation* over `m6_adjacency`/`m6_pair_stats`,
+//! and C1 builds those tables' writer, not their reader.
+//!
+//! ## STOP: `R-BENCH-ROWS` is breached, and this is an S0-99 amendment
+//!
+//! The prior receipt in this comment was measured against a corpus whose hub
+//! groups could not reach the top-64 cut: `M6_HUB_DEGREES` set each hub's root
+//! count while `hub_weight(d)` reads pages touched, so every group's page
+//! degree came from a fanout drawn `1..=15`, `hub_weight` returned exactly
+//! `1.0` for all 12,000 groups, and the `64/d` branch never executed. Those
+//! numbers measured a sweep that never met a hub. They are withdrawn, not
+//! updated.
+//!
+//! Against the corrected corpus the count gate does not pass:
+//!
+//! ```text
+//! bounded turn 46 breached its budget:
+//!   M6 relevance evaluation materialized 513 rows; cap is 512
+//! ```
+//!
+//! **Per S0-99 the response is not to move 512.** It is also not to lower
+//! `SWEEP_CANDIDATE_WINDOW`, the parameter the contract left free, and the
+//! margin is what says so: one row over, from a turn that packed a single
+//! endpoint. `pack_within_budget` always returns at least one endpoint — a
+//! turn that reserves its way to zero work never converges — so an endpoint
+//! whose own groups project past the whole budget is admitted regardless of
+//! the window, and shrinking the window cannot exclude it. Bounding one
+//! endpoint's work is a design change, which is exactly the amendment S0-99
+//! reserves to a reviewed decision rather than to whoever is holding the
+//! failing test.
+//!
+//! The scan gap the withdrawn receipt described is still real and still
+//! unfixed in `candidate_endpoints`: it builds `support` over the whole space
+//! before `stale`'s `LIMIT` cuts to a handful of endpoints, so per-turn cost
+//! tracks corpus size while the decoded-row instrument that gates it does not
+//! — the defect S0-95 names in its own text, "a query that scans a million
+//! rows and returns 512". That pass is now load-bearing rather than merely
+//! unoptimized: selecting a co-supported page that has no pair row at all is
+//! what closes the incremental-≠-full hole, and it cannot be answered from an
+//! index on `m6_pair_stats`. `groups_touching` did take the pushdown, since
+//! its endpoints are already known.
 
 use std::io::{self, Write};
 use wenlan_core::eval::m6_bench_corpus::{
@@ -16,6 +70,8 @@ use wenlan_core::eval::m6_bench_corpus::{
     M6_MEMORY_COUNT, M6_PAGES_PER_GROUP_MEAN, M6_PAGE_COUNT, M6_RETRACTED_EDGE_PERCENT,
     M6_ROOT_AGE_MAX_DAYS, M6_SPACE_SPLIT_PERCENT, M6_ZIPF_TRUNCATION,
 };
+#[cfg(feature = "eval-harness")]
+use wenlan_core::eval::m6_relevance_harness::run_relevance_budget_bench;
 
 const MANIFEST_DIGEST_BYTES: &[u8] = include_bytes!("fixtures/m6_bench_corpus.sha256");
 
@@ -260,5 +316,117 @@ impl Write for RecordCounter {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+/// `R-BENCH-Q` and `R-BENCH-ROWS` over the frozen corpus.
+///
+/// The unit fixtures already assert both counters, but on a dozen pages, where
+/// one turn sees every group and the fan-out that actually spends the budget
+/// never happens. This is the same assertion against the corpus D9 states the
+/// budget over — 5,000 pages, 12,000 groups, a Zipf degree tail.
+///
+/// **Two legs, because neither alone is the gate.** The dense 40% space is
+/// where the budget is actually spent, and draining its 2,000 pages takes
+/// ~400 turns at ~3.5s each — too slow to be a required check. The 2% space
+/// drains completely and cheaply, but its pages are sparse. So: sample the
+/// dense space deep enough to hit real fan-out, and drain the small one to
+/// exhaustion so at least one leg proves the invariant holds all the way to
+/// `Idle` rather than for a prefix.
+///
+/// What the sampled leg does **not** prove is a maximum. It could not: an
+/// earlier fixed-slice design passed 24 turns and breached at turn 102, which
+/// is exactly why the bound is now enforced by `pack_within_budget` rather
+/// than hoped for. The residual case the packing cannot avoid — a single
+/// endpoint whose own fan-out exceeds the remaining budget, which the turn
+/// takes anyway so the sweep can make progress — is asserted directly in
+/// `relevance_sweep_test.rs`, not left to drain luck.
+#[cfg(feature = "eval-harness")]
+#[test]
+fn the_bounded_sweep_stays_inside_the_frozen_count_budgets() {
+    // The corpus must be the committed one, or the numbers are incomparable.
+    let summary = summarize_corpus().expect("corpus");
+    verify_manifest_digest(MANIFEST_DIGEST_BYTES, &summary.sha256)
+        .expect("corpus digest does not match the committed manifest; the bench refuses to run");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+
+    for (space_index, max_turns, drains) in [(0usize, 60usize, false), (7, 4096, true)] {
+        // The database is built here, not inside the harness:
+        // `repository_module_graph_matches_r4_25_group_6_census` requires every
+        // raw `libsql` origin under `crates/*/src` to be `#[cfg(test)]`-gated,
+        // and the harness is behind a cargo feature instead -- which the guard
+        // does not accept, and should not, since a feature can be switched on
+        // in a shipped build. This target lives outside `src`, so owning the
+        // connection here keeps the invariant intact.
+        let receipt = runtime
+            .block_on(async {
+                let database = libsql::Builder::new_local(":memory:")
+                    .build()
+                    .await
+                    .expect("build in-memory database");
+                let connection = database.connect().expect("connect");
+                run_relevance_budget_bench(&connection, space_index, max_turns).await
+            })
+            .expect("relevance budget bench");
+        let widths: Vec<usize> = receipt
+            .bounded_turns
+            .iter()
+            .map(|turn| turn.endpoints_considered)
+            .collect();
+        println!(
+            "[m6-relevance-bench] corpus={} space={} pages={} groups={} pairs={} turns={} \
+             endpoints={} width={:?}..{:?} peak_queries={} peak_rows={} \
+             sweep_turn_max_ms={:.1} sweep_turn_p50_ms={:.1} machine={}",
+            &summary.sha256[..16],
+            receipt.space,
+            receipt.pages_in_space,
+            receipt.groups_in_space,
+            receipt.rereference_pairs,
+            receipt.bounded_turns.len(),
+            widths.iter().sum::<usize>(),
+            widths.iter().min(),
+            widths.iter().max(),
+            receipt.peak_queries(),
+            receipt.peak_rows(),
+            // Recorded, never asserted. These time the sweep turn -- the
+            // writer C1 builds -- and are deliberately not named after
+            // `R-BENCH-MAX`, which times the route evaluation that reads the
+            // two tables the sweep writes. S0-99 binds the ungated half too:
+            // a number here that looks wrong is a contract amendment
+            // question, not a constant to relax.
+            receipt.max_turn_ms(),
+            receipt.p50_turn_ms(),
+            receipt.machine(),
+        );
+
+        assert!(
+            !receipt.bounded_turns.is_empty(),
+            "space {space_index} ran no bounded turn, so neither budget was \
+             exercised; a vacuous pass is what this gate exists to prevent"
+        );
+        if drains {
+            assert!(
+                receipt.bounded_turns.len() < max_turns,
+                "space {space_index} never reached Idle in {max_turns} turns, so \
+                 the draining leg proved nothing about convergence"
+            );
+        }
+        assert!(
+            receipt.peak_queries() <= 4,
+            "R-BENCH-Q: a bounded turn on space {space_index} issued {} queries \
+             against the frozen corpus; the cap is 4 and S0-99 forbids relaxing it",
+            receipt.peak_queries(),
+        );
+        assert!(
+            receipt.peak_rows() <= 512,
+            "R-BENCH-ROWS: a bounded turn on space {space_index} materialized {} \
+             rows against the frozen corpus; the cap is 512 and S0-99 forbids \
+             relaxing it",
+            receipt.peak_rows(),
+        );
     }
 }

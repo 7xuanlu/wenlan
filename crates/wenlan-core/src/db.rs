@@ -40,7 +40,11 @@ mod eval_temporal_seed;
 mod genesis_schema;
 /// Migration 108's shipped DDL, re-exported so the M6 fixtures install the
 /// real substrate. Text, not a `libsql` handle — see the constant's own note.
-#[cfg(test)]
+///
+/// `eval-harness` is in the gate alongside `test` because the M6 relevance
+/// bench loads the frozen corpus into this same substrate, and it is an
+/// integration target rather than a unit test.
+#[cfg(any(test, feature = "eval-harness"))]
 pub(crate) use genesis_schema::GENESIS_SUBSTRATE_DDL;
 mod kg_quality_diagnostics;
 mod kg_quality_duplicate_candidates;
@@ -709,7 +713,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// Bump this whenever a new migration lands. Used as an eval cache invalidation key.
 /// Migration 110 adds M5's policy-independent judge-eligibility registry and
 /// generation fence. It follows the inert M6 substrate at 109.
-pub const SCHEMA_VERSION: u32 = 110;
+pub const SCHEMA_VERSION: u32 = 111;
 
 /// Reserved id AND name of the uncategorized-page sentinel space (M1 honest
 /// columns). Uncategorized pages store this value in `pages.space`/`workspace`
@@ -8513,6 +8517,13 @@ impl MemoryDB {
             if version < 110 {
                 self.migrate_110_judge_eligibility(version).await?;
             }
+
+            // Migration 111 (M6 PR-C C1): the two relevance marginal tables,
+            // for databases that ran 109 before those tables existed. See
+            // migrate_111_relevance_marginals.
+            if version < 111 {
+                self.migrate_111_relevance_marginals(version).await?;
+            }
         }
 
         // Private M4 builds could already have stamped user_version=95 before
@@ -12366,6 +12377,42 @@ impl MemoryDB {
             .await
             .map_err(|error| WenlanError::VectorDb(format!("m110 bump: {error}")))?;
         log::info!("[migration] Migration 110 applied: M5 judge eligibility safety fence");
+        Ok(())
+    }
+
+    /// Migration 111: create the relevance marginal tables on databases that
+    /// already ran migration 109.
+    ///
+    /// C1 added `m6_page_mass`/`m6_space_mass` to
+    /// [`crate::m6::relevance::ensure_relevance_tables`], which is reached only
+    /// from `migrate_109_m6_substrate_followup` behind `if version < 109`. Every
+    /// shipped database is already at `SCHEMA_VERSION` 110, so it never re-runs
+    /// 109 and never sees the two new tables — the first relevance write would
+    /// fail with `no such table: m6_space_mass`. Editing a migration that has
+    /// already run is the bug; a database's applied history is not rewritable
+    /// from source, so a table added after the fact needs a version its
+    /// databases have not yet passed.
+    ///
+    /// Calling the same DDL rather than restating it: it is
+    /// `CREATE TABLE IF NOT EXISTS` throughout, so a fresh database that gets
+    /// the tables from 109 and an upgraded one that gets them here converge on
+    /// the same schema, and the two spellings cannot drift apart.
+    async fn migrate_111_relevance_marginals(&self, _prior: i64) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m111 begin: {error}")))?;
+
+        crate::m6::relevance::ensure_relevance_tables(&tx).await?;
+
+        tx.commit()
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m111 commit: {error}")))?;
+        conn.execute("PRAGMA user_version = 111", ())
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("m111 bump: {error}")))?;
+        log::info!("[migration] Migration 111 applied: M6 relevance marginal tables");
         Ok(())
     }
 
