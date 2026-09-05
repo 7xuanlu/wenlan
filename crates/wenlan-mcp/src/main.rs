@@ -2,8 +2,9 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use rmcp::{transport::stdio, ServiceExt};
+use rmcp::ServiceExt;
 use wenlan_mcp::client::{discover_origin_url, WenlanClient};
+use wenlan_mcp::stdio::stdio;
 use wenlan_mcp::tools::{TransportMode, WenlanMcpServer};
 use wenlan_mcp::{serve, token};
 
