@@ -47,7 +47,7 @@ impl Client {
         .expect("bounded response wait")
     }
 
-    async fn initialize(&mut self) {
+    async fn initialize(&mut self, roots_during: bool) {
         self.send(json!({
             "jsonrpc": "2.0", "id": "init", "method": "initialize",
             "params": {"protocolVersion": "2025-11-25", "capabilities": {},
@@ -56,12 +56,16 @@ impl Client {
         .await;
         let reply = self.response(json!("init")).await;
         assert_eq!(reply["result"]["protocolVersion"], "2025-11-25");
+        if roots_during {
+            self.send(json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed"}))
+                .await;
+        }
         self.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
             .await;
     }
 }
 
-async fn exercise_connection(probe_id: Option<Value>) {
+async fn exercise_connection(probe_id: Option<Value>, roots_before: bool, roots_during: bool) {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/memory/search"))
@@ -114,7 +118,12 @@ async fn exercise_connection(probe_id: Option<Value>) {
             "legacy server must not advertise modern support"
         );
     }
-    client.initialize().await;
+    if roots_before {
+        client
+            .send(json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed"}))
+            .await;
+    }
+    client.initialize(roots_during).await;
     client
         .send(json!({"jsonrpc": "2.0", "id": "list", "method": "tools/list", "params": {}}))
         .await;
@@ -148,13 +157,23 @@ async fn exercise_connection(probe_id: Option<Value>) {
 #[tokio::test]
 async fn discovery_probe_preserves_ids_and_allows_legacy_tool_calls() {
     for id in [json!(1), json!("discover"), json!("quoted-\"-雪-\n")] {
-        exercise_connection(Some(id)).await;
+        exercise_connection(Some(id), false, false).await;
     }
 }
 
 #[tokio::test]
 async fn legacy_client_connects_without_discovery() {
-    exercise_connection(None).await;
+    exercise_connection(None, false, false).await;
+}
+
+#[tokio::test]
+async fn roots_change_before_initialize_does_not_interrupt_fallback() {
+    exercise_connection(Some(json!("roots-before")), true, false).await;
+}
+
+#[tokio::test]
+async fn roots_change_before_initialized_notification_does_not_interrupt_handshake() {
+    exercise_connection(Some(json!("roots-during")), false, true).await;
 }
 
 #[tokio::test]
