@@ -6,7 +6,9 @@
 //! transport must remain open so the client can continue with `initialize`.
 
 use rmcp::{
-    model::{ClientJsonRpcMessage, ClientRequest, ErrorCode, ServerJsonRpcMessage},
+    model::{
+        ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorCode, ServerJsonRpcMessage,
+    },
     service::{RoleServer, RxJsonRpcMessage, TxJsonRpcMessage},
     transport::{async_rw::AsyncRwTransport, Transport},
     ErrorData,
@@ -14,10 +16,17 @@ use rmcp::{
 
 const SERVER_DISCOVER_METHOD: &str = "server/discover";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HandshakePhase {
+    AwaitingInitialize,
+    AwaitingInitialized,
+    Ready,
+}
+
 /// A server transport that declines an optional pre-initialize discovery probe.
 pub struct DiscoveryFallback<T> {
     inner: T,
-    initialized: bool,
+    phase: HandshakePhase,
 }
 
 impl<T> DiscoveryFallback<T> {
@@ -25,7 +34,7 @@ impl<T> DiscoveryFallback<T> {
     pub fn new(inner: T) -> Self {
         Self {
             inner,
-            initialized: false,
+            phase: HandshakePhase::AwaitingInitialize,
         }
     }
 }
@@ -47,9 +56,17 @@ where
         loop {
             let message = self.inner.receive().await?;
 
-            if !self.initialized {
-                if let ClientJsonRpcMessage::Request(request) = &message {
-                    match &request.request {
+            match self.phase {
+                HandshakePhase::AwaitingInitialize => match &message {
+                    ClientJsonRpcMessage::Notification(notification)
+                        if matches!(
+                            &notification.notification,
+                            ClientNotification::RootsListChangedNotification(_)
+                        ) =>
+                    {
+                        continue;
+                    }
+                    ClientJsonRpcMessage::Request(request) => match &request.request {
                         ClientRequest::CustomRequest(custom)
                             if custom.method == SERVER_DISCOVER_METHOD =>
                         {
@@ -67,11 +84,32 @@ where
                             continue;
                         }
                         ClientRequest::InitializeRequest(_) => {
-                            self.initialized = true;
+                            self.phase = HandshakePhase::AwaitingInitialized;
                         }
                         _ => {}
+                    },
+                    _ => {}
+                },
+                HandshakePhase::AwaitingInitialized => match &message {
+                    ClientJsonRpcMessage::Notification(notification)
+                        if matches!(
+                            &notification.notification,
+                            ClientNotification::RootsListChangedNotification(_)
+                        ) =>
+                    {
+                        continue;
                     }
-                }
+                    ClientJsonRpcMessage::Notification(notification)
+                        if matches!(
+                            &notification.notification,
+                            ClientNotification::InitializedNotification(_)
+                        ) =>
+                    {
+                        self.phase = HandshakePhase::Ready;
+                    }
+                    _ => {}
+                },
+                HandshakePhase::Ready => {}
             }
 
             return Some(message);
