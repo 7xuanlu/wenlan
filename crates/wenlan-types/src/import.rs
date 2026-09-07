@@ -27,3 +27,94 @@ pub struct PendingImport {
     pub processed_conversations: i64,
     pub total_conversations: Option<i64>,
 }
+
+// ===== Import phases and batch status =====
+
+/// A user-facing phase of one import. `Ingest` and `Store` finish inside the
+/// import request; the rest are background work the ambient scheduler owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportPhase {
+    Ingest,
+    Store,
+    Detect,
+    Enrich,
+    Link,
+    Distill,
+}
+
+impl ImportPhase {
+    /// Every phase, in the order a user sees them.
+    pub const ALL: [ImportPhase; 6] = [
+        ImportPhase::Ingest,
+        ImportPhase::Store,
+        ImportPhase::Detect,
+        ImportPhase::Enrich,
+        ImportPhase::Link,
+        ImportPhase::Distill,
+    ];
+
+    /// The `enrichment_steps.step_name` values that make up this phase, or an
+    /// empty slice for the two phases that finish inside the import request.
+    /// The server owns the mapping; this list is the wire contract for it.
+    pub fn step_names(self) -> &'static [&'static str] {
+        match self {
+            ImportPhase::Ingest | ImportPhase::Store => &[],
+            ImportPhase::Detect => &["entity_extraction", "entity_link"],
+            ImportPhase::Enrich => &["title", "classification", "structured"],
+            ImportPhase::Link => &["page_growth"],
+            ImportPhase::Distill => &["distill"],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportPhaseState {
+    Pending,
+    Running,
+    Complete,
+    Failed,
+}
+
+/// Real counts for one phase. Never a timer: `done` and `total` are rows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportPhaseStatus {
+    pub phase: ImportPhase,
+    pub state: ImportPhaseState,
+    /// Units finished — memories for every phase except `Distill`, which counts pages.
+    pub done: u64,
+    /// Units expected. 0 means not yet known.
+    pub total: u64,
+    /// Units that failed and will not be retried.
+    pub failed: u64,
+}
+
+/// Aggregate progress for one import batch, derived from the batch's memories
+/// and their `enrichment_steps` rows. Every field is a live count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportBatchStatus {
+    pub batch_id: String,
+    /// The `import_source` the memories were written with (chatgpt, claude, other).
+    pub source: String,
+    pub started_at: i64,
+    pub updated_at: i64,
+    /// Import requests received so far for this batch.
+    pub chunks_received: u32,
+    pub memories_imported: u64,
+    pub memories_skipped: u64,
+    /// Entities this batch's memories link to, by lifecycle state.
+    pub entities_detected: u64,
+    pub entities_established: u64,
+    pub pages_distilled: u64,
+    pub phases: Vec<ImportPhaseStatus>,
+    /// Every background phase has settled (complete or failed).
+    pub complete: bool,
+    #[serde(default)]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveImportBatchesResponse {
+    pub batches: Vec<ImportBatchStatus>,
+}
