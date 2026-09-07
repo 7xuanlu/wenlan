@@ -231,7 +231,12 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   });
 
   const handleRestoreAll = () => withActionErrorHandling(async () => {
-    const response = await restoreEntities({ filter: { status: "archived" }, dry_run: false });
+    // Restore exactly what the matchline above the button counted, including
+    // a search term the 300 ms debounce has not folded into `filters` yet.
+    const readback: EntityFilters = { ...filters, query: queryInput };
+    if (readback.query !== filters.query) setFilters(readback);
+    const filter = entityListRequest("archived", readback, 0);
+    const response = await restoreEntities({ filter, dry_run: false });
     toast.success(t("entities.toast_restored", { count: response.count }));
     await reload();
   });
@@ -389,7 +394,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
             onClick={() => void handleRestoreAll()}
             type="button"
           >
-            {t("entities.restoreAll")}
+            {t(filtersAreActive ? "entities.restoreAllMatching" : "entities.restoreAll")}
           </button>
         </div>
       )}

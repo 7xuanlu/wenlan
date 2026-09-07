@@ -1031,6 +1031,7 @@ async fn idle_detected_entity_with_only_old_memories_is_archived() {
         .await
         .unwrap();
     backdate_linked_memories(&db, &["idle-old-mem"], days_ago(60).timestamp()).await;
+    backdate_shadow_page(&db, &entity, &days_ago(60).to_rfc3339()).await;
 
     let archived = db.archive_idle_detected_entities(30, 500).await.unwrap();
     assert_eq!(archived, 1);
@@ -1086,6 +1087,7 @@ async fn established_entity_with_only_old_memories_is_not_archived() {
         days_ago(60).timestamp(),
     )
     .await;
+    backdate_shadow_page(&db, &entity, &days_ago(60).to_rfc3339()).await;
 
     assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 0);
     assert_eq!(
@@ -1110,6 +1112,7 @@ async fn already_archived_entity_is_skipped_by_the_idle_sweep() {
         .await
         .unwrap();
     backdate_linked_memories(&db, &["gone-mem"], days_ago(60).timestamp()).await;
+    backdate_shadow_page(&db, &entity, &days_ago(60).to_rfc3339()).await;
     db.archive_entity(&entity).await.unwrap();
 
     assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 0);
@@ -1131,6 +1134,7 @@ async fn idle_sweep_with_zero_days_archives_nothing() {
         .await
         .unwrap();
     backdate_linked_memories(&db, &["idle-zero-mem"], days_ago(60).timestamp()).await;
+    backdate_shadow_page(&db, &entity, &days_ago(60).to_rfc3339()).await;
 
     assert_eq!(db.archive_idle_detected_entities(0, 500).await.unwrap(), 0);
     assert_eq!(
@@ -1176,6 +1180,7 @@ async fn restore_brings_back_an_idle_archived_entity() {
         .await
         .unwrap();
     backdate_linked_memories(&db, &["return-mem"], days_ago(60).timestamp()).await;
+    backdate_shadow_page(&db, &entity, &days_ago(60).to_rfc3339()).await;
     assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 1);
 
     db.restore_entity(&entity).await.unwrap();
@@ -1212,8 +1217,10 @@ async fn idle_sweep_limit_caps_archived_count() {
         ids.push((entity, source_id));
     }
     let old_epoch = days_ago(60).timestamp();
-    for (_, source_id) in &ids {
+    let old_iso = days_ago(60).to_rfc3339();
+    for (entity, source_id) in &ids {
         backdate_linked_memories(&db, &[source_id.as_str()], old_epoch).await;
+        backdate_shadow_page(&db, entity, &old_iso).await;
     }
 
     assert_eq!(db.archive_idle_detected_entities(30, 2).await.unwrap(), 2);
@@ -1221,4 +1228,42 @@ async fn idle_sweep_limit_caps_archived_count() {
     for (entity, _) in &ids {
         assert_eq!(page_status(&db, entity).await, "archived");
     }
+}
+
+/// A freshly imported old conversation must survive the next sweep. An
+/// imported memory keeps its original conversation date, so its
+/// `memories.created_at` is already past the window the moment the import
+/// finishes; the entity's own shadow page is what proves nobody has had a
+/// chance to look at it yet.
+#[tokio::test]
+async fn entity_from_a_freshly_imported_old_conversation_is_not_archived() {
+    let (db, _tmp) = test_db().await;
+    let entity = db
+        .store_entity("Entity Twelve", "person", None, None, Some(0.6))
+        .await
+        .unwrap();
+    db.upsert_documents(vec![memory_doc("imported-mem")])
+        .await
+        .unwrap();
+    db.link_memory_entities("imported-mem", &[&entity])
+        .await
+        .unwrap();
+    // The import stamps the conversation's own date, not the import time.
+    backdate_linked_memories(&db, &["imported-mem"], days_ago(400).timestamp()).await;
+
+    assert_eq!(
+        db.archive_idle_detected_entities(30, 500).await.unwrap(),
+        0,
+        "the entity was detected today, so the import's old dates alone must not archive it"
+    );
+    assert_eq!(
+        entity_row(&db, &entity).await.status,
+        EntityStatus::Detected
+    );
+    assert_eq!(page_status(&db, &entity).await, "active");
+
+    // Once the entity itself has sat in the index past the window, it goes.
+    backdate_shadow_page(&db, &entity, &days_ago(60).to_rfc3339()).await;
+    assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 1);
+    assert_eq!(page_status(&db, &entity).await, "archived");
 }

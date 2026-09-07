@@ -37769,12 +37769,17 @@ impl MemoryDB {
     /// established (`entity_confirmed = 1`) and already-archived rows are
     /// never touched.
     ///
-    /// "Most recent linked memory" is `MAX(memories.created_at)` over
-    /// `memory_entities` for the entity. `memories.created_at` is INTEGER
-    /// unix seconds while the shadow page's `pages.created_at` is TEXT
-    /// RFC3339, so each side is compared in the representation its own table
-    /// stores -- no cross-format conversion. An entity with no linked memory
-    /// falls back to its shadow page's `pages.created_at`.
+    /// Two clocks must both be past the window. "Most recent linked memory"
+    /// is `MAX(memories.created_at)` over `memory_entities` for the entity
+    /// (absent memories count as idle). The entity's own shadow page must
+    /// also be older than the window: `pages.created_at` is stamped when the
+    /// entity is first detected, while an imported memory keeps its original
+    /// conversation date as `memories.created_at`, so without this floor a
+    /// freshly imported old chat would have its detected entities archived on
+    /// the very next sweep before anyone could look at them.
+    /// `memories.created_at` is INTEGER unix seconds and `pages.created_at`
+    /// is TEXT RFC3339, so each side is compared in the representation its
+    /// own table stores -- no cross-format conversion.
     ///
     /// `idle_days == 0` disables the rule and returns `Ok(0)` without
     /// touching the database. `limit` caps how many entities one call
@@ -37863,9 +37868,9 @@ impl MemoryDB {
     }
 
     /// Resolve the idle-archive sweep selection: detected entities
-    /// (`kind = 'entity'`, active, unconfirmed) whose newest linked memory
-    /// predates `cutoff_epoch`, or -- with no linked memory at all -- whose
-    /// shadow page predates `cutoff_iso`.
+    /// (`kind = 'entity'`, active, unconfirmed) whose shadow page predates
+    /// `cutoff_iso` and whose newest linked memory, if any, predates
+    /// `cutoff_epoch`.
     ///
     /// `within` narrows the predicate to a chunk, mirroring
     /// `select_bulk_entity_ids_within`; `limit` bounds the rows returned.
@@ -37883,14 +37888,12 @@ impl MemoryDB {
             "p.kind = 'entity'".to_string(),
             "p.status = 'active'".to_string(),
             "COALESCE(p.entity_confirmed, 0) = 0".to_string(),
-            "((SELECT MAX(m.created_at) \
-                FROM memory_entities me \
-                JOIN memories m ON m.source_id = me.memory_id \
-               WHERE me.entity_id = epm.entity_id) < ?1 \
-               OR (NOT EXISTS (SELECT 1 FROM memory_entities me \
-                                WHERE me.entity_id = epm.entity_id) \
-                   AND p.created_at < ?2))"
+            "COALESCE((SELECT MAX(m.created_at) \
+                         FROM memory_entities me \
+                         JOIN memories m ON m.source_id = me.memory_id \
+                        WHERE me.entity_id = epm.entity_id), 0) < ?1"
                 .to_string(),
+            "p.created_at < ?2".to_string(),
         ];
         let mut values: Vec<libsql::Value> = vec![
             libsql::Value::Integer(cutoff_epoch),

@@ -260,9 +260,11 @@ pub struct RefineryConfig {
     #[serde(default = "d_3_usize")]
     pub entity_establish_min_memories: usize,
     /// Housekeeping rule for the detected-entity index (#708): archive a
-    /// detected entity once it has gone this many days without any linked
-    /// memory. `0` (the default) turns the rule off. Only detected entities
-    /// are eligible; established and already-archived ones are never
+    /// detected entity once it has been in the index for this many days and
+    /// none of its linked memories is dated within the window (an imported
+    /// memory keeps its original conversation date, so the entity's own age
+    /// is the floor). `0` (the default) turns the rule off. Only detected
+    /// entities are eligible; established and already-archived ones are never
     /// touched, and archiving is reversible from the Entities view.
     #[serde(default)]
     pub entity_archive_idle_days: u64,

@@ -969,6 +969,7 @@ const en = {
     matchFiltered_archived_other: "{{count}} archived entities match",
     archiveAllMatching: "Archive all matching",
     restoreAll: "Restore all",
+    restoreAllMatching: "Restore all matching",
     columns: {
       entity: "Entity",
       type: "Type",
@@ -2702,6 +2703,7 @@ const zhHans = {
     matchFiltered_archived_other: "{{count}} 个已归档实体匹配",
     archiveAllMatching: "归档所有匹配项",
     restoreAll: "全部恢复",
+    restoreAllMatching: "恢复所有匹配项",
     columns: {
       entity: "实体",
       type: "类型",
@@ -4413,6 +4415,7 @@ const zhHant = {
     matchFiltered_archived_other: "{{count}} 個已歸檔實體符合",
     archiveAllMatching: "歸檔所有符合項目",
     restoreAll: "全部復原",
+    restoreAllMatching: "復原所有符合項目",
     columns: {
       entity: "實體",
       type: "類型",
