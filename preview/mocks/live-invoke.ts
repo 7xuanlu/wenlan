@@ -367,6 +367,23 @@ async function getPageVia(a: any, headers?: Record<string, string>): Promise<unk
 // Exported (not just module-local) so the parity test below can read the
 // covered-command key sets without re-parsing this file.
 export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
+  // --- import ---
+  // The import view is the one screen whose whole point is what happens
+  // after the request lands, so a null stub is not a stand-in for it: the
+  // view reads `.imported` off the response and throws. These three go to
+  // the daemon so the preview can drive a real batch and poll its phases.
+  import_memories_cmd: (a) =>
+    post("/api/import/memories", {
+      source: a?.source,
+      content: a?.content,
+      label: a?.label ?? null,
+      batch_id: a?.batchId ?? null,
+      chunk_index: a?.chunkIndex ?? null,
+      chunk_total: a?.chunkTotal ?? null,
+    }),
+  import_batch_status_cmd: (a) =>
+    get(`/api/import/batches/${encodeURIComponent(String(a?.batchId ?? ""))}/status`),
+  active_import_batches_cmd: () => get("/api/import/batches/active"),
   daemon_version: () =>
     get("/api/health").then((response) => String(response?.version ?? "")),
   // --- pages (mirrors search.rs exactly) ---
@@ -956,32 +973,6 @@ export const DEFAULTS: Record<string, unknown> = {
   list_registered_sources: [],
   list_indexed_files: [],
   list_pending_imports: [],
-  // A batch mid-flight: ingest and store finished inside the request, the
-  // background phases are still working. An empty or `complete` fixture would
-  // render the one state nobody needs to review — the finished list.
-  import_batch_status_cmd: {
-    batch_id: "preview-batch",
-    source: "chatgpt",
-    started_at: 1_700_000_000,
-    updated_at: 1_700_000_090,
-    chunks_received: 2,
-    memories_imported: 620,
-    memories_skipped: 4,
-    entities_detected: 38,
-    entities_established: 12,
-    pages_distilled: 3,
-    phases: [
-      { phase: "ingest", state: "complete", done: 620, total: 620, failed: 0 },
-      { phase: "store", state: "complete", done: 620, total: 620, failed: 0 },
-      { phase: "detect", state: "running", done: 910, total: 1240, failed: 0 },
-      { phase: "enrich", state: "running", done: 240, total: 620, failed: 2 },
-      { phase: "link", state: "pending", done: 0, total: 620, failed: 0 },
-      { phase: "distill", state: "running", done: 3, total: 0, failed: 0 },
-    ],
-    complete: false,
-    space: null,
-  },
-  active_import_batches_cmd: { batches: [] },
   get_index_status: {
     indexing: false,
     total_chunks: 0,

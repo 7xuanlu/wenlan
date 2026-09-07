@@ -188,6 +188,26 @@ describe("ImportView", () => {
     resolveImport(chunkResult());
   });
 
+  it("counts memories in the progress heading, not upload chunks", async () => {
+    // `chunkImportText` returns chunks, so a 1,200-line paste is 3 of them.
+    // Reading its length here made the heading say "3 memories".
+    let resolveImport!: (value: unknown) => void;
+    (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => { resolveImport = resolve; }),
+    );
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch());
+
+    renderImport();
+    startImport(Array.from({ length: 1200 }, (_, i) => `Memory ${i}`).join("\n"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/1,?200 memories/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/^3 memories$/)).not.toBeInTheDocument();
+
+    resolveImport(chunkResult());
+  });
+
   it("renders a failed phase as failed", async () => {
     let resolveImport!: (value: unknown) => void;
     (importMemories as ReturnType<typeof vi.fn>).mockImplementation(

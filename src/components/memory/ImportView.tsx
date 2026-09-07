@@ -366,7 +366,9 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
 
   // ── Progress: live daemon row counts, never a timer ───────────────
   if (phase === "progress") {
-    const lineCount = chunkImportText(text).length;
+    // `chunkImportText` returns upload chunks, not memories: a 1,200-line
+    // paste is 3 chunks, and the heading has to say 1,200.
+    const lineCount = text.split("\n").filter((l) => l.trim() !== "").length;
     return (
       <div className="flex flex-col items-center max-w-md mx-auto py-16" style={{ gap: "32px" }}>
         <div className="text-center" style={{ gap: "8px", display: "flex", flexDirection: "column" }}>
