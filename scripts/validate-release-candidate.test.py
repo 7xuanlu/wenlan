@@ -186,6 +186,24 @@ def lock_contents(
     return "\n\n".join(stanzas) + "\n"
 
 
+def root_cargo_contents(version: str, *, decoy_version: str | None = None) -> str:
+    """Root Cargo.toml in the shape bump-version.sh rewrites: the marker line and
+    both workspace-member pins move together; an optional third-party literal
+    (the `lru = "0.18.2"` collision) sits wherever `decoy_version` says."""
+    lines = [
+        "[workspace.package]",
+        f'version = "{version}"   # x-release-please-version',
+        'edition = "2021"',
+        "",
+        "[workspace.dependencies]",
+        f'wenlan-types = {{ path = "crates/wenlan-types", version = "{version}" }}',
+        f'wenlan-core  = {{ path = "crates/wenlan-core",  version = "{version}" }}',
+    ]
+    if decoy_version is not None:
+        lines.append(f'lru = "{decoy_version}"')
+    return "\n".join(lines) + "\n"
+
+
 def release_contents() -> tuple[dict[str, str], dict[str, str]]:
     old_version = "0.15.3"
     new_version = "0.15.4"
@@ -211,8 +229,8 @@ def release_contents() -> tuple[dict[str, str], dict[str, str]]:
     codex = "plugin-codex/.codex-plugin/plugin.json"
     old[codex] = json.dumps({"version": f"{old_version}+codex"})
     new[codex] = json.dumps({"version": f"{new_version}+codex"})
-    old["Cargo.toml"] = f'version = "{old_version}"   # x-release-please-version\n'
-    new["Cargo.toml"] = f'version = "{new_version}"   # x-release-please-version\n'
+    old["Cargo.toml"] = root_cargo_contents(old_version)
+    new["Cargo.toml"] = root_cargo_contents(new_version)
     old["app/Cargo.toml"] = f'version = "{old_version}" # x-release-please-version\n'
     new["app/Cargo.toml"] = f'version = "{new_version}" # x-release-please-version\n'
     for path in ("app/tauri.conf.json", "package.json"):
@@ -1219,6 +1237,55 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             VALIDATOR.validate_release_pr_content(
                 FakeContentApi(old, hostile_new), "7xuanlu/wenlan", candidate_pr()
             )
+
+    def test_root_cargo_transform_leaves_a_colliding_dependency_literal_alone(self) -> None:
+        # Positive: the 0.18.2 -> 0.18.3 shape. `lru = "0.18.2"` sits at the
+        # base version and must survive untouched while the marker line and
+        # both member pins move.
+        old, new = release_contents()
+        old["Cargo.toml"] = root_cargo_contents("0.15.3", decoy_version="0.15.3")
+        new["Cargo.toml"] = root_cargo_contents("0.15.4", decoy_version="0.15.3")
+        version, _, _ = VALIDATOR.validate_release_pr_content(
+            FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+        )
+        self.assertEqual(version, "0.15.4")
+
+        # Collision-negative: the decoy moving with the release is exactly what
+        # the whole-file replace would have demanded, and must be rejected.
+        hostile_new = dict(new)
+        hostile_new["Cargo.toml"] = root_cargo_contents("0.15.4", decoy_version="0.15.4")
+        with self.assertRaisesRegex(VALIDATOR.CandidateError, "marker-and-member-pin"):
+            VALIDATOR.validate_release_pr_content(
+                FakeContentApi(old, hostile_new), "7xuanlu/wenlan", candidate_pr()
+            )
+
+        # A member pin left at the base version is a broken `cargo publish`,
+        # not a version-only release; the transform refuses it.
+        stale_pin = dict(new)
+        stale_pin["Cargo.toml"] = root_cargo_contents("0.15.4", decoy_version="0.15.3").replace(
+            'wenlan-core  = { path = "crates/wenlan-core",  version = "0.15.4" }',
+            'wenlan-core  = { path = "crates/wenlan-core",  version = "0.15.3" }',
+        )
+        with self.assertRaisesRegex(VALIDATOR.CandidateError, "marker-and-member-pin"):
+            VALIDATOR.validate_release_pr_content(
+                FakeContentApi(old, stale_pin), "7xuanlu/wenlan", candidate_pr()
+            )
+
+        # The base itself must carry both pins exactly once, or the validator
+        # fails closed instead of guessing which lines bump-version.sh touched.
+        for broken_base in (
+            root_cargo_contents("0.15.3").replace(
+                'wenlan-core  = { path = "crates/wenlan-core",  version = "0.15.3" }\n', ""
+            ),
+            root_cargo_contents("0.15.3")
+            + 'wenlan-core  = { path = "crates/wenlan-core",  version = "0.15.3" }\n',
+        ):
+            broken_old = dict(old)
+            broken_old["Cargo.toml"] = broken_base
+            with self.assertRaisesRegex(VALIDATOR.CandidateError, "Cargo.toml"):
+                VALIDATOR.validate_release_pr_content(
+                    FakeContentApi(broken_old, new), "7xuanlu/wenlan", candidate_pr()
+                )
 
     def test_json_trio_transforms_reject_extra_field_changes(self) -> None:
         # Positive + collision-negative for the shared JSON scoped transform,
