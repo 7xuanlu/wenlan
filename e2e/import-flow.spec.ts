@@ -126,12 +126,13 @@ test("import flow shows real phases and an honest summary", async ({ page }) => 
   await installImportMock(page);
   await page.goto("/");
 
-  // Sources → Manage sources → Import memories.
-  await page
-    .getByRole("navigation", { name: "Primary navigation" })
-    .getByRole("button", { name: "Sources", exact: true })
-    .click();
-  await page.getByRole("button", { name: /Manage sources/ }).click();
+  // Account menu → Settings → Sources → Import memories. The Sources view in
+  // the primary navigation only offers "Manage sources" once a source is
+  // registered, and this fixture registers none, so it renders its empty state
+  // instead. The account menu reaches Settings either way.
+  await page.getByRole("button", { name: /account menu/i }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Sources", exact: true }).click();
   await page.getByRole("button", { name: "Import", exact: true }).click();
 
   // Paste three memories and start the import.
