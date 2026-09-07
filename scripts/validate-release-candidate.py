@@ -433,6 +433,58 @@ def _reject_qualified_workspace_refs(value: object) -> None:
 
 _APP_CARGO_MARKER_RE = re.compile(r'^version = "([^"]+)"(.*x-release-please-version.*)$')
 
+# The root workspace manifest pins its two publishable members by version so
+# `cargo publish` resolves them against the registry. bump-version.sh rewrites
+# exactly these lines plus the marker line, and nothing else.
+_ROOT_CARGO_MEMBER_PIN_RE = re.compile(
+    r'^((?P<member>wenlan-types|wenlan-core)\s+= \{ path = "crates/(?P=member)",\s+version = ")'
+    r'([^"]+)(".*)$'
+)
+ROOT_CARGO_MEMBER_PINS = frozenset({"wenlan-types", "wenlan-core"})
+
+
+def _expected_root_cargo_transform(old: str, old_version: str, new_version: str) -> str:
+    """Bump the marker line and the two workspace-member pins in Cargo.toml.
+
+    Every other line stays byte-identical. The root manifest carries
+    third-party dependency literals that can land on the workspace version
+    string (`lru = "0.18.2"` collided with the 0.18.2 -> 0.18.3 release and
+    failed the candidate), so the generic whole-file
+    `old.replace(old_version, new_version)` transform is unsafe here -- the
+    same collision class app/Cargo.toml and Cargo.lock already guard against.
+    The marker line and each member pin must appear exactly once and sit at
+    the base version; anything else fails closed.
+    """
+    lines = old.split("\n")
+    marker_rows = [i for i, line in enumerate(lines) if _APP_CARGO_MARKER_RE.match(line)]
+    if len(marker_rows) != 1:
+        raise CandidateError(
+            "Cargo.toml does not pin exactly one x-release-please-version marker line"
+        )
+    row = marker_rows[0]
+    match = _APP_CARGO_MARKER_RE.match(lines[row])
+    assert match is not None
+    if match.group(1) != old_version:
+        raise CandidateError("Cargo.toml marker line is not at the base version")
+    lines[row] = f'version = "{new_version}"{match.group(2)}'
+
+    seen: dict[str, int] = {}
+    for index, line in enumerate(lines):
+        pin = _ROOT_CARGO_MEMBER_PIN_RE.match(line)
+        if pin is None:
+            continue
+        member = pin.group("member")
+        if member in seen:
+            raise CandidateError(f"Cargo.toml pins workspace member {member!r} more than once")
+        if pin.group(3) != old_version:
+            raise CandidateError(f"Cargo.toml pin for {member!r} is not at the base version")
+        seen[member] = index
+        lines[index] = f"{pin.group(1)}{new_version}{pin.group(4)}"
+    missing = sorted(ROOT_CARGO_MEMBER_PINS - seen.keys())
+    if missing:
+        raise CandidateError(f"Cargo.toml is missing workspace member pins: {missing}")
+    return "\n".join(lines)
+
 
 def _expected_app_cargo_transform(old: str, old_version: str, new_version: str) -> str:
     """Bump only the `# x-release-please-version` marker line in app/Cargo.toml,
@@ -510,14 +562,21 @@ def _validate_content_delta(path: str, old: str, new: str, old_version: str, new
     if path == "Cargo.lock":
         if new != _expected_lock_transform(old, old_version, new_version):
             raise CandidateError(
-                "release-managed file 'Cargo.lock' is not the exact"
+                "release-managed file 'Cargo.lock' is not the exact version-only"
                 " workspace-stanza version-only transform"
+            )
+        return
+    if path == "Cargo.toml":
+        if new != _expected_root_cargo_transform(old, old_version, new_version):
+            raise CandidateError(
+                "release-managed file 'Cargo.toml' is not the exact version-only"
+                " marker-and-member-pin transform"
             )
         return
     if path == "app/Cargo.toml":
         if new != _expected_app_cargo_transform(old, old_version, new_version):
             raise CandidateError(
-                "release-managed file 'app/Cargo.toml' is not the exact"
+                "release-managed file 'app/Cargo.toml' is not the exact version-only"
                 " marker-line-only transform"
             )
         return
