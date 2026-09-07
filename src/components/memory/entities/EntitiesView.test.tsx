@@ -527,6 +527,39 @@ describe("EntitiesView", () => {
     expect(fixture.find((candidate) => candidate.id === "countess")?.status).toBe("archived");
   });
 
+  it("will not restore on a count the search box is about to change", async () => {
+    fixture = [
+      ...fixture,
+      entity({
+        id: "difference",
+        name: "Difference Engine",
+        entity_type: "concept",
+        status: "archived",
+        memory_count: 0,
+      }),
+    ];
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Archived/);
+    await screen.findByText("Countess of Lovelace");
+
+    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
+    expect(await screen.findByText("1 archived entity matches")).toBeInTheDocument();
+
+    // Clearing the box does not reach the count for 300 ms. Until it does,
+    // the button is unavailable rather than restoring everything archived
+    // while the screen still says one entity matches.
+    await user.clear(screen.getByRole("searchbox", { name: "Find a name" }));
+    expect(screen.getByRole("button", { name: "Restore all matching" })).toBeDisabled();
+    expect(vi.mocked(tauri.restoreEntities)).not.toHaveBeenCalled();
+
+    await screen.findByText("2 archived entities");
+    await user.click(screen.getByRole("button", { name: "Restore all" }));
+    const applied = vi.mocked(tauri.restoreEntities).mock.calls.find(([req]) => !req.dry_run);
+    expect(applied?.[0].filter?.query).toBeUndefined();
+  });
+
   it("keeps the filters but clears the selection when switching tabs", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");

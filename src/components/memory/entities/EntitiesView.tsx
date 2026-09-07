@@ -231,11 +231,12 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   });
 
   const handleRestoreAll = () => withActionErrorHandling(async () => {
-    // Restore exactly what the matchline above the button counted, including
-    // a search term the 300 ms debounce has not folded into `filters` yet.
-    const readback: EntityFilters = { ...filters, query: queryInput };
-    if (readback.query !== filters.query) setFilters(readback);
-    const filter = entityListRequest("archived", readback, 0);
+    // Restore exactly the set the matchline above the button counted. That
+    // count came from `filters`, which the search box only reaches after a
+    // 300 ms debounce, so the request must use `filters` too -- and the
+    // button stays disabled while the two disagree, so nobody can act on a
+    // count that is about to change.
+    const filter = entityListRequest("archived", filters, 0);
     const response = await restoreEntities({ filter, dry_run: false });
     toast.success(t("entities.toast_restored", { count: response.count }));
     await reload();
@@ -299,6 +300,10 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   const selectAll = selectAllState(selected, ids);
   const hasMore = entities.length < total;
   const filtersAreActive = filtersActive(filters);
+  // The search box reaches `filters` only after a 300 ms debounce, and every
+  // count on screen came from `filters`. While the two disagree the counts
+  // are about to change, so a bulk action that trusts them must wait.
+  const searchIsSettled = queryInput === filters.query;
 
   return (
     <section aria-labelledby="entities-title" className="entities-view">
@@ -390,7 +395,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
           <span>{matchLabel("archived", total, filtersAreActive, t)}</span>
           <button
             className="entities-ghost-btn"
-            disabled={total === 0}
+            disabled={total === 0 || !searchIsSettled}
             onClick={() => void handleRestoreAll()}
             type="button"
           >
