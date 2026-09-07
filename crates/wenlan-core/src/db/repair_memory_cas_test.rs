@@ -82,6 +82,20 @@ async fn entity_fixture() -> (
     RepairManifest,
     RepairRollbackPayloadV2,
 ) {
+    entity_fixture_with_prior_links(0).await
+}
+
+/// Same as [`entity_fixture`], but `ent-new` already carries `prior_links`
+/// memory links from other memories before the repair adds its own. Lets a
+/// test place the repair's link exactly on the auto-establish threshold.
+async fn entity_fixture_with_prior_links(
+    prior_links: usize,
+) -> (
+    MemoryDB,
+    tempfile::TempDir,
+    RepairManifest,
+    RepairRollbackPayloadV2,
+) {
     let (db, db_dir) = crate::db::tests::test_db().await;
     db.conn
         .lock()
@@ -113,6 +127,17 @@ async fn entity_fixture() -> (
     db.test_seed_entity_shadow_page(TestEntity::new("ent-new", "New", "concept").space("work"))
         .await
         .unwrap();
+    for index in 0..prior_links {
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "INSERT INTO memory_entities(memory_id,entity_id) VALUES (?1,'ent-new')",
+                libsql::params![format!("mem-prior-{index}")],
+            )
+            .await
+            .unwrap();
+    }
 
     let occurrence = RepairDigest::parse(ENTITY_OCCURRENCE).unwrap();
     let review_id = format!("lint_review_{ENTITY_OCCURRENCE}");
@@ -173,6 +198,25 @@ async fn entity_fixture() -> (
     };
     let rollback = stored_rollback.payload().clone();
     (db, db_dir, manifest, rollback)
+}
+
+/// `(entity_confirmed, established_by)` of an entity's shadow page.
+async fn entity_establishment(db: &MemoryDB, entity_id: &str) -> (i64, Option<String>) {
+    let connection = db.conn.lock().await;
+    let mut rows = connection
+        .query(
+            "SELECT COALESCE(p.entity_confirmed, 0), p.established_by
+             FROM entity_page_map epm JOIN pages p ON p.id = epm.page_id
+             WHERE epm.entity_id = ?1",
+            libsql::params![entity_id],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().expect("shadow page row");
+    (
+        row.get::<i64>(0).unwrap(),
+        row.get::<Option<String>>(1).unwrap(),
+    )
 }
 
 async fn entity_state(db: &MemoryDB) -> (Vec<String>, (String, Option<String>, i64, i64)) {
@@ -509,5 +553,35 @@ async fn entity_extraction_forced_rollback_failure_is_exact_recovery_required() 
     ));
     db.conn.lock().await.execute("ROLLBACK", ()).await.unwrap();
     assert_eq!(entity_state(&db).await, before);
+    assert_db_mutex_released(&db);
+}
+
+/// #708: a repair that records the link which reaches the auto-establish
+/// threshold promotes the entity exactly like the live link path would,
+/// inside the same transaction and without tripping the effect guard.
+#[tokio::test]
+#[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+async fn entity_extraction_that_reaches_the_threshold_establishes_the_entity() {
+    let threshold = crate::db::entity_establish_min_memories();
+    let (db, _db_dir, manifest, rollback) = entity_fixture_with_prior_links(threshold - 1).await;
+    assert_eq!(entity_establishment(&db, "ent-new").await, (0, None));
+
+    db.complete_entity_extraction_repair_cas(&manifest, &rollback, |proof| {
+        assert_eq!(proof.non_target_before(), proof.non_target_after());
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        entity_establishment(&db, "ent-new").await,
+        (1, Some(crate::db::ESTABLISHED_BY_AUTO_MEMORIES.to_string())),
+        "the repair's link was the Nth, so the entity is established by memories"
+    );
+    assert_eq!(
+        entity_establishment(&db, "ent-existing").await,
+        (0, None),
+        "an entity the repair did not touch stays detected"
+    );
     assert_db_mutex_released(&db);
 }

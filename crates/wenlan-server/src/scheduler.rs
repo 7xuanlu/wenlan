@@ -46,6 +46,12 @@ const ENRICHMENT_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const RECONCILE_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const CITATION_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const EDGE_GROUNDING_SWEEP_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// Daily cadence for the detected-entity idle-archive housekeeping sweep
+/// (#708). The rule is measured in days, so a finer cadence would only find
+/// the same rows again; a selected (non-empty) sweep stays due regardless.
+const ENTITY_IDLE_ARCHIVE_SWEEP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Rows one idle-archive sweep may archive before yielding the turn.
+const ENTITY_IDLE_ARCHIVE_SWEEP_LIMIT: usize = 500;
 /// Target-Mac evidence keeps short ambient turns below a 5% duty cycle while
 /// avoiding the fivefold convergence penalty of the provisional ten-minute
 /// hotfix. Automatic recap batching still uses its separate ten-minute window.

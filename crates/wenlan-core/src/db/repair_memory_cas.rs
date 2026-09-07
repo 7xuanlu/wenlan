@@ -337,9 +337,10 @@ impl MemoryDB {
             let parity_before = crate::repair::parity_input_generation_on_connection(&conn).await?;
             let non_target_before = crate::repair::effect_guard_receipt(conn.total_changes());
             let mut inserted = 0_u64;
+            let mut inserted_entity_ids: Vec<&str> = Vec::new();
             for entity_id in entity_ids {
-                inserted = inserted.saturating_add(
-                    conn.execute(
+                let rows = conn
+                    .execute(
                         // The unscoped predicate must match
                         // `validate_selected_entities_on_connection` exactly:
                         // pages.space is NOT NULL and an unfiled shadow page
@@ -371,8 +372,34 @@ impl MemoryDB {
                         WenlanError::VectorDb(format!(
                             "repair complete entity extraction link: {error}"
                         ))
-                    })?,
-                );
+                    })?;
+                inserted = inserted.saturating_add(rows);
+                if rows > 0 {
+                    inserted_entity_ids.push(entity_id);
+                }
+            }
+            // #708: a repair that records the Nth memory→entity link must
+            // promote like any other link write. Mirrors the
+            // `maybe_establish_entity_in_transaction` call on the live link
+            // path: only ids this repair actually inserted are checked, and
+            // the check runs on this same connection inside this same
+            // transaction. The link INSERT above only fires for ACTIVE shadow
+            // pages, so the archived-restore branch inside the helper cannot
+            // trigger here -- a promotion is exactly one `pages` UPDATE, and
+            // each one is a target write the effect guard below must allow.
+            let mut promotion_changes = 0_u64;
+            for entity_id in inserted_entity_ids {
+                if self
+                    .maybe_establish_entity_in_transaction(
+                        &conn,
+                        entity_id,
+                        crate::db::ESTABLISHED_BY_AUTO_MEMORIES,
+                        crate::db::entity_establish_min_memories(),
+                    )
+                    .await?
+                {
+                    promotion_changes = promotion_changes.saturating_add(1);
+                }
             }
             let updated = conn
                 .execute(
@@ -420,7 +447,9 @@ impl MemoryDB {
                     "repair_target_write_unproven".to_string(),
                 ));
             }
-            let allowed_changes = inserted.saturating_add(updated);
+            let allowed_changes = inserted
+                .saturating_add(updated)
+                .saturating_add(promotion_changes);
             let parity_bump = crate::repair::parity_input_generation_on_connection(&conn)
                 .await?
                 .checked_sub(parity_before)

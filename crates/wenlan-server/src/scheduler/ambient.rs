@@ -11,10 +11,14 @@ pub(super) enum AmbientJob {
     Reconcile,
     Citation,
     EdgeGroundingPromote,
+    /// Housekeeping for the detected-entity index (#708): archive detected
+    /// entities idle for `refinery.entity_archive_idle_days`. Pure SQL, no
+    /// provider, so it stays available when every inference lane is parked.
+    EntityIdleArchive,
 }
 
 impl AmbientJob {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::Document,
         Self::Classification,
         Self::StructuredExtract,
@@ -24,6 +28,7 @@ impl AmbientJob {
         Self::Reconcile,
         Self::Citation,
         Self::EdgeGroundingPromote,
+        Self::EntityIdleArchive,
     ];
 
     /// Stable key for this job, used for the `app_metadata` last-run record
@@ -40,6 +45,7 @@ impl AmbientJob {
             Self::Reconcile => "reconcile",
             Self::Citation => "citation",
             Self::EdgeGroundingPromote => "edge_grounding_promote",
+            Self::EntityIdleArchive => "entity_idle_archive",
         }
     }
 }
@@ -75,6 +81,7 @@ pub(super) struct AmbientAvailability {
     pub(super) reconcile: bool,
     pub(super) citation: bool,
     pub(super) edge_grounding_promote: bool,
+    pub(super) entity_idle_archive: bool,
 }
 
 impl AmbientAvailability {
@@ -97,6 +104,11 @@ impl AmbientAvailability {
             // AND the opt-in flag is set (mirroring reconcile / citation).
             edge_grounding_promote: provider_available
                 && wenlan_core::db::edge_grounding_promote_enabled(),
+            // Deterministic housekeeping: no model involved, so it runs
+            // whether or not a provider is pinned. The tuning key itself
+            // (`entity_archive_idle_days`, default 0) is the on/off switch,
+            // checked inside the job arm.
+            entity_idle_archive: true,
         }
     }
 
@@ -111,6 +123,7 @@ impl AmbientAvailability {
             AmbientJob::Reconcile => self.reconcile,
             AmbientJob::Citation => self.citation,
             AmbientJob::EdgeGroundingPromote => self.edge_grounding_promote,
+            AmbientJob::EntityIdleArchive => self.entity_idle_archive,
         }
     }
 }
@@ -126,6 +139,7 @@ pub(super) struct AmbientSchedule {
     pub(super) last_reconcile: Option<Instant>,
     pub(super) last_citation: Option<Instant>,
     last_edge_grounding_promote: Option<Instant>,
+    pub(super) last_entity_idle_archive: Option<Instant>,
 }
 
 impl AmbientSchedule {
@@ -141,6 +155,7 @@ impl AmbientSchedule {
             last_reconcile: None,
             last_citation: None,
             last_edge_grounding_promote: None,
+            last_entity_idle_archive: None,
         }
     }
 
@@ -181,6 +196,9 @@ impl AmbientSchedule {
                 AmbientJob::EdgeGroundingPromote => self
                     .last_edge_grounding_promote
                     .is_none_or(|last| now.duration_since(last) >= EDGE_GROUNDING_SWEEP_INTERVAL),
+                AmbientJob::EntityIdleArchive => self.last_entity_idle_archive.is_none_or(|last| {
+                    now.duration_since(last) >= ENTITY_IDLE_ARCHIVE_SWEEP_INTERVAL
+                }),
             };
             if !due {
                 continue;
@@ -246,6 +264,10 @@ impl AmbientSchedule {
             // slice made no progress (empty backlog), so stamp the interval to
             // back off. A progressing slice returned early above, staying due.
             AmbientJob::EdgeGroundingPromote => self.last_edge_grounding_promote = Some(now),
+            // A sweep that archived something (`selected`) returned early and
+            // stays due so the next tick drains the rest of the backlog in
+            // 500-row slices; an empty or disabled sweep backs off a day.
+            AmbientJob::EntityIdleArchive => self.last_entity_idle_archive = Some(now),
         }
     }
 
@@ -572,6 +594,39 @@ pub(super) async fn run_ambient_job(
                 Ok(report) => report.progressed,
                 Err(error) => {
                     tracing::warn!("[scheduler] edge grounding slice error: {error}");
+                    false
+                }
+            }
+        }
+        AmbientJob::EntityIdleArchive => {
+            // `0` is the documented "off" value: report an unselected turn
+            // without touching the database so the lane backs off a day.
+            let idle_days = refinery.entity_archive_idle_days;
+            if idle_days == 0 {
+                return AmbientTurnReport {
+                    job,
+                    selected: false,
+                    page_growth_terminal_no_match_committed: false,
+                    llm_calls: 0,
+                    panicked: false,
+                    elapsed: started.elapsed(),
+                };
+            }
+            match db
+                .archive_idle_detected_entities(idle_days, ENTITY_IDLE_ARCHIVE_SWEEP_LIMIT)
+                .await
+            {
+                Ok(archived) => {
+                    if archived > 0 {
+                        tracing::info!(
+                            "[scheduler] entity idle-archive sweep archived {archived} detected \
+                             entities idle for more than {idle_days} days"
+                        );
+                    }
+                    archived > 0
+                }
+                Err(error) => {
+                    tracing::warn!("[scheduler] entity idle-archive sweep error: {error}");
                     false
                 }
             }

@@ -14,9 +14,10 @@ fn ambient_schedule_includes_fixed_memory_stages() {
         reconcile: true,
         citation: true,
         edge_grounding_promote: true,
+        entity_idle_archive: true,
     };
     assert_eq!(
-        (0..9)
+        (0..10)
             .filter_map(|_| schedule.select_due(now, available))
             .collect::<Vec<_>>(),
         vec![
@@ -29,6 +30,7 @@ fn ambient_schedule_includes_fixed_memory_stages() {
             AmbientJob::Reconcile,
             AmbientJob::Citation,
             AmbientJob::EdgeGroundingPromote,
+            AmbientJob::EntityIdleArchive,
         ]
     );
 }
@@ -55,6 +57,67 @@ fn unconfigured_pin_allows_only_deterministic_document_preparation() {
             "{job:?} must remain pending until an authorized provider is available"
         );
     }
+    assert!(
+        availability.supports(AmbientJob::EntityIdleArchive),
+        "idle-archive housekeeping is pure SQL and must not wait for a provider"
+    );
+}
+
+/// #708: the idle-archive housekeeping job is part of the round-robin, carries
+/// its persisted key, and is available with or without a pinned provider.
+#[test]
+fn entity_idle_archive_is_scheduled_and_available_without_a_provider() {
+    assert!(AmbientJob::ALL.contains(&AmbientJob::EntityIdleArchive));
+    assert_eq!(
+        AmbientJob::EntityIdleArchive.as_key(),
+        "entity_idle_archive"
+    );
+    assert!(AmbientAvailability::for_provider(false).supports(AmbientJob::EntityIdleArchive));
+    assert!(AmbientAvailability::for_provider(true).supports(AmbientJob::EntityIdleArchive));
+
+    // Daily cadence: an empty sweep backs off for the interval, a selected
+    // (archiving) sweep stays due so the next tick drains the backlog.
+    let now = Instant::now();
+    let mut schedule = AmbientSchedule::new(now);
+    let only = AmbientAvailability {
+        document: false,
+        classification: false,
+        structured_extract: false,
+        entity: false,
+        title: false,
+        page_growth: false,
+        reconcile: false,
+        citation: false,
+        edge_grounding_promote: false,
+        entity_idle_archive: true,
+    };
+    assert_eq!(
+        schedule.select_due(now, only),
+        Some(AmbientJob::EntityIdleArchive)
+    );
+    schedule.note_job_result(AmbientJob::EntityIdleArchive, now, true);
+    assert_eq!(
+        schedule.select_due(now, only),
+        Some(AmbientJob::EntityIdleArchive),
+        "a sweep that archived rows stays due"
+    );
+    schedule.note_job_result(AmbientJob::EntityIdleArchive, now, false);
+    assert_eq!(
+        schedule.select_due(
+            now + ENTITY_IDLE_ARCHIVE_SWEEP_INTERVAL - Duration::from_secs(1),
+            only
+        ),
+        None,
+        "an empty sweep backs off for the daily interval"
+    );
+    assert_eq!(
+        schedule.select_due(now + ENTITY_IDLE_ARCHIVE_SWEEP_INTERVAL, only),
+        Some(AmbientJob::EntityIdleArchive)
+    );
+    assert!(
+        !ambient_work_consumes_thermal_turn(AmbientJob::EntityIdleArchive, true, 0, false),
+        "a SQL-only sweep does not charge the thermal budget like an LLM lane"
+    );
 }
 
 // Non-vacuity guard for the promotion lane's opt-in flag gate.
@@ -348,6 +411,7 @@ fn ambient_schedule_round_robins_all_due_jobs() {
         reconcile: true,
         citation: true,
         edge_grounding_promote: true,
+        entity_idle_archive: true,
     };
 
     assert_eq!(
@@ -399,6 +463,7 @@ fn drain_due_returns_the_full_lap_in_cursor_order_when_everything_is_due() {
         reconcile: true,
         citation: true,
         edge_grounding_promote: true,
+        entity_idle_archive: true,
     };
     assert_eq!(
         schedule.drain_due(now, available),
@@ -412,6 +477,7 @@ fn drain_due_returns_the_full_lap_in_cursor_order_when_everything_is_due() {
             AmbientJob::Reconcile,
             AmbientJob::Citation,
             AmbientJob::EdgeGroundingPromote,
+            AmbientJob::EntityIdleArchive,
         ]
     );
 }
@@ -436,6 +502,7 @@ fn drain_due_lets_a_later_cursor_job_run_alongside_an_always_due_earlier_one() {
         reconcile: true,
         citation: true,
         edge_grounding_promote: true,
+        entity_idle_archive: true,
     };
     // Mark every periodic lane except Citation as freshly run-and-empty so it
     // is not due again this instant. Citation and Document are left alone:
@@ -449,6 +516,7 @@ fn drain_due_lets_a_later_cursor_job_run_alongside_an_always_due_earlier_one() {
         AmbientJob::PageGrowth,
         AmbientJob::Reconcile,
         AmbientJob::EdgeGroundingPromote,
+        AmbientJob::EntityIdleArchive,
     ] {
         schedule.note_job_result(job, now, false);
     }
@@ -477,6 +545,7 @@ fn selected_backlog_lane_stays_due_after_global_cooldown() {
         reconcile: true,
         citation: true,
         edge_grounding_promote: true,
+        entity_idle_archive: true,
     };
 
     assert_eq!(
@@ -512,6 +581,10 @@ fn selected_backlog_lane_stays_due_after_global_cooldown() {
     assert_eq!(
         schedule.select_due(now, available),
         Some(AmbientJob::EdgeGroundingPromote)
+    );
+    assert_eq!(
+        schedule.select_due(now, available),
+        Some(AmbientJob::EntityIdleArchive)
     );
     assert_eq!(
         schedule.select_due(now, available),
@@ -2201,6 +2274,88 @@ async fn ambient_status_records_last_run_after_force_ambient_sweep() {
     );
 }
 
+/// #708: with `entity_archive_idle_days = 0` (the default) the idle-archive
+/// job reports an unselected turn without database work, and the attempt is
+/// still recorded so `/api/ambient/status` shows the lane is alive.
+#[tokio::test]
+async fn entity_idle_archive_tick_with_zero_days_is_not_selected() {
+    let _lock = crate::TEST_DATA_DIR_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let _env = DataDirGuard::new();
+    let (db, _db_dir) = new_test_db().await;
+    let refinery = wenlan_core::tuning::RefineryConfig::default();
+    assert_eq!(refinery.entity_archive_idle_days, 0);
+
+    let report = run_ambient_job_safe(
+        AmbientJob::EntityIdleArchive,
+        &db,
+        None,
+        None,
+        None,
+        None,
+        &wenlan_core::prompts::PromptRegistry::default(),
+        &refinery,
+        &wenlan_core::tuning::DistillationConfig::default(),
+        None,
+    )
+    .await;
+    assert!(!report.selected);
+    assert_eq!(report.llm_calls, 0);
+    assert!(!report.panicked);
+
+    let status = ambient_status(&db, None).await.unwrap();
+    assert!(
+        status.phase_last_run_epoch["entity_idle_archive"].is_some(),
+        "the attempt is recorded even when the rule is off"
+    );
+}
+
+/// #708: with a positive `entity_archive_idle_days` the sweep runs against
+/// the database without a provider. A freshly stored detected entity is not
+/// idle, so the turn is unselected; the archive-of-idle-rows behaviour itself
+/// is covered by the core `archive_idle_detected_entities` tests, which can
+/// backdate rows (the server crate has no test-support handle for that).
+#[tokio::test]
+async fn entity_idle_archive_tick_with_positive_days_runs_without_a_provider() {
+    let _lock = crate::TEST_DATA_DIR_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let _env = DataDirGuard::new();
+    let (db, _db_dir) = new_test_db().await;
+    db.store_entity("Entity One", "concept", None, None, Some(0.6))
+        .await
+        .unwrap();
+    let refinery = wenlan_core::tuning::RefineryConfig {
+        entity_archive_idle_days: 1,
+        ..Default::default()
+    };
+
+    let report = run_ambient_job_safe(
+        AmbientJob::EntityIdleArchive,
+        &db,
+        None,
+        None,
+        None,
+        None,
+        &wenlan_core::prompts::PromptRegistry::default(),
+        &refinery,
+        &wenlan_core::tuning::DistillationConfig::default(),
+        None,
+    )
+    .await;
+    assert!(!report.panicked);
+    assert_eq!(report.llm_calls, 0);
+    assert!(
+        !report.selected,
+        "an entity stored moments ago is not idle for a day"
+    );
+    let status = ambient_status(&db, None).await.unwrap();
+    assert!(status.phase_last_run_epoch["entity_idle_archive"].is_some());
+}
+
 struct MaintenanceTestProvider {
     body: String,
 }
@@ -3494,6 +3649,7 @@ async fn ambient_reconcile_backpressure_uses_lane_rescan_backoff() {
         reconcile: true,
         citation: false,
         edge_grounding_promote: false,
+        entity_idle_archive: false,
     };
     assert_eq!(
         schedule.select_due(

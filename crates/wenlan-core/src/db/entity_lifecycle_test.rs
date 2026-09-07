@@ -979,3 +979,246 @@ async fn bulk_archive_reports_only_what_it_actually_archived() {
         assert_eq!(page_status(&db, id).await, "archived");
     }
 }
+
+// --- #708 idle-archive sweep -------------------------------------------------
+
+fn days_ago(days: i64) -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() - chrono::Duration::try_days(days).unwrap()
+}
+
+/// Age linked memories: `memories.created_at` is INTEGER unix seconds, so an
+/// old unix timestamp is the whole seed. The sweep compares it against an
+/// epoch cutoff in the same representation.
+async fn backdate_linked_memories(db: &MemoryDB, source_ids: &[&str], epoch: i64) {
+    let conn = db.conn.lock().await;
+    for source_id in source_ids {
+        conn.execute(
+            "UPDATE memories SET created_at = ?1 WHERE source_id = ?2",
+            libsql::params![epoch, source_id],
+        )
+        .await
+        .unwrap();
+    }
+}
+
+/// Age the shadow page for the no-linked-memory fallback: `pages.created_at`
+/// is TEXT RFC3339, compared against an RFC3339 cutoff in the same
+/// representation.
+async fn backdate_shadow_page(db: &MemoryDB, entity_id: &str, iso: &str) {
+    let page_id = shadow_page_id(db, entity_id).await;
+    let conn = db.conn.lock().await;
+    conn.execute(
+        "UPDATE pages SET created_at = ?1 WHERE id = ?2",
+        libsql::params![iso, page_id],
+    )
+    .await
+    .unwrap();
+}
+
+/// A detected entity whose only memory is older than the idle window is
+/// archived through the same path as a manual archive, reversibly.
+#[tokio::test]
+async fn idle_detected_entity_with_only_old_memories_is_archived() {
+    let (db, _tmp) = test_db().await;
+    let entity = db
+        .store_entity("Entity One", "person", None, None, Some(0.6))
+        .await
+        .unwrap();
+    db.upsert_documents(vec![memory_doc("idle-old-mem")])
+        .await
+        .unwrap();
+    db.link_memory_entities("idle-old-mem", &[&entity])
+        .await
+        .unwrap();
+    backdate_linked_memories(&db, &["idle-old-mem"], days_ago(60).timestamp()).await;
+
+    let archived = db.archive_idle_detected_entities(30, 500).await.unwrap();
+    assert_eq!(archived, 1);
+    assert_eq!(page_status(&db, &entity).await, "archived");
+    let row = archived_entity(&db, &entity).await;
+    assert_eq!(row.status, EntityStatus::Archived);
+    assert_eq!(
+        row.established_by, None,
+        "the sweep must not rewrite the establishment record"
+    );
+}
+
+/// A detected entity mentioned recently stays in the index.
+#[tokio::test]
+async fn detected_entity_with_a_recent_memory_is_not_archived() {
+    let (db, _tmp) = test_db().await;
+    let entity = db
+        .store_entity("Entity Two", "person", None, None, Some(0.6))
+        .await
+        .unwrap();
+    db.upsert_documents(vec![memory_doc("fresh-mem")])
+        .await
+        .unwrap();
+    db.link_memory_entities("fresh-mem", &[&entity])
+        .await
+        .unwrap();
+
+    assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 0);
+    assert_eq!(
+        entity_row(&db, &entity).await.status,
+        EntityStatus::Detected
+    );
+    assert_eq!(page_status(&db, &entity).await, "active");
+}
+
+/// Establishment is a stronger signal than idleness: an established entity
+/// with only old memories is never eligible, however quiet it has been.
+#[tokio::test]
+async fn established_entity_with_only_old_memories_is_not_archived() {
+    let (db, _tmp) = test_db().await;
+    let entity = db
+        .store_entity("Entity Three", "organization", None, None, Some(0.7))
+        .await
+        .unwrap();
+    link_memories(&db, &entity, "settled-mem", 3).await;
+    assert_eq!(
+        entity_row(&db, &entity).await.status,
+        EntityStatus::Established
+    );
+    backdate_linked_memories(
+        &db,
+        &["settled-mem-0", "settled-mem-1", "settled-mem-2"],
+        days_ago(60).timestamp(),
+    )
+    .await;
+
+    assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 0);
+    assert_eq!(
+        entity_row(&db, &entity).await.status,
+        EntityStatus::Established
+    );
+    assert_eq!(page_status(&db, &entity).await, "active");
+}
+
+/// Already-archived entities are skipped, not re-archived or counted.
+#[tokio::test]
+async fn already_archived_entity_is_skipped_by_the_idle_sweep() {
+    let (db, _tmp) = test_db().await;
+    let entity = db
+        .store_entity("Entity Four", "person", None, None, Some(0.6))
+        .await
+        .unwrap();
+    db.upsert_documents(vec![memory_doc("gone-mem")])
+        .await
+        .unwrap();
+    db.link_memory_entities("gone-mem", &[&entity])
+        .await
+        .unwrap();
+    backdate_linked_memories(&db, &["gone-mem"], days_ago(60).timestamp()).await;
+    db.archive_entity(&entity).await.unwrap();
+
+    assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 0);
+    assert_eq!(page_status(&db, &entity).await, "archived");
+}
+
+/// `idle_days == 0` is the off switch: no database work, nothing archived.
+#[tokio::test]
+async fn idle_sweep_with_zero_days_archives_nothing() {
+    let (db, _tmp) = test_db().await;
+    let entity = db
+        .store_entity("Entity Five", "person", None, None, Some(0.6))
+        .await
+        .unwrap();
+    db.upsert_documents(vec![memory_doc("idle-zero-mem")])
+        .await
+        .unwrap();
+    db.link_memory_entities("idle-zero-mem", &[&entity])
+        .await
+        .unwrap();
+    backdate_linked_memories(&db, &["idle-zero-mem"], days_ago(60).timestamp()).await;
+
+    assert_eq!(db.archive_idle_detected_entities(0, 500).await.unwrap(), 0);
+    assert_eq!(
+        entity_row(&db, &entity).await.status,
+        EntityStatus::Detected
+    );
+    assert_eq!(page_status(&db, &entity).await, "active");
+}
+
+/// With no linked memory at all, the entity page's own age decides: an old
+/// page is archived while a fresh one in the same sweep is left alone.
+#[tokio::test]
+async fn detected_entity_with_no_memories_and_old_page_is_archived() {
+    let (db, _tmp) = test_db().await;
+    let old = db
+        .store_entity("Entity Six", "concept", None, None, Some(0.5))
+        .await
+        .unwrap();
+    let fresh = db
+        .store_entity("Entity Seven", "concept", None, None, Some(0.5))
+        .await
+        .unwrap();
+    backdate_shadow_page(&db, &old, &days_ago(60).to_rfc3339()).await;
+
+    assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 1);
+    assert_eq!(page_status(&db, &old).await, "archived");
+    assert_eq!(page_status(&db, &fresh).await, "active");
+}
+
+/// An idle-archived entity comes back through the restore path exactly like a
+/// hand-archived one, and the sweep rediscovers it while it is still idle.
+#[tokio::test]
+async fn restore_brings_back_an_idle_archived_entity() {
+    let (db, _tmp) = test_db().await;
+    let entity = db
+        .store_entity("Entity Eight", "person", None, None, Some(0.6))
+        .await
+        .unwrap();
+    db.upsert_documents(vec![memory_doc("return-mem")])
+        .await
+        .unwrap();
+    db.link_memory_entities("return-mem", &[&entity])
+        .await
+        .unwrap();
+    backdate_linked_memories(&db, &["return-mem"], days_ago(60).timestamp()).await;
+    assert_eq!(db.archive_idle_detected_entities(30, 500).await.unwrap(), 1);
+
+    db.restore_entity(&entity).await.unwrap();
+    let back = entity_row(&db, &entity).await;
+    assert_eq!(back.status, EntityStatus::Detected);
+    assert_eq!(back.established_by, None);
+    assert_eq!(page_status(&db, &entity).await, "active");
+
+    assert_eq!(
+        db.archive_idle_detected_entities(30, 500).await.unwrap(),
+        1,
+        "still idle and detected after the restore, so the next sweep archives it again"
+    );
+}
+
+/// `limit` caps how many one call archives; the remainder waits for the next
+/// tick.
+#[tokio::test]
+async fn idle_sweep_limit_caps_archived_count() {
+    let (db, _tmp) = test_db().await;
+    let mut ids = Vec::new();
+    for name in ["Entity Nine", "Entity Ten", "Entity Eleven"] {
+        let entity = db
+            .store_entity(name, "concept", None, None, Some(0.5))
+            .await
+            .unwrap();
+        let source_id = format!("{name}-mem");
+        db.upsert_documents(vec![memory_doc(&source_id)])
+            .await
+            .unwrap();
+        db.link_memory_entities(&source_id, &[&entity])
+            .await
+            .unwrap();
+        ids.push((entity, source_id));
+    }
+    let old_epoch = days_ago(60).timestamp();
+    for (_, source_id) in &ids {
+        backdate_linked_memories(&db, &[source_id.as_str()], old_epoch).await;
+    }
+
+    assert_eq!(db.archive_idle_detected_entities(30, 2).await.unwrap(), 2);
+    assert_eq!(db.archive_idle_detected_entities(30, 2).await.unwrap(), 1);
+    for (entity, _) in &ids {
+        assert_eq!(page_status(&db, entity).await, "archived");
+    }
+}
