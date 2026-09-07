@@ -2344,12 +2344,74 @@ export async function importMemories(
   source: string,
   content: string,
   label?: string,
+  chunk?: { batchId: string; chunkIndex: number; chunkTotal: number },
 ): Promise<ImportResult> {
   return invoke("import_memories_cmd", {
     source,
     content,
     label: label ?? null,
+    batchId: chunk?.batchId ?? null,
+    chunkIndex: chunk?.chunkIndex ?? null,
+    chunkTotal: chunk?.chunkTotal ?? null,
   });
+}
+
+// ===== Import batches (honest phased progress) =====
+//
+// One import is a batch: the client generates a batch id up front, uploads the
+// parsed memories in chunks, and then reads live row counts back through
+// `import_batch_status_cmd`. `done`/`total` are rows, never elapsed time.
+// `distill` never reports a usable `total` (always 0): render it as a live
+// count, never as a bar.
+
+export type ImportPhase = "ingest" | "store" | "detect" | "enrich" | "link" | "distill";
+
+export type ImportPhaseState = "pending" | "running" | "complete" | "failed";
+
+export interface ImportPhaseStatus {
+  phase: ImportPhase;
+  state: ImportPhaseState;
+  /** Units finished — memories for every phase except `distill`, which counts pages. */
+  done: number;
+  /** Units expected. 0 means not yet known: render as waiting, never as 0%. */
+  total: number;
+  /** Units that failed and will not be retried. */
+  failed: number;
+}
+
+export interface ImportBatchStatus {
+  batch_id: string;
+  /** The `import_source` the memories were written with (chatgpt, claude, other). */
+  source: string;
+  started_at: number;
+  updated_at: number;
+  /** Import requests received so far for this batch. */
+  chunks_received: number;
+  memories_imported: number;
+  memories_skipped: number;
+  /** Entities this batch's memories link to, by lifecycle state. */
+  entities_detected: number;
+  entities_established: number;
+  pages_distilled: number;
+  phases: ImportPhaseStatus[];
+  /** Every background phase has settled (complete or failed). */
+  complete: boolean;
+  space?: string | null;
+}
+
+export interface ActiveImportBatchesResponse {
+  batches: ImportBatchStatus[];
+}
+
+/** Memories per `import_memories_cmd` call. n memories produce ceil(n/500) calls. */
+export const IMPORT_CHUNK_SIZE = 500;
+
+export async function getImportBatchStatus(batchId: string): Promise<ImportBatchStatus> {
+  return invoke("import_batch_status_cmd", { batchId });
+}
+
+export async function getActiveImportBatches(): Promise<ActiveImportBatchesResponse> {
+  return invoke("active_import_batches_cmd");
 }
 
 // ===== Chat Export Import =====

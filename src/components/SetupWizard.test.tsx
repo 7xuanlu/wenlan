@@ -10,6 +10,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("../lib/tauri", () => ({
   importMemories: vi.fn(),
+  getImportBatchStatus: vi.fn(),
+  IMPORT_CHUNK_SIZE: 500,
   shouldShowWizard: vi.fn().mockResolvedValue(true),
   setSetupCompleted: vi.fn().mockResolvedValue(undefined),
   detectMcpClients: vi.fn().mockResolvedValue([]),
@@ -113,6 +115,8 @@ vi.mock("../lib/tauri", () => ({
 }));
 
 import {
+  importMemories,
+  getImportBatchStatus,
   detectMcpClients,
   writeMcpConfig,
   installClientPlugin,
@@ -401,6 +405,59 @@ describe("SetupWizard", () => {
     await waitFor(() => {
       expect(screen.getByText("Connect your AI tools")).toBeInTheDocument();
     });
+  });
+
+  it("import step chat path shows the same real phases, never a timer", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => "batch-wizard" });
+    let resolveImport!: (value: unknown) => void;
+    (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => { resolveImport = resolve; }),
+    );
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      batch_id: "batch-wizard",
+      source: "chatgpt",
+      started_at: 1_700_000_000,
+      updated_at: 1_700_000_100,
+      chunks_received: 1,
+      memories_imported: 1,
+      memories_skipped: 0,
+      entities_detected: 0,
+      entities_established: 0,
+      pages_distilled: 0,
+      phases: [
+        { phase: "ingest", state: "complete", done: 1, total: 1, failed: 0 },
+        { phase: "store", state: "complete", done: 1, total: 1, failed: 0 },
+        { phase: "detect", state: "running", done: 5, total: 12, failed: 0 },
+        { phase: "enrich", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "link", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "distill", state: "pending", done: 0, total: 0, failed: 0 },
+      ],
+      complete: false,
+      space: null,
+    });
+
+    renderWizard({ initialStep: "import" });
+    fireEvent.click(screen.getByText("Import chat history"));
+
+    const textarea = screen.getByPlaceholderText(/paste your memories/i);
+    fireEvent.change(textarea, { target: { value: "Memory 1" } });
+    fireEvent.click(screen.getByText("Import"));
+
+    // The wizard reuses ImportView, so its phases are the daemon's row
+    // counts — not a forked copy and not an elapsed-time bar.
+    await waitFor(() => {
+      expect(screen.getByText("Detecting entities")).toBeInTheDocument();
+    });
+    expect(screen.getByText("5 of 12")).toBeInTheDocument();
+    expect(screen.queryByText(/Processing your memories/)).not.toBeInTheDocument();
+
+    resolveImport({
+      imported: 1, skipped: 0,
+      breakdown: { fact: 1 },
+      entities_created: 0, observations_added: 0, relations_created: 0,
+      batch_id: "batch-wizard",
+    });
+    vi.unstubAllGlobals();
   });
 
   // ── Round 5, defect 4 ──────────────────────────────────────────────────

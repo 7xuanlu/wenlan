@@ -1,6 +1,13 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { importMemories, clipboardWrite, type ImportResult } from "../../lib/tauri";
+import { useTranslation } from "react-i18next";
+import {
+  importMemories,
+  clipboardWrite,
+  IMPORT_CHUNK_SIZE,
+  type ImportResult,
+} from "../../lib/tauri";
+import { IMPORT_SOURCE_LABELS, ImportPhaseList, useImportBatchStatus } from "./ImportPhases";
 
 type Source = "chatgpt" | "claude" | "other";
 
@@ -19,183 +26,17 @@ interface ImportViewProps {
 
 type Phase = "input" | "progress" | "summary";
 
-const PROGRESS_STEPS = [
-  { label: "Parsing memories", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2", duration: 1500 },
-  { label: "Generating embeddings", icon: "M13 10V3L4 14h7v7l9-11h-7z", duration: 4000 },
-  { label: "Storing memories", icon: "M5 3v18l7-3 7 3V3l-7 3-7-3z", duration: 2000 },
-];
-
-function ImportProgress({ memoryCount }: { memoryCount: number }) {
-  const [activeStep, setActiveStep] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    const interval = setInterval(() => setElapsed((e) => e + 100), 100);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    // Advance steps based on cumulative duration
-    let cumulative = 0;
-    for (let i = 0; i < PROGRESS_STEPS.length; i++) {
-      cumulative += PROGRESS_STEPS[i].duration;
-      if (elapsed < cumulative) {
-        setActiveStep(i);
-        return;
-      }
-    }
-    setActiveStep(PROGRESS_STEPS.length - 1);
-  }, [elapsed]);
-
-  // Progress within current step
-  let cumulativeBefore = 0;
-  for (let i = 0; i < activeStep; i++) cumulativeBefore += PROGRESS_STEPS[i].duration;
-  const stepElapsed = elapsed - cumulativeBefore;
-  const stepProgress = Math.min(stepElapsed / PROGRESS_STEPS[activeStep].duration, 0.95);
-  const totalDuration = PROGRESS_STEPS.reduce((s, p) => s + p.duration, 0);
-  const overallProgress = Math.min(elapsed / totalDuration, 0.95);
-
-  return (
-    <div className="flex flex-col items-center max-w-md mx-auto py-16" style={{ gap: "32px" }}>
-      {/* Count + source */}
-      <div className="text-center" style={{ gap: "8px", display: "flex", flexDirection: "column" }}>
-        <p style={{
-          fontFamily: "var(--mem-font-heading)",
-          fontSize: "28px",
-          fontWeight: 400,
-          color: "var(--mem-text)",
-          letterSpacing: "-0.02em",
-        }}>
-          {memoryCount} memories
-        </p>
-        <p style={{
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "13px",
-          color: "var(--mem-text-tertiary)",
-        }}>
-          Processing your memories...
-        </p>
-      </div>
-
-      {/* Progress bar */}
-      <div style={{
-        width: "100%",
-        height: "3px",
-        borderRadius: "2px",
-        backgroundColor: "var(--mem-border)",
-        overflow: "hidden",
-      }}>
-        <div style={{
-          height: "100%",
-          borderRadius: "2px",
-          backgroundColor: "var(--mem-accent-indigo)",
-          width: `${overallProgress * 100}%`,
-          transition: "width 0.3s ease-out",
-        }} />
-      </div>
-
-      {/* Steps */}
-      <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: "4px" }}>
-        {PROGRESS_STEPS.map((step, i) => {
-          const isActive = i === activeStep;
-          const isDone = i < activeStep;
-
-          return (
-            <div
-              key={step.label}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "14px",
-                padding: "10px 14px",
-                borderRadius: "10px",
-                backgroundColor: isActive ? "var(--mem-surface)" : "transparent",
-                border: isActive ? "1px solid var(--mem-border)" : "1px solid transparent",
-                transition: "all 0.4s ease",
-                opacity: isDone ? 0.5 : isActive ? 1 : 0.35,
-              }}
-            >
-              {/* Icon */}
-              <div style={{
-                width: "32px",
-                height: "32px",
-                borderRadius: "8px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: isDone
-                  ? "rgba(123, 123, 232, 0.15)"
-                  : isActive
-                    ? "rgba(123, 123, 232, 0.1)"
-                    : "transparent",
-                transition: "all 0.4s ease",
-                flexShrink: 0,
-              }}>
-                {isDone ? (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                    stroke="var(--mem-accent-indigo)" strokeWidth="2.5"
-                    strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                ) : (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                    stroke={isActive ? "var(--mem-accent-indigo)" : "var(--mem-text-tertiary)"}
-                    strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                    style={isActive ? { animation: "pulse-subtle 2s ease-in-out infinite" } : undefined}>
-                    <path d={step.icon} />
-                  </svg>
-                )}
-              </div>
-
-              {/* Label */}
-              <span style={{
-                fontFamily: "var(--mem-font-body)",
-                fontSize: "13px",
-                fontWeight: isActive ? 500 : 400,
-                color: isDone ? "var(--mem-text-secondary)" : isActive ? "var(--mem-text)" : "var(--mem-text-tertiary)",
-                transition: "all 0.4s ease",
-              }}>
-                {step.label}
-                {isDone && (
-                  <span style={{ color: "var(--mem-text-tertiary)", fontWeight: 400, marginLeft: "6px" }}>
-                    done
-                  </span>
-                )}
-              </span>
-
-              {/* Step progress for active */}
-              {isActive && (
-                <div style={{
-                  marginLeft: "auto",
-                  width: "48px",
-                  height: "3px",
-                  borderRadius: "2px",
-                  backgroundColor: "var(--mem-border)",
-                  overflow: "hidden",
-                }}>
-                  <div style={{
-                    height: "100%",
-                    borderRadius: "2px",
-                    backgroundColor: "var(--mem-accent-indigo)",
-                    width: `${stepProgress * 100}%`,
-                    transition: "width 0.3s ease-out",
-                  }} />
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* CSS animation */}
-      <style>{`
-        @keyframes pulse-subtle {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
-      `}</style>
-    </div>
-  );
+/**
+ * Split pasted lines into upload chunks. One memory per non-empty line; empty
+ * lines and separators never reach the daemon.
+ */
+export function chunkImportText(text: string, chunkSize: number = IMPORT_CHUNK_SIZE): string[] {
+  const lines = text.split("\n").filter((l) => l.trim() !== "");
+  const chunks: string[] = [];
+  for (let i = 0; i < lines.length; i += chunkSize) {
+    chunks.push(lines.slice(i, i + chunkSize).join("\n"));
+  }
+  return chunks;
 }
 
 const EXPORT_PROMPT = `Export all of my stored memories and any context you've learned about me. Preserve my words verbatim where possible.
@@ -228,11 +69,7 @@ Rules:
 - One memory per line
 - Wrap entire output in a single code block`;
 
-const SOURCE_LABELS: Record<Source, string> = {
-  chatgpt: "ChatGPT",
-  claude: "Claude",
-  other: "Other",
-};
+const SOURCE_LABELS: Record<Source, string> = IMPORT_SOURCE_LABELS;
 
 // Aligned with Wenlan's --mem-accent-* palette (see FACET_COLORS in tauri.ts)
 const TYPE_BADGE_STYLES: Record<string, { bg: string; text: string }> = {
@@ -247,6 +84,7 @@ const TYPE_BADGE_STYLES: Record<string, { bg: string; text: string }> = {
 
 export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSkip, wizardHint }: ImportViewProps) {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const [phase, setPhaseRaw] = useState<Phase>("input");
   const setPhase = useCallback((p: Phase) => {
     setPhaseRaw(p);
@@ -256,8 +94,11 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [chunkProgress, setChunkProgress] = useState<{ done: number; total: number } | null>(null);
   const [promptCopied, setPromptCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const batchStatus = useImportBatchStatus(batchId);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -276,14 +117,49 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
 
   const handleImport = async () => {
     setError(null);
+    const chunks = chunkImportText(text);
+    // One batch id for the whole import, shared by every chunk, so the
+    // daemon can report one honest aggregate under import_batch_status_cmd.
+    const id = crypto.randomUUID();
+    setBatchId(id);
+    setChunkProgress({ done: 0, total: chunks.length });
     setPhase("progress");
     try {
-      const res = await importMemories(source, text);
-      setResult(res);
+      const agg: ImportResult = {
+        imported: 0,
+        skipped: 0,
+        breakdown: {},
+        entities_created: 0,
+        observations_added: 0,
+        relations_created: 0,
+        batch_id: id,
+      };
+      for (let i = 0; i < chunks.length; i++) {
+        const res = await importMemories(source, chunks[i]!, undefined, {
+          batchId: id,
+          chunkIndex: i,
+          chunkTotal: chunks.length,
+        });
+        agg.imported += res.imported;
+        agg.skipped += res.skipped;
+        agg.entities_created += res.entities_created;
+        agg.observations_added += res.observations_added;
+        agg.relations_created += res.relations_created;
+        for (const [type, count] of Object.entries(res.breakdown ?? {})) {
+          agg.breakdown[type] = (agg.breakdown[type] ?? 0) + count;
+        }
+        setChunkProgress({ done: i + 1, total: chunks.length });
+      }
+      setResult(agg);
+      // The request phases (ingest, store) are done here; detect and later
+      // keep running in the background. The summary says so honestly while
+      // the status poll keeps the live counts climbing.
       setPhase("summary");
       queryClient.invalidateQueries();
     } catch (err) {
       setError(String(err));
+      setBatchId(null);
+      setChunkProgress(null);
       setPhase("input");
     }
   };
@@ -293,6 +169,8 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
     setText("");
     setError(null);
     setResult(null);
+    setBatchId(null);
+    setChunkProgress(null);
   };
 
   // ── Input form ──────────────────────────────────────────────────────
@@ -486,21 +364,52 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
     );
   }
 
-  // ── Progress ────────────────────────────────────────────────────────
+  // ── Progress: live daemon row counts, never a timer ───────────────
   if (phase === "progress") {
-    const lineCount = text.split("\n").filter((l) => l.trim()).length;
-    return <ImportProgress memoryCount={lineCount} />;
+    const lineCount = chunkImportText(text).length;
+    return (
+      <div className="flex flex-col items-center max-w-md mx-auto py-16" style={{ gap: "32px" }}>
+        <div className="text-center" style={{ gap: "8px", display: "flex", flexDirection: "column" }}>
+          <p style={{
+            fontFamily: "var(--mem-font-heading)",
+            fontSize: "28px",
+            fontWeight: 400,
+            color: "var(--mem-text)",
+            letterSpacing: "-0.02em",
+          }}>
+            {t("importBatch.progressTitle", { count: lineCount })}
+          </p>
+          {chunkProgress && chunkProgress.total > 1 && (
+            <p style={{
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "13px",
+              color: "var(--mem-text-tertiary)",
+            }}>
+              {t("importBatch.chunkProgress", { done: Math.min(chunkProgress.done + 1, chunkProgress.total), total: chunkProgress.total })}
+            </p>
+          )}
+        </div>
+
+        <ImportPhaseList phases={batchStatus?.phases ?? []} />
+      </div>
+    );
   }
 
-  // ── Summary ─────────────────────────────────────────────────────────
+  // ── Summary: real figures, honest about background work ─────────────
   if (phase === "summary" && result) {
     const breakdownEntries = Object.entries(result.breakdown).filter(
       ([, count]) => count > 0,
     );
-    const kgTotal =
-      result.entities_created +
-      result.observations_added +
-      result.relations_created;
+    // Live daemon counts once the first status poll lands; the chunk
+    // responses before that. Either way these are measured rows, and the
+    // note below says which phases are still moving them.
+    const imported = batchStatus?.memories_imported ?? result.imported;
+    const skipped = batchStatus?.memories_skipped ?? result.skipped;
+    const runningNames = (batchStatus?.phases ?? [])
+      .filter((p) => p.state === "running" || p.state === "pending")
+      .map((p) => t(`importBatch.phases.${p.phase}`));
+    // The daemon's `complete` flag is the source of truth for whether the
+    // numbers are still moving — never a phase row read in isolation.
 
     return (
       <div className="flex flex-col gap-6 max-w-2xl mx-auto py-4">
@@ -541,10 +450,9 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                   color: "var(--mem-text)",
                 }}
               >
-                {result.imported} memories imported from{" "}
-                {SOURCE_LABELS[source]}
+                {t("importBatch.summaryImported", { count: imported, source: SOURCE_LABELS[source] })}
               </p>
-              {result.skipped > 0 && (
+              {skipped > 0 && (
                 <p
                   style={{
                     fontFamily: "var(--mem-font-body)",
@@ -553,7 +461,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                     marginTop: "2px",
                   }}
                 >
-                  {result.skipped} skipped (duplicates or empty)
+                  {t("importBatch.summarySkipped", { count: skipped })}
                 </p>
               )}
             </div>
@@ -585,17 +493,36 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
             </div>
           )}
 
-          {/* KG stats */}
-          {kgTotal > 0 && (
-            <p
+          {/* Live enrichment figures from the daemon */}
+          {batchStatus && (
+            <div
+              className="flex flex-wrap gap-x-4 gap-y-1 mb-4"
               style={{
                 fontFamily: "var(--mem-font-mono)",
                 fontSize: "11px",
                 color: "var(--mem-text-tertiary)",
               }}
             >
-              {result.entities_created} entities, {result.observations_added}{" "}
-              observations discovered
+              <span>{t("importBatch.entitiesDetected", { count: batchStatus.entities_detected })}</span>
+              <span>{t("importBatch.entitiesEstablished", { count: batchStatus.entities_established })}</span>
+              <span>{t("importBatch.pagesDistilled", { count: batchStatus.pages_distilled })}</span>
+            </div>
+          )}
+
+          {/* Honesty note: background phases keep moving these numbers */}
+          {batchStatus && (
+            <p
+              style={{
+                fontFamily: "var(--mem-font-body)",
+                fontSize: "12px",
+                color: "var(--mem-text-secondary)",
+                lineHeight: "1.5",
+                margin: 0,
+              }}
+            >
+              {!batchStatus.complete && runningNames.length > 0
+                ? t("importBatch.backgroundRunning", { phases: runningNames.join(", ") })
+                : t("importBatch.backgroundSettled")}
             </p>
           )}
         </div>
