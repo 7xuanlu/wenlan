@@ -37757,6 +37757,179 @@ impl MemoryDB {
         })
     }
 
+    /// Archive detected entities nobody has mentioned for a while (#708).
+    ///
+    /// The housekeeping sweep over the detected-entity index: a detected
+    /// entity whose most recent linked memory is older than `idle_days` days
+    /// is archived through the same
+    /// [`Self::archive_entity_in_transaction`] path a manual archive uses
+    /// (same edge retirement tagging, same history append, same
+    /// `entity_updated_at` stamp), so the Entities view restores it exactly
+    /// like a hand-archived one. Only detected entities are eligible --
+    /// established (`entity_confirmed = 1`) and already-archived rows are
+    /// never touched.
+    ///
+    /// Two clocks must both be past the window. "Most recent linked memory"
+    /// is `MAX(memories.created_at)` over `memory_entities` for the entity
+    /// (absent memories count as idle). The entity's own shadow page must
+    /// also be older than the window: `pages.created_at` is stamped when the
+    /// entity is first detected, while an imported memory keeps its original
+    /// conversation date as `memories.created_at`, so without this floor a
+    /// freshly imported old chat would have its detected entities archived on
+    /// the very next sweep before anyone could look at them.
+    /// `memories.created_at` is INTEGER unix seconds and `pages.created_at`
+    /// is TEXT RFC3339, so each side is compared in the representation its
+    /// own table stores -- no cross-format conversion.
+    ///
+    /// `idle_days == 0` disables the rule and returns `Ok(0)` without
+    /// touching the database. `limit` caps how many entities one call
+    /// archives; the ambient job runs the sweep again next tick.
+    ///
+    /// Chunked transactions like [`Self::bulk_entity_lifecycle`]: one
+    /// transaction per `ENTITY_BULK_CHUNK`, never one per entity across the
+    /// whole set. Returns the number actually archived.
+    pub async fn archive_idle_detected_entities(
+        &self,
+        idle_days: u64,
+        limit: usize,
+    ) -> Result<u64, WenlanError> {
+        if idle_days == 0 || limit == 0 {
+            return Ok(0);
+        }
+        // Clamped before any arithmetic: `idle_days` is a config value, and
+        // `u64` days do not fit in an `i64` second count or a chrono span.
+        // Anything past a century behaves the same -- nothing recent qualifies.
+        let idle_days = idle_days.min(36_500);
+        let cutoff = chrono::Utc::now()
+            - chrono::Duration::try_days(idle_days as i64).unwrap_or(chrono::Duration::MAX);
+        let cutoff_epoch = cutoff.timestamp();
+        let cutoff_iso = cutoff.to_rfc3339();
+        let limit_rows = i64::try_from(limit).unwrap_or(i64::MAX);
+        let selected = {
+            let conn = self.conn.lock().await;
+            Self::select_idle_detected_ids_within(
+                &conn,
+                cutoff_epoch,
+                &cutoff_iso,
+                limit_rows,
+                None,
+            )
+            .await?
+        };
+        let mut archived = 0u64;
+        for chunk in selected.chunks(ENTITY_BULK_CHUNK) {
+            let now = chrono::Utc::now();
+            let conn = self.conn.lock().await;
+            conn.execute("BEGIN", ())
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("archive_idle begin: {e}")))?;
+            let result: Result<u64, WenlanError> = async {
+                // The connection was released after the first selection, so
+                // re-run the eligibility predicate against this chunk inside
+                // its own transaction, mirroring `reselect_bulk_chunk`: a
+                // concurrent writer may have linked, established, or archived
+                // a candidate since.
+                let mut done = 0u64;
+                for slice in chunk.chunks(ENTITY_ID_LOOKUP_CHUNK) {
+                    let eligible = Self::select_idle_detected_ids_within(
+                        &conn,
+                        cutoff_epoch,
+                        &cutoff_iso,
+                        slice.len() as i64,
+                        Some(slice),
+                    )
+                    .await?;
+                    for entity_id in &eligible {
+                        if self
+                            .archive_entity_in_transaction(&conn, entity_id, &now)
+                            .await?
+                        {
+                            done += 1;
+                        }
+                    }
+                }
+                Ok(done)
+            }
+            .await;
+            match result {
+                Ok(done) => {
+                    commit_or_rollback(&conn)
+                        .await
+                        .map_err(|e| WenlanError::VectorDb(format!("archive_idle commit: {e}")))?;
+                    archived += done;
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+        Ok(archived)
+    }
+
+    /// Resolve the idle-archive sweep selection: detected entities
+    /// (`kind = 'entity'`, active, unconfirmed) whose shadow page predates
+    /// `cutoff_iso` and whose newest linked memory, if any, predates
+    /// `cutoff_epoch`.
+    ///
+    /// `within` narrows the predicate to a chunk, mirroring
+    /// `select_bulk_entity_ids_within`; `limit` bounds the rows returned.
+    async fn select_idle_detected_ids_within(
+        conn: &libsql::Connection,
+        cutoff_epoch: i64,
+        cutoff_iso: &str,
+        limit: i64,
+        within: Option<&[String]>,
+    ) -> Result<Vec<String>, WenlanError> {
+        if within.is_some_and(|ids| ids.is_empty()) {
+            return Ok(Vec::new());
+        }
+        let mut conditions = vec![
+            "p.kind = 'entity'".to_string(),
+            "p.status = 'active'".to_string(),
+            "COALESCE(p.entity_confirmed, 0) = 0".to_string(),
+            "COALESCE((SELECT MAX(m.created_at) \
+                         FROM memory_entities me \
+                         JOIN memories m ON m.source_id = me.memory_id \
+                        WHERE me.entity_id = epm.entity_id), 0) < ?1"
+                .to_string(),
+            "p.created_at < ?2".to_string(),
+        ];
+        let mut values: Vec<libsql::Value> = vec![
+            libsql::Value::Integer(cutoff_epoch),
+            libsql::Value::Text(cutoff_iso.to_string()),
+        ];
+        if let Some(within) = within {
+            let placeholders: Vec<String> = (0..within.len())
+                .map(|index| format!("?{}", index + 3))
+                .collect();
+            conditions.push(format!("epm.entity_id IN ({})", placeholders.join(", ")));
+            values.extend(within.iter().map(|id| libsql::Value::Text(id.clone())));
+        }
+        let limit_placeholder = format!("?{}", values.len() + 1);
+        values.push(libsql::Value::Integer(limit));
+        let sql = format!(
+            "SELECT epm.entity_id FROM entity_page_map epm \
+             JOIN pages p ON p.id = epm.page_id \
+             WHERE {} \
+             ORDER BY epm.entity_id ASC LIMIT {limit_placeholder}",
+            conditions.join(" AND ")
+        );
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("archive_idle select: {e}")))?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("archive_idle select row: {e}")))?
+        {
+            ids.push(row.get::<String>(0).unwrap_or_default());
+        }
+        Ok(ids)
+    }
+
     /// Resolve a bulk selection into the entity ids the action can actually
     /// act on: in scope, present as an entity, and in the right lifecycle
     /// state for `action`.

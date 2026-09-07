@@ -259,6 +259,15 @@ pub struct RefineryConfig {
     /// the moment it is detected.
     #[serde(default = "d_3_usize")]
     pub entity_establish_min_memories: usize,
+    /// Housekeeping rule for the detected-entity index (#708): archive a
+    /// detected entity once it has been in the index for this many days and
+    /// none of its linked memories is dated within the window (an imported
+    /// memory keeps its original conversation date, so the entity's own age
+    /// is the floor). `0` (the default) turns the rule off. Only detected
+    /// entities are eligible; established and already-archived ones are never
+    /// touched, and archiving is reversible from the Entities view.
+    #[serde(default)]
+    pub entity_archive_idle_days: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -538,6 +547,7 @@ impl Default for RefineryConfig {
             kg_rethink_interval_hours: d_168_u64(),
             entity_backfill_batch_size: d_5_usize(),
             entity_establish_min_memories: d_3_usize(),
+            entity_archive_idle_days: 0,
         }
     }
 }
@@ -709,6 +719,7 @@ mod tests {
         assert_eq!(cfg.refinery.batch_window_secs, 30);
         assert_eq!(cfg.refinery.kg_rethink_interval_hours, 168);
         assert_eq!(cfg.refinery.entity_establish_min_memories, 3);
+        assert_eq!(cfg.refinery.entity_archive_idle_days, 0);
         // Narrative
         assert_eq!(cfg.narrative.stale_secs, 86400);
         assert_eq!(cfg.narrative.max_memories, 12);
@@ -766,6 +777,23 @@ score_threshold = 0.25
         assert_eq!(cfg.refinery.entity_establish_min_memories, 7);
         assert_eq!(cfg.refinery.entity_backfill_batch_size, 5);
         assert_eq!(cfg.refinery.max_proposals_per_steep, 5);
+    }
+
+    /// `entity_archive_idle_days` is off unless the file names it, and a file
+    /// that sets only it leaves the rest of the refinery block alone.
+    #[test]
+    fn entity_archive_idle_days_reads_from_toml_and_defaults_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("intelligence.toml");
+        std::fs::write(&path, "[refinery]\nentity_archive_idle_days = 30\n").unwrap();
+
+        let cfg = TuningConfig::load(&path);
+        assert_eq!(cfg.refinery.entity_archive_idle_days, 30);
+        assert_eq!(cfg.refinery.entity_establish_min_memories, 3);
+
+        std::fs::write(&path, "[refinery]\nentity_establish_min_memories = 4\n").unwrap();
+        let cfg = TuningConfig::load(&path);
+        assert_eq!(cfg.refinery.entity_archive_idle_days, 0);
     }
 
     #[test]

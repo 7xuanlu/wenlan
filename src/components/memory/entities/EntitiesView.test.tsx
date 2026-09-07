@@ -382,6 +382,252 @@ describe("EntitiesView", () => {
     expect(fixture.find((candidate) => candidate.id === "babbage")?.status).toBe("detected");
   });
 
+  it("filters the Established tab by search", async () => {
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Established/);
+    await screen.findByText("Analytical Engine");
+
+    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Engine");
+
+    // The debounced search narrows the Established request to the match.
+    await waitFor(() => {
+      const calls = vi.mocked(tauri.queryEntities).mock.calls;
+      const last = calls[calls.length - 1][0];
+      expect(last.status).toBe("established");
+      expect(last.query).toBe("Engine");
+    });
+    expect(screen.getByText("Analytical Engine")).toBeInTheDocument();
+
+    const searchbox = screen.getByRole("searchbox", { name: "Find a name" });
+    await user.clear(searchbox);
+    await user.type(searchbox, "zzz");
+    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+  });
+
+  it("archives selected entities from the Established tab", async () => {
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+
+    // Give Established a second row through the real establish flow.
+    await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
+    await user.click(screen.getByRole("button", { name: "Establish selected" }));
+    await openTab(user, /Established/);
+    await screen.findByText("Analytical Engine");
+    await screen.findByText("Ada Lovelace");
+
+    await user.click(screen.getByRole("checkbox", { name: "Select Analytical Engine" }));
+    // Establish makes no sense for already-established rows: only archiving.
+    expect(screen.queryByRole("button", { name: "Establish selected" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
+    await user.click(screen.getByRole("button", { name: "Archive selected" }));
+
+    const applied = vi.mocked(tauri.archiveEntities).mock.calls.find(([req]) => !req.dry_run);
+    expect([...(applied?.[0].ids ?? [])].sort()).toEqual(["ada", "engine"]);
+    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+
+    await openTab(user, /Archived/);
+    await screen.findByText("Analytical Engine");
+    await screen.findByText("Ada Lovelace");
+  });
+
+  it("archives all matching on Established with the active filter read back", async () => {
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Established/);
+    await screen.findByText("Analytical Engine");
+
+    await user.click(screen.getByRole("button", { name: "Concept" }));
+    await screen.findByText("Analytical Engine");
+
+    await user.click(screen.getByRole("button", { name: "Archive all matching" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Archive 1 established entity?")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Concept/)).toBeInTheDocument();
+    // The Engine holds 5 memories, so the dialog warns archiving takes them along.
+    expect(within(dialog).getByText("Includes")).toBeInTheDocument();
+
+    const dryRuns = vi.mocked(tauri.archiveEntities).mock.calls.filter(([req]) => req.dry_run);
+    expect(dryRuns.length).toBeGreaterThan(0);
+    for (const [req] of dryRuns) {
+      expect(req.filter?.status).toBe("established");
+      expect(req.filter?.entity_type).toBe("concept");
+    }
+
+    await user.click(within(dialog).getByRole("button", { name: "Archive" }));
+    const applied = vi.mocked(tauri.archiveEntities).mock.calls.find(([req]) => !req.dry_run);
+    expect(applied?.[0].filter?.status).toBe("established");
+    expect(applied?.[0].filter?.entity_type).toBe("concept");
+
+    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+    await openTab(user, /Archived/);
+    await screen.findByText("Analytical Engine");
+  });
+
+  it("filters the Archived tab by search", async () => {
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Archived/);
+    await screen.findByText("Countess of Lovelace");
+
+    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
+
+    await waitFor(() => {
+      const calls = vi.mocked(tauri.queryEntities).mock.calls;
+      const last = calls[calls.length - 1][0];
+      expect(last.status).toBe("archived");
+      expect(last.query).toBe("Countess");
+    });
+    expect(screen.getByText("Countess of Lovelace")).toBeInTheDocument();
+
+    const searchbox = screen.getByRole("searchbox", { name: "Find a name" });
+    await user.clear(searchbox);
+    await user.type(searchbox, "zzz");
+    expect(await screen.findByText("No archived entities")).toBeInTheDocument();
+  });
+
+  it("restores only what the Archived matchline counted when a filter is on", async () => {
+    fixture = [
+      ...fixture,
+      entity({
+        id: "difference",
+        name: "Difference Engine",
+        entity_type: "concept",
+        status: "archived",
+        memory_count: 0,
+      }),
+    ];
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Archived/);
+    await screen.findByText("Countess of Lovelace");
+    await screen.findByText("Difference Engine");
+
+    await user.click(screen.getByRole("button", { name: "Concept" }));
+    expect(await screen.findByText("1 archived entity matches")).toBeInTheDocument();
+
+    // The button says what it will do, and does exactly that: the person
+    // filtered out of the list must survive the restore.
+    await user.click(await screen.findByRole("button", { name: "Restore all matching" }));
+
+    const applied = vi.mocked(tauri.restoreEntities).mock.calls.find(([req]) => !req.dry_run);
+    expect(applied?.[0].filter?.status).toBe("archived");
+    expect(applied?.[0].filter?.entity_type).toBe("concept");
+    expect(applied?.[0].ids).toBeUndefined();
+
+    await waitFor(() =>
+      expect(fixture.find((candidate) => candidate.id === "difference")?.status).toBe("detected"),
+    );
+    expect(fixture.find((candidate) => candidate.id === "countess")?.status).toBe("archived");
+  });
+
+  it("will not restore on a count the search box is about to change", async () => {
+    fixture = [
+      ...fixture,
+      entity({
+        id: "difference",
+        name: "Difference Engine",
+        entity_type: "concept",
+        status: "archived",
+        memory_count: 0,
+      }),
+    ];
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Archived/);
+    await screen.findByText("Countess of Lovelace");
+
+    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
+    expect(await screen.findByText("1 archived entity matches")).toBeInTheDocument();
+
+    // Clearing the box does not reach the count for 300 ms, and the new count
+    // only lands when its request returns. Until both have happened the button
+    // is unavailable, rather than restoring everything archived while the
+    // screen still says one entity matches.
+    let releaseList: () => void = () => {};
+    const realQuery = vi.mocked(tauri.queryEntities).getMockImplementation()!;
+    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
+      if (filter.status === "archived" && filter.query === undefined && filter.limit !== 1) {
+        await new Promise<void>((resolve) => {
+          releaseList = resolve;
+        });
+      }
+      return realQuery(filter);
+    });
+
+    await user.clear(screen.getByRole("searchbox", { name: "Find a name" }));
+    expect(screen.getByRole("button", { name: "Restore all matching" })).toBeDisabled();
+
+    // The debounce has now moved the cleared search into the filters, but the
+    // list showing the new count is still in flight.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore all" })).toBeDisabled(),
+    );
+    expect(vi.mocked(tauri.restoreEntities)).not.toHaveBeenCalled();
+
+    releaseList();
+
+    await screen.findByText("2 archived entities");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore all" })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole("button", { name: "Restore all" }));
+    const applied = vi.mocked(tauri.restoreEntities).mock.calls.find(([req]) => !req.dry_run);
+    expect(applied?.[0].filter?.query).toBeUndefined();
+  });
+
+  it("will not restore on a count a failed reload left stale", async () => {
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Archived/);
+    await screen.findByText("Countess of Lovelace");
+
+    // The list for the typed search never arrives, so the count beside the
+    // button still describes the unfiltered tab. The button must not act on
+    // it.
+    const realQuery = vi.mocked(tauri.queryEntities).getMockImplementation()!;
+    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
+      if (filter.query !== undefined) throw new Error("list unavailable");
+      return realQuery(filter);
+    });
+
+    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore all matching" })).toBeDisabled(),
+    );
+    expect(vi.mocked(tauri.restoreEntities)).not.toHaveBeenCalled();
+  });
+
+  it("keeps the filters but clears the selection when switching tabs", async () => {
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+
+    await user.click(screen.getByRole("button", { name: "Person" }));
+    await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
+    expect(screen.getByRole("button", { name: "Archive selected" })).toBeInTheDocument();
+
+    await openTab(user, /Established/);
+    // The Person chip persists (the Concept Engine is filtered out) while the
+    // Detected selection does not follow.
+    expect(screen.getByRole("button", { name: "Person" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "Archive selected" })).not.toBeInTheDocument();
+    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+
+    await openTab(user, /Detected/);
+    expect(screen.getByRole("button", { name: "Person" })).toHaveAttribute("aria-pressed", "true");
+    await screen.findByText("Ada Lovelace");
+    expect(screen.queryByRole("button", { name: "Archive selected" })).not.toBeInTheDocument();
+  });
+
   it("moves between tabs with the arrow keys", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");

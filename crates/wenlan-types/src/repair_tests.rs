@@ -2072,8 +2072,20 @@ fn aggregate_contracts_are_v6_manifest_and_v5_receipt_only() {
     let entity_value = serde_json::to_value(entity_manifest).unwrap();
     assert_eq!(
         entity_value["allowed_effects"]["fields"],
-        serde_json::json!(["memory_entity_links", "enrichment_step"])
+        serde_json::json!([
+            "memory_entity_links",
+            "enrichment_step",
+            "entity_establishment"
+        ])
     );
+    // A manifest prepared before #708 declared only the two link/step
+    // effects. It is still on disk waiting to be applied, so it must stay
+    // valid; only newly prepared manifests name the establishment write.
+    let mut pre_708_entity = entity_value.clone();
+    pre_708_entity["allowed_effects"]["fields"] =
+        serde_json::json!(["memory_entity_links", "enrichment_step"]);
+    assert!(serde_json::from_value::<RepairManifest>(pre_708_entity).is_ok());
+
     let mut legacy_entity = entity_value;
     legacy_entity["manifest_schema_version"] = serde_json::json!(5);
     assert!(serde_json::from_value::<RepairManifest>(legacy_entity).is_err());

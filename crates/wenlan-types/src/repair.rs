@@ -2693,6 +2693,7 @@ pub enum RepairMemoryField {
     MemoryEntityLink,
     MemoryEntityLinks,
     EnrichmentStep,
+    EntityEstablishment,
     TargetPageId,
     PageStatus,
     PageTitle,
@@ -2764,6 +2765,11 @@ impl RepairAllowedEffects {
             fields: vec![
                 RepairMemoryField::MemoryEntityLinks,
                 RepairMemoryField::EnrichmentStep,
+                // #708: recording the Nth memory link establishes the entity,
+                // which writes `entity_confirmed` and `established_by` on its
+                // page. The effect guard excludes that write, so the receipt
+                // has to name it or it records an incomplete account.
+                RepairMemoryField::EntityEstablishment,
             ],
         }
     }
@@ -2829,6 +2835,15 @@ impl<'de> Deserialize<'de> for RepairAllowedEffects {
                 == [
                     RepairMemoryField::MemoryEntityLinks,
                     RepairMemoryField::EnrichmentStep,
+                ]
+            // Since #708 the same writer also establishes the entity. The
+            // two-field shape above stays supported for manifests prepared
+            // before that upgrade.
+            || wire.fields
+                == [
+                    RepairMemoryField::MemoryEntityLinks,
+                    RepairMemoryField::EnrichmentStep,
+                    RepairMemoryField::EntityEstablishment,
                 ]
             || wire.fields
                 == [
@@ -3599,7 +3614,12 @@ impl RepairManifestDraft {
                 RepairMutation::CompleteEntityExtraction {
                     entity_ids: mutation_entity_ids,
                 },
-                [RepairMemoryField::MemoryEntityLinks, RepairMemoryField::EnrichmentStep],
+                // Three fields is what this writer declares since #708, when
+                // recording the Nth memory link began establishing the entity
+                // too. The two-field form stays valid so a manifest prepared
+                // before that upgrade can still be applied and verified.
+                [RepairMemoryField::MemoryEntityLinks, RepairMemoryField::EnrichmentStep]
+                | [RepairMemoryField::MemoryEntityLinks, RepairMemoryField::EnrichmentStep, RepairMemoryField::EntityEstablishment],
             ) => entity_ids == mutation_entity_ids,
             _ => false,
         };
@@ -4418,9 +4438,15 @@ fn repair_receipt_effects_match(
         ) | (
             RepairTarget::MemoryEntityExtraction { .. },
             RepairWriter::CompleteEntityExtraction,
+            // Two fields is a receipt for a manifest prepared before #708;
+            // three is one that also establishes the entity.
             [
                 RepairMemoryField::MemoryEntityLinks,
                 RepairMemoryField::EnrichmentStep,
+            ] | [
+                RepairMemoryField::MemoryEntityLinks,
+                RepairMemoryField::EnrichmentStep,
+                RepairMemoryField::EntityEstablishment,
             ]
         )
     )

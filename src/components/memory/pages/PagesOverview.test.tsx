@@ -91,7 +91,7 @@ describe("PagesOverview", () => {
     expect(screen.queryByRole("dialog", { name: "New page" })).not.toBeInTheDocument();
   });
 
-  it("combines active and draft inventories without treating a draft as Unconfirmed", async () => {
+  it("combines active and draft inventories without treating a draft as Unchecked", async () => {
     vi.mocked(listPagesExplicitBrowse).mockImplementation(async (status) => status === "draft"
       ? [
           page({
@@ -126,16 +126,16 @@ describe("PagesOverview", () => {
     const draftRow = draftAction.closest("tr");
     expect(draftRow).not.toBeNull();
     expect(within(draftRow!).getByText("Draft")).toBeInTheDocument();
-    expect(within(draftRow!).queryByText("Unconfirmed")).not.toBeInTheDocument();
+    expect(within(draftRow!).queryByText("Unchecked")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Untitled draft · Draft" })).toBeInTheDocument();
 
     fireEvent.click(within(draftRow!).getAllByText("Page")[0]!);
     expect(onSelectDraft).toHaveBeenCalledWith("draft-titled", "Research");
     expect(onSelectPage).not.toHaveBeenCalled();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Review" }), "unconfirmed");
+    await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
     expect(screen.getByRole("button", {
-      name: "Open Needs verification · Unconfirmed",
+      name: "Open Needs verification · Unchecked",
     })).toBeInTheDocument();
     expect(screen.queryByRole("button", {
       name: "Open Working theory · Draft",
@@ -185,11 +185,11 @@ describe("PagesOverview", () => {
     renderOverview();
 
     expect(await screen.findByRole("button", { name: "Open Nash Su" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Needs verification · Unconfirmed" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Nash Su · Unconfirmed" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Nash Su · Unchecked" })).not.toBeInTheDocument();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Review" }), "unconfirmed");
-    expect(await screen.findByRole("button", { name: "Open Needs verification · Unconfirmed" })).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
+    expect(await screen.findByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Nash Su" })).not.toBeInTheDocument();
   });
 
@@ -201,12 +201,12 @@ describe("PagesOverview", () => {
     const user = userEvent.setup();
     renderOverview();
 
-    const statusFilter = await screen.findByRole("combobox", { name: "Review" });
-    expect(screen.getByText("Unconfirmed")).toBeInTheDocument();
+    const statusFilter = await screen.findByRole("combobox", { name: "State" });
+    expect(screen.getByText("Unchecked")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "New page candidates" })).not.toBeInTheDocument();
 
     await user.selectOptions(statusFilter, "unconfirmed");
-    expect(screen.getByRole("button", { name: "Open Needs verification · Unconfirmed" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Confirmed note" })).not.toBeInTheDocument();
   });
 
@@ -266,11 +266,11 @@ describe("PagesOverview", () => {
     renderOverview({ onSelectPage });
 
     const pageAction = await screen.findByRole("button", {
-      name: "Open Review boundary · Unconfirmed · Cleanup suggested",
+      name: "Open Review boundary · Unchecked · Cleanup suggested",
     });
     const row = pageAction.closest("tr");
     expect(row).not.toBeNull();
-    expect(within(row!).getByText("Unconfirmed")).toBeInTheDocument();
+    expect(within(row!).getByText("Unchecked")).toBeInTheDocument();
     expect(within(row!).getByText("Cleanup suggested")).toBeInTheDocument();
 
     fireEvent.click(row!);

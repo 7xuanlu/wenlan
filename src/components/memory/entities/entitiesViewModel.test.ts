@@ -56,18 +56,19 @@ describe("entityListRequest", () => {
     });
   });
 
-  it("ignores filters on tabs other than Detected", () => {
+  it("applies filters identically on every tab", () => {
     const filters: EntityFilters = { query: "ada", type: "person", memories: "none" };
-    expect(entityListRequest("established", filters, 0)).toEqual({
-      status: "established",
-      limit: ENTITIES_PAGE_SIZE,
-      offset: 0,
-    });
-    expect(entityListRequest("archived", filters, 0)).toEqual({
-      status: "archived",
-      limit: ENTITIES_PAGE_SIZE,
-      offset: 0,
-    });
+    for (const tab of ["established", "detected", "archived"] as const) {
+      expect(entityListRequest(tab, filters, 0)).toEqual({
+        status: tab,
+        limit: ENTITIES_PAGE_SIZE,
+        offset: 0,
+        entity_type: "person",
+        min_memories: 0,
+        max_memories: 0,
+        query: "ada",
+      });
+    }
   });
 
   it("applies the type chip, trimmed query, and 'no memories' as an exact zero range", () => {
@@ -114,13 +115,13 @@ describe("filtersActive", () => {
 });
 
 describe("matchLabel", () => {
-  it("picks the filtered key only for a filtered Detected tab", () => {
+  it("follows the filtered flag on every tab", () => {
     expect(matchLabel("detected", 5, false, t)).toBe('entities.match_detected:{"count":5}');
     expect(matchLabel("detected", 5, true, t)).toBe('entities.matchFiltered_detected:{"count":5}');
-  });
-
-  it("always reads Archived as unfiltered", () => {
-    expect(matchLabel("archived", 2, true, t)).toBe('entities.match_archived:{"count":2}');
+    expect(matchLabel("established", 5, false, t)).toBe('entities.match_established:{"count":5}');
+    expect(matchLabel("established", 5, true, t)).toBe('entities.matchFiltered_established:{"count":5}');
+    expect(matchLabel("archived", 2, false, t)).toBe('entities.match_archived:{"count":2}');
+    expect(matchLabel("archived", 2, true, t)).toBe('entities.matchFiltered_archived:{"count":2}');
   });
 });
 

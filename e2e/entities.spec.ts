@@ -50,3 +50,46 @@ test("archives every detected entity matching the current filter, then restores 
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });
+
+test("archives every established entity matching the current filter, then restores them all back to Established", async ({ page }) => {
+  const browserErrors = collectBrowserErrors(page);
+  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await openEntities(page);
+
+  // The fixture ships six confirmed established entities (Babbage plus five),
+  // so Established starts at six rows with the default unfiltered view.
+  await page.getByRole("tab", { name: "Established" }).click();
+  await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Archive all matching" }).click();
+
+  const archiveDialog = page.getByRole("dialog");
+  await expect(archiveDialog.getByText("Archive 6 established entities?")).toBeVisible();
+  await expect(archiveDialog.getByText("Filter", { exact: true })).toBeVisible();
+  await expect(archiveDialog.getByText("Any, any number of memories")).toBeVisible();
+  // Every established fixture row already has a memory, so the dialog warns
+  // that archiving takes memories with it.
+  await expect(archiveDialog.getByText("Includes", { exact: true })).toBeVisible();
+  await expect(
+    archiveDialog.getByText("To keep those, set Memories to None first. Archived entities can be restored from the Archived tab."),
+  ).toBeVisible();
+
+  await archiveDialog.getByRole("button", { name: "Archive", exact: true }).click();
+
+  await expect(archiveDialog).toHaveCount(0);
+  await expect(page.getByText("No established entities yet")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Archived" }).click();
+  await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Restore all" }).click();
+
+  // All six were confirmed before archiving, so they all come back
+  // Established -- the exact inverse of the archive.
+  await expect(page.getByText("No archived entities")).toBeVisible();
+  await page.getByRole("tab", { name: "Established" }).click();
+  await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
+
+  expect(browserErrors.pageErrors).toEqual([]);
+  expect(browserErrors.consoleErrors).toEqual([]);
+});
