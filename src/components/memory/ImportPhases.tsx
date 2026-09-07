@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getImportBatchStatus,
@@ -39,9 +39,24 @@ export function importSourceLabel(source: string): string {
  * Live row counts for one import batch. Same polling shape as ImportFlow's
  * pending-import poll: an immediate read, a 1.5 s interval, an `alive` guard,
  * and cleanup on unmount. Stops polling once the daemon reports `complete`.
+ *
+ * Pass `uploading` while chunks are still being posted. The daemon reports
+ * `complete` for the memories it has, not for the ones still queued in the
+ * browser, so on an install with no LLM provider — where every enrichment step
+ * records `skipped` the moment it lands — chunk 1 can settle before chunk 2 is
+ * sent. Stopping there froze the phase list at chunk-1 numbers and printed
+ * "settled" over an import with most of its work still to come, and nothing
+ * restarted the poll. Held open, the poll survives to the end of the upload.
  */
-export function useImportBatchStatus(batchId: string | null): ImportBatchStatus | null {
+export function useImportBatchStatus(
+  batchId: string | null,
+  uploading = false,
+): ImportBatchStatus | null {
   const [status, setStatus] = useState<ImportBatchStatus | null>(null);
+  // A ref, not a dep: flipping `uploading` must not tear down the interval and
+  // blank the counts mid-import.
+  const uploadingRef = useRef(uploading);
+  uploadingRef.current = uploading;
 
   useEffect(() => {
     setStatus(null);
@@ -53,7 +68,7 @@ export function useImportBatchStatus(batchId: string | null): ImportBatchStatus 
         .then((next) => {
           if (!alive) return;
           setStatus(next);
-          if (next.complete && id !== null) {
+          if (next.complete && !uploadingRef.current && id !== null) {
             clearInterval(id);
             id = null;
           }

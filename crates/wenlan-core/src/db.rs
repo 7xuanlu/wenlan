@@ -40296,23 +40296,27 @@ impl MemoryDB {
         }
     }
 
-    /// Escape a batch id (or any literal) for a `LIKE ... ESCAPE '\'` match.
-    fn escape_import_like_literal(value: &str) -> String {
-        value
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
+    /// The half-open key range holding exactly the source ids one import batch
+    /// minted: every id starting `import_{batch}_`.
+    ///
+    /// A range, not `LIKE ... ESCAPE`. SQLite only rewrites a prefix `LIKE`
+    /// into an index range when `case_sensitive_like` is ON, and this database
+    /// never sets that pragma, so the `LIKE` form scanned every row of each
+    /// table it touched. It also matched case-insensitively, admitting rows of
+    /// a batch id differing only in case. The upper bound increments the
+    /// prefix's last byte, which is the first key past the prefix under the
+    /// BINARY collation the source-id indexes use.
+    fn import_batch_key_range(batch_id: &str) -> (String, String) {
+        Self::import_prefix_key_range(&format!("import_{batch_id}_"))
     }
 
-    /// The `LIKE` pattern matching exactly the source ids one import batch
-    /// minted: `import_{batch}_%`, with every literal underscore escaped so a
-    /// batch id containing `_` cannot widen the match. Uses the existing
-    /// `idx_memories_source_id` prefix path; no migration.
-    fn import_batch_like_pattern(batch_id: &str) -> String {
-        format!(
-            "import\\_{}\\_%",
-            Self::escape_import_like_literal(batch_id)
-        )
+    /// The half-open key range for any literal source-id prefix.
+    fn import_prefix_key_range(prefix: &str) -> (String, String) {
+        let mut upper = prefix.to_string();
+        let last = upper.pop().expect("import prefix is never empty");
+        let next = char::from_u32(last as u32 + 1).expect("import prefix ends in an ASCII byte");
+        upper.push(next);
+        (prefix.to_string(), upper)
     }
 
     /// True when `remainder` (a source id with the `import_{batch}_` prefix
@@ -40374,8 +40378,8 @@ impl MemoryDB {
         use std::collections::{HashMap, HashSet};
         use wenlan_types::import::{ImportPhase, ImportPhaseState, ImportPhaseStatus};
 
-        let pattern = Self::import_batch_like_pattern(batch_id);
         let prefix = format!("import_{batch_id}_");
+        let (key_lo, key_hi) = Self::import_batch_key_range(batch_id);
 
         // Batch members: distinct source ids under the prefix whose remainder
         // is one of the two minted shapes.
@@ -40390,8 +40394,8 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT source_id, source_agent, space, COALESCE(created_at, last_modified) \
-                     FROM memories WHERE source_id LIKE ?1 ESCAPE '\\'",
-                    libsql::params![pattern.clone()],
+                     FROM memories WHERE source_id >= ?1 AND source_id < ?2",
+                    libsql::params![key_lo.clone(), key_hi.clone()],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("import_batch_status members: {e}")))?;
@@ -40446,8 +40450,8 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT source_id, step_name, status, updated_at FROM enrichment_steps \
-                     WHERE source_id LIKE ?1 ESCAPE '\\'",
-                    libsql::params![pattern.clone()],
+                     WHERE source_id >= ?1 AND source_id < ?2",
+                    libsql::params![key_lo.clone(), key_hi.clone()],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("import_batch_status steps: {e}")))?;
@@ -40469,9 +40473,18 @@ impl MemoryDB {
                     "ok" | "skipped" => {
                         done_steps.insert(key);
                     }
-                    "failed" => {
+                    // `abandoned` is terminal: the entity lane writes it once a
+                    // memory has burned ENTITY_ENRICHMENT_MAX_ATTEMPTS, and the
+                    // retry selector never picks an abandoned row up again.
+                    // Counting it as neither done nor failed left the phase one
+                    // row short of its total forever, so the batch never
+                    // completed and both the import view and the home pill
+                    // polled the daemon for the life of the process.
+                    "failed" | "abandoned" => {
                         failed_steps.insert(key);
                     }
+                    // `needs_retry` and anything unrecognized is still in
+                    // flight; the phase stays Running, which is the truth.
                     _ => {}
                 }
             }
@@ -40543,8 +40556,9 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT DISTINCT src_id, dst_id FROM edges \
-                     WHERE edge_type = 'cites' AND valid_until IS NULL AND dst_id LIKE ?1 ESCAPE '\\'",
-                    libsql::params![pattern.clone()],
+                     WHERE edge_type = 'cites' AND valid_until IS NULL \
+                     AND dst_id >= ?1 AND dst_id < ?2",
+                    libsql::params![key_lo.clone(), key_hi.clone()],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("import_batch_status distill: {e}")))?;
@@ -40561,10 +40575,17 @@ impl MemoryDB {
         };
         phases.push(ImportPhaseStatus {
             phase: ImportPhase::Distill,
-            state: if settled_background {
+            // Distillation has no total and writes no step row, so the only
+            // evidence it ran is a page citing the batch. Claiming Complete off
+            // `settled_background` alone drew a finished phase reading "0
+            // pages" the moment the other lanes settled, which nothing
+            // supports. With no page yet it stays Pending.
+            state: if !settled_background {
+                ImportPhaseState::Running
+            } else if pages_distilled > 0 {
                 ImportPhaseState::Complete
             } else {
-                ImportPhaseState::Running
+                ImportPhaseState::Pending
             },
             done: pages_distilled,
             total: 0,
@@ -40583,8 +40604,8 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT DISTINCT memory_id, entity_id FROM memory_entities \
-                     WHERE memory_id LIKE ?1 ESCAPE '\\'",
-                    libsql::params![pattern.clone()],
+                     WHERE memory_id >= ?1 AND memory_id < ?2",
+                    libsql::params![key_lo.clone(), key_hi.clone()],
                 )
                 .await
                 .map_err(|e| {
@@ -40601,8 +40622,8 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT source_id, entity_id FROM memories \
-                     WHERE entity_id IS NOT NULL AND source_id LIKE ?1 ESCAPE '\\'",
-                    libsql::params![pattern.clone()],
+                     WHERE entity_id IS NOT NULL AND source_id >= ?1 AND source_id < ?2",
+                    libsql::params![key_lo.clone(), key_hi.clone()],
                 )
                 .await
                 .map_err(|e| {
@@ -40681,9 +40702,22 @@ impl MemoryDB {
     }
 
     /// The most recently updated import batches that are not `complete`,
-    /// newest first, capped at `limit`. Candidate batches come from the
-    /// `import_` source-id prefix range (never a whole-table scan); each
-    /// candidate is then read through [`Self::import_batch_status`].
+    /// newest first, capped at `limit`.
+    ///
+    /// Candidate batches come from the `import_` source-id prefix range, then
+    /// are narrowed to those written inside [`Self::ACTIVE_IMPORT_WINDOW_SECS`]
+    /// and to the [`Self::ACTIVE_IMPORT_CANDIDATES`] newest of those before any
+    /// per-batch read happens. Without that bound this walked every batch the
+    /// database had ever held on every call, and the home screen calls it every
+    /// ten seconds.
+    /// How far back `active_import_batches` looks for a batch that might still
+    /// be settling. One day: longer than any import's background work.
+    const ACTIVE_IMPORT_WINDOW_SECS: i64 = 24 * 60 * 60;
+
+    /// The most batches `active_import_batches` will read per call, newest
+    /// first. A ceiling on the work one home-screen poll can cost.
+    const ACTIVE_IMPORT_CANDIDATES: usize = 32;
+
     pub async fn active_import_batches(
         &self,
         limit: usize,
@@ -40691,6 +40725,7 @@ impl MemoryDB {
         if limit == 0 {
             return Ok(Vec::new());
         }
+        let (scan_lo, scan_hi) = Self::import_prefix_key_range("import_");
         // Distinct batch ids in the prefix range, with each batch's newest
         // memory write for recency ordering.
         let mut newest: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
@@ -40699,8 +40734,8 @@ impl MemoryDB {
             let mut rows = conn
                 .query(
                     "SELECT source_id, last_modified FROM memories \
-                     WHERE source_id LIKE 'import\\_%' ESCAPE '\\'",
-                    (),
+                     WHERE source_id >= ?1 AND source_id < ?2",
+                    libsql::params![scan_lo.clone(), scan_hi.clone()],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("active_import_batches scan: {e}")))?;
@@ -40718,10 +40753,19 @@ impl MemoryDB {
                     .or_insert(modified);
             }
         }
-        let mut candidates: Vec<String> = newest.into_keys().collect();
-        candidates.sort();
+        // A batch nobody has written to in a day is not "settling" in any
+        // sense a user cares about, and reading it costs four table walks.
+        let floor = chrono::Utc::now().timestamp() - Self::ACTIVE_IMPORT_WINDOW_SECS;
+        let mut candidates: Vec<(i64, String)> = newest
+            .into_iter()
+            .filter(|(_, modified)| *modified >= floor)
+            .map(|(batch_id, modified)| (modified, batch_id))
+            .collect();
+        // Newest first, so the cap keeps the batches most likely to be active.
+        candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        candidates.truncate(Self::ACTIVE_IMPORT_CANDIDATES);
         let mut active = Vec::new();
-        for batch_id in candidates {
+        for (_, batch_id) in candidates {
             let Some(status) = self.import_batch_status(&batch_id).await? else {
                 continue;
             };
@@ -40729,6 +40773,9 @@ impl MemoryDB {
                 continue;
             }
             active.push(status);
+            if active.len() >= limit {
+                break;
+            }
         }
         active.sort_by(|a, b| {
             b.updated_at
