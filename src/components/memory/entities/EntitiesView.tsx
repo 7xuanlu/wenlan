@@ -304,8 +304,9 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   // only after a 300 ms debounce, and then only once the list request for the
   // new filters comes back. Until both have happened the number beside the
   // button describes the previous search, so a bulk action that trusts that
-  // number must wait for it.
-  const countMatchesTheSearchBox = queryInput === filters.query && !loading;
+  // number must wait for it. A failed request never replaces the count at
+  // all, so it leaves the number stale for good rather than briefly.
+  const countMatchesTheSearchBox = queryInput === filters.query && !loading && !loadError;
 
   return (
     <section aria-labelledby="entities-title" className="entities-view">

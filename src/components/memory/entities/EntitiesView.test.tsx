@@ -583,6 +583,30 @@ describe("EntitiesView", () => {
     expect(applied?.[0].filter?.query).toBeUndefined();
   });
 
+  it("will not restore on a count a failed reload left stale", async () => {
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openTab(user, /Archived/);
+    await screen.findByText("Countess of Lovelace");
+
+    // The list for the typed search never arrives, so the count beside the
+    // button still describes the unfiltered tab. The button must not act on
+    // it.
+    const realQuery = vi.mocked(tauri.queryEntities).getMockImplementation()!;
+    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
+      if (filter.query !== undefined) throw new Error("list unavailable");
+      return realQuery(filter);
+    });
+
+    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore all matching" })).toBeDisabled(),
+    );
+    expect(vi.mocked(tauri.restoreEntities)).not.toHaveBeenCalled();
+  });
+
   it("keeps the filters but clears the selection when switching tabs", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
