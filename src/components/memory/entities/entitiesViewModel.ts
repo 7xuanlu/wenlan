@@ -20,10 +20,9 @@ const TAB_STATUS: Record<EntityTab, EntityStatus> = {
   archived: "archived",
 };
 
-/** Search and chip state. Only the Detected tab renders controls for these
- * (Established and Archived are plain paginated lists, per the mock), but the
- * shape is shared so "Archive all matching" can read back exactly what is
- * active. */
+/** Search and chip state. Every tab renders controls for these and they
+ * drive the list request the same way, so "Archive all matching" can read
+ * back exactly what is active on any tab. */
 export interface EntityFilters {
   readonly query: string;
   readonly type: EntityTypeFilter;
@@ -37,8 +36,9 @@ export function filtersActive(filters: EntityFilters): boolean {
   return filters.type !== "all" || filters.memories !== "any" || filters.query.trim() !== "";
 }
 
-/** Maps a tab plus (for Detected) the active filters to the daemon's list
- * request, including `limit`/`offset` for the page the caller is on. */
+/** Maps a tab plus the active filters to the daemon's list request,
+ * including `limit`/`offset` for the page the caller is on. The search and
+ * chips apply identically on every tab. */
 export function entityListRequest(
   tab: EntityTab,
   filters: EntityFilters,
@@ -49,7 +49,6 @@ export function entityListRequest(
     limit: ENTITIES_PAGE_SIZE,
     offset,
   };
-  if (tab !== "detected") return request;
   if (filters.type !== "all") request.entity_type = filters.type;
   if (filters.memories === "none") {
     request.min_memories = 0;
@@ -70,19 +69,18 @@ export function subtitle(
   return t("entities.subtitle", counts);
 }
 
-/** The matchline sentence above the Detected and Archived tables: unfiltered
- * ("N detected entities") vs. filtered ("N detected entities match"). Only
- * Detected can be filtered; Archived always reads as unfiltered. */
+/** The matchline sentence above each tab's table: unfiltered
+ * ("N detected entities") vs. filtered ("N detected entities match"). Every
+ * tab can be filtered, so the sentence follows the `filtered` flag on all
+ * three. */
 export function matchLabel(
-  tab: "detected" | "archived",
+  tab: EntityTab,
   count: number,
   filtered: boolean,
   t: TFunction,
 ): string {
-  if (tab === "archived") return t("entities.match_archived", { count });
-  return filtered
-    ? t("entities.matchFiltered_detected", { count })
-    : t("entities.match_detected", { count });
+  if (filtered) return t(`entities.matchFiltered_${tab}`, { count });
+  return t(`entities.match_${tab}`, { count });
 }
 
 /** The "Filter" line read back in the archive-all-matching confirm dialog,

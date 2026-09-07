@@ -90,7 +90,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   const requestSeqRef = useRef(0);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
-  // Debounce the search box into `filters.query` (Detected tab only).
+  // Debounce the search box into `filters.query` (every tab filters alike).
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
@@ -244,7 +244,9 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
       // dry run, the readback, and the apply all describe the same filter.
       const readback: EntityFilters = { ...filters, query: queryInput };
       if (readback.query !== filters.query) setFilters(readback);
-      const filter = entityListRequest("detected", readback, 0);
+      // The "Archive all matching" button only renders on Established and
+      // Detected, so `tab` here is always the status being archived.
+      const filter = entityListRequest(tab, readback, 0);
       const dryRun = await archiveEntities({ filter, dry_run: true });
       // The Memories chip already excludes them when it's "None"; otherwise a
       // second dry-run (same filter, but only entities that have memories)
@@ -291,7 +293,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   const ids = entities.map((entity) => entity.id);
   const selectAll = selectAllState(selected, ids);
   const hasMore = entities.length < total;
-  const detectedFiltered = filtersActive(filters);
+  const filtersAreActive = filtersActive(filters);
 
   return (
     <section aria-labelledby="entities-title" className="entities-view">
@@ -320,7 +322,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
       </div>
 
       <div aria-labelledby={`entities-tab-${tab}`} id="entities-tabpanel" role="tabpanel">
-      {tab === "detected" && (
+        {/* Search, Type, and Memories filter every tab alike (spec: browse-and-tidy). */}
         <div className="entities-filters" aria-label={t("entities.filters.typeLabel")}>
           <input
             aria-label={t("entities.search.label")}
@@ -363,11 +365,10 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
             ))}
           </div>
         </div>
-      )}
 
-      {tab === "detected" && (
+      {(tab === "established" || tab === "detected") && (
         <div className="entities-matchline">
-          <span>{matchLabel("detected", total, detectedFiltered, t)}</span>
+          <span>{matchLabel(tab, total, filtersAreActive, t)}</span>
           <button
             className="entities-ghost-btn"
             disabled={total === 0 || archiveMatchingPending}
@@ -381,7 +382,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
 
       {tab === "archived" && (
         <div className="entities-matchline">
-          <span>{matchLabel("archived", total, false, t)}</span>
+          <span>{matchLabel("archived", total, filtersAreActive, t)}</span>
           <button
             className="entities-ghost-btn"
             disabled={total === 0}
@@ -393,24 +394,23 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
         </div>
       )}
 
-      {(tab === "detected" || tab === "archived") && selected.size > 0 && (
+      {selected.size > 0 && (
         <div className="entities-selection-bar">
           <span className="entities-selection-count">{selectionSummary(selected.size, t)}</span>
-          {tab === "detected" ? (
-            <>
-              <button className="entities-ghost-btn" onClick={() => void handleEstablish([...selected])} type="button">
-                {t("entities.selectionBar.establishSelected")}
-              </button>
-              <button className="entities-ghost-btn" onClick={() => void handleArchive([...selected])} type="button">
-                {t("entities.selectionBar.archiveSelected")}
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="entities-ghost-btn" onClick={() => void handleRestore([...selected])} type="button">
-                {t("entities.selectionBar.restoreSelected")}
-              </button>
-            </>
+          {tab === "detected" && (
+            <button className="entities-ghost-btn" onClick={() => void handleEstablish([...selected])} type="button">
+              {t("entities.selectionBar.establishSelected")}
+            </button>
+          )}
+          {tab !== "archived" && (
+            <button className="entities-ghost-btn" onClick={() => void handleArchive([...selected])} type="button">
+              {t("entities.selectionBar.archiveSelected")}
+            </button>
+          )}
+          {tab === "archived" && (
+            <button className="entities-ghost-btn" onClick={() => void handleRestore([...selected])} type="button">
+              {t("entities.selectionBar.restoreSelected")}
+            </button>
           )}
         </div>
       )}
@@ -428,19 +428,17 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
         <table className="entities-table">
           <thead>
             <tr>
-              {(tab === "detected" || tab === "archived") && (
-                <th className="entities-check-col">
-                  <input
-                    aria-label={t("entities.actions.selectAll")}
-                    checked={selectAll.checked}
-                    onChange={(event) => setSelected((current) => toggleSelectAll(current, ids, event.target.checked))}
-                    ref={(element) => {
-                      if (element) element.indeterminate = selectAll.indeterminate;
-                    }}
-                    type="checkbox"
-                  />
-                </th>
-              )}
+              <th className="entities-check-col">
+                <input
+                  aria-label={t("entities.actions.selectAll")}
+                  checked={selectAll.checked}
+                  onChange={(event) => setSelected((current) => toggleSelectAll(current, ids, event.target.checked))}
+                  ref={(element) => {
+                    if (element) element.indeterminate = selectAll.indeterminate;
+                  }}
+                  type="checkbox"
+                />
+              </th>
               <th>{t("entities.columns.entity")}</th>
               <th>{t("entities.columns.type")}</th>
               <th style={{ textAlign: "right" }}>{t("entities.columns.memories")}</th>
@@ -453,16 +451,14 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
           <tbody>
             {entities.map((entity) => (
               <tr key={entity.id}>
-                {(tab === "detected" || tab === "archived") && (
-                  <td className="entities-check-col">
-                    <input
-                      aria-label={t("entities.actions.selectEntity", { name: entity.name })}
-                      checked={selected.has(entity.id)}
-                      onChange={() => setSelected((current) => toggleSelected(current, entity.id))}
-                      type="checkbox"
-                    />
-                  </td>
-                )}
+                <td className="entities-check-col">
+                  <input
+                    aria-label={t("entities.actions.selectEntity", { name: entity.name })}
+                    checked={selected.has(entity.id)}
+                    onChange={() => setSelected((current) => toggleSelected(current, entity.id))}
+                    type="checkbox"
+                  />
+                </td>
                 <td>
                   {tab === "established" ? (
                     <button className="entities-name-link" onClick={() => onEntityClick(entity.id)} type="button">
@@ -545,7 +541,9 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
           >
             <h2 id="entities-dialog-title">
               {dialog.kind === "archiveMatching"
-                ? t("entities.dialogs.archiveMatching.title", { count: dialog.count })
+                ? (dialog.filter.status === "established"
+                  ? t("entities.dialogs.archiveMatching.titleEstablished", { count: dialog.count })
+                  : t("entities.dialogs.archiveMatching.title", { count: dialog.count }))
                 : t("entities.dialogs.deletePermanently.titleNamed", { name: dialog.name })}
             </h2>
             <p>
