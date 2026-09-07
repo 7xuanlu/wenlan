@@ -273,6 +273,13 @@ function WikiHome({
     refetchInterval: 10_000,
   });
   const importBatches = activeImports?.batches ?? [];
+  // Close the panel when the last batch settles. Left open, it stays armed:
+  // the next import would replace the whole home grid with a detail panel the
+  // user never asked for, minutes or days after they last opened one.
+  const hasActiveImports = importBatches.length > 0;
+  useEffect(() => {
+    if (!hasActiveImports) setImportDetailOpen(false);
+  }, [hasActiveImports]);
   // New-memory captures are inflow, not decisions — they're unconfirmed but
   // already live (recalled, feeding pages), so they stay out of the rail AND
   // out of the dialog the rail opens: its "n of total" header must walk the

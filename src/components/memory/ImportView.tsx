@@ -96,9 +96,10 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
   const [result, setResult] = useState<ImportResult | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
   const [chunkProgress, setChunkProgress] = useState<{ done: number; total: number } | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const batchStatus = useImportBatchStatus(batchId);
+  const batchStatus = useImportBatchStatus(batchId, uploading);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -123,6 +124,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
     const id = crypto.randomUUID();
     setBatchId(id);
     setChunkProgress({ done: 0, total: chunks.length });
+    setUploading(true);
     setPhase("progress");
     try {
       const agg: ImportResult = {
@@ -150,6 +152,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
         }
         setChunkProgress({ done: i + 1, total: chunks.length });
       }
+      setUploading(false);
       setResult(agg);
       // The request phases (ingest, store) are done here; detect and later
       // keep running in the background. The summary says so honestly while
@@ -157,6 +160,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
       setPhase("summary");
       queryClient.invalidateQueries();
     } catch (err) {
+      setUploading(false);
       setError(String(err));
       setBatchId(null);
       setChunkProgress(null);
@@ -165,6 +169,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
   };
 
   const handleReset = () => {
+    setUploading(false);
     setPhase("input");
     setText("");
     setError(null);

@@ -51,8 +51,8 @@ function makeBatch(overrides: Partial<ImportBatchStatus> = {}): ImportBatchStatu
   } as ImportBatchStatus;
 }
 
-function Probe({ batchId }: { batchId: string | null }) {
-  const status = useImportBatchStatus(batchId);
+function Probe({ batchId, uploading = false }: { batchId: string | null; uploading?: boolean }) {
+  const status = useImportBatchStatus(batchId, uploading);
   return <div data-testid="probe">{status ? status.batch_id : "none"}</div>;
 }
 
@@ -192,6 +192,38 @@ describe("useImportBatchStatus", () => {
     (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
       makeBatch({ complete: true }),
     );
+    await act(async () => {
+      vi.advanceTimersByTime(1_500);
+    });
+    const settledCalls = (getImportBatchStatus as ReturnType<typeof vi.fn>).mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(getImportBatchStatus).toHaveBeenCalledTimes(settledCalls);
+  });
+
+  it("keeps polling through a complete report while chunks are still uploading", async () => {
+    // The daemon reports on the memories it has, not the ones still queued in
+    // the browser. On an install with no LLM provider every step records
+    // `skipped` on arrival, so chunk 1 can report complete before chunk 2 is
+    // sent. Stopping there froze the phase list at chunk-1 numbers for the
+    // rest of the import, with nothing to restart it.
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeBatch({ complete: true }),
+    );
+
+    const { rerender } = render(<Probe batchId="batch-1" uploading />);
+    await act(async () => {});
+    const afterFirstComplete = (getImportBatchStatus as ReturnType<typeof vi.fn>).mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(4_500);
+    });
+    expect((getImportBatchStatus as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(
+      afterFirstComplete,
+    );
+
+    // Upload finished: the next complete report stops the poll for good.
+    rerender(<Probe batchId="batch-1" uploading={false} />);
     await act(async () => {
       vi.advanceTimersByTime(1_500);
     });
