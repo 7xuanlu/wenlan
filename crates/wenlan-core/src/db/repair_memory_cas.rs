@@ -387,8 +387,22 @@ impl MemoryDB {
             // pages, so the archived-restore branch inside the helper cannot
             // trigger here -- a promotion is exactly one `pages` UPDATE, and
             // each one is a target write the effect guard below must allow.
+            //
+            // A manifest prepared before #708 declares only the link and
+            // enrichment-step effects. Its apply receipt copies that
+            // declaration, so promoting under it would record an account that
+            // never mentions the `pages` write. Such a manifest keeps its
+            // original behaviour instead: no promotion, and the next live link
+            // write on that entity establishes it.
+            let establishment_declared = manifest
+                .allowed_effects()
+                .fields()
+                .contains(&wenlan_types::repair::RepairMemoryField::EntityEstablishment);
             let mut promotion_changes = 0_u64;
             for entity_id in inserted_entity_ids {
+                if !establishment_declared {
+                    break;
+                }
                 if self
                     .maybe_establish_entity_in_transaction(
                         &conn,

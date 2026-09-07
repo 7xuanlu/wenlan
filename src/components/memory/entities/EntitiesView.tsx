@@ -300,10 +300,12 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   const selectAll = selectAllState(selected, ids);
   const hasMore = entities.length < total;
   const filtersAreActive = filtersActive(filters);
-  // The search box reaches `filters` only after a 300 ms debounce, and every
-  // count on screen came from `filters`. While the two disagree the counts
-  // are about to change, so a bulk action that trusts them must wait.
-  const searchIsSettled = queryInput === filters.query;
+  // Every count on screen came from `filters`, which the search box reaches
+  // only after a 300 ms debounce, and then only once the list request for the
+  // new filters comes back. Until both have happened the number beside the
+  // button describes the previous search, so a bulk action that trusts that
+  // number must wait for it.
+  const countMatchesTheSearchBox = queryInput === filters.query && !loading;
 
   return (
     <section aria-labelledby="entities-title" className="entities-view">
@@ -395,7 +397,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
           <span>{matchLabel("archived", total, filtersAreActive, t)}</span>
           <button
             className="entities-ghost-btn"
-            disabled={total === 0 || !searchIsSettled}
+            disabled={total === 0 || !countMatchesTheSearchBox}
             onClick={() => void handleRestoreAll()}
             type="button"
           >

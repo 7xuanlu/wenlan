@@ -556,6 +556,41 @@ async fn entity_extraction_forced_rollback_failure_is_exact_recovery_required() 
     assert_db_mutex_released(&db);
 }
 
+/// A manifest prepared before #708 declares only the link and enrichment-step
+/// effects, and its apply receipt copies that declaration. Promoting under it
+/// would record an account that never mentions the `pages` write, so such a
+/// manifest keeps its original behaviour: the link is recorded, the entity is
+/// not established, and the next live link write on it does that instead.
+#[tokio::test]
+#[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+async fn a_manifest_prepared_before_the_effect_was_declared_does_not_establish() {
+    let threshold = crate::db::entity_establish_min_memories();
+    let (db, _db_dir, manifest, rollback) = entity_fixture_with_prior_links(threshold - 1).await;
+    let mut value = serde_json::to_value(&manifest).unwrap();
+    value["allowed_effects"]["fields"] =
+        serde_json::json!(["memory_entity_links", "enrichment_step"]);
+    let legacy: RepairManifest = serde_json::from_value(value).unwrap();
+
+    db.complete_entity_extraction_repair_cas(&legacy, &rollback, |proof| {
+        assert_eq!(proof.non_target_before(), proof.non_target_after());
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        entity_establishment(&db, "ent-new").await,
+        (0, None),
+        "a manifest that never declared the establishment write must not make it"
+    );
+    assert_eq!(
+        entity_state(&db).await.0,
+        vec!["ent-existing".to_string(), "ent-new".to_string()],
+        "the link the repair was prepared for is still recorded"
+    );
+    assert_db_mutex_released(&db);
+}
+
 /// #708: a repair that records the link which reaches the auto-establish
 /// threshold promotes the entity exactly like the live link path would,
 /// inside the same transaction and without tripping the effect guard.

@@ -547,14 +547,37 @@ describe("EntitiesView", () => {
     await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
     expect(await screen.findByText("1 archived entity matches")).toBeInTheDocument();
 
-    // Clearing the box does not reach the count for 300 ms. Until it does,
-    // the button is unavailable rather than restoring everything archived
-    // while the screen still says one entity matches.
+    // Clearing the box does not reach the count for 300 ms, and the new count
+    // only lands when its request returns. Until both have happened the button
+    // is unavailable, rather than restoring everything archived while the
+    // screen still says one entity matches.
+    let releaseList: () => void = () => {};
+    const realQuery = vi.mocked(tauri.queryEntities).getMockImplementation()!;
+    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
+      if (filter.status === "archived" && filter.query === undefined && filter.limit !== 1) {
+        await new Promise<void>((resolve) => {
+          releaseList = resolve;
+        });
+      }
+      return realQuery(filter);
+    });
+
     await user.clear(screen.getByRole("searchbox", { name: "Find a name" }));
     expect(screen.getByRole("button", { name: "Restore all matching" })).toBeDisabled();
+
+    // The debounce has now moved the cleared search into the filters, but the
+    // list showing the new count is still in flight.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore all" })).toBeDisabled(),
+    );
     expect(vi.mocked(tauri.restoreEntities)).not.toHaveBeenCalled();
 
+    releaseList();
+
     await screen.findByText("2 archived entities");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore all" })).toBeEnabled(),
+    );
     await user.click(screen.getByRole("button", { name: "Restore all" }));
     const applied = vi.mocked(tauri.restoreEntities).mock.calls.find(([req]) => !req.dry_run);
     expect(applied?.[0].filter?.query).toBeUndefined();
