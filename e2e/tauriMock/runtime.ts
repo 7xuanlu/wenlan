@@ -200,6 +200,10 @@ export class TauriMockRuntime {
       // No fixture models a live M5 truth cutover yet, so this always
       // reports "not cut over" — the same state as production before cutover.
       case "get_truth_status": return null;
+      // Review is a fixture surface; no import is ever in flight in it, so
+      // the home screen's poll answers "nothing settling" rather than being
+      // rejected as an unknown command.
+      case "active_import_batches_cmd": return { batches: [] };
       case "create_page": return this.createPage(args);
       case "update_page": return this.updatePage(args);
       case "delete_page": return this.deletePage(args);

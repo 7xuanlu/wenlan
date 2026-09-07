@@ -37,7 +37,6 @@ const INVOKE_LITERAL = /invoke[A-Za-z]*(?:<[^>]*>)?\(\s*"([a-z0-9_]+)"/g;
 const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "accept_pending_revision",
   "acknowledge_guarded_quit_request",
-  "active_import_batches_cmd",
   "add_source",
   "add_watch_path",
   "archive_page",

@@ -33,6 +33,7 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "get_briefing",
     "get_pending_contradictions",
     "get_truth_status",
+    "active_import_batches_cmd",
   ],
   wikiAndPages: [
     "list_pages",
