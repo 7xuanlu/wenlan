@@ -40296,6 +40296,449 @@ impl MemoryDB {
         }
     }
 
+    /// Escape a batch id (or any literal) for a `LIKE ... ESCAPE '\'` match.
+    fn escape_import_like_literal(value: &str) -> String {
+        value
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    }
+
+    /// The `LIKE` pattern matching exactly the source ids one import batch
+    /// minted: `import_{batch}_%`, with every literal underscore escaped so a
+    /// batch id containing `_` cannot widen the match. Uses the existing
+    /// `idx_memories_source_id` prefix path; no migration.
+    fn import_batch_like_pattern(batch_id: &str) -> String {
+        format!(
+            "import\\_{}\\_%",
+            Self::escape_import_like_literal(batch_id)
+        )
+    }
+
+    /// True when `remainder` (a source id with the `import_{batch}_` prefix
+    /// stripped) is one of the two shapes the importer mints: `{i}` or
+    /// `{chunk}_{i}`, both numeric. Rejects rows of a longer batch id that
+    /// merely shares the prefix (batch `abc` vs `abc_def`).
+    fn import_batch_remainder_is_member(remainder: &str) -> bool {
+        let parts: Vec<&str> = remainder.split('_').collect();
+        (parts.len() == 1 || parts.len() == 2)
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    }
+
+    /// The chunk segment of a member remainder: the leading `{chunk}` of the
+    /// chunked form, or `""` for the un-chunked form (which is its own single
+    /// segment).
+    fn import_batch_chunk_key(remainder: &str) -> &str {
+        match remainder.split_once('_') {
+            Some((chunk, _)) => chunk,
+            // Un-chunked: the single segment is the memory index `{i}`, not a
+            // chunk number. Every such row belongs to the same lone chunk.
+            None => "",
+        }
+    }
+
+    /// Recover the batch id from a full `import_...` source id by stripping
+    /// the trailing numeric `{i}` / `{chunk}_{i}` segments. Caller-supplied
+    /// batch ids that themselves end in `_`-separated digits are ambiguous
+    /// with the chunked shape; minted UUIDs never are.
+    fn import_batch_id_from_source_id(source_id: &str) -> Option<String> {
+        let rest = source_id.strip_prefix("import_")?;
+        let mut parts: Vec<&str> = rest.split('_').collect();
+        let mut stripped = 0;
+        while stripped < 2 {
+            match parts.last() {
+                Some(last) if !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()) => {
+                    parts.pop();
+                    stripped += 1;
+                }
+                _ => break,
+            }
+        }
+        if stripped == 0 || parts.is_empty() {
+            return None;
+        }
+        Some(parts.join("_"))
+    }
+
+    /// Aggregate progress for one import batch, derived live from the batch's
+    /// memories and their `enrichment_steps` rows. `memories_skipped` is not
+    /// recoverable from the database after the fact and is always 0 here.
+    /// Returns `Ok(None)` when no memory carries the batch's source-id
+    /// prefix. Read-only SQL.
+    pub async fn import_batch_status(
+        &self,
+        batch_id: &str,
+    ) -> Result<Option<wenlan_types::import::ImportBatchStatus>, WenlanError> {
+        use std::collections::{HashMap, HashSet};
+        use wenlan_types::import::{ImportPhase, ImportPhaseState, ImportPhaseStatus};
+
+        let pattern = Self::import_batch_like_pattern(batch_id);
+        let prefix = format!("import_{batch_id}_");
+
+        // Batch members: distinct source ids under the prefix whose remainder
+        // is one of the two minted shapes.
+        let mut members: HashSet<String> = HashSet::new();
+        let mut chunk_keys: HashSet<String> = HashSet::new();
+        let mut source_votes: HashMap<String, u64> = HashMap::new();
+        let mut spaces: HashSet<String> = HashSet::new();
+        let mut started_at = i64::MAX;
+        let mut mem_updated = 0i64;
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, source_agent, space, COALESCE(created_at, last_modified) \
+                     FROM memories WHERE source_id LIKE ?1 ESCAPE '\\'",
+                    libsql::params![pattern.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("import_batch_status members: {e}")))?;
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("import_batch_status member row: {e}"))
+            })? {
+                let source_id: String = row.get(0).unwrap_or_default();
+                let Some(remainder) = source_id.strip_prefix(prefix.as_str()) else {
+                    continue;
+                };
+                if !Self::import_batch_remainder_is_member(remainder) {
+                    continue;
+                }
+                chunk_keys.insert(Self::import_batch_chunk_key(remainder).to_string());
+                let agent: Option<String> = row.get::<Option<String>>(1).unwrap_or(None);
+                if let Some(agent) = agent {
+                    *source_votes.entry(agent).or_insert(0u64) += 1;
+                }
+                let space: Option<String> = row.get(2).unwrap_or(None);
+                if let Some(space) = space {
+                    spaces.insert(space);
+                }
+                let created: i64 = row.get(3).unwrap_or(0);
+                started_at = started_at.min(created);
+                mem_updated = mem_updated.max(created);
+                members.insert(source_id);
+            }
+        }
+        if members.is_empty() {
+            return Ok(None);
+        }
+        let memories_imported = members.len() as u64;
+        let chunks_received = chunk_keys.len() as u32;
+        let source = source_votes
+            .into_iter()
+            .max_by_key(|(_, votes)| *votes)
+            .map(|(agent, _)| agent)
+            .unwrap_or_else(|| "other".to_string());
+        let space = if spaces.len() == 1 {
+            spaces.into_iter().next()
+        } else {
+            None
+        };
+
+        // Step outcomes for member memories only. `(source_id, step)` is the
+        // table's primary key, so each pair lands in at most one set.
+        let mut done_steps: HashSet<(String, String)> = HashSet::new();
+        let mut failed_steps: HashSet<(String, String)> = HashSet::new();
+        let mut step_updated: Option<i64> = None;
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, step_name, status, updated_at FROM enrichment_steps \
+                     WHERE source_id LIKE ?1 ESCAPE '\\'",
+                    libsql::params![pattern.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("import_batch_status steps: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("import_batch_status step row: {e}")))?
+            {
+                let source_id: String = row.get(0).unwrap_or_default();
+                if !members.contains(&source_id) {
+                    continue;
+                }
+                let step: String = row.get(1).unwrap_or_default();
+                let status: String = row.get(2).unwrap_or_default();
+                let updated: i64 = row.get(3).unwrap_or(0);
+                step_updated = Some(step_updated.unwrap_or(0).max(updated));
+                let key = (source_id, step);
+                match status.as_str() {
+                    "ok" | "skipped" => {
+                        done_steps.insert(key);
+                    }
+                    "failed" => {
+                        failed_steps.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let updated_at = step_updated.unwrap_or(mem_updated);
+
+        // Per-phase rollup over `ImportPhase::step_names()`.
+        let mut phases = Vec::with_capacity(ImportPhase::ALL.len());
+        let mut settled_background = true;
+        for phase in ImportPhase::ALL {
+            let steps = phase.step_names();
+            if steps.is_empty() && !matches!(phase, ImportPhase::Distill) {
+                // Ingest and Store finish inside the import request.
+                phases.push(ImportPhaseStatus {
+                    phase,
+                    state: ImportPhaseState::Complete,
+                    done: memories_imported,
+                    total: memories_imported,
+                    failed: 0,
+                });
+                continue;
+            }
+            if matches!(phase, ImportPhase::Distill) {
+                continue;
+            }
+            let total = memories_imported * steps.len() as u64;
+            let mut done = 0u64;
+            let mut failed = 0u64;
+            let mut rows_seen = 0u64;
+            for source_id in &members {
+                for step in steps {
+                    let key = (source_id.clone(), step.to_string());
+                    let is_done = done_steps.contains(&key);
+                    let is_failed = failed_steps.contains(&key);
+                    done += u64::from(is_done);
+                    failed += u64::from(is_failed);
+                    rows_seen += u64::from(is_done || is_failed);
+                }
+            }
+            let state = if done + failed == total {
+                if failed == 0 {
+                    ImportPhaseState::Complete
+                } else {
+                    ImportPhaseState::Failed
+                }
+            } else if rows_seen > 0 {
+                ImportPhaseState::Running
+            } else {
+                ImportPhaseState::Pending
+            };
+            if !matches!(state, ImportPhaseState::Complete | ImportPhaseState::Failed) {
+                settled_background = false;
+            }
+            phases.push(ImportPhaseStatus {
+                phase,
+                state,
+                done,
+                total,
+                failed,
+            });
+        }
+
+        // Distill writes no step row: progress is the live count of distilled
+        // pages citing the batch, via the live page-sources relation (active
+        // `cites` edges, the same store `get_page_sources` reads).
+        let pages_distilled = {
+            let mut citing_pages = HashSet::new();
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT DISTINCT src_id, dst_id FROM edges \
+                     WHERE edge_type = 'cites' AND valid_until IS NULL AND dst_id LIKE ?1 ESCAPE '\\'",
+                    libsql::params![pattern.clone()],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("import_batch_status distill: {e}")))?;
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("import_batch_status distill row: {e}"))
+            })? {
+                let src: String = row.get(0).unwrap_or_default();
+                let dst: String = row.get(1).unwrap_or_default();
+                if members.contains(&dst) {
+                    citing_pages.insert(src);
+                }
+            }
+            citing_pages.len() as u64
+        };
+        phases.push(ImportPhaseStatus {
+            phase: ImportPhase::Distill,
+            state: if settled_background {
+                ImportPhaseState::Complete
+            } else {
+                ImportPhaseState::Running
+            },
+            done: pages_distilled,
+            total: 0,
+            failed: 0,
+        });
+        let complete = settled_background;
+
+        // Entities the batch's memories link to, split by the #708 lifecycle:
+        // detected is `kind='entity'` with `entity_confirmed=0` and a live
+        // status; established is `entity_confirmed=1`. Both link sources
+        // count: the `memory_entities` junction and the legacy direct
+        // `memories.entity_id` column.
+        let mut entity_ids: HashSet<String> = HashSet::new();
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT DISTINCT memory_id, entity_id FROM memory_entities \
+                     WHERE memory_id LIKE ?1 ESCAPE '\\'",
+                    libsql::params![pattern.clone()],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("import_batch_status entity links: {e}"))
+                })?;
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("import_batch_status entity link row: {e}"))
+            })? {
+                let mid: String = row.get(0).unwrap_or_default();
+                if members.contains(&mid) {
+                    entity_ids.insert(row.get::<String>(1).unwrap_or_default());
+                }
+            }
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, entity_id FROM memories \
+                     WHERE entity_id IS NOT NULL AND source_id LIKE ?1 ESCAPE '\\'",
+                    libsql::params![pattern.clone()],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("import_batch_status legacy entity links: {e}"))
+                })?;
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("import_batch_status legacy entity link row: {e}"))
+            })? {
+                let sid: String = row.get(0).unwrap_or_default();
+                if members.contains(&sid) {
+                    entity_ids.insert(row.get::<String>(1).unwrap_or_default());
+                }
+            }
+        }
+        let (entities_detected, entities_established) =
+            self.import_batch_entity_lifecycle(&entity_ids).await?;
+
+        Ok(Some(wenlan_types::import::ImportBatchStatus {
+            batch_id: batch_id.to_string(),
+            source,
+            started_at,
+            updated_at,
+            chunks_received,
+            memories_imported,
+            memories_skipped: 0,
+            entities_detected,
+            entities_established,
+            pages_distilled,
+            phases,
+            complete,
+            space,
+        }))
+    }
+
+    /// Split the batch-linked `entity_ids` into detected / established per the
+    /// #708 lifecycle, read off the `kind='entity'` shadow pages — the same
+    /// classification `scoped_pages` expresses. Entities with no shadow page
+    /// count toward neither.
+    async fn import_batch_entity_lifecycle(
+        &self,
+        entity_ids: &std::collections::HashSet<String>,
+    ) -> Result<(u64, u64), WenlanError> {
+        if entity_ids.is_empty() {
+            return Ok((0, 0));
+        }
+        let ids: Vec<String> = entity_ids.iter().cloned().collect();
+        let placeholders = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT epm.entity_id, p.status, COALESCE(p.entity_confirmed, 0) \
+             FROM entity_page_map epm JOIN pages p ON p.id = epm.page_id AND p.kind = 'entity' \
+             WHERE epm.entity_id IN ({placeholders})"
+        );
+        let params: Vec<libsql::Value> = ids.into_iter().map(libsql::Value::Text).collect();
+        let (mut detected, mut established) = (0u64, 0u64);
+        let conn = self.conn.lock().await;
+        let mut rows = conn.query(&sql, params).await.map_err(|e| {
+            WenlanError::VectorDb(format!("import_batch_entity_lifecycle class: {e}"))
+        })?;
+        while let Some(row) = rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("import_batch_entity_lifecycle class row: {e}"))
+        })? {
+            let status: String = row.get(1).unwrap_or_default();
+            let confirmed: i64 = row.get(2).unwrap_or(0);
+            if confirmed == 1 {
+                established += 1;
+            } else if status != "archived" {
+                detected += 1;
+            }
+        }
+        Ok((detected, established))
+    }
+
+    /// The most recently updated import batches that are not `complete`,
+    /// newest first, capped at `limit`. Candidate batches come from the
+    /// `import_` source-id prefix range (never a whole-table scan); each
+    /// candidate is then read through [`Self::import_batch_status`].
+    pub async fn active_import_batches(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<wenlan_types::import::ImportBatchStatus>, WenlanError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        // Distinct batch ids in the prefix range, with each batch's newest
+        // memory write for recency ordering.
+        let mut newest: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT source_id, last_modified FROM memories \
+                     WHERE source_id LIKE 'import\\_%' ESCAPE '\\'",
+                    (),
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("active_import_batches scan: {e}")))?;
+            while let Some(row) = rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("active_import_batches scan row: {e}"))
+            })? {
+                let source_id: String = row.get(0).unwrap_or_default();
+                let Some(batch_id) = Self::import_batch_id_from_source_id(&source_id) else {
+                    continue;
+                };
+                let modified: i64 = row.get(1).unwrap_or(0);
+                newest
+                    .entry(batch_id)
+                    .and_modify(|seen| *seen = (*seen).max(modified))
+                    .or_insert(modified);
+            }
+        }
+        let mut candidates: Vec<String> = newest.into_keys().collect();
+        candidates.sort();
+        let mut active = Vec::new();
+        for batch_id in candidates {
+            let Some(status) = self.import_batch_status(&batch_id).await? else {
+                continue;
+            };
+            if status.complete {
+                continue;
+            }
+            active.push(status);
+        }
+        active.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.batch_id.cmp(&a.batch_id))
+        });
+        active.truncate(limit);
+        Ok(active)
+    }
+
     /// Return memories with at least one `failed` enrichment step that hasn't
     /// exceeded `max_attempts`, ordered oldest-first. Returns (source_id, step_name, content).
     pub async fn get_failed_enrichment_memories(

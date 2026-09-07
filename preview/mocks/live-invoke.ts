@@ -956,6 +956,32 @@ export const DEFAULTS: Record<string, unknown> = {
   list_registered_sources: [],
   list_indexed_files: [],
   list_pending_imports: [],
+  // A batch mid-flight: ingest and store finished inside the request, the
+  // background phases are still working. An empty or `complete` fixture would
+  // render the one state nobody needs to review — the finished list.
+  import_batch_status_cmd: {
+    batch_id: "preview-batch",
+    source: "chatgpt",
+    started_at: 1_700_000_000,
+    updated_at: 1_700_000_090,
+    chunks_received: 2,
+    memories_imported: 620,
+    memories_skipped: 4,
+    entities_detected: 38,
+    entities_established: 12,
+    pages_distilled: 3,
+    phases: [
+      { phase: "ingest", state: "complete", done: 620, total: 620, failed: 0 },
+      { phase: "store", state: "complete", done: 620, total: 620, failed: 0 },
+      { phase: "detect", state: "running", done: 910, total: 1240, failed: 0 },
+      { phase: "enrich", state: "running", done: 240, total: 620, failed: 2 },
+      { phase: "link", state: "pending", done: 0, total: 620, failed: 0 },
+      { phase: "distill", state: "running", done: 3, total: 0, failed: 0 },
+    ],
+    complete: false,
+    space: null,
+  },
+  active_import_batches_cmd: { batches: [] },
   get_index_status: {
     indexing: false,
     total_chunks: 0,

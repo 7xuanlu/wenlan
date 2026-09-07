@@ -11,7 +11,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 use wenlan_server::state::ServerState;
-use wenlan_types::import::{ImportChatExportRequest, ImportChatExportResponse, PendingImport};
+use wenlan_types::import::{
+    ActiveImportBatchesResponse, ImportBatchStatus, ImportChatExportRequest,
+    ImportChatExportResponse, PendingImport,
+};
 use wenlan_types::requests::ImportMemoriesRequest;
 use wenlan_types::responses::{DeleteResponse, ImportMemoriesResponse, IngestResponse};
 use wenlan_types::WriteSpaceTarget;
@@ -176,6 +179,9 @@ async fn moved_ingest_and_import_routes_preserve_typed_success_contracts() {
         content: "- Typed import contract canary remains parseable.".to_string(),
         label: None,
         space: WriteSpaceTarget::Inherit,
+        batch_id: None,
+        chunk_index: None,
+        chunk_total: None,
     };
     let (status, imported): (StatusCode, ImportMemoriesResponse) = request_typed(
         &router,
@@ -223,6 +229,51 @@ async fn moved_ingest_and_import_routes_preserve_typed_success_contracts() {
     assert_eq!(pending[0].id, "imp-typed-pending");
     assert_eq!(pending[0].vendor, "claude");
     assert_eq!(pending[0].stage, "parsing");
+
+    // Chunked import: two chunks share one caller-supplied batch id.
+    let chunked_batch = "typed-chunked-batch";
+    for (index, content) in [
+        (0u32, "- Typed chunked import alpha memory content here."),
+        (1u32, "- Typed chunked import beta memory content here."),
+    ] {
+        let chunk_request = ImportMemoriesRequest {
+            source: "other".to_string(),
+            content: content.to_string(),
+            label: None,
+            space: WriteSpaceTarget::Inherit,
+            batch_id: Some(chunked_batch.to_string()),
+            chunk_index: Some(index),
+            chunk_total: Some(2),
+        };
+        let (status, imported): (StatusCode, ImportMemoriesResponse) = request_typed(
+            &router,
+            Method::POST,
+            "/api/import/memories",
+            json_body(&chunk_request),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(imported.batch_id, chunked_batch);
+        assert_eq!(imported.imported, 1);
+    }
+
+    let (status, batch_status): (StatusCode, ImportBatchStatus) = request_typed(
+        &router,
+        Method::GET,
+        &format!("/api/import/batches/{chunked_batch}/status"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(batch_status.batch_id, chunked_batch);
+    assert_eq!(batch_status.memories_imported, 2);
+    assert_eq!(batch_status.chunks_received, 2);
+    assert_eq!(batch_status.memories_skipped, 0);
+
+    let (status, active): (StatusCode, ActiveImportBatchesResponse) =
+        request_typed(&router, Method::GET, "/api/import/batches/active", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(active.batches.iter().any(|b| b.batch_id == chunked_batch));
 }
 
 #[tokio::test]
@@ -297,6 +348,9 @@ async fn moved_ingest_and_import_routes_preserve_typed_error_contracts() {
         content: "- Typed invalid import remains long enough.".to_string(),
         label: None,
         space: WriteSpaceTarget::Inherit,
+        batch_id: None,
+        chunk_index: None,
+        chunk_total: None,
     };
     let (status, error): (StatusCode, ErrorEnvelope) = request_typed(
         &router,
@@ -330,4 +384,19 @@ async fn moved_ingest_and_import_routes_preserve_typed_error_contracts() {
         request_typed(&router, Method::GET, "/api/import/state", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error.error, "database not initialized");
+
+    let (status, error): (StatusCode, ErrorEnvelope) = request_typed(
+        &router,
+        Method::GET,
+        "/api/import/batches/missing-batch/status",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.error, "Database not initialized");
+
+    let (status, error): (StatusCode, ErrorEnvelope) =
+        request_typed(&router, Method::GET, "/api/import/batches/active", None).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.error, "Database not initialized");
 }

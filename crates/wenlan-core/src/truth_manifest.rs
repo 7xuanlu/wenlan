@@ -172,10 +172,10 @@ pub struct CliReader {
     pub adapter: &'static str,
 }
 
-/// All 166 registered `(method, path, handler)` triples.
+/// All 175 registered `(method, path, handler)` triples.
 ///
-/// 59 page-bearing, 107 not. Expands to 170 `(builder, method, path)`
-/// runtime entries: 164 in `main`, 6 in `repair`.
+/// 62 page-bearing, 113 not. Expands to 179 `(builder, method, path)`
+/// runtime entries: 173 in `main`, 6 in `repair`.
 #[rustfmt::skip]
 pub const HTTP_READERS: &[HttpReader] = &[
     HttpReader { method: ReaderMethod::Get, path: "/api/activities", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_list_activities", evidence: "AgentActivityRow.detail = title={page.title}" },
@@ -212,6 +212,8 @@ pub const HTTP_READERS: &[HttpReader] = &[
     HttpReader { method: ReaderMethod::Post, path: "/api/outbox/drain", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "drain report only" },
     HttpReader { method: ReaderMethod::Get, path: "/api/outbox/status", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "outbox counts only" },
     HttpReader { method: ReaderMethod::Get, path: "/api/home-stats", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_get_home_stats", evidence: "TopMemory.content via dismissed revision card" },
+    HttpReader { method: ReaderMethod::Get, path: "/api/import/batches/active", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
+    HttpReader { method: ReaderMethod::Get, path: "/api/import/batches/{batch_id}/status", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Post, path: "/api/import/chat-export", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Post, path: "/api/import/memories", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Get, path: "/api/import/state", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },

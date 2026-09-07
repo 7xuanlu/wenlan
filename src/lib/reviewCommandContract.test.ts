@@ -37,6 +37,7 @@ const INVOKE_LITERAL = /invoke[A-Za-z]*(?:<[^>]*>)?\(\s*"([a-z0-9_]+)"/g;
 const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "accept_pending_revision",
   "acknowledge_guarded_quit_request",
+  "active_import_batches_cmd",
   "add_source",
   "add_watch_path",
   "archive_page",
@@ -80,6 +81,7 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "get_snapshot_captures",
   "get_snapshot_captures_with_content",
   "get_wenlan_mcp_entry",
+  "import_batch_status_cmd",
   "import_chat_export",
   "import_memories_cmd",
   "ingest_webpage",

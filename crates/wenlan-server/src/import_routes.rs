@@ -2,20 +2,34 @@
 use crate::error::ServerError;
 use crate::route_registry::{get, post, TrackedRouter};
 use crate::state::{ServerState, SharedState};
-use axum::{extract::State, response::Json};
+use axum::{extract::Path, extract::State, response::Json};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use wenlan_types::import::{ImportChatExportRequest, ImportChatExportResponse};
+use wenlan_types::import::{
+    ActiveImportBatchesResponse, ImportBatchStatus, ImportChatExportRequest,
+    ImportChatExportResponse,
+};
 use wenlan_types::requests::ImportMemoriesRequest;
 use wenlan_types::responses::ImportMemoriesResponse;
 use wenlan_types::WriteSpaceSource;
+
+/// Default cap for `GET /api/import/batches/active`.
+const DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT: usize = 20;
 
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
     router
         .route("/api/import/memories", post(handle_import_memories))
         .route("/api/import/chat-export", post(handle_chat_export_import))
         .route("/api/import/state", get(handle_list_pending_imports))
+        .route(
+            "/api/import/batches/active",
+            get(handle_active_import_batches),
+        )
+        .route(
+            "/api/import/batches/{batch_id}/status",
+            get(handle_import_batch_status),
+        )
 }
 
 /// POST /api/import/memories
@@ -43,13 +57,15 @@ pub async fn handle_import_memories(
     let resolved = db
         .resolve_write_space(&req.space, header_space.as_deref())
         .await?;
-    let result = wenlan_core::importer::import_memories_no_llm_in_space(
+    let result = wenlan_core::importer::import_memories_no_llm_in_batch(
         &db,
         &req.content,
         &req.source,
         req.label.as_deref(),
         &confidence_cfg,
         &resolved,
+        req.batch_id.as_deref(),
+        req.chunk_index,
     )
     .await?;
     let persisted = db.finalize_write_space(&resolved).await?;
@@ -220,6 +236,57 @@ pub async fn handle_list_pending_imports(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// GET /api/import/batches/{batch_id}/status
+// ---------------------------------------------------------------------------
+
+/// GET /api/import/batches/{batch_id}/status — live progress for one import
+/// batch. 404 when no memory carries the batch's source-id prefix.
+///
+/// Like `GET /api/import/state`, this takes no Space selector: a batch is
+/// addressed by its unguessable id and the response carries the batch's own
+/// `space`, so there is nothing to scope the request by.
+pub async fn handle_import_batch_status(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(batch_id): Path<String>,
+) -> Result<Json<ImportBatchStatus>, ServerError> {
+    let db = {
+        let guard = state.read().await;
+        guard
+            .db
+            .as_ref()
+            .ok_or(ServerError::DbNotInitialized)?
+            .clone()
+    };
+    db.import_batch_status(&batch_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ServerError::NotFound(format!("unknown import batch '{batch_id}'")))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/import/batches/active
+// ---------------------------------------------------------------------------
+
+/// GET /api/import/batches/active — most recently updated incomplete import
+/// batches, newest first. Unscoped for the same reason as the status route.
+pub async fn handle_active_import_batches(
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> Result<Json<ActiveImportBatchesResponse>, ServerError> {
+    let db = {
+        let guard = state.read().await;
+        guard
+            .db
+            .as_ref()
+            .ok_or(ServerError::DbNotInitialized)?
+            .clone()
+    };
+    let batches = db
+        .active_import_batches(DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT)
+        .await?;
+    Ok(Json(ActiveImportBatchesResponse { batches }))
+}
+
 #[cfg(test)]
 mod chat_export_route_tests {
     use async_trait::async_trait;
@@ -384,5 +451,182 @@ mod chat_export_route_tests {
             "chat import must leave enrichment to the ambient scheduler"
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[cfg(test)]
+mod import_batch_status_route_tests {
+    use axum::extract::{Path, State};
+    use axum::Json;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use wenlan_types::import::ImportPhase;
+    use wenlan_types::WriteSpaceTarget;
+
+    use crate::error::ServerError;
+    use crate::state::ServerState;
+
+    async fn test_state() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(
+                &dir.path().join("db"),
+                Arc::new(wenlan_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap(),
+        );
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            ..Default::default()
+        }));
+        (state, dir)
+    }
+
+    fn import_request(
+        content: &str,
+        batch_id: &str,
+        chunk_index: u32,
+    ) -> wenlan_types::requests::ImportMemoriesRequest {
+        wenlan_types::requests::ImportMemoriesRequest {
+            source: "other".to_string(),
+            content: content.to_string(),
+            label: None,
+            space: WriteSpaceTarget::Inherit,
+            batch_id: Some(batch_id.to_string()),
+            chunk_index: Some(chunk_index),
+            chunk_total: Some(2),
+        }
+    }
+
+    async fn post_chunk(
+        state: &Arc<RwLock<ServerState>>,
+        content: &str,
+        batch_id: &str,
+        chunk_index: u32,
+    ) -> wenlan_types::responses::ImportMemoriesResponse {
+        super::handle_import_memories(
+            State(state.clone()),
+            crate::space_header::SpaceHeader(None),
+            Json(import_request(content, batch_id, chunk_index)),
+        )
+        .await
+        .expect("import chunk")
+        .0
+    }
+
+    #[tokio::test]
+    async fn chunked_import_chunks_share_one_batch_id() {
+        let (state, _dir) = test_state().await;
+        let batch = "test-batch-chunks";
+        for (chunk, content) in [
+            (
+                0,
+                "- chunk zero alpha memory content here\n- chunk zero beta memory content here",
+            ),
+            (
+                1,
+                "- chunk one gamma memory content here\n- chunk one delta memory content here",
+            ),
+        ] {
+            let resp = post_chunk(&state, content, batch, chunk).await;
+            assert_eq!(resp.batch_id, batch);
+            assert_eq!(resp.imported, 2);
+            assert_eq!(resp.skipped, 0);
+        }
+
+        let db = state.read().await.db.clone().unwrap();
+        let status = db
+            .import_batch_status(batch)
+            .await
+            .expect("batch status")
+            .expect("batch exists");
+        assert_eq!(status.batch_id, batch);
+        assert_eq!(status.memories_imported, 4);
+        assert_eq!(status.chunks_received, 2);
+        assert_eq!(status.memories_skipped, 0);
+        assert_eq!(status.source, "other");
+        assert!(!status.complete);
+        // Ingest and Store settle inside the request.
+        for want in [ImportPhase::Ingest, ImportPhase::Store] {
+            let phase = status
+                .phases
+                .iter()
+                .find(|p| p.phase == want)
+                .expect("phase");
+            assert_eq!(phase.done, 4);
+            assert_eq!(phase.total, 4);
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_status_unknown_id_is_none_and_404() {
+        let (state, _dir) = test_state().await;
+        let db = state.read().await.db.clone().unwrap();
+        assert!(db
+            .import_batch_status("no-such-batch")
+            .await
+            .expect("db status")
+            .is_none());
+        let err =
+            super::handle_import_batch_status(State(state), Path("no-such-batch".to_string()))
+                .await
+                .expect_err("unknown batch must 404");
+        assert!(
+            matches!(err, ServerError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn active_import_batches_excludes_a_settled_batch() {
+        let (state, _dir) = test_state().await;
+        post_chunk(
+            &state,
+            "- restless batch alpha memory content\n- restless batch beta memory content",
+            "restless-batch",
+            0,
+        )
+        .await;
+        let settled = post_chunk(
+            &state,
+            "- settled batch alpha memory content\n- settled batch beta memory content",
+            "settled-batch",
+            0,
+        )
+        .await;
+        assert_eq!(settled.imported, 2);
+
+        // Settle every background step row for the settled batch.
+        let db = state.read().await.db.clone().unwrap();
+        for i in 0..settled.imported {
+            // Chunked form: `import_{batch}_{chunk}_{i}` with chunk 0.
+            let source_id = format!("import_settled-batch_0_{i}");
+            for step in [
+                "entity_extract",
+                "entity_link",
+                "title_enrich",
+                "page_growth",
+            ] {
+                db.record_enrichment_step(&source_id, step, "ok", None)
+                    .await
+                    .expect("record step");
+            }
+        }
+
+        let done = db
+            .import_batch_status("settled-batch")
+            .await
+            .expect("db status")
+            .expect("settled batch exists");
+        assert!(done.complete);
+
+        let active = super::handle_active_import_batches(State(state))
+            .await
+            .expect("active batches")
+            .0;
+        let ids: Vec<&str> = active.batches.iter().map(|b| b.batch_id.as_str()).collect();
+        assert!(ids.contains(&"restless-batch"), "active: {ids:?}");
+        assert!(!ids.contains(&"settled-batch"), "active: {ids:?}");
     }
 }
