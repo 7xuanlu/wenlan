@@ -3229,7 +3229,7 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
     );
     assert_eq!(
         analysis.support_calls.len(),
-        1046,
+        1051,
         "PR-D integration must expose the frozen 967 support calls, the 6 PR-D test identities, \
          the 5 M5 derivation-marker fixture calls, the 10 M6 shadow-promoter fixture calls, \
          the 7 G6 BindPageLink repair-test calls (G6 Stage 2 PR 2b, item 3: \
@@ -3354,7 +3354,13 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
          which ages a staged page card back to its pre-#598 shape to prove the accept path \
          refuses it: test_primary_session|1, TestDbSession::query|1, TestDbRows::next|1 and \
          TestDbRow::get|1 read the card's structured_fields, TestDbSession::execute|1 writes \
-         them back with source_revision removed"
+         them back with source_revision removed; plus the 5 import batch-status calls \
+         in importer.rs (#708): seed_import_memory writes each seed row through \
+         test_primary_session|1 + TestDbSession::execute|1, and \
+         batch_status_counts_distilled_pages_citing_members adds test_primary_session|1 \
+         + TestDbSession::execute|1..2 for the two real `pages` rows its citation edges \
+         point at -- edges_space_fence aborts an edge whose endpoint row is missing, so \
+         the distilled pages have to be real rows"
     );
 }
 

@@ -2060,6 +2060,10 @@ pub async fn quick_capture(
     Ok(resp.chunks_created)
 }
 
+// A Tauri command takes its arguments flat and by name, so the three
+// chunk fields cannot be folded into a struct without changing what
+// the frontend passes to `invoke`.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn import_memories_cmd(
     state: tauri::State<'_, State>,
