@@ -367,6 +367,23 @@ async function getPageVia(a: any, headers?: Record<string, string>): Promise<unk
 // Exported (not just module-local) so the parity test below can read the
 // covered-command key sets without re-parsing this file.
 export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
+  // --- import ---
+  // The import view is the one screen whose whole point is what happens
+  // after the request lands, so a null stub is not a stand-in for it: the
+  // view reads `.imported` off the response and throws. These three go to
+  // the daemon so the preview can drive a real batch and poll its phases.
+  import_memories_cmd: (a) =>
+    post("/api/import/memories", {
+      source: a?.source,
+      content: a?.content,
+      label: a?.label ?? null,
+      batch_id: a?.batchId ?? null,
+      chunk_index: a?.chunkIndex ?? null,
+      chunk_total: a?.chunkTotal ?? null,
+    }),
+  import_batch_status_cmd: (a) =>
+    get(`/api/import/batches/${encodeURIComponent(String(a?.batchId ?? ""))}/status`),
+  active_import_batches_cmd: () => get("/api/import/batches/active"),
   daemon_version: () =>
     get("/api/health").then((response) => String(response?.version ?? "")),
   // --- pages (mirrors search.rs exactly) ---

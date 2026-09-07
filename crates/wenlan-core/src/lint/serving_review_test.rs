@@ -65,6 +65,8 @@ fn route_catalog_freezes_exact_global_and_scoped_keys() {
         (Method::Get, "/api/knowledge/count"),
         (Method::Get, "/api/onboarding/milestones"),
         (Method::Get, "/api/import/state"),
+        (Method::Get, "/api/import/batches/active"),
+        (Method::Get, "/api/import/batches/{batch_id}/status"),
         (Method::Get, "/api/memory/rejections"),
         (Method::Get, "/api/refinery/queue"),
         (Method::Get, "/api/capture-stats"),

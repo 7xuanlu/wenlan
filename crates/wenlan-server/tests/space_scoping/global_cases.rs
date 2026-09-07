@@ -26,6 +26,11 @@ pub async fn global_routes_ignore_space_header() {
         ("/api/knowledge/count", "/api/knowledge/count"),
         ("/api/onboarding/milestones", "/api/onboarding/milestones"),
         ("/api/import/state", "/api/import/state"),
+        ("/api/import/batches/active", "/api/import/batches/active"),
+        (
+            "/api/import/batches/missing-batch/status",
+            "/api/import/batches/{batch_id}/status",
+        ),
         ("/api/memory/rejections", "/api/memory/rejections"),
         ("/api/refinery/queue", "/api/refinery/queue"),
         ("/api/capture-stats", "/api/capture-stats"),

@@ -15,6 +15,8 @@ main|get|/api/decisions|wenlan_server::decisions_routes::handle_list_decisions
 main|get|/api/decisions/domains|wenlan_server::decisions_routes::handle_list_decision_domains
 main|get|/api/health|wenlan_server::routes::handle_health
 main|get|/api/home-stats|wenlan_server::memory_routes::handle_get_home_stats
+main|get|/api/import/batches/active|wenlan_server::import_routes::handle_active_import_batches
+main|get|/api/import/batches/{batch_id}/status|wenlan_server::import_routes::handle_import_batch_status
 main|get|/api/import/state|wenlan_server::import_routes::handle_list_pending_imports
 main|get|/api/indexed-files|wenlan_server::indexed_files_routes::handle_list_indexed_files
 main|get|/api/knowledge/count|wenlan_server::knowledge_routes::handle_get_knowledge_count

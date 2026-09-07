@@ -967,7 +967,6 @@ const UNSTUBBED_DEBT = new Set([
   "get_snapshot_captures_with_content",
   "get_space",
   "import_chat_export",
-  "import_memories_cmd",
   "ingest_webpage",
   "install_client_plugin",
   "list_external_models",

@@ -2060,6 +2060,10 @@ pub async fn quick_capture(
     Ok(resp.chunks_created)
 }
 
+// A Tauri command takes its arguments flat and by name, so the three
+// chunk fields cannot be folded into a struct without changing what
+// the frontend passes to `invoke`.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn import_memories_cmd(
     state: tauri::State<'_, State>,
@@ -2067,6 +2071,9 @@ pub async fn import_memories_cmd(
     source: String,
     content: String,
     _label: Option<String>,
+    batch_id: Option<String>,
+    chunk_index: Option<u32>,
+    chunk_total: Option<u32>,
 ) -> Result<responses::ImportMemoriesResponse, String> {
     let client = daemon_client(&state).await;
     let req = requests::ImportMemoriesRequest {
@@ -2074,6 +2081,9 @@ pub async fn import_memories_cmd(
         content,
         label: _label,
         space: Default::default(),
+        batch_id,
+        chunk_index,
+        chunk_total,
     };
     let result: responses::ImportMemoriesResponse =
         client.post_json("/api/import/memories", &req).await?;
@@ -2083,6 +2093,28 @@ pub async fn import_memories_cmd(
     let _ = app_handle.emit("import-complete", &result);
 
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn import_batch_status_cmd(
+    state: tauri::State<'_, State>,
+    batch_id: String,
+) -> Result<wenlan_types::import::ImportBatchStatus, String> {
+    let client = daemon_client(&state).await;
+    client
+        .get_json(&format!(
+            "/api/import/batches/{}/status",
+            percent_encode_path_segment(&batch_id)
+        ))
+        .await
+}
+
+#[tauri::command]
+pub async fn active_import_batches_cmd(
+    state: tauri::State<'_, State>,
+) -> Result<wenlan_types::import::ActiveImportBatchesResponse, String> {
+    let client = daemon_client(&state).await;
+    client.get_json("/api/import/batches/active").await
 }
 
 #[tauri::command]

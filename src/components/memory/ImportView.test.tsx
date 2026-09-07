@@ -1,13 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ImportView } from "./ImportView";
+import { ImportView, chunkImportText } from "./ImportView";
 
 vi.mock("../../lib/tauri", () => ({
   importMemories: vi.fn(),
+  getImportBatchStatus: vi.fn(),
+  clipboardWrite: vi.fn(),
+  IMPORT_CHUNK_SIZE: 500,
 }));
 
-import { importMemories } from "../../lib/tauri";
+import { importMemories, getImportBatchStatus } from "../../lib/tauri";
 
 function renderImport(props = {}) {
   const queryClient = new QueryClient({
@@ -24,9 +27,70 @@ function renderImport(props = {}) {
   );
 }
 
+type PhaseEntry = {
+  phase: string;
+  state: "pending" | "running" | "complete" | "failed";
+  done: number;
+  total: number;
+  failed?: number;
+};
+
+function makeBatch(overrides: Record<string, unknown> = {}) {
+  return {
+    batch_id: "batch-test-1",
+    source: "chatgpt",
+    started_at: 1_700_000_000,
+    updated_at: 1_700_000_100,
+    chunks_received: 1,
+    memories_imported: 3,
+    memories_skipped: 1,
+    entities_detected: 4,
+    entities_established: 2,
+    pages_distilled: 7,
+    phases: [
+      { phase: "ingest", state: "complete", done: 3, total: 3, failed: 0 },
+      { phase: "store", state: "complete", done: 3, total: 3, failed: 0 },
+      { phase: "detect", state: "running", done: 5, total: 12, failed: 0 },
+      { phase: "enrich", state: "pending", done: 0, total: 0, failed: 0 },
+      { phase: "link", state: "pending", done: 0, total: 0, failed: 0 },
+      { phase: "distill", state: "running", done: 3, total: 0, failed: 0 },
+    ] as PhaseEntry[],
+    complete: false,
+    space: null,
+    ...overrides,
+  };
+}
+
+function chunkResult(overrides: Record<string, unknown> = {}) {
+  return {
+    imported: 3,
+    skipped: 1,
+    breakdown: { fact: 3 },
+    entities_created: 0,
+    observations_added: 0,
+    relations_created: 0,
+    batch_id: "batch-test-1",
+    ...overrides,
+  };
+}
+
+function startImport(text = "Memory 1") {
+  const textarea = screen.getByPlaceholderText(/paste your memories/i);
+  fireEvent.change(textarea, { target: { value: text } });
+  fireEvent.click(screen.getByText("Import"));
+}
+
 describe("ImportView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "batch-test-1") });
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeBatch({ complete: true }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("renders input form by default", () => {
@@ -51,60 +115,195 @@ describe("ImportView", () => {
     expect(button).not.toBeDisabled();
   });
 
-  it("shows progress state while importing", async () => {
-    let resolveImport: (value: unknown) => void;
+  it("splits n memories into ceil(n/500) calls sharing one batch id", async () => {
     (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise((resolve) => { resolveImport = resolve; }),
+      (_source: string, content: string) => Promise.resolve(
+        chunkResult({
+          imported: content.split("\n").length,
+          skipped: 0,
+          breakdown: { fact: content.split("\n").length },
+        }),
+      ),
+    );
+    // The live status agrees with the uploads, as the daemon's would.
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeBatch({ complete: true, memories_imported: 1200, memories_skipped: 0 }),
     );
 
     renderImport();
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "Memory 1" } });
-    fireEvent.click(screen.getByText("Import"));
+    const lines = Array.from({ length: 1200 }, (_, i) => `Memory ${i}`).join("\n");
+    startImport(lines);
 
-    expect(screen.getByText(/Processing your memories/)).toBeInTheDocument();
-
-    resolveImport!({
-      imported: 1, skipped: 0,
-      breakdown: { fact: 1 },
-      entities_created: 0, observations_added: 0, relations_created: 0,
-      batch_id: "test",
+    await waitFor(() => {
+      expect(importMemories).toHaveBeenCalledTimes(3);
+    });
+    const calls = (importMemories as ReturnType<typeof vi.fn>).mock.calls;
+    expect(new Set(calls.map((c) => c[3].batchId)).size).toBe(1);
+    expect(calls[0][3]).toEqual({ batchId: "batch-test-1", chunkIndex: 0, chunkTotal: 3 });
+    expect(calls[1][3]).toEqual({ batchId: "batch-test-1", chunkIndex: 1, chunkTotal: 3 });
+    expect(calls[2][3]).toEqual({ batchId: "batch-test-1", chunkIndex: 2, chunkTotal: 3 });
+    // The summary aggregates every chunk.
+    await waitFor(() => {
+      expect(screen.getByText(/1200 memories imported/i)).toBeInTheDocument();
     });
   });
 
-  it("shows summary after successful import", async () => {
-    const mockResult = {
-      imported: 3, skipped: 1,
-      breakdown: { identity: 1, fact: 2 },
-      entities_created: 2, observations_added: 3, relations_created: 1,
-      batch_id: "import_123",
-    };
-    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(mockResult);
+  it("sends a single chunk for a small import", async () => {
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
 
     renderImport();
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "Memory 1\nMemory 2\nMemory 3" } });
-    fireEvent.click(screen.getByText("Import"));
+    startImport("Just one memory");
+
+    await waitFor(() => {
+      expect(importMemories).toHaveBeenCalledTimes(1);
+    });
+    expect(importMemories).toHaveBeenCalledWith(
+      "chatgpt",
+      "Just one memory",
+      undefined,
+      { batchId: "batch-test-1", chunkIndex: 0, chunkTotal: 1 },
+    );
+  });
+
+  it("renders per-phase counts mid-flight, never a timer bar", async () => {
+    let resolveImport!: (value: unknown) => void;
+    (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => { resolveImport = resolve; }),
+    );
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch());
+
+    renderImport();
+    startImport("Memory 1");
+
+    // Real row counts from the daemon…
+    await waitFor(() => {
+      expect(screen.getByText("5 of 12")).toBeInTheDocument();
+    });
+    // …a phase with no rows yet reads as waiting, not 0%…
+    expect(screen.getAllByText("Waiting").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/0%/)).not.toBeInTheDocument();
+    // …and there is no elapsed-time progress anywhere.
+    expect(screen.queryByText(/Processing your memories/)).not.toBeInTheDocument();
+
+    resolveImport(chunkResult());
+  });
+
+  it("counts memories in the progress heading, not upload chunks", async () => {
+    // `chunkImportText` returns chunks, so a 1,200-line paste is 3 of them.
+    // Reading its length here made the heading say "3 memories".
+    let resolveImport!: (value: unknown) => void;
+    (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => { resolveImport = resolve; }),
+    );
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch());
+
+    renderImport();
+    startImport(Array.from({ length: 1200 }, (_, i) => `Memory ${i}`).join("\n"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/1,?200 memories/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/^3 memories$/)).not.toBeInTheDocument();
+
+    resolveImport(chunkResult());
+  });
+
+  it("renders a failed phase as failed", async () => {
+    let resolveImport!: (value: unknown) => void;
+    (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => { resolveImport = resolve; }),
+    );
+    const failed = makeBatch({
+      phases: [
+        { phase: "ingest", state: "complete", done: 3, total: 3, failed: 0 },
+        { phase: "store", state: "complete", done: 3, total: 3, failed: 0 },
+        { phase: "detect", state: "failed", done: 2, total: 3, failed: 1 },
+        { phase: "enrich", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "link", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "distill", state: "pending", done: 0, total: 0, failed: 0 },
+      ] as PhaseEntry[],
+    });
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(failed);
+
+    renderImport();
+    startImport("Memory 1");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("import-phase-detect")).toHaveAttribute("data-state", "failed");
+    });
+    const row = screen.getByTestId("import-phase-detect");
+    expect(within(row).getByText("Failed")).toBeInTheDocument();
+    expect(within(row).getByText("1 failed")).toBeInTheDocument();
+
+    resolveImport(chunkResult());
+  });
+
+  it("renders distill as a live count with no bar", async () => {
+    let resolveImport!: (value: unknown) => void;
+    (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => { resolveImport = resolve; }),
+    );
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch());
+
+    renderImport();
+    startImport("Memory 1");
+
+    await waitFor(() => {
+      expect(screen.getByText("3 pages so far")).toBeInTheDocument();
+    });
+    expect(
+      within(screen.getByTestId("import-phase-distill")).queryByRole("progressbar"),
+    ).not.toBeInTheDocument();
+    // …while a phase with a known total does draw a bar.
+    expect(
+      within(screen.getByTestId("import-phase-detect")).getByRole("progressbar"),
+    ).toBeInTheDocument();
+
+    resolveImport(chunkResult());
+  });
+
+  it("shows summary figures and names the phases still running", async () => {
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch());
+
+    renderImport();
+    startImport("Memory 1\nMemory 2\nMemory 3");
 
     await waitFor(() => {
       expect(screen.getByText(/3 memories imported/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/1 skipped/i)).toBeInTheDocument();
+    expect(screen.getByText("4 detected entities")).toBeInTheDocument();
+    expect(screen.getByText("2 entities established")).toBeInTheDocument();
+    expect(screen.getByText("7 pages distilled")).toBeInTheDocument();
+    // Honest that background work continues — no final total that is not final.
+    expect(screen.getByText(/Still working:/)).toBeInTheDocument();
+    expect(screen.getByText(/Detecting entities/)).toBeInTheDocument();
+    expect(screen.getByText(/keep climbing/)).toBeInTheDocument();
+  });
+
+  it("says background work finished once every phase settles", async () => {
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeBatch({ complete: true }),
+    );
+
+    renderImport();
+    startImport("Memory 1");
+
+    await waitFor(() => {
+      expect(screen.getByText("Background work finished.")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Still working:/)).not.toBeInTheDocument();
   });
 
   it("shows type breakdown badges in summary", async () => {
-    const mockResult = {
-      imported: 3, skipped: 0,
-      breakdown: { identity: 1, fact: 2 },
-      entities_created: 0, observations_added: 0, relations_created: 0,
-      batch_id: "test",
-    };
-    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(mockResult);
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(
+      chunkResult({ imported: 3, skipped: 0, breakdown: { identity: 1, fact: 2 } }),
+    );
 
     renderImport();
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "a\nb\nc" } });
-    fireEvent.click(screen.getByText("Import"));
+    startImport("a\nb\nc");
 
     await waitFor(() => {
       expect(screen.getByText("identity")).toBeInTheDocument();
@@ -112,33 +311,11 @@ describe("ImportView", () => {
     });
   });
 
-  it("shows KG stats when entities or observations are created", async () => {
-    const mockResult = {
-      imported: 2, skipped: 0,
-      breakdown: { fact: 2 },
-      entities_created: 3, observations_added: 5, relations_created: 0,
-      batch_id: "test",
-    };
-    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(mockResult);
-
-    renderImport();
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "a\nb" } });
-    fireEvent.click(screen.getByText("Import"));
-
-    await waitFor(() => {
-      expect(screen.getByText(/3 entities/)).toBeInTheDocument();
-      expect(screen.getByText(/5 observations/)).toBeInTheDocument();
-    });
-  });
-
   it("shows error on import failure", async () => {
     (importMemories as ReturnType<typeof vi.fn>).mockRejectedValue("Import failed: too large");
 
     renderImport();
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "Memory" } });
-    fireEvent.click(screen.getByText("Import"));
+    startImport("Memory");
 
     await waitFor(() => {
       expect(screen.getByText(/Import failed/i)).toBeInTheDocument();
@@ -158,16 +335,10 @@ describe("ImportView", () => {
 
   it("calls onComplete when View memories clicked", async () => {
     const onComplete = vi.fn();
-    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue({
-      imported: 1, skipped: 0, breakdown: { fact: 1 },
-      entities_created: 0, observations_added: 0, relations_created: 0,
-      batch_id: "test",
-    });
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
 
     renderImport({ onComplete });
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "Memory" } });
-    fireEvent.click(screen.getByText("Import"));
+    startImport("Memory");
 
     await waitFor(() => screen.getByText("View memories"));
     fireEvent.click(screen.getByText("View memories"));
@@ -175,16 +346,10 @@ describe("ImportView", () => {
   });
 
   it("resets to input form when Import more clicked", async () => {
-    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue({
-      imported: 1, skipped: 0, breakdown: { fact: 1 },
-      entities_created: 0, observations_added: 0, relations_created: 0,
-      batch_id: "test",
-    });
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
 
     renderImport();
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "Memory" } });
-    fireEvent.click(screen.getByText("Import"));
+    startImport("Memory");
 
     await waitFor(() => screen.getByText("Import more"));
     fireEvent.click(screen.getByText("Import more"));
@@ -210,20 +375,37 @@ describe("ImportView", () => {
   });
 
   it("passes selected source to importMemories", async () => {
-    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue({
-      imported: 1, skipped: 0, breakdown: { fact: 1 },
-      entities_created: 0, observations_added: 0, relations_created: 0,
-      batch_id: "test",
-    });
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
 
     renderImport();
     fireEvent.click(screen.getByText("Claude"));
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "Memory" } });
-    fireEvent.click(screen.getByText("Import"));
+    startImport("Memory");
 
     await waitFor(() => {
-      expect(importMemories).toHaveBeenCalledWith("claude", "Memory");
+      expect(importMemories).toHaveBeenCalledWith(
+        "claude",
+        "Memory",
+        undefined,
+        { batchId: "batch-test-1", chunkIndex: 0, chunkTotal: 1 },
+      );
     });
+  });
+});
+
+describe("chunkImportText", () => {
+  it("returns one chunk for a small import", () => {
+    expect(chunkImportText("a\nb\nc")).toEqual(["a\nb\nc"]);
+  });
+
+  it("skips empty lines", () => {
+    expect(chunkImportText("a\n\n  \nb")).toEqual(["a\nb"]);
+  });
+
+  it("splits at the chunk boundary", () => {
+    const lines = Array.from({ length: 1200 }, (_, i) => `m${i}`);
+    const chunks = chunkImportText(lines.join("\n"));
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]!.split("\n")).toHaveLength(500);
+    expect(chunks[2]!.split("\n")).toHaveLength(200);
   });
 });

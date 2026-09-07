@@ -209,10 +209,12 @@ fn manifest_counts_match_the_spec() {
     // (force-sweep + status surface for the ambient scheduler). Then 170 after
     // the four `/api/pages/drafts` editor routes were wired (audit server#0).
     // Then 173 after #708 added POST `/api/memory/entities/query`, `/archive`
-    // and `/restore` (detected-entities index).
+    // and `/restore` (detected-entities index). Then 175 after the import
+    // batch-status lane added GET `/api/import/batches/active` and GET
+    // `/api/import/batches/{batch_id}/status`.
     assert_eq!(
         HTTP_READERS.len(),
-        173,
+        175,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -223,7 +225,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        177,
+        179,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -231,7 +233,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        171,
+        173,
         "main builder entries"
     );
     assert_eq!(
@@ -407,7 +409,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        167
+        169
     );
 }
 

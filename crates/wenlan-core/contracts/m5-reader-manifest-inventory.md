@@ -535,9 +535,9 @@ A surface that transmits anyway is a failing test on that surface. That gate is
 soft, and saying so plainly is what cooperative-tier means. It is also no longer
 load-bearing: the shape gate holds even when this one is bypassed.
 
-## HTTP — all 166 registered `(method, path, handler)` triples
+## HTTP — all 168 registered `(method, path, handler)` triples
 
-59 page-bearing, 107 not.
+59 page-bearing, 109 not.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
@@ -573,6 +573,8 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `GET` | `/api/health` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/health` | repair | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/home-stats` | main | yes | automatic | `none` | `handle_get_home_stats` | TopMemory.content via dismissed revision card |
+| `GET` | `/api/import/batches/active` | main | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/import/batches/{batch_id}/status` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/import/chat-export` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/import/memories` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/import/state` | main | no | not_applicable | `none` | — | no prose fields |

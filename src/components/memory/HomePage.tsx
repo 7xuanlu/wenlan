@@ -4,11 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
+  getActiveImportBatches,
   getMemoryStats,
   listEntities,
   type MemoryStats,
   type Page,
 } from "../../lib/tauri";
+import { ImportDetailPanel, ImportStatusPill } from "./ImportPhases";
 import { isKnowledgePage, listAllActivePages } from "./pages/listAllPages";
 import { useReviewQueue, reviewItemId, type ReviewItem } from "./useReviewQueue";
 import ReviewDialog, {
@@ -261,6 +263,23 @@ function WikiHome({
     refetch: refetchReviewQueue,
   } = useReviewQueue();
   const [openReviewId, setOpenReviewId] = useState<string | null>(null);
+  const [importDetailOpen, setImportDetailOpen] = useState(false);
+  // Background import phases, if any. Asked here — not higher — because this
+  // is the only surface whose copy branches on the answer, and the command
+  // rejects on flavors that do not serve it: a rejection just means no pill.
+  const { data: activeImports } = useQuery({
+    queryKey: ["active-import-batches"],
+    queryFn: getActiveImportBatches,
+    refetchInterval: 10_000,
+  });
+  const importBatches = activeImports?.batches ?? [];
+  // Close the panel when the last batch settles. Left open, it stays armed:
+  // the next import would replace the whole home grid with a detail panel the
+  // user never asked for, minutes or days after they last opened one.
+  const hasActiveImports = importBatches.length > 0;
+  useEffect(() => {
+    if (!hasActiveImports) setImportDetailOpen(false);
+  }, [hasActiveImports]);
   // New-memory captures are inflow, not decisions — they're unconfirmed but
   // already live (recalled, feeding pages), so they stay out of the rail AND
   // out of the dialog the rail opens: its "n of total" header must walk the
@@ -286,7 +305,12 @@ function WikiHome({
         data-testid="wiki-daily-desk"
         className="wiki-daily-desk"
       >
-        <TodayHeader pages={allPages} />
+        <TodayHeader
+          pages={allPages}
+          statusPill={
+            <ImportStatusPill batches={importBatches} onOpen={() => setImportDetailOpen(true)} />
+          }
+        />
 
         <HomeContextRail
           knowledgePages={knowledgePages}
@@ -294,6 +318,11 @@ function WikiHome({
         />
       </section>
 
+      {importDetailOpen && importBatches.length > 0 ? (
+        <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+          <ImportDetailPanel batches={importBatches} onBack={() => setImportDetailOpen(false)} />
+        </div>
+      ) : (
       <div
         data-testid="wiki-content-grid"
         className="wiki-content-grid"
@@ -329,6 +358,7 @@ function WikiHome({
           leadsColumn={!isWideLayout && decisionItems.length > 0}
         />
       </div>
+      )}
 
       {/* No retrieval list here. Agents reading from the library are the
           Activity view's subject, and home is the library's own surface: pages,
@@ -388,7 +418,7 @@ function SectionHeading({
   );
 }
 
-function TodayHeader({ pages }: { pages: Page[] }) {
+function TodayHeader({ pages, statusPill }: { pages: Page[]; statusPill?: React.ReactNode }) {
   const { t } = useTranslation();
   return (
     <section data-testid="wiki-today-heading" className="wiki-today-heading">
@@ -397,16 +427,19 @@ function TodayHeader({ pages }: { pages: Page[] }) {
         level={1}
         size="page"
         action={
-          <span
-            data-testid="wiki-context-latest"
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: 11,
-              color: "var(--mem-text-tertiary)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {latestPageUpdate(t, pages)}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            {statusPill}
+            <span
+              data-testid="wiki-context-latest"
+              style={{
+                fontFamily: "var(--mem-font-mono)",
+                fontSize: 11,
+                color: "var(--mem-text-tertiary)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {latestPageUpdate(t, pages)}
+            </span>
           </span>
         }
       />

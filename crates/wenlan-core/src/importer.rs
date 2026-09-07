@@ -106,6 +106,36 @@ pub fn validate_parsed_count(count: usize) -> Result<(), WenlanError> {
     Ok(())
 }
 
+/// Longest caller-supplied batch id the importer will mint source ids from.
+const MAX_BATCH_ID_LEN: usize = 64;
+
+/// Validate a caller-supplied import batch id.
+///
+/// The batch id is embedded in every source id the import mints
+/// (`import_{batch}_{chunk}_{i}`), and batch membership is recovered by
+/// stripping the trailing numeric segments back off. An id containing `_`
+/// makes that recovery ambiguous: batch `x` would claim the memories of an
+/// un-chunked import whose batch id is `x_0`, reporting another import's rows
+/// as its own with the wrong chunk count and wrong phase totals. The desktop
+/// app sends `crypto.randomUUID()`, which is already safe; this closes the
+/// door for MCP and CLI callers, who can send anything.
+pub fn validate_batch_id(batch_id: &str) -> Result<(), WenlanError> {
+    if batch_id.is_empty() || batch_id.len() > MAX_BATCH_ID_LEN {
+        return Err(WenlanError::Generic(format!(
+            "Import batch id must be 1..={MAX_BATCH_ID_LEN} characters"
+        )));
+    }
+    if !batch_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+    {
+        return Err(WenlanError::Generic(
+            "Import batch id may contain only letters, digits, '-' and '.'".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Returns true if a line is a visual separator (e.g. `---`, `===`, `***`).
 fn is_separator(line: &str) -> bool {
     let trimmed = line.trim();
@@ -347,7 +377,44 @@ pub async fn import_memories_no_llm_in_space(
     confidence_cfg: &crate::tuning::ConfidenceConfig,
     write_space: &crate::space_context::ResolvedWriteSpace,
 ) -> Result<ImportResult, WenlanError> {
-    import_memories_no_llm_inner(db, raw_text, source, confidence_cfg, Some(write_space)).await
+    import_memories_no_llm_inner(
+        db,
+        raw_text,
+        source,
+        confidence_cfg,
+        Some(write_space),
+        None,
+        None,
+    )
+    .await
+}
+
+/// [`import_memories_no_llm_in_space`], plus the chunked-import identity: when
+/// the caller supplies a batch id it is used verbatim so every chunk of one
+/// user-facing import aggregates under one batch; otherwise one is minted as
+/// before. `chunk_index` names this chunk's segment in the minted source ids
+/// and is what keeps per-chunk `i` counters from colliding.
+#[allow(clippy::too_many_arguments)]
+pub async fn import_memories_no_llm_in_batch(
+    db: &MemoryDB,
+    raw_text: &str,
+    source: &str,
+    _label: Option<&str>,
+    confidence_cfg: &crate::tuning::ConfidenceConfig,
+    write_space: &crate::space_context::ResolvedWriteSpace,
+    batch_id: Option<&str>,
+    chunk_index: Option<u32>,
+) -> Result<ImportResult, WenlanError> {
+    import_memories_no_llm_inner(
+        db,
+        raw_text,
+        source,
+        confidence_cfg,
+        Some(write_space),
+        batch_id,
+        chunk_index,
+    )
+    .await
 }
 
 async fn import_memories_no_llm_inner(
@@ -356,14 +423,26 @@ async fn import_memories_no_llm_inner(
     source: &str,
     confidence_cfg: &crate::tuning::ConfidenceConfig,
     write_space: Option<&crate::space_context::ResolvedWriteSpace>,
+    batch_id: Option<&str>,
+    chunk_index: Option<u32>,
 ) -> Result<ImportResult, WenlanError> {
     validate_input(raw_text)?;
+    if let Some(id) = batch_id {
+        validate_batch_id(id)?;
+    }
     let memories = parse_memories(raw_text);
     validate_parsed_count(memories.len())?;
 
     let duplicates = find_duplicates(db, &memories).await;
 
-    let batch_id = uuid::Uuid::new_v4().to_string();
+    let minted_batch_id;
+    let batch_id = match batch_id {
+        Some(id) => id,
+        None => {
+            minted_batch_id = uuid::Uuid::new_v4().to_string();
+            minted_batch_id.as_str()
+        }
+    };
     let now = chrono::Utc::now().timestamp();
     let mut imported = 0usize;
     let mut skipped = 0usize;
@@ -382,7 +461,13 @@ async fn import_memories_no_llm_inner(
         let confidence = compute_effective_confidence(None, None, "review", None, confidence_cfg);
 
         let title: String = memory.content.chars().take(80).collect();
-        let source_id = format!("import_{}_{}", batch_id, i);
+        // Chunked imports restart `i` at 0 per chunk, so the chunk index is
+        // part of the id whenever the caller supplies one; both forms match
+        // an `import_{batch}_%` prefix query.
+        let source_id = match chunk_index {
+            Some(chunk) => format!("import_{}_{}_{}", batch_id, chunk, i),
+            None => format!("import_{}_{}", batch_id, i),
+        };
 
         docs.push(RawDocument {
             source: "memory".to_string(),
@@ -394,7 +479,7 @@ async fn import_memories_no_llm_inner(
             last_modified: memory.extracted_date.unwrap_or(now),
             metadata: HashMap::from([
                 ("import_source".to_string(), source.to_string()),
-                ("import_batch".to_string(), batch_id.clone()),
+                ("import_batch".to_string(), batch_id.to_string()),
             ]),
             memory_type: None,
             space: write_space.and_then(|resolved| resolved.space_name.clone()),
@@ -434,7 +519,7 @@ async fn import_memories_no_llm_inner(
         entities_created: 0,
         observations_added: 0,
         relations_created: 0,
-        batch_id,
+        batch_id: batch_id.to_string(),
     })
 }
 
@@ -675,5 +760,328 @@ mod tests {
             .unwrap();
         assert!(!created3);
         assert_eq!(id1, id3);
+    }
+
+    // ── Import batch status tests ─────────────────────────────────────
+
+    async fn seed_import_memory(
+        db: &MemoryDB,
+        source_id: &str,
+        source_agent: &str,
+        space: Option<&str>,
+    ) {
+        let session = db.test_primary_session().await;
+        session
+            .execute(
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
+                 last_modified, chunk_type, source_agent, space, created_at) \
+                 VALUES (?1, ?2, 'memory', ?3, ?4, 0, 1700000000, 'prose', ?5, ?6, 1700000000)",
+                libsql::params![
+                    format!("mem_{source_id}"),
+                    format!("seeded content for {source_id} that is long enough"),
+                    source_id.to_string(),
+                    format!("title {source_id}"),
+                    source_agent.to_string(),
+                    space.unwrap_or(crate::db::UNFILED_SPACE_ID).to_string(),
+                ],
+            )
+            .await
+            .expect("seed import memory");
+    }
+
+    #[tokio::test]
+    async fn batch_status_reports_phase_done_failed_and_state() {
+        use wenlan_types::import::{ImportPhase, ImportPhaseState};
+
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_phasebatch_0", "chatgpt", None).await;
+        seed_import_memory(&db, "import_phasebatch_1", "chatgpt", None).await;
+
+        for (sid, step, status) in [
+            ("import_phasebatch_0", "entity_extract", "ok"),
+            ("import_phasebatch_0", "entity_link", "ok"),
+            ("import_phasebatch_0", "title_enrich", "skipped"),
+            ("import_phasebatch_0", "page_growth", "failed"),
+            ("import_phasebatch_1", "entity_extract", "ok"),
+            ("import_phasebatch_1", "page_growth", "failed"),
+        ] {
+            db.record_enrichment_step(sid, step, status, None)
+                .await
+                .unwrap();
+        }
+
+        let status = db
+            .import_batch_status("phasebatch")
+            .await
+            .unwrap()
+            .expect("batch exists");
+        assert_eq!(status.memories_imported, 2);
+        assert_eq!(status.chunks_received, 1);
+        assert_eq!(status.memories_skipped, 0);
+        assert_eq!(status.source, "chatgpt");
+        assert_eq!(status.started_at, 1_700_000_000);
+        assert!(!status.complete);
+
+        let phase = |p: ImportPhase| {
+            status
+                .phases
+                .iter()
+                .find(|s| s.phase == p)
+                .expect("phase present")
+        };
+        // Detect: 2 ok + 1 ok of 4 rows; one row missing.
+        let detect = phase(ImportPhase::Detect);
+        assert_eq!((detect.done, detect.total, detect.failed), (3, 4, 0));
+        assert_eq!(detect.state, ImportPhaseState::Running);
+        // Enrich: the skipped title row counts as done.
+        let enrich = phase(ImportPhase::Enrich);
+        assert_eq!((enrich.done, enrich.total, enrich.failed), (1, 2, 0));
+        assert_eq!(enrich.state, ImportPhaseState::Running);
+        // Link: every row settled, failures present.
+        let link = phase(ImportPhase::Link);
+        assert_eq!((link.done, link.total, link.failed), (0, 2, 2));
+        assert_eq!(link.state, ImportPhaseState::Failed);
+        // Distill: no citations yet, still running with the rest unsettled.
+        let distill = phase(ImportPhase::Distill);
+        assert_eq!((distill.done, distill.total), (0, 0));
+        assert_eq!(distill.state, ImportPhaseState::Running);
+    }
+
+    #[tokio::test]
+    async fn batch_status_splits_entities_by_lifecycle() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_entbatch_0", "claude", None).await;
+        seed_import_memory(&db, "import_entbatch_1", "claude", None).await;
+
+        let detected = db
+            .store_entity("Batch Detected", "person", None, None, None)
+            .await
+            .unwrap();
+        let established = db
+            .store_entity("Batch Established", "person", None, None, None)
+            .await
+            .unwrap();
+        db.confirm_entity(&established, true).await.unwrap();
+        db.link_memory_entities("import_entbatch_0", &[detected.as_str()])
+            .await
+            .unwrap();
+        db.link_memory_entities("import_entbatch_1", &[established.as_str()])
+            .await
+            .unwrap();
+
+        let status = db
+            .import_batch_status("entbatch")
+            .await
+            .unwrap()
+            .expect("batch exists");
+        assert_eq!(status.entities_detected, 1);
+        assert_eq!(status.entities_established, 1);
+    }
+
+    #[tokio::test]
+    async fn batch_status_counts_distilled_pages_citing_members() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_distbatch_0", "other", None).await;
+        seed_import_memory(&db, "import_distbatch_1", "other", None).await;
+
+        // A citation edge is only writable when both endpoints exist and sit
+        // in the edge's own space; `edges_space_fence` aborts on a missing
+        // endpoint the same way it aborts on a mismatched one. So the citing
+        // pages, and the one memory outside this batch, all have to be real
+        // rows in the unfiled space the memories above were seeded into.
+        let space = crate::db::UNFILED_SPACE_ID;
+        seed_import_memory(&db, "import_otherbatch_0", "other", Some(space)).await;
+        let session = db.test_primary_session().await;
+        for page in ["page_dist_1", "page_dist_2"] {
+            session
+                .execute(
+                    "INSERT INTO pages (id, title, content, source_memory_ids, version, \
+                     status, created_at, last_compiled, last_modified, workspace, \
+                     creation_kind, review_status) \
+                     VALUES (?1, ?1, 'body', '[]', 1, 'active', 'now', 'now', 'now', ?2, \
+                     'distilled', 'confirmed')",
+                    libsql::params![page, space],
+                )
+                .await
+                .expect("seed distilled page");
+        }
+        session
+            .execute(
+                &format!(
+                    "INSERT INTO edges (edge_id, src_id, src_kind, dst_id, dst_kind, \
+                     edge_type, lineage, grounded, space, created_at, valid_until) VALUES \
+                     ('edge-dist-1', 'page_dist_1', 'page', 'import_distbatch_0', 'memory', \
+                      'cites', 'evidence', 1, '{space}', 1700000001, NULL), \
+                     ('edge-dist-2', 'page_dist_1', 'page', 'import_distbatch_1', 'memory', \
+                      'cites', 'evidence', 1, '{space}', 1700000002, NULL), \
+                     ('edge-dist-3', 'page_dist_2', 'page', 'import_otherbatch_0', 'memory', \
+                      'cites', 'evidence', 1, '{space}', 1700000003, NULL)"
+                ),
+                (),
+            )
+            .await
+            .expect("seed cites edges");
+        drop(session);
+
+        let status = db
+            .import_batch_status("distbatch")
+            .await
+            .unwrap()
+            .expect("batch exists");
+        // One page cites two member memories; the non-member citation is out.
+        assert_eq!(status.pages_distilled, 1);
+        let distill = status
+            .phases
+            .iter()
+            .find(|s| s.phase == wenlan_types::import::ImportPhase::Distill)
+            .expect("distill phase");
+        assert_eq!((distill.done, distill.total), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn abandoned_step_is_terminal_so_the_batch_settles() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_stuckbatch_0", "other", None).await;
+        // What the entity lane writes once a memory has burned every attempt.
+        // The retry selector never picks an abandoned row up again, so if the
+        // rollup treats it as neither done nor failed the phase is one row
+        // short of its total for good: Detect stays Running, the batch never
+        // reports complete, and every poller keeps asking forever.
+        for (step, status) in [
+            ("entity_extract", "abandoned"),
+            ("entity_link", "ok"),
+            ("title_enrich", "ok"),
+            ("page_growth", "ok"),
+        ] {
+            db.record_enrichment_step("import_stuckbatch_0", step, status, None)
+                .await
+                .expect("record step");
+        }
+
+        let status = db
+            .import_batch_status("stuckbatch")
+            .await
+            .unwrap()
+            .expect("batch exists");
+        let detect = status
+            .phases
+            .iter()
+            .find(|s| s.phase == wenlan_types::import::ImportPhase::Detect)
+            .expect("detect phase");
+        assert_eq!((detect.done, detect.failed, detect.total), (1, 1, 2));
+        assert_eq!(
+            detect.state,
+            wenlan_types::import::ImportPhaseState::Failed,
+            "one abandoned step of two fails the phase"
+        );
+        assert!(
+            status.complete,
+            "an abandoned step is terminal, so the batch settles instead of polling forever"
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_status_keeps_case_variant_batch_ids_apart() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_CaseBatch_0", "other", None).await;
+        seed_import_memory(&db, "import_casebatch_0", "other", None).await;
+        // SQLite's default LIKE is case-insensitive, so the old pattern match
+        // read both rows into whichever batch was asked for.
+        let upper = db
+            .import_batch_status("CaseBatch")
+            .await
+            .unwrap()
+            .expect("batch exists");
+        assert_eq!(upper.memories_imported, 1);
+    }
+
+    #[test]
+    fn batch_id_that_could_claim_another_batch_is_rejected() {
+        assert!(validate_batch_id("plain-batch").is_ok());
+        assert!(validate_batch_id(&uuid::Uuid::new_v4().to_string()).is_ok());
+        // `x` would otherwise match `import_x_0_7`, the ids an un-chunked
+        // import with batch id `x_0` mints.
+        assert!(validate_batch_id("x_0").is_err());
+        assert!(validate_batch_id("").is_err());
+        assert!(validate_batch_id(&"a".repeat(MAX_BATCH_ID_LEN + 1)).is_err());
+    }
+
+    #[tokio::test]
+    async fn batch_status_unknown_id_returns_none() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        assert!(db
+            .import_batch_status("missing-batch")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn two_chunks_sharing_batch_id_form_one_batch() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let cfg = crate::tuning::ConfidenceConfig::default();
+        let space = crate::space_context::ResolvedWriteSpace::uncategorized();
+        for (chunk, content) in [
+            (
+                0u32,
+                "- core chunk zero alpha memory content\n- core chunk zero beta memory content",
+            ),
+            (
+                1u32,
+                "- core chunk one gamma memory content\n- core chunk one delta memory content",
+            ),
+        ] {
+            let result = import_memories_no_llm_in_batch(
+                &db,
+                content,
+                "other",
+                None,
+                &cfg,
+                &space,
+                Some("core-batch"),
+                Some(chunk),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.batch_id, "core-batch");
+            assert_eq!(result.imported, 2);
+            assert_eq!(result.skipped, 0);
+        }
+
+        let status = db
+            .import_batch_status("core-batch")
+            .await
+            .unwrap()
+            .expect("batch exists");
+        assert_eq!(status.memories_imported, 4);
+        assert_eq!(status.chunks_received, 2);
+        assert_eq!(status.source, "other");
+    }
+
+    #[tokio::test]
+    async fn unchunked_import_keeps_legacy_source_id_shape() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let cfg = crate::tuning::ConfidenceConfig::default();
+        let space = crate::space_context::ResolvedWriteSpace::uncategorized();
+        let result = import_memories_no_llm_in_space(
+            &db,
+            "- legacy shape alpha memory content here\n- legacy shape beta memory content here",
+            "chatgpt",
+            None,
+            &cfg,
+            &space,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.imported, 2);
+
+        let status = db
+            .import_batch_status(&result.batch_id)
+            .await
+            .unwrap()
+            .expect("batch exists");
+        assert_eq!(status.memories_imported, 2);
+        assert_eq!(status.chunks_received, 1);
+        assert_eq!(status.source, "chatgpt");
     }
 }

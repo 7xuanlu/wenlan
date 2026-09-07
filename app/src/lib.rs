@@ -1384,6 +1384,8 @@ pub fn run() {
             // Memory layer commands
             search::store_memory,
             search::import_memories_cmd,
+            search::import_batch_status_cmd,
+            search::active_import_batches_cmd,
             search::import_chat_export,
             search::list_pending_imports,
             search::list_onboarding_milestones,
