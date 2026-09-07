@@ -94,6 +94,17 @@ pub struct ImportMemoriesRequest {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "WriteSpaceTarget::is_inherit")]
     pub space: WriteSpaceTarget,
+    /// Chunked import: every chunk of one user-facing import sends the same id,
+    /// so progress aggregates across requests. Absent means a single-shot
+    /// import and the server mints one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    /// 0-based position of this chunk, for logs and the chunk counter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_index: Option<u32>,
+    /// How many chunks this batch will send in total, when the caller knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_total: Option<u32>,
 }
 
 // ===== General search/context =====
