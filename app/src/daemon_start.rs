@@ -1013,6 +1013,20 @@ fn spawn_for_owner_decision(
     result
 }
 
+/// Respawn the sidecar for the version self-heal under the owner lock — the
+/// same lock `settle_startup_owner` and the on-demand start take — so a heal
+/// cannot race either of them into a double spawn, and an unknown-owner spawn
+/// is latched for diagnostics like every other spawn.
+fn respawn_sidecar_for_version_heal(
+    app: &tauri::AppHandle,
+    owner_unknown: bool,
+) -> Result<(), String> {
+    let _decision = OWNER_DECISION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    spawn_for_owner_decision(app, owner_unknown, "version self-heal")
+}
+
 /// Start the daemon sidecar if — and only if — nothing already serves it.
 /// Probes the port first (a daemon that came back on its own must not be
 /// double-spawned), then defers to launchd, then honors the startup preflight,
@@ -1143,8 +1157,16 @@ pub async fn start_daemon_sidecar(
 pub const DAEMON_VERSION_EVENT: &str = "daemon://version";
 
 /// How long the self-heal waits for `/api/health` to report the app's
-/// release after a restart attempt before giving up to the banner.
-const VERSION_HEAL_REPOLL_LIMIT: Duration = Duration::from_secs(30);
+/// release after a restart attempt before giving up to the banner. The
+/// bundled `wenlan restart` already waits up to 30 s for health on its own,
+/// and this wait sits in front of the rest of app init, so it stays short.
+const VERSION_HEAL_REPOLL_LIMIT: Duration = Duration::from_secs(10);
+
+/// Typed error strings `restart_daemon` rejects with. The banner maps each
+/// to a localized message; any other string is a CLI failure shown verbatim.
+pub const RESTART_ERROR_NOT_OWNED: &str = "daemon-restart:not-owned";
+pub const RESTART_ERROR_ISOLATED: &str = "daemon-restart:isolated";
+pub const RESTART_ERROR_STILL_MISMATCHED: &str = "daemon-restart:still-mismatched";
 
 /// The read-only version report behind `daemon_version_status` and the
 /// frontend's `getDaemonVersionStatus()`. No restart is attempted to build
@@ -1294,8 +1316,29 @@ pub async fn heal_version_mismatch(
             log::info!(
                 "[daemon-version] respawning the app-owned sidecar: daemon v{daemon_version}, app v{app_version}"
             );
-            let _ = stop_sidecar().await;
-            match spawn_daemon_sidecar(app) {
+            // Only a daemon this app spawned can be respawned here, and the
+            // sidecar is always the bundled build. A mismatched daemon with
+            // no sidecar to stop belongs to another process (an older app
+            // still running, or a separate install): a respawn would meet
+            // the held port and exit, so report without an attempt.
+            if matches!(stop_sidecar().await, SidecarStopOutcome::NoSidecar) {
+                log::warn!(
+                    "[daemon-version] no app-owned sidecar to restart; the mismatched daemon belongs to another process"
+                );
+                return DaemonVersionReport {
+                    daemon: daemon_version.to_string(),
+                    app: app_version,
+                    matched: false,
+                    restarted: false,
+                    owner: owner_label(owner),
+                    error: Some(RESTART_ERROR_NOT_OWNED.to_string()),
+                    program,
+                };
+            }
+            match respawn_sidecar_for_version_heal(
+                app,
+                owner == crate::lifecycle::VersionMismatchOwner::Unknown,
+            ) {
                 Ok(()) => None,
                 Err(e) => {
                     log::warn!("[daemon-version] sidecar respawn failed: {e}");
@@ -1306,9 +1349,14 @@ pub async fn heal_version_mismatch(
         crate::lifecycle::VersionMismatchAction::ReportOnly => None,
     };
 
-    let daemon = repoll_health_for_match(client)
-        .await
-        .unwrap_or_else(|| daemon_version.to_string());
+    // A failed attempt is not worth a bounded wait in front of app init:
+    // read health once and let the banner carry the error.
+    let daemon = if attempt_error.is_none() {
+        repoll_health_for_match(client).await
+    } else {
+        client.health().await.ok().map(|health| health.version)
+    }
+    .unwrap_or_else(|| daemon_version.to_string());
     let matched = versions_match(&daemon, &app_version);
     log::info!(
         "[daemon-version] self-heal done: daemon v{daemon}, app v{app_version}, matched={matched}, restarted=true, owner={}",
@@ -1384,15 +1432,64 @@ pub async fn restart_daemon(
     }
     let report = heal_version_mismatch(&app, &client, &current).await;
     emit_daemon_version(&app, &report);
+    restart_outcome(&report)
+}
+
+/// What `restart_daemon` answers for a heal report: the healthy version, or
+/// a typed error the banner localizes (a CLI failure passes through as-is).
+fn restart_outcome(report: &DaemonVersionReport) -> Result<String, String> {
     if report.matched {
-        Ok(report.daemon)
-    } else if let Some(error) = report.error {
-        Err(error)
+        Ok(report.daemon.clone())
+    } else if let Some(error) = &report.error {
+        Err(error.clone())
+    } else if !report.restarted {
+        Err(RESTART_ERROR_ISOLATED.to_string())
     } else {
-        Err(format!(
-            "The service still reports {} after the restart; the banner keeps the details.",
-            report.daemon
-        ))
+        Err(RESTART_ERROR_STILL_MISMATCHED.to_string())
+    }
+}
+
+#[cfg(test)]
+mod version_heal_tests {
+    use super::*;
+
+    fn report(matched: bool, restarted: bool, error: Option<&str>) -> DaemonVersionReport {
+        DaemonVersionReport {
+            daemon: "0.18.1".into(),
+            app: "0.18.2".into(),
+            matched,
+            restarted,
+            owner: "sidecar",
+            error: error.map(str::to_string),
+            program: None,
+        }
+    }
+
+    #[test]
+    fn restart_outcome_maps_each_report_shape() {
+        assert_eq!(
+            restart_outcome(&report(true, true, None)),
+            Ok("0.18.1".to_string())
+        );
+        assert_eq!(
+            restart_outcome(&report(false, true, Some("wenlan restart: exit 1"))),
+            Err("wenlan restart: exit 1".to_string()),
+            "a CLI failure passes through verbatim"
+        );
+        assert_eq!(
+            restart_outcome(&report(false, false, Some(RESTART_ERROR_NOT_OWNED))),
+            Err(RESTART_ERROR_NOT_OWNED.to_string()),
+            "a daemon this app does not own is a typed error"
+        );
+        assert_eq!(
+            restart_outcome(&report(false, false, None)),
+            Err(RESTART_ERROR_ISOLATED.to_string()),
+            "a report-only (isolated) run says so instead of claiming a restart"
+        );
+        assert_eq!(
+            restart_outcome(&report(false, true, None)),
+            Err(RESTART_ERROR_STILL_MISMATCHED.to_string())
+        );
     }
 }
 
