@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.4](https://github.com/7xuanlu/wenlan/compare/v0.18.3...v0.18.4) (2026-09-08)
+
+
+### Features
+
+* **app:** self-heal a stale background service after update, and let the tray stop it ([#718](https://github.com/7xuanlu/wenlan/issues/718)) ([2ce7a6c](https://github.com/7xuanlu/wenlan/commit/2ce7a6ca155c4e8f6868b107126cd2f9335f6d45))
+* **entities:** archive idle detected entities by default ([#717](https://github.com/7xuanlu/wenlan/issues/717)) ([0f261be](https://github.com/7xuanlu/wenlan/commit/0f261bef45d38301eebd54da09e48aa47b0f2c4f))
+
+
+### Bug Fixes
+
+* **app:** run one daemon self-heal at a time so a restart cannot re-prompt ([#720](https://github.com/7xuanlu/wenlan/issues/720)) ([de2858d](https://github.com/7xuanlu/wenlan/commit/de2858d5ce4cdbf6c899ada7ec4e240781c8aaf0))
+
 ## [0.18.3](https://github.com/7xuanlu/wenlan/compare/v0.18.2...v0.18.3) (2026-09-08)
 
 
