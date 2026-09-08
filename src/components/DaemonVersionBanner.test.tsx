@@ -135,6 +135,19 @@ describe("DaemonVersionBanner", () => {
     expect(screen.getByTestId("daemon-version-banner")).toBeInTheDocument();
   });
 
+  it("localizes a typed restart error instead of showing the code", async () => {
+    const user = userEvent.setup();
+    getStatusMock.mockResolvedValue(mismatchedStatus);
+    restartMock.mockRejectedValue("daemon-restart:not-owned");
+    render(<DaemonVersionBanner />);
+
+    await user.click(await screen.findByTestId("daemon-version-restart"));
+
+    const error = await screen.findByTestId("daemon-version-error");
+    expect(error).toHaveTextContent("was not started by this app");
+    expect(error).not.toHaveTextContent("daemon-restart:not-owned");
+  });
+
   it("dismisses for the session only", async () => {
     const user = userEvent.setup();
     getStatusMock.mockResolvedValue(mismatchedStatus);
