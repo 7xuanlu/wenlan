@@ -1168,6 +1168,20 @@ pub const RESTART_ERROR_NOT_OWNED: &str = "daemon-restart:not-owned";
 pub const RESTART_ERROR_ISOLATED: &str = "daemon-restart:isolated";
 pub const RESTART_ERROR_STILL_MISMATCHED: &str = "daemon-restart:still-mismatched";
 
+/// One self-heal at a time. The startup health poll and the banner's
+/// "Restart service" button both run [`heal_version_mismatch`]; a click while
+/// the startup heal was still restarting the daemon started a second
+/// `wenlan restart` against a process already mid-restart, and whichever
+/// attempt finished last emitted the final `daemon://version`. A failed
+/// second attempt read health once, fell back to the old version, and
+/// re-showed the banner right after the first attempt had landed. Later
+/// callers wait here, then re-read health and report the match without
+/// another attempt.
+fn version_heal_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 /// The read-only version report behind `daemon_version_status` and the
 /// frontend's `getDaemonVersionStatus()`. No restart is attempted to build
 /// it. `program` is present only when the LaunchAgent runs a daemon outside
@@ -1256,7 +1270,9 @@ async fn repoll_health_for_match(client: &crate::api::WenlanClient) -> Option<St
 }
 
 /// Attempt one self-heal for a mismatched daemon and report the outcome.
-/// Callers emit the report as [`DAEMON_VERSION_EVENT`].
+/// Callers emit the report as [`DAEMON_VERSION_EVENT`]. Attempts are
+/// serialized through [`version_heal_lock`]; a caller that waited behind a
+/// successful one gets a `matched` report with `restarted: false`.
 pub async fn heal_version_mismatch(
     app: &tauri::AppHandle,
     client: &crate::api::WenlanClient,
@@ -1268,6 +1284,29 @@ pub async fn heal_version_mismatch(
     let ownership =
         crate::lifecycle::launchd_owns_server_daemon(&crate::lifecycle::SystemLaunchctl);
     let (owner, action) = crate::lifecycle::decide_version_mismatch_action(isolated, ownership);
+
+    // Serialize with any heal already in flight, then re-read health: the
+    // earlier attempt may have landed while this one waited, in which case
+    // there is nothing left to restart and the report says so.
+    let _serialized = version_heal_lock().lock().await;
+    let daemon_version = match client.health().await {
+        Ok(health) => health.version,
+        Err(_) => daemon_version.to_string(),
+    };
+    if versions_match(&daemon_version, &app_version) {
+        log::info!(
+            "[daemon-version] mismatch already healed by an earlier attempt: daemon v{daemon_version}, app v{app_version}"
+        );
+        return DaemonVersionReport {
+            daemon: daemon_version,
+            app: app_version,
+            matched: true,
+            restarted: false,
+            owner: owner_label(owner),
+            error: None,
+            program,
+        };
+    }
 
     if action == crate::lifecycle::VersionMismatchAction::ReportOnly {
         log::info!(
@@ -1470,6 +1509,11 @@ mod version_heal_tests {
         assert_eq!(
             restart_outcome(&report(true, true, None)),
             Ok("0.18.1".to_string())
+        );
+        assert_eq!(
+            restart_outcome(&report(true, false, None)),
+            Ok("0.18.1".to_string()),
+            "a heal that waited behind a successful one answers the healthy version without an attempt"
         );
         assert_eq!(
             restart_outcome(&report(false, true, Some("wenlan restart: exit 1"))),
