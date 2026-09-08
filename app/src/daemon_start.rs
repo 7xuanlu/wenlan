@@ -1131,6 +1131,271 @@ pub async fn start_daemon_sidecar(
     Ok(start_daemon_if_unowned(&app, &client).await)
 }
 
+// ── Daemon version self-heal ─────────────────────────────────────────────
+// After an in-app update the new daemon binary is on disk but the old
+// process keeps the port, so a fresh launch meets a healthy incumbent whose
+// release is older than the app's. The startup health poll and the
+// `restart_daemon` command both funnel through [`heal_version_mismatch`]:
+// restart through the bundled CLI when a service manager owns the daemon,
+// stop+respawn when the app owns the sidecar, report only on isolated runs.
+
+/// Event name carrying the version report to the frontend banner.
+pub const DAEMON_VERSION_EVENT: &str = "daemon://version";
+
+/// How long the self-heal waits for `/api/health` to report the app's
+/// release after a restart attempt before giving up to the banner.
+const VERSION_HEAL_REPOLL_LIMIT: Duration = Duration::from_secs(30);
+
+/// The read-only version report behind `daemon_version_status` and the
+/// frontend's `getDaemonVersionStatus()`. No restart is attempted to build
+/// it. `program` is present only when the LaunchAgent runs a daemon outside
+/// the app bundle (see
+/// [`crate::lifecycle::server_plist_program_outside_bundle`]), so the banner
+/// can render its extra sentence whenever `program` is present.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DaemonVersionStatus {
+    pub daemon: String,
+    pub app: String,
+    pub matched: bool,
+    pub owner: &'static str,
+    pub program: Option<String>,
+}
+
+/// The outcome of one self-heal attempt, emitted as `daemon://version` and
+/// returned by `restart_daemon` as the new version (or a typed error).
+/// `restarted` says an attempt was made, not that it worked — check
+/// `matched`. `error` carries the failure for the banner's inline message.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DaemonVersionReport {
+    pub daemon: String,
+    pub app: String,
+    pub matched: bool,
+    pub restarted: bool,
+    pub owner: &'static str,
+    pub error: Option<String>,
+    pub program: Option<String>,
+}
+
+/// The `owner` field both reports share: the launchd tri-state mapped onto
+/// the values the frontend banner switches on.
+pub fn daemon_version_owner_label(ownership: crate::lifecycle::LaunchdOwnership) -> &'static str {
+    match ownership {
+        crate::lifecycle::LaunchdOwnership::Owns => "launchd",
+        crate::lifecycle::LaunchdOwnership::DoesNot => "sidecar",
+        crate::lifecycle::LaunchdOwnership::Unknown => "unknown",
+    }
+}
+
+fn app_release() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+fn versions_match(daemon: &str, app: &str) -> bool {
+    crate::release_part(daemon) == crate::release_part(app)
+}
+
+/// Read the current daemon/app version report without restarting anything.
+pub async fn daemon_version_status_report(
+    client: &crate::api::WenlanClient,
+) -> Result<DaemonVersionStatus, String> {
+    let daemon = client.health().await?.version;
+    let app = app_release();
+    let ownership =
+        crate::lifecycle::launchd_owns_server_daemon(&crate::lifecycle::SystemLaunchctl);
+    Ok(DaemonVersionStatus {
+        matched: versions_match(&daemon, &app),
+        daemon,
+        app,
+        owner: daemon_version_owner_label(ownership),
+        program: crate::lifecycle::server_plist_program_outside_bundle(),
+    })
+}
+
+/// Re-poll `/api/health` until its release matches the app's, or the bounded
+/// wait runs out. Returns the last version seen.
+async fn repoll_health_for_match(client: &crate::api::WenlanClient) -> Option<String> {
+    let deadline = std::time::Instant::now() + VERSION_HEAL_REPOLL_LIMIT;
+    let mut last: Option<String> = None;
+    while std::time::Instant::now() < deadline {
+        match client.health().await {
+            Ok(health) => {
+                last = Some(health.version.clone());
+                if versions_match(&health.version, &app_release()) {
+                    break;
+                }
+            }
+            Err(e) => {
+                log::debug!("[daemon-version] re-poll waiting for the restarted daemon: {e}");
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    last
+}
+
+/// Attempt one self-heal for a mismatched daemon and report the outcome.
+/// Callers emit the report as [`DAEMON_VERSION_EVENT`].
+pub async fn heal_version_mismatch(
+    app: &tauri::AppHandle,
+    client: &crate::api::WenlanClient,
+    daemon_version: &str,
+) -> DaemonVersionReport {
+    let app_version = app_release();
+    let program = crate::lifecycle::server_plist_program_outside_bundle();
+    let isolated = crate::lifecycle::data_dir_env_overridden();
+    let ownership =
+        crate::lifecycle::launchd_owns_server_daemon(&crate::lifecycle::SystemLaunchctl);
+    let (owner, action) = crate::lifecycle::decide_version_mismatch_action(isolated, ownership);
+
+    if action == crate::lifecycle::VersionMismatchAction::ReportOnly {
+        log::info!(
+            "[daemon-version] mismatch without restart (isolated run): daemon v{daemon_version}, app v{app_version}"
+        );
+        return DaemonVersionReport {
+            daemon: daemon_version.to_string(),
+            app: app_version,
+            matched: false,
+            restarted: false,
+            owner: owner_label(owner),
+            error: None,
+            program,
+        };
+    }
+
+    let attempt_error: Option<String> = match action {
+        crate::lifecycle::VersionMismatchAction::RestartViaCli => {
+            log::info!(
+                "[daemon-version] restarting service-manager daemon via bundled CLI: daemon v{daemon_version}, app v{app_version}"
+            );
+            // Blocking subprocess on a blocking task: `wenlan restart`
+            // polls health itself for up to 30 s.
+            match tauri::async_runtime::spawn_blocking(|| {
+                crate::lifecycle::restart_service_via_cli()
+            })
+            .await
+            {
+                Ok(Ok(())) => {
+                    log::info!("[daemon-version] bundled `wenlan restart` returned ok");
+                    None
+                }
+                Ok(Err(e)) => {
+                    let message = format!("{e:#}");
+                    log::warn!("[daemon-version] bundled `wenlan restart` failed: {message}");
+                    Some(message)
+                }
+                Err(e) => {
+                    let message = format!("restart task failed: {e}");
+                    log::warn!("[daemon-version] {message}");
+                    Some(message)
+                }
+            }
+        }
+        crate::lifecycle::VersionMismatchAction::RespawnSidecar => {
+            log::info!(
+                "[daemon-version] respawning the app-owned sidecar: daemon v{daemon_version}, app v{app_version}"
+            );
+            let _ = stop_sidecar().await;
+            match spawn_daemon_sidecar(app) {
+                Ok(()) => None,
+                Err(e) => {
+                    log::warn!("[daemon-version] sidecar respawn failed: {e}");
+                    Some(e)
+                }
+            }
+        }
+        crate::lifecycle::VersionMismatchAction::ReportOnly => None,
+    };
+
+    let daemon = repoll_health_for_match(client)
+        .await
+        .unwrap_or_else(|| daemon_version.to_string());
+    let matched = versions_match(&daemon, &app_version);
+    log::info!(
+        "[daemon-version] self-heal done: daemon v{daemon}, app v{app_version}, matched={matched}, restarted=true, owner={}",
+        owner_label(owner)
+    );
+    DaemonVersionReport {
+        daemon,
+        app: app_version,
+        matched,
+        restarted: true,
+        owner: owner_label(owner),
+        error: attempt_error,
+        program,
+    }
+}
+
+fn owner_label(owner: crate::lifecycle::VersionMismatchOwner) -> &'static str {
+    match owner {
+        crate::lifecycle::VersionMismatchOwner::ServiceManager => "launchd",
+        crate::lifecycle::VersionMismatchOwner::Sidecar => "sidecar",
+        crate::lifecycle::VersionMismatchOwner::Unknown => "unknown",
+    }
+}
+
+/// Emit one [`DAEMON_VERSION_EVENT`] carrying `report`. The banner hides on
+/// `matched`, renders on `!matched`.
+pub fn emit_daemon_version(app: &tauri::AppHandle, report: &DaemonVersionReport) {
+    use tauri::Emitter;
+    if let Err(e) = app.emit(DAEMON_VERSION_EVENT, report) {
+        log::warn!("[daemon-version] failed to emit {DAEMON_VERSION_EVENT}: {e}");
+    }
+}
+
+/// Current daemon/app version report for the banner. Never restarts.
+#[tauri::command]
+pub async fn daemon_version_status(
+    state: tauri::State<'_, Arc<RwLock<AppState>>>,
+) -> Result<DaemonVersionStatus, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    daemon_version_status_report(&client).await
+}
+
+/// Restart a mismatched daemon with the same branch logic as the startup
+/// self-heal, then report. Returns the new health version; a typed error
+/// string is shown inline by the banner.
+#[tauri::command]
+pub async fn restart_daemon(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<RwLock<AppState>>>,
+) -> Result<String, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    let current = client.health().await.map(|h| h.version).unwrap_or_default();
+    if !current.is_empty() && versions_match(&current, &app_release()) {
+        let report = DaemonVersionReport {
+            daemon: current.clone(),
+            app: app_release(),
+            matched: true,
+            restarted: false,
+            owner: daemon_version_owner_label(crate::lifecycle::launchd_owns_server_daemon(
+                &crate::lifecycle::SystemLaunchctl,
+            )),
+            error: None,
+            program: crate::lifecycle::server_plist_program_outside_bundle(),
+        };
+        emit_daemon_version(&app, &report);
+        return Ok(current);
+    }
+    let report = heal_version_mismatch(&app, &client, &current).await;
+    emit_daemon_version(&app, &report);
+    if report.matched {
+        Ok(report.daemon)
+    } else if let Some(error) = report.error {
+        Err(error)
+    } else {
+        Err(format!(
+            "The service still reports {} after the restart; the banner keeps the details.",
+            report.daemon
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1699,6 +1964,45 @@ mod tests {
             decide_startup_sidecar(true, true, LaunchdOwnership::DoesNot),
             StartupSidecar::SkipAlreadyServing
         );
+    }
+
+    // Daemon lifecycle UX: the `daemon://version` owner field is the exact
+    // contract the banner switches on. Every launchd tri-state maps, and
+    // build metadata never counts as a mismatch on either side.
+    #[test]
+    fn version_owner_labels_match_the_banner_contract() {
+        assert_eq!(
+            daemon_version_owner_label(LaunchdOwnership::Owns),
+            "launchd"
+        );
+        assert_eq!(
+            daemon_version_owner_label(LaunchdOwnership::DoesNot),
+            "sidecar"
+        );
+        assert_eq!(
+            daemon_version_owner_label(LaunchdOwnership::Unknown),
+            "unknown"
+        );
+        assert_eq!(
+            owner_label(crate::lifecycle::VersionMismatchOwner::ServiceManager),
+            "launchd"
+        );
+        assert_eq!(
+            owner_label(crate::lifecycle::VersionMismatchOwner::Sidecar),
+            "sidecar"
+        );
+        assert_eq!(
+            owner_label(crate::lifecycle::VersionMismatchOwner::Unknown),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn version_match_ignores_build_metadata() {
+        assert!(versions_match("0.18.2", "0.18.2"));
+        assert!(versions_match("0.18.2+g1234abcd", "0.18.2"));
+        assert!(versions_match("0.18.2", "0.18.2+g5678efgh"));
+        assert!(!versions_match("0.18.1", "0.18.2"));
     }
 
     /// A2, startup half. `settle_startup_owner` took the probe's flattened
