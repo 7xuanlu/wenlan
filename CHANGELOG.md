@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.3](https://github.com/7xuanlu/wenlan/compare/v0.18.2...v0.18.3) (2026-09-08)
+
+
+### Features
+
+* **entities:** idle-archive housekeeping rule ([#715](https://github.com/7xuanlu/wenlan/issues/715)) ([c60e6c8](https://github.com/7xuanlu/wenlan/commit/c60e6c82ea9384ea371c91b5f3a8ae607f64e1b7))
+* **import:** real phase progress and batch status ([#713](https://github.com/7xuanlu/wenlan/issues/713)) ([c291caa](https://github.com/7xuanlu/wenlan/commit/c291caaac1079330bd4e814663d9146ea8a3f280))
+
+
+### Bug Fixes
+
+* **release:** scope the Cargo.toml release transform to the marker and member pins ([#716](https://github.com/7xuanlu/wenlan/issues/716)) ([ca1f104](https://github.com/7xuanlu/wenlan/commit/ca1f1049ff58fa5044114e7e95cba1a984652143))
+
 ## [0.18.2](https://github.com/7xuanlu/wenlan/compare/v0.18.1...v0.18.2) (2026-09-07)
 
 
