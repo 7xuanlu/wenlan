@@ -723,6 +723,14 @@ const en = {
     later: "Later",
     install: "Install",
   },
+  daemonService: {
+    title: "Wenlan's background service is out of date",
+    body: "The service is running {{daemon}} while the app is {{app}}. Restart it so pages and entities load correctly.",
+    outsideBundle:
+      "The service is started from {{program}}. Update that install (Homebrew or npm), or turn Run in background off and on again to switch to the app's copy.",
+    restart: "Restart service",
+    dismiss: "Dismiss",
+  },
   settings: {
     title: "Settings",
     home: "Home",
@@ -768,7 +776,7 @@ const en = {
       appSection: "App",
       runAtLoginTitle: "Run Wenlan in background at login",
       runAtLoginDescription:
-        "Keeps the daemon and tray icon running even when the app window is closed. Quit from the tray menu to stop everything.",
+        "Keeps the Wenlan service and tray icon running after you close the window, and starts them at login. To stop the service right now, use 'Quit and stop background service' in the tray menu.",
       runAtLoginUnreadable:
         "Wenlan could not read whether this is on — launchctl did not answer. The switch below may not reflect the real setting.",
       rerunSetup: "Re-run setup wizard",
@@ -2457,6 +2465,14 @@ const zhHans = {
     later: "稍后",
     install: "安装",
   },
+  daemonService: {
+    title: "文澜的后台服务已过期",
+    body: "服务正在运行 {{daemon}}，而应用是 {{app}}。请重启服务，页面与实体才能正确加载。",
+    outsideBundle:
+      "服务是从 {{program}} 启动的。请更新该安装（Homebrew 或 npm），或将“登录时在后台运行”关闭再打开，以切换为应用自带的版本。",
+    restart: "重启服务",
+    dismiss: "关闭",
+  },
   settings: {
     title: "设置",
     home: "首页",
@@ -2502,7 +2518,7 @@ const zhHans = {
       appSection: "应用",
       runAtLoginTitle: "登录时在后台运行文澜",
       runAtLoginDescription:
-        "即使应用窗口已关闭，也保持守护进程和托盘图标运行。要停止全部内容，请从托盘菜单退出。",
+        "关闭窗口后，仍保持文澜服务与托盘图标运行，并在登录时启动。若要立即停止服务，请使用托盘菜单中的“退出并停止后台服务”。",
       runAtLoginUnreadable:
         "文澜无法读取该项是否已开启——launchctl 没有响应。下方开关可能与实际设置不符。",
       rerunSetup: "重新运行设置向导",
@@ -4169,6 +4185,14 @@ const zhHant = {
     later: "稍後",
     install: "安裝",
   },
+  daemonService: {
+    title: "文瀾的背景服務已過期",
+    body: "服務正在執行 {{daemon}}，而應用程式是 {{app}}。請重新啟動服務，頁面與實體才能正確載入。",
+    outsideBundle:
+      "服務是從 {{program}} 啟動的。請更新該安裝（Homebrew 或 npm），或將「登入時在背景執行」關閉再開啟，以切換為應用程式內附的版本。",
+    restart: "重新啟動服務",
+    dismiss: "關閉",
+  },
   settings: {
     title: "設定",
     home: "首頁",
@@ -4214,7 +4238,7 @@ const zhHant = {
       appSection: "應用程式",
       runAtLoginTitle: "登入時在背景執行文瀾",
       runAtLoginDescription:
-        "即使應用程式視窗已關閉，也保持守護程式和選單列圖示執行。要停止全部內容，請從選單列退出。",
+        "關閉視窗後，仍保持文瀾服務與選單列圖示執行，並在登入時啟動。若要立即停止服務，請使用選單列中的「結束並停止背景服務」。",
       runAtLoginUnreadable:
         "文瀾無法讀取此項是否已開啟——launchctl 沒有回應。下方開關可能與實際設定不符。",
       rerunSetup: "重新執行設定精靈",
