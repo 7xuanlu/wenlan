@@ -182,6 +182,39 @@ export async function getDaemonVersion(): Promise<string> {
   return invoke("daemon_version");
 }
 
+/** Read-only daemon/app version report for the version banner. Never restarts. */
+export interface DaemonVersionStatus {
+  daemon: string;
+  app: string;
+  matched: boolean;
+  owner: "launchd" | "sidecar" | "unknown";
+  program?: string | null;
+}
+
+/** Outcome of one self-heal attempt, emitted as `daemon://version`. */
+export interface DaemonVersionEvent {
+  daemon: string;
+  app: string;
+  matched: boolean;
+  restarted: boolean;
+  owner: "launchd" | "sidecar" | "unknown";
+  error?: string | null;
+  program?: string | null;
+}
+
+export async function getDaemonVersionStatus(): Promise<DaemonVersionStatus> {
+  return invoke("daemon_version_status");
+}
+
+/**
+ * Restart a mismatched daemon with the startup self-heal branch logic.
+ * Resolves with the new health version; rejects with a typed error string
+ * for the banner to show inline.
+ */
+export async function restartDaemon(): Promise<string> {
+  return invoke("restart_daemon");
+}
+
 /** Stage a loose file into the managed dir and ensure it is a daemon source. */
 export async function uploadSourceFile(path: string): Promise<RegisteredSource> {
   return invoke("upload_source_file", { path });
