@@ -1119,3 +1119,26 @@ describe("daemonErrorMessage", () => {
     expect(tauri.daemonErrorMessage(undefined)).toBeNull();
   });
 });
+
+describe('getDaemonVersionStatus', () => {
+  it('calls invoke with no args', async () => {
+    mockInvoke.mockResolvedValue({
+      daemon: '0.18.1',
+      app: '0.18.2',
+      matched: false,
+      owner: 'launchd',
+      program: null,
+    });
+    const status = await tauri.getDaemonVersionStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('daemon_version_status');
+    expect(status.matched).toBe(false);
+  });
+});
+
+describe('restartDaemon', () => {
+  it('calls invoke with no args and resolves with the new version', async () => {
+    mockInvoke.mockResolvedValue('0.18.2');
+    await expect(tauri.restartDaemon()).resolves.toBe('0.18.2');
+    expect(mockInvoke).toHaveBeenCalledWith('restart_daemon');
+  });
+});

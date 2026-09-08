@@ -428,6 +428,12 @@ fn cancel_guarded_quit_request(request_id: u64, delivery_id: u64) -> bool {
     if cancelled {
         lifecycle::clear_handover_bundle();
     }
+    // Likewise the tray's "Quit and stop background service" arm: the quit it
+    // was armed for is not happening, and a later plain "Quit Wenlan" must
+    // still uninstall the LaunchAgents.
+    if cancelled {
+        lifecycle::disarm_quit_keep_registration();
+    }
     cancelled
 }
 
@@ -478,6 +484,9 @@ fn request_full_quit(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
             });
             if let Err(error) = app.emit("quit-requested", payload) {
                 with_guarded_quit(|guard| guard.abandon(request_id, delivery_id));
+                // No quit follows this request; drop any keep-registration
+                // arm so it cannot leak into a later plain quit.
+                crate::lifecycle::disarm_quit_keep_registration();
                 return Err(error);
             }
             let app_for_timeout = app.clone();
@@ -505,9 +514,24 @@ fn request_full_quit(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
 /// The release part of a version. Build metadata (`0.17.0+g1234abcd`) never
 /// counts as a mismatch on either side: a source build carries it, and so can
 /// a published daemon whose binary was built before its tag existed.
-#[cfg(not(feature = "review-fixtures"))]
-fn release_part(version: &str) -> &str {
+///
+/// Ungated (unlike its first caller in `run()`): the daemon version
+/// self-heal in `daemon_start` shares it in every build.
+pub(crate) fn release_part(version: &str) -> &str {
     version.split('+').next().unwrap_or(version)
+}
+
+/// Tray menu item ids. The builder and the menu-event handler both go through
+/// these, so the unit test on [`tray_menu_ids::ALL`] pins the contract the
+/// handler arms on — including `QUIT_AND_STOP`, the "Quit and stop background
+/// service" item under "Quit Wenlan".
+pub(crate) mod tray_menu_ids {
+    pub const SHOW: &str = "show";
+    pub const STATUS: &str = "status";
+    pub const QUIT: &str = "quit";
+    pub const QUIT_AND_STOP: &str = "quit_and_stop";
+    #[cfg(test)]
+    pub const ALL: [&str; 4] = [SHOW, STATUS, QUIT, QUIT_AND_STOP];
 }
 
 #[cfg(target_os = "macos")]
@@ -1039,17 +1063,26 @@ pub fn run() {
                 use tauri::tray::TrayIconEvent;
                 use tauri::Manager;
 
-                let show_item = MenuItemBuilder::with_id("show", "Show Wenlan").build(app)?;
-                let status_item = MenuItemBuilder::with_id("status", "Status: Starting…")
-                    .enabled(false)
-                    .build(app)?;
-                let quit_item = MenuItemBuilder::with_id("quit", "Quit Wenlan").build(app)?;
+                let show_item =
+                    MenuItemBuilder::with_id(tray_menu_ids::SHOW, "Show Wenlan").build(app)?;
+                let status_item =
+                    MenuItemBuilder::with_id(tray_menu_ids::STATUS, "Status: Starting…")
+                        .enabled(false)
+                        .build(app)?;
+                let quit_item =
+                    MenuItemBuilder::with_id(tray_menu_ids::QUIT, "Quit Wenlan").build(app)?;
+                let quit_and_stop_item = MenuItemBuilder::with_id(
+                    tray_menu_ids::QUIT_AND_STOP,
+                    "Quit and stop background service",
+                )
+                .build(app)?;
                 let tray_menu = MenuBuilder::new(app)
                     .item(&show_item)
                     .separator()
                     .item(&status_item)
                     .separator()
                     .item(&quit_item)
+                    .item(&quit_and_stop_item)
                     .build()?;
 
                 let tray = app
@@ -1109,16 +1142,36 @@ pub fn run() {
 
                     let handle_for_menu = handle.clone();
                     tray.on_menu_event(move |_tray, event| match event.id().as_ref() {
-                        "show" => {
+                        id if id == tray_menu_ids::SHOW => {
                             if let Some(win) = handle_for_menu.get_webview_window("main") {
                                 set_main_window_dock_visibility(&handle_for_menu, true);
                                 let _ = win.show();
                                 let _ = win.set_focus();
                             }
                         }
-                        "quit" => {
+                        id if id == tray_menu_ids::QUIT => {
                             if let Err(e) = request_full_quit(&handle_for_menu) {
                                 log::error!("[tray] failed to request guarded quit: {e}");
+                                force_full_quit(handle_for_menu.clone());
+                            }
+                        }
+                        id if id == tray_menu_ids::QUIT_AND_STOP => {
+                            // "Quit and stop background service": the same
+                            // guarded quit as "Quit Wenlan", but the quit
+                            // leaves the LaunchAgent registration in place —
+                            // the daemon stops now (graceful shutdown, then
+                            // the sidecar stop, inside the quit) and comes
+                            // back at next login. The stop itself stays
+                            // inside the quit, after the frontend guard:
+                            // stopping first would kill memory while a
+                            // refused quit keeps the app open.
+                            crate::lifecycle::arm_quit_keep_registration();
+                            if let Err(e) = request_full_quit(&handle_for_menu) {
+                                log::error!("[tray] failed to request guarded quit: {e}");
+                                // The failed request disarmed; the forced
+                                // quit that replaces it is still this item's
+                                // stop-and-keep-registration quit.
+                                crate::lifecycle::arm_quit_keep_registration();
                                 force_full_quit(handle_for_menu.clone());
                             }
                         }
@@ -1208,6 +1261,7 @@ pub fn run() {
             } else {
                 let init_state = state_clone.clone();
                 let remote_handle = handle.clone();
+                let version_heal_app = handle.clone();
                 tauri::async_runtime::spawn(async move {
                 // Health check the daemon with exponential backoff
                 let client = {
@@ -1221,15 +1275,30 @@ pub fn run() {
                             // The daemon binary comes from a separate install
                             // path (LaunchAgent, sidecar, or dev checkout) —
                             // a stale one can hold the port and answer health
-                            // while breaking newer API calls.
+                            // while breaking newer API calls. The app heals
+                            // this itself (CLI restart for a service-manager
+                            // daemon, stop+respawn for its own sidecar) and
+                            // reports the outcome on `daemon://version`; the
+                            // banner renders only when the heal did not land.
                             if release_part(&health.version)
                                 != release_part(env!("CARGO_PKG_VERSION"))
                             {
                                 log::warn!(
-                                    "[init] Daemon version mismatch: daemon v{}, app v{} at {}; restart it (e.g. `wenlan restart`)",
+                                    "[init] Daemon version mismatch: daemon v{}, app v{} at {}; attempting a self-heal restart",
                                     health.version,
                                     env!("CARGO_PKG_VERSION"),
                                     client.base_url()
+                                );
+                                let report =
+                                    crate::daemon_start::heal_version_mismatch(
+                                        &version_heal_app,
+                                        &client,
+                                        &health.version,
+                                    )
+                                    .await;
+                                crate::daemon_start::emit_daemon_version(
+                                    &version_heal_app,
+                                    &report,
                                 );
                             }
                             break;
@@ -1542,6 +1611,8 @@ pub fn run() {
             acknowledge_guarded_quit_request,
             cancel_guarded_quit_request,
             daemon_start::start_daemon_sidecar,
+            daemon_start::daemon_version_status,
+            daemon_start::restart_daemon,
             // Which global hotkeys this session actually holds
             global_shortcuts::global_shortcut_status,
         ])
@@ -1596,6 +1667,34 @@ mod platform_tests {
     #[test]
     fn launch_agent_startup_is_macos_only() {
         assert_eq!(launch_agent_startup_enabled(), cfg!(target_os = "macos"));
+    }
+
+    // Daemon lifecycle UX: the tray menu carries "Quit and stop background
+    // service" under "Quit Wenlan". The builder and the menu-event handler
+    // both use these ids, so pinning the set here pins the contract.
+    #[test]
+    fn tray_menu_carries_quit_and_stop_service() {
+        assert!(
+            tray_menu_ids::ALL.contains(&tray_menu_ids::QUIT_AND_STOP),
+            "tray menu must contain the quit-and-stop item"
+        );
+        let mut sorted = tray_menu_ids::ALL;
+        sorted.sort_unstable();
+        for pair in sorted.windows(2) {
+            assert_ne!(
+                pair[0], pair[1],
+                "tray menu ids must be unique, or menu events misroute"
+            );
+        }
+        assert_eq!(
+            tray_menu_ids::ALL,
+            [
+                tray_menu_ids::SHOW,
+                tray_menu_ids::STATUS,
+                tray_menu_ids::QUIT,
+                tray_menu_ids::QUIT_AND_STOP
+            ]
+        );
     }
 
     #[test]
