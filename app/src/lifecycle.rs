@@ -29,6 +29,14 @@ pub fn arm_quit_keep_registration() {
     QUIT_KEEP_REGISTRATION.store(true, Ordering::Release);
 }
 
+/// Drop the keep-registration arm without a quit consuming it. Called when
+/// the guarded quit it was armed for did not happen (the frontend refused
+/// it, or the request could not be delivered), so a later plain "Quit
+/// Wenlan" does not inherit it and skip the LaunchAgent cleanup.
+pub fn disarm_quit_keep_registration() {
+    QUIT_KEEP_REGISTRATION.store(false, Ordering::Release);
+}
+
 /// Take the keep-registration arm, if set. The quit consumes it exactly once
 /// so a later plain "Quit Wenlan" cannot inherit it.
 fn take_quit_keep_registration() -> bool {
@@ -4171,6 +4179,14 @@ mod tests {
         assert!(
             !take_quit_keep_registration(),
             "a later plain quit must not inherit the arm"
+        );
+        // A refused (or undeliverable) guarded quit disarms without a quit:
+        // the arm must not wait for the next plain "Quit Wenlan".
+        arm_quit_keep_registration();
+        disarm_quit_keep_registration();
+        assert!(
+            !take_quit_keep_registration(),
+            "a refused quit must drop the arm, not leave it for a later plain quit"
         );
     }
 }
