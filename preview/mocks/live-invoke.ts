@@ -386,6 +386,16 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   active_import_batches_cmd: () => get("/api/import/batches/active"),
   daemon_version: () =>
     get("/api/health").then((response) => String(response?.version ?? "")),
+  // Preview has no app bundle to compare against, so the status reports the
+  // live daemon version on both sides: matched, never a banner. Restart
+  // resolves with the live version for the same reason.
+  daemon_version_status: () =>
+    get("/api/health").then((response) => {
+      const daemon = String(response?.version ?? "");
+      return { daemon, app: daemon, matched: true, owner: "sidecar", program: null };
+    }),
+  restart_daemon: () =>
+    get("/api/health").then((response) => String(response?.version ?? "")),
   // --- pages (mirrors search.rs exactly) ---
   get_page: (a) => getPageVia(a),
   // M5 truth axes: same lookup, marked as a human-initiated wiki browse so
