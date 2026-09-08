@@ -174,6 +174,9 @@ fn d_15_u64() -> u64 {
 fn d_90_i64() -> i64 {
     90
 }
+fn d_90_u64() -> u64 {
+    90
+}
 fn d_01_f64() -> f64 {
     0.1
 }
@@ -263,10 +266,10 @@ pub struct RefineryConfig {
     /// detected entity once it has been in the index for this many days and
     /// none of its linked memories is dated within the window (an imported
     /// memory keeps its original conversation date, so the entity's own age
-    /// is the floor). `0` (the default) turns the rule off. Only detected
-    /// entities are eligible; established and already-archived ones are never
-    /// touched, and archiving is reversible from the Entities view.
-    #[serde(default)]
+    /// is the floor). Defaults to 90 days; `0` turns the rule off. Only
+    /// detected entities are eligible; established and already-archived ones
+    /// are never touched, and archiving is reversible from the Entities view.
+    #[serde(default = "d_90_u64")]
     pub entity_archive_idle_days: u64,
 }
 
@@ -547,7 +550,7 @@ impl Default for RefineryConfig {
             kg_rethink_interval_hours: d_168_u64(),
             entity_backfill_batch_size: d_5_usize(),
             entity_establish_min_memories: d_3_usize(),
-            entity_archive_idle_days: 0,
+            entity_archive_idle_days: d_90_u64(),
         }
     }
 }
@@ -719,7 +722,7 @@ mod tests {
         assert_eq!(cfg.refinery.batch_window_secs, 30);
         assert_eq!(cfg.refinery.kg_rethink_interval_hours, 168);
         assert_eq!(cfg.refinery.entity_establish_min_memories, 3);
-        assert_eq!(cfg.refinery.entity_archive_idle_days, 0);
+        assert_eq!(cfg.refinery.entity_archive_idle_days, 90);
         // Narrative
         assert_eq!(cfg.narrative.stale_secs, 86400);
         assert_eq!(cfg.narrative.max_memories, 12);
@@ -779,10 +782,11 @@ score_threshold = 0.25
         assert_eq!(cfg.refinery.max_proposals_per_steep, 5);
     }
 
-    /// `entity_archive_idle_days` is off unless the file names it, and a file
-    /// that sets only it leaves the rest of the refinery block alone.
+    /// `entity_archive_idle_days` defaults to 90 unless the file names it, `0`
+    /// in the file is the opt-out, and a file that sets only it leaves the
+    /// rest of the refinery block alone.
     #[test]
-    fn entity_archive_idle_days_reads_from_toml_and_defaults_off() {
+    fn entity_archive_idle_days_reads_from_toml_and_defaults_to_90() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("intelligence.toml");
         std::fs::write(&path, "[refinery]\nentity_archive_idle_days = 30\n").unwrap();
@@ -792,6 +796,11 @@ score_threshold = 0.25
         assert_eq!(cfg.refinery.entity_establish_min_memories, 3);
 
         std::fs::write(&path, "[refinery]\nentity_establish_min_memories = 4\n").unwrap();
+        let cfg = TuningConfig::load(&path);
+        assert_eq!(cfg.refinery.entity_archive_idle_days, 90);
+        assert_eq!(cfg.refinery.entity_establish_min_memories, 4);
+
+        std::fs::write(&path, "[refinery]\nentity_archive_idle_days = 0\n").unwrap();
         let cfg = TuningConfig::load(&path);
         assert_eq!(cfg.refinery.entity_archive_idle_days, 0);
     }

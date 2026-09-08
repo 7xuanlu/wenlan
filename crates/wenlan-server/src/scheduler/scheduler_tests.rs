@@ -2274,9 +2274,10 @@ async fn ambient_status_records_last_run_after_force_ambient_sweep() {
     );
 }
 
-/// #708: with `entity_archive_idle_days = 0` (the default) the idle-archive
-/// job reports an unselected turn without database work, and the attempt is
-/// still recorded so `/api/ambient/status` shows the lane is alive.
+/// #708: with `entity_archive_idle_days = 0` (the opt-out; the default is 90)
+/// the idle-archive job reports an unselected turn without database work, and
+/// the attempt is still recorded so `/api/ambient/status` shows the lane is
+/// alive.
 #[tokio::test]
 async fn entity_idle_archive_tick_with_zero_days_is_not_selected() {
     let _lock = crate::TEST_DATA_DIR_LOCK
@@ -2285,8 +2286,10 @@ async fn entity_idle_archive_tick_with_zero_days_is_not_selected() {
         .await;
     let _env = DataDirGuard::new();
     let (db, _db_dir) = new_test_db().await;
-    let refinery = wenlan_core::tuning::RefineryConfig::default();
-    assert_eq!(refinery.entity_archive_idle_days, 0);
+    let refinery = wenlan_core::tuning::RefineryConfig {
+        entity_archive_idle_days: 0,
+        ..Default::default()
+    };
 
     let report = run_ambient_job_safe(
         AmbientJob::EntityIdleArchive,

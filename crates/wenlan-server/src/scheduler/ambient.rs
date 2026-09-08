@@ -106,7 +106,8 @@ impl AmbientAvailability {
                 && wenlan_core::db::edge_grounding_promote_enabled(),
             // Deterministic housekeeping: no model involved, so it runs
             // whether or not a provider is pinned. The tuning key itself
-            // (`entity_archive_idle_days`, default 0) is the on/off switch,
+            // (`entity_archive_idle_days`, default 90; `0` opts out) is the
+            // on/off switch,
             // checked inside the job arm.
             entity_idle_archive: true,
         }
