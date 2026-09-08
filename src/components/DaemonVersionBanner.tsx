@@ -13,6 +13,23 @@ import {
 type VersionState = DaemonVersionStatus | DaemonVersionEvent;
 
 /**
+ * Typed errors `restart_daemon` rejects with (app/src/daemon_start.rs
+ * `RESTART_ERROR_*`), mapped to localized copy. Anything else is a CLI
+ * failure and renders verbatim.
+ */
+const RESTART_ERROR_KEYS = {
+  "daemon-restart:not-owned": "daemonService.errors.notOwned",
+  "daemon-restart:isolated": "daemonService.errors.isolated",
+  "daemon-restart:still-mismatched": "daemonService.errors.stillMismatched",
+} as const;
+
+function restartErrorKey(raw: string): (typeof RESTART_ERROR_KEYS)[keyof typeof RESTART_ERROR_KEYS] | null {
+  return Object.prototype.hasOwnProperty.call(RESTART_ERROR_KEYS, raw)
+    ? RESTART_ERROR_KEYS[raw as keyof typeof RESTART_ERROR_KEYS]
+    : null;
+}
+
+/**
  * Top-of-window banner for a stale background service. The app self-heals a
  * daemon/app version mismatch on launch and reports the outcome as
  * `daemon://version`; this banner renders only when `matched === false`,
@@ -62,7 +79,9 @@ export default function DaemonVersionBanner() {
       setStatus(null);
       setDismissed(false);
     } catch (error) {
-      setErrorMsg(error instanceof Error ? error.message : String(error));
+      const raw = error instanceof Error ? error.message : String(error);
+      const key = restartErrorKey(raw);
+      setErrorMsg(key ? t(key) : raw);
     } finally {
       setRestarting(false);
     }
