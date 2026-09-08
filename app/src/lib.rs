@@ -428,6 +428,12 @@ fn cancel_guarded_quit_request(request_id: u64, delivery_id: u64) -> bool {
     if cancelled {
         lifecycle::clear_handover_bundle();
     }
+    // Likewise the tray's "Quit and stop background service" arm: the quit it
+    // was armed for is not happening, and a later plain "Quit Wenlan" must
+    // still uninstall the LaunchAgents.
+    if cancelled {
+        lifecycle::disarm_quit_keep_registration();
+    }
     cancelled
 }
 
@@ -478,6 +484,9 @@ fn request_full_quit(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
             });
             if let Err(error) = app.emit("quit-requested", payload) {
                 with_guarded_quit(|guard| guard.abandon(request_id, delivery_id));
+                // No quit follows this request; drop any keep-registration
+                // arm so it cannot leak into a later plain quit.
+                crate::lifecycle::disarm_quit_keep_registration();
                 return Err(error);
             }
             let app_for_timeout = app.clone();
@@ -1159,6 +1168,10 @@ pub fn run() {
                             crate::lifecycle::arm_quit_keep_registration();
                             if let Err(e) = request_full_quit(&handle_for_menu) {
                                 log::error!("[tray] failed to request guarded quit: {e}");
+                                // The failed request disarmed; the forced
+                                // quit that replaces it is still this item's
+                                // stop-and-keep-registration quit.
+                                crate::lifecycle::arm_quit_keep_registration();
                                 force_full_quit(handle_for_menu.clone());
                             }
                         }
