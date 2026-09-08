@@ -15,6 +15,26 @@ use tauri::AppHandle;
 /// teardown releases it so the recovered app can guard a later retry.
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
+/// Armed by the tray's "Quit and stop background service" item before it runs
+/// the same guarded quit as "Quit Wenlan". The quit still stops the daemon
+/// (graceful shutdown, then the sidecar stop), but it leaves the LaunchAgent
+/// registration in place: the job stays registered and comes back at next
+/// login, and the "Run Wenlan in background at login" toggle remains the
+/// permanent switch. Consumed once by the quit that runs next.
+static QUIT_KEEP_REGISTRATION: AtomicBool = AtomicBool::new(false);
+
+/// Arm the keep-registration quit for the tray's "Quit and stop background
+/// service" item. Call immediately before the guarded quit request.
+pub fn arm_quit_keep_registration() {
+    QUIT_KEEP_REGISTRATION.store(true, Ordering::Release);
+}
+
+/// Take the keep-registration arm, if set. The quit consumes it exactly once
+/// so a later plain "Quit Wenlan" cannot inherit it.
+fn take_quit_keep_registration() -> bool {
+    QUIT_KEEP_REGISTRATION.swap(false, Ordering::AcqRel)
+}
+
 /// The newer app bundle to reopen once this quit has finished, set by the
 /// single-instance handover (see `handover.rs`). Only ever read on macOS.
 #[cfg(target_os = "macos")]
@@ -479,6 +499,57 @@ fn legacy_server_plist_is_owned(content: &str) -> bool {
             .is_some_and(path_is_legacy_origin_server_exe)
 }
 
+/// The daemon binary the server LaunchAgent runs (`Program`, else the first
+/// `ProgramArguments` entry), when the plist exists and is readable. `None`
+/// on non-macOS platforms, where LaunchAgents do not exist.
+pub fn server_plist_program() -> Option<String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let path = server_plist_path().ok()?;
+        let content = std::fs::read_to_string(&path).ok()?;
+        plist_first_program(&content)
+    }
+}
+
+/// Whether `program` is the app's own bundled daemon copy: inside a macOS
+/// `.app` bundle, or sitting next to the running app executable (the
+/// Windows/Linux bundled layout). Pure so the boundary is unit-testable.
+fn program_inside_app_bundle(program: &str, current_exe: &Path) -> bool {
+    let path = Path::new(program);
+    if path.ancestors().any(|ancestor| {
+        ancestor
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+    }) {
+        return true;
+    }
+    match (path.parent(), current_exe.parent()) {
+        (Some(program_dir), Some(exe_dir)) => program_dir == exe_dir,
+        _ => false,
+    }
+}
+
+/// The plist daemon path only when it points *outside* the app bundle — the
+/// Homebrew/npm shape whose banner sentence tells the user to update that
+/// install instead. `None` when the plist is unreadable, has no program, or
+/// runs the app's own copy (no sentence needed). The single source for the
+/// `program` field of the `daemon://version` event and
+/// `daemon_version_status`, so the frontend can render the sentence whenever
+/// `program` is present without knowing bundle layout.
+pub fn server_plist_program_outside_bundle() -> Option<String> {
+    let program = server_plist_program()?;
+    let current_exe = std::env::current_exe().ok()?;
+    if program_inside_app_bundle(&program, &current_exe) {
+        return None;
+    }
+    Some(program)
+}
+
 fn remove_legacy_app_plist_file_if_owned() -> Result<()> {
     let plist = legacy_app_plist_path()?;
     if !plist.exists() {
@@ -559,6 +630,13 @@ fn service_cli_path() -> Result<PathBuf> {
 /// which exercises `["background", "on"]` end to end and asserts the removed
 /// `install`/`uninstall` verbs are gone.
 const SERVICE_CLI_BACKGROUND_ON: [&str; 2] = ["background", "on"];
+
+/// Argv the app hands the bundled `wenlan` CLI to restart the registered
+/// background daemon after an app update replaced the binary on disk. Must
+/// stay in step with `Commands::Restart` in `crates/wenlan-cli/src/main.rs`,
+/// which maps to `service::restart()`: graceful shutdown, start the freshly
+/// registered binary, verify `/api/health` before returning.
+const SERVICE_CLI_RESTART: [&str; 1] = ["restart"];
 
 fn run_service_cli(args: &[&str]) -> Result<()> {
     let bin = service_cli_path()?;
@@ -689,6 +767,79 @@ pub fn prepare_server_plist_for_startup(launchctl: &dyn LaunchctlExec) -> Result
 pub fn install_server_plist_via_subprocess(launchctl: &dyn LaunchctlExec) -> Result<()> {
     run_service_cli(&SERVICE_CLI_BACKGROUND_ON)?;
     ensure_server_plist_data_dir_env(launchctl)
+}
+
+/// Run `wenlan restart` through the bundled CLI: the service-manager-owned
+/// path of the daemon version self-heal. The CLI shuts the running daemon
+/// down gracefully, starts the freshly registered binary, and verifies
+/// `/api/health` before returning. Never touches a plist directly — the CLI
+/// owns service-manager integration.
+pub(crate) fn restart_service_via_cli() -> Result<()> {
+    run_service_cli(&SERVICE_CLI_RESTART)
+}
+
+/// Who owns the daemon behind a version mismatch, from the app's side.
+///
+/// This is the owner half of the self-heal decision: it answers "which
+/// restart path applies", not the launchd tri-state itself (that stays in
+/// [`LaunchdOwnership`], where the unmeasurable case is visible).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionMismatchOwner {
+    /// A service manager (launchd on macOS) owns the daemon: restart it
+    /// through the bundled CLI, never by spawning a rival process.
+    ServiceManager,
+    /// The app owns the daemon as a sidecar (or nothing owns it): stop the
+    /// sidecar and spawn the bundled copy again.
+    Sidecar,
+    /// Could not be measured (isolated run, or launchd unreadable): report
+    /// only, or attempt the sidecar path when an attempt is allowed at all.
+    Unknown,
+}
+
+/// What the app does about a daemon/app version mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionMismatchAction {
+    /// Run `wenlan restart` through the bundled CLI, then re-poll health.
+    RestartViaCli,
+    /// `stop_sidecar()` then spawn the bundled sidecar again, then re-poll.
+    RespawnSidecar,
+    /// Never restart (isolated dev run): report the mismatch only.
+    ReportOnly,
+}
+
+/// Decide the version-mismatch self-heal path. Pure so the owner/attempt
+/// matrix is testable with a mocked launchctl behind [`LaunchdOwnership`].
+///
+/// `isolated` is [`data_dir_env_overridden()`]: a scratch run must never
+/// restart (or stop) the developer's shared daemon, so it always reports.
+pub fn decide_version_mismatch_action(
+    isolated: bool,
+    ownership: LaunchdOwnership,
+) -> (VersionMismatchOwner, VersionMismatchAction) {
+    if isolated {
+        return (
+            VersionMismatchOwner::Unknown,
+            VersionMismatchAction::ReportOnly,
+        );
+    }
+    match ownership {
+        LaunchdOwnership::Owns => (
+            VersionMismatchOwner::ServiceManager,
+            VersionMismatchAction::RestartViaCli,
+        ),
+        LaunchdOwnership::DoesNot => (
+            VersionMismatchOwner::Sidecar,
+            VersionMismatchAction::RespawnSidecar,
+        ),
+        // Unmeasurable owner, but an attempt is allowed (not isolated): the
+        // sidecar path is safe — `stop_sidecar()` is a no-op without our own
+        // child, and a spawn against a held port exits cleanly — while a CLI
+        // restart against an unknown manager could fight it.
+        LaunchdOwnership::Unknown => (
+            VersionMismatchOwner::Unknown,
+            VersionMismatchAction::RespawnSidecar,
+        ),
+    }
 }
 
 /// Unload `plist`; if launchctl refuses, succeed only when `label` is
@@ -1487,7 +1638,13 @@ pub async fn quit_origin(app_handle: &AppHandle) -> Result<()> {
 
     let quit_plan = quit_plan_for_target_os(std::env::consts::OS);
 
-    if quit_plan.clean_launch_agents {
+    // The tray's "Quit and stop background service" arms this: the daemon is
+    // still stopped below (graceful shutdown, then the sidecar stop), but the
+    // registration stays — the job comes back at next login. Consumed once,
+    // so a later plain quit cannot inherit it.
+    let keep_registration = take_quit_keep_registration();
+
+    if quit_plan.clean_launch_agents && !keep_registration {
         // Spec lifecycle invariant #4: "Quit Wenlan = full off; both plists
         // unloaded, both processes exit, no auto-restart on reboot." (H2)
         // Order matters: uninstall plists FIRST so launchd won't respawn after
@@ -1507,6 +1664,15 @@ pub async fn quit_origin(app_handle: &AppHandle) -> Result<()> {
         if let Err(e) = cleanup_legacy_server_plist(&launchctl) {
             log::warn!("[quit] cleanup_legacy_server_plist failed: {e}");
         }
+    } else if keep_registration {
+        // "Quit and stop background service": the graceful shutdown below
+        // stops the daemon now, and the registration stays so the job comes
+        // back at next login. The Run at Login toggle remains the permanent
+        // switch. A clean exit stays down: the server job uses
+        // `KeepAlive { SuccessfulExit: false }`.
+        log::info!(
+            "[quit] leaving LaunchAgent registration in place; the daemon stops now and returns at next login"
+        );
     } else {
         log::info!("[lifecycle] LaunchAgent cleanup is not applicable on this platform");
     }
@@ -3886,6 +4052,125 @@ mod tests {
         assert!(
             max_seen <= 1,
             "RUN_AT_LOGIN_LOCK failed to serialize: max_in_flight={max_seen}"
+        );
+    }
+
+    // Daemon lifecycle UX: version-mismatch self-heal decision matrix. A
+    // launchd-owned daemon restarts through the bundled CLI; an app-owned
+    // sidecar (no plist) respawns via stop+spawn; an isolated run never
+    // restarts and reports only.
+    #[test]
+    #[serial_test::serial]
+    fn version_mismatch_over_launchd_daemon_restarts_via_cli() {
+        let _env = EnvGuard::capture(LIFECYCLE_ENV_KEYS);
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("WENLAN_DATA_DIR", data.path());
+        std::env::remove_var("ORIGIN_DATA_DIR");
+        write_server_plist_for(data.path());
+
+        let launchctl = MockLaunchctl::default();
+        *launchctl.list_stdout.lock().unwrap() = launchctl_table(&[SERVER_PLIST_LABEL]);
+        let ownership = launchd_owns_server_daemon(&launchctl);
+        assert_eq!(ownership, LaunchdOwnership::Owns);
+
+        assert_eq!(
+            decide_version_mismatch_action(false, ownership),
+            (
+                VersionMismatchOwner::ServiceManager,
+                VersionMismatchAction::RestartViaCli
+            )
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn version_mismatch_without_plist_respawns_the_sidecar() {
+        let _env = EnvGuard::capture(LIFECYCLE_ENV_KEYS);
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("WENLAN_DATA_DIR", data.path());
+        std::env::remove_var("ORIGIN_DATA_DIR");
+
+        let launchctl = MockLaunchctl::default();
+        let ownership = launchd_owns_server_daemon(&launchctl);
+        assert_eq!(ownership, LaunchdOwnership::DoesNot);
+
+        assert_eq!(
+            decide_version_mismatch_action(false, ownership),
+            (
+                VersionMismatchOwner::Sidecar,
+                VersionMismatchAction::RespawnSidecar
+            )
+        );
+    }
+
+    #[test]
+    fn version_mismatch_in_isolated_run_only_reports() {
+        // No env or launchctl needed: isolation wins over every ownership.
+        for ownership in [
+            LaunchdOwnership::Owns,
+            LaunchdOwnership::DoesNot,
+            LaunchdOwnership::Unknown,
+        ] {
+            assert_eq!(
+                decide_version_mismatch_action(true, ownership),
+                (
+                    VersionMismatchOwner::Unknown,
+                    VersionMismatchAction::ReportOnly
+                ),
+                "isolated run must never restart, ownership={ownership:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn version_mismatch_with_unmeasurable_owner_attempts_the_sidecar_path() {
+        assert_eq!(
+            decide_version_mismatch_action(false, LaunchdOwnership::Unknown),
+            (
+                VersionMismatchOwner::Unknown,
+                VersionMismatchAction::RespawnSidecar
+            )
+        );
+    }
+
+    #[test]
+    fn bundled_daemon_programs_count_as_inside_the_bundle() {
+        let exe = Path::new("/Applications/Wenlan.app/Contents/MacOS/wenlan-app");
+        assert!(program_inside_app_bundle(
+            "/Applications/Wenlan.app/Contents/MacOS/wenlan-server",
+            exe
+        ));
+        // Windows/Linux bundled layout: the daemon sits next to the app exe.
+        let exe = Path::new("/opt/wenlan/wenlan-app");
+        assert!(program_inside_app_bundle("/opt/wenlan/wenlan-server", exe));
+    }
+
+    #[test]
+    fn foreign_daemon_programs_count_as_outside_the_bundle() {
+        let exe = Path::new("/Applications/Wenlan.app/Contents/MacOS/wenlan-app");
+        assert!(!program_inside_app_bundle(
+            "/opt/homebrew/bin/wenlan-server",
+            exe
+        ));
+        assert!(!program_inside_app_bundle(
+            "/usr/local/lib/node_modules/wenlan/bin/wenlan-server",
+            exe
+        ));
+    }
+
+    #[test]
+    fn quit_keep_registration_arm_is_consumed_once() {
+        // No AppHandle needed: the arm is a flag the quit consumes.
+        assert!(!take_quit_keep_registration());
+        arm_quit_keep_registration();
+        assert!(take_quit_keep_registration());
+        assert!(
+            !take_quit_keep_registration(),
+            "a later plain quit must not inherit the arm"
         );
     }
 }
