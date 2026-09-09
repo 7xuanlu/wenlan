@@ -35,7 +35,7 @@ async function settle(page: Page): Promise<void> {
 // existing pixel baselines.
 async function assertRedesignedSurface(page: Page, name: string): Promise<boolean> {
   const spaces = name.startsWith("spaces-");
-  const wikiReferences = /^home-(375x812|768x900)-dark$/.test(name);
+  const wikiReferences = name.startsWith("home-");
   if (!spaces && !wikiReferences) return false;
   const viewport = page.viewportSize()!;
   const overflow = await page.evaluate(() => ({
@@ -66,6 +66,24 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     await expect(home).toBeVisible();
     await expect(home).toContainText("Fixture architecture summary");
     await expect(home).not.toContainText("[[");
+    const pages = home.getByTestId("wiki-page-list").getByRole("button");
+    await expect(pages).toHaveCount(6);
+    await expect(pages.first()).toHaveAccessibleName("Open Fixture architecture");
+    const rows = await pages.evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height };
+    }));
+    for (let index = 0; index < rows.length; index++) {
+      expect(rows[index].left).toBeGreaterThanOrEqual(0);
+      expect(rows[index].right).toBeLessThanOrEqual(viewport.width);
+      expect(rows[index].height).toBeGreaterThanOrEqual(44);
+      if (index) expect(rows[index].top).toBeGreaterThanOrEqual(rows[index - 1].bottom - 1);
+    }
+    const contrast = await renderedContrast(page, [
+      { selector: '[data-testid="wiki-home"] h1', label: "Home title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: '[data-testid="wiki-page-list"] button p', label: "Page title", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
   }
   return true;
 }
