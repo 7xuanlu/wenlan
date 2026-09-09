@@ -11,6 +11,8 @@
     "dev:all": "node scripts/run-bash.mjs scripts/dev-all.sh",
     "build": "tsc -b && vite build",
     "dev:review:web": "vite --mode review --config vite.review.config.ts",
+    "dev:live:web": "vite --config vite.dev-live.config.ts",
+    "dev:live:build": "pnpm tauri build --debug --bundles app --features review-fixtures --config app/tauri.review.conf.json --config app/tauri.dev-live.conf.json --no-sign",
     "build:review:web": "vite build --mode review --config vite.review.config.ts",
     "review:build": "pnpm tauri build --debug --bundles app --features review-fixtures --config app/tauri.review.conf.json --no-sign",
     "review:verify": "node scripts/verify-review-bundle.mjs",

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { Space } from "../../../lib/tauri";
 import type { SpacesOverviewLabels } from "./spacesTypes";
 
@@ -11,13 +12,29 @@ type SuggestedSpacesProps = {
 };
 
 export function SuggestedSpaces(props: SuggestedSpacesProps) {
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !disclosure.current?.contains(event.target)) {
+        disclosure.current?.removeAttribute("open");
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, []);
   if (props.spaces.length === 0) return null;
 
   return (
-    <section className="spaces-section" aria-labelledby="suggested-spaces-heading">
-      <h2 id="suggested-spaces-heading">
+    <details ref={disclosure} className="spaces-suggestions" onKeyDown={(event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        disclosure.current?.removeAttribute("open");
+        disclosure.current?.querySelector("summary")?.focus();
+      }
+    }}>
+      <summary id="suggested-spaces-heading">
         {props.labels.suggestedHeading} ({props.spaces.length})
-      </h2>
+      </summary>
       <div className="spaces-rows">
         {props.spaces.map((space) => {
           const pending = props.pendingIds.includes(space.id);
@@ -54,6 +71,6 @@ export function SuggestedSpaces(props: SuggestedSpacesProps) {
           );
         })}
       </div>
-    </section>
+    </details>
   );
 }

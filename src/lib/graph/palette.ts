@@ -133,9 +133,9 @@ export function compositeOver(fg: string, bg: string, alpha: number): string {
 
 /**
  * Stability-tiered node fill matching the old canvas graph's translucency:
- * confirmed entities at 0.9 alpha, everything else (unconfirmed, or
+ * confirmed entities at 0.95 alpha, everything else (unconfirmed, or
  * relation-derived neighbors whose status is unknown — confirmed: null) at
- * the airy 0.5. Composited over the surface, not real alpha (see
+ * the 0.8 on light ground and 0.7 on dark ground. Composited over the surface, not real alpha (see
  * compositeOver).
  */
 export function nodeFillFor(
@@ -153,6 +153,8 @@ export function nodeFillFor(
   if (entityType === PAGE_NODE_TYPE) {
     return compositeOver(palette.page, palette.surface, 0.9);
   }
-  const alpha = confirmed === true ? 0.9 : 0.5;
+  const rgb = HEX6.test(palette.surface) ? [1, 3, 5].map((i) => parseInt(palette.surface.slice(i, i + 2), 16)) : [0, 0, 0];
+  const lightSurface = rgb[0]! * 0.2126 + rgb[1]! * 0.7152 + rgb[2]! * 0.0722 > 160;
+  const alpha = confirmed === true ? 0.95 : lightSurface ? 0.8 : 0.7;
   return compositeOver(colorForEntityType(entityType, palette), palette.surface, alpha);
 }

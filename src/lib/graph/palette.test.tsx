@@ -124,12 +124,16 @@ describe("nodeFillFor", () => {
     page: "#dddddd",
   };
 
-  it("fills confirmed entities at 0.9 alpha and everything else at 0.5", () => {
+  it("keeps confirmation hierarchy while giving ordinary nodes readable contrast", () => {
     // person #444444: 0x44 * 0.9 = 61.2 → 61 = 0x3d.
-    expect(nodeFillFor("person", true, palette)).toBe("#3d3d3d");
+    expect(nodeFillFor("person", true, palette)).toBe("#414141");
     // 0x44 * 0.5 = 34 = 0x22 — unconfirmed and unknown (relation-derived) alike.
-    expect(nodeFillFor("person", false, palette)).toBe("#222222");
-    expect(nodeFillFor("person", null, palette)).toBe("#222222");
+    expect(nodeFillFor("person", false, palette)).toBe("#303030");
+    expect(nodeFillFor("person", null, palette)).toBe("#303030");
+  });
+
+  it("uses stronger ordinary-node ink on light ground", () => {
+    expect(nodeFillFor("person", false, { ...palette, surface: "#ffffff" })).toBe("#696969");
   });
 
   it("gives a wiki page its own full-presence fill, never an entity slot", () => {
@@ -142,6 +146,6 @@ describe("nodeFillFor", () => {
 
   it("resolves the entity type through its palette slot before compositing", () => {
     // place → neutral #666666: 0x66 * 0.5 = 51 = 0x33.
-    expect(nodeFillFor("place", null, palette)).toBe("#333333");
+    expect(nodeFillFor("place", null, palette)).toBe("#474747");
   });
 });

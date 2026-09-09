@@ -251,3 +251,84 @@
     margin-bottom: 12px;
   }
 }
+
+/* A bounded review popover stays beside the inventory actions at any list size. */
+.spaces-overview-header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  background: var(--mem-bg);
+  /* Cover the scroll container's top padding as rows pass beneath the header. */
+  box-shadow: 0 -32px 0 var(--mem-bg);
+}
+
+.spaces-header-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.spaces-suggestions {
+  position: relative;
+}
+
+.spaces-suggestions > summary {
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid var(--mem-control-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--mem-text-secondary);
+  font: 500 13px/1.3 var(--mem-font-body);
+  white-space: nowrap;
+}
+
+.spaces-suggestions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.spaces-suggestions > summary::after {
+  content: "⌄";
+  margin-left: 8px;
+}
+
+.spaces-suggestions[open] > summary {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.spaces-suggestions > summary:focus-visible {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 3px;
+}
+
+.spaces-suggestions > .spaces-rows {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(480px, calc(100vw - 48px));
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 16px;
+  border: 1px solid var(--mem-popover-border);
+  border-radius: 10px;
+  background: var(--mem-surface);
+  box-shadow: var(--mem-shadow-toast);
+}
+
+.spaces-inventory-header {
+  justify-content: flex-start;
+}
+
+@media (max-width: 640px) {
+  .spaces-overview-header {
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .spaces-suggestions > .spaces-rows {
+    right: auto;
+    left: 0;
+  }
+}

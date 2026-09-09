@@ -60,10 +60,11 @@ describe("SpacesOverview management", () => {
     expect(within(suggestedRow).queryByRole("button", { name: labels.confirmDelete })).not.toBeInTheDocument();
   });
 
-  it("renders Suggested before the unlabeled inventory with filter and real metadata columns", async () => {
+  it("keeps suggestions in the header above a long confirmed inventory", async () => {
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     api.listSpaces.mockResolvedValue([
       { ...work, memory_count: 44, updated_at: 1_720_569_600 },
+      ...Array.from({ length: 79 }, (_, index) => ({ ...work, id: `confirmed-${index}`, name: `Project ${index}` })),
       suggested,
     ]);
     api.listPages.mockResolvedValue([
@@ -73,9 +74,9 @@ describe("SpacesOverview management", () => {
     ]);
 
     renderOverview();
-    const suggestedSection = await screen.findByRole("region", {
-      name: `${labels.suggestedHeading} (1)`,
-    });
+    const summary = await screen.findByText(`${labels.suggestedHeading} (1)`);
+    const suggestedSection = summary.closest("details")!;
+    expect(suggestedSection).not.toHaveAttribute("open");
     const inventorySection = screen.getByRole("region", { name: labels.confirmedHeading });
     const workRow = screen.getByTestId("space-row-work");
 
@@ -83,6 +84,14 @@ describe("SpacesOverview management", () => {
       suggestedSection.compareDocumentPosition(inventorySection) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(within(suggestedSection).getByText("Suggested description")).toBeInTheDocument();
+    fireEvent.click(summary);
+    expect(suggestedSection).toHaveAttribute("open");
+    fireEvent.keyDown(summary, { key: "Escape" });
+    expect(suggestedSection).not.toHaveAttribute("open");
+    expect(summary).toHaveFocus();
+    fireEvent.click(summary);
+    fireEvent.pointerDown(inventorySection);
+    expect(suggestedSection).not.toHaveAttribute("open");
     expect(within(inventorySection).queryByRole("heading", { name: labels.confirmedHeading })).not.toBeInTheDocument();
     expect(within(inventorySection).getByLabelText(labels.filterLabel)).toBeInTheDocument();
     expect(within(inventorySection).getByRole("columnheader", { name: labels.pages })).toBeInTheDocument();

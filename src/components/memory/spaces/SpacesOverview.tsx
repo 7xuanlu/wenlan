@@ -150,9 +150,19 @@ export function SpacesOverview(props: SpacesOverviewProps) {
     <div className="spaces-overview">
       <header className="spaces-overview-header">
         <h1>{props.labels.title}</h1>
-        <button type="button" className="page-create-action spaces-new-action" onClick={() => setCreating(true)}>
-          {props.labels.newSpace}
-        </button>
+        <div className="spaces-header-actions">
+          <SuggestedSpaces
+            spaces={suggested}
+            labels={props.labels}
+            pendingIds={pendingIds}
+            onSelect={props.onSelectSpace}
+            onKeep={(space) => submit({ kind: "confirm", space })}
+            onDiscard={(space) => submit({ kind: "delete", space })}
+          />
+          <button type="button" className="page-create-action spaces-new-action" onClick={() => setCreating(true)}>
+            {props.labels.newSpace}
+          </button>
+        </div>
       </header>
       {creating ? (
         <SpaceEditor
@@ -175,14 +185,6 @@ export function SpacesOverview(props: SpacesOverviewProps) {
       {mutationFailed ? <p className="spaces-error" role="alert">{props.labels.mutationError}</p> : null}
       {query.isPending && lastGood === null ? null : (
         <>
-          <SuggestedSpaces
-            spaces={suggested}
-            labels={props.labels}
-            pendingIds={pendingIds}
-            onSelect={props.onSelectSpace}
-            onKeep={(space) => submit({ kind: "confirm", space })}
-            onDiscard={(space) => submit({ kind: "delete", space })}
-          />
           <ConfirmedSpaces
             spaces={confirmed}
             allSpaces={allSpaces}

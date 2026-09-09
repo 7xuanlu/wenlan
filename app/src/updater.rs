@@ -1,5 +1,8 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +11,125 @@ use tauri_plugin_updater::UpdaterExt;
 
 const SUPPRESS_TTL: Duration = Duration::from_secs(24 * 3600);
 const STARTUP_DELAY: Duration = Duration::from_secs(3);
+const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
+// Manifest checks use a small budget; the package download gets a larger one
+// because the two requests go through separate clients.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+static UPDATER_STARTED: AtomicBool = AtomicBool::new(false);
+
+fn configure_network(
+    builder: tauri_plugin_updater::UpdaterBuilder,
+) -> tauri_plugin_updater::UpdaterBuilder {
+    builder.timeout(CHECK_TIMEOUT).configure_client(|client| {
+        client
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+    })
+}
+
+fn configure_download(update: &mut tauri_plugin_updater::Update) {
+    update.timeout = Some(DOWNLOAD_TIMEOUT);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LifecyclePhase {
+    Starting,
+    Idle,
+    Checking,
+    Prompting,
+    Installing,
+}
+
+impl LifecyclePhase {
+    fn accepts_manual_check(self) -> bool {
+        self == Self::Idle
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusState {
+    Checking,
+    Current,
+    Available,
+    Error,
+}
+
+impl StatusState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Checking => "checking",
+            Self::Current => "current",
+            Self::Available => "available",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct KnownStatus {
+    state: StatusState,
+    version: Option<String>,
+    error: Option<String>,
+}
+
+impl KnownStatus {
+    fn checking() -> Self {
+        Self {
+            state: StatusState::Checking,
+            version: None,
+            error: None,
+        }
+    }
+
+    fn current() -> Self {
+        Self {
+            state: StatusState::Current,
+            version: None,
+            error: None,
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            state: StatusState::Error,
+            version: None,
+            error: Some(message.into()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LifecycleState {
+    phase: LifecyclePhase,
+    status: KnownStatus,
+}
+
+type SharedLifecycleState = Arc<Mutex<LifecycleState>>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CheckTrigger {
+    Startup,
+    Scheduled,
+    Manual,
+}
+
+fn parse_action(payload: &str) -> Option<bool> {
+    let action =
+        serde_json::from_str::<String>(payload).unwrap_or_else(|_| payload.trim().to_string());
+    match action.as_str() {
+        "install" => Some(true),
+        "later" => Some(false),
+        _ => None,
+    }
+}
+
+fn should_prompt(trigger: CheckTrigger, recently_dismissed: bool) -> bool {
+    trigger == CheckTrigger::Manual || !recently_dismissed
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct DismissedUpdate {
@@ -22,35 +144,46 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn dismissal_file_path(dir: &Path) -> PathBuf {
+    dir.join("updater-dismissed.json")
+}
+
 fn dismissal_path(app: &AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_data_dir().ok()?;
     std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("updater-dismissed.json"))
+    Some(dismissal_file_path(&dir))
+}
+
+fn was_recently_dismissed_at(path: &Path, version: &str, now: u64) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(entry) = serde_json::from_slice::<DismissedUpdate>(&bytes) else {
+        return false;
+    };
+    entry.version == version && now.saturating_sub(entry.dismissed_at_secs) < SUPPRESS_TTL.as_secs()
+}
+
+fn record_dismissal_at(path: &Path, version: &str, now: u64) {
+    let entry = DismissedUpdate {
+        version: version.to_string(),
+        dismissed_at_secs: now,
+    };
+    if let Ok(bytes) = serde_json::to_vec(&entry) {
+        let _ = std::fs::write(path, bytes);
+    }
 }
 
 fn was_recently_dismissed(app: &AppHandle, version: &str) -> bool {
     let Some(path) = dismissal_path(app) else {
         return false;
     };
-    let Ok(bytes) = std::fs::read(&path) else {
-        return false;
-    };
-    let Ok(entry) = serde_json::from_slice::<DismissedUpdate>(&bytes) else {
-        return false;
-    };
-    entry.version == version
-        && now_secs().saturating_sub(entry.dismissed_at_secs) < SUPPRESS_TTL.as_secs()
+    was_recently_dismissed_at(&path, version, now_secs())
 }
 
 fn record_dismissal(app: &AppHandle, version: &str) {
     if let Some(path) = dismissal_path(app) {
-        let entry = DismissedUpdate {
-            version: version.to_string(),
-            dismissed_at_secs: now_secs(),
-        };
-        if let Ok(bytes) = serde_json::to_vec(&entry) {
-            let _ = std::fs::write(path, bytes);
-        }
+        record_dismissal_at(&path, version, now_secs());
     }
 }
 
@@ -59,6 +192,82 @@ fn emit_available(app: &AppHandle, version: &str) {
         "updater://available",
         serde_json::json!({ "version": version }),
     );
+}
+
+fn status_payload(status: &KnownStatus) -> serde_json::Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "state".to_string(),
+        serde_json::Value::String(status.state.as_str().to_string()),
+    );
+    if let Some(version) = &status.version {
+        payload.insert(
+            "version".to_string(),
+            serde_json::Value::String(version.clone()),
+        );
+    }
+    if let Some(error) = &status.error {
+        payload.insert(
+            "error".to_string(),
+            serde_json::Value::String(error.clone()),
+        );
+    }
+    serde_json::Value::Object(payload)
+}
+
+fn emit_status(app: &AppHandle, status: &KnownStatus) {
+    let _ = app.emit("updater://status", status_payload(status));
+}
+
+fn replay_status(app: &AppHandle, state: &SharedLifecycleState) {
+    let (phase, status) = snapshot_lifecycle(state);
+    emit_status(app, &status);
+    if phase == LifecyclePhase::Prompting && status.state == StatusState::Available {
+        if let Some(version) = status.version.as_deref() {
+            emit_available(app, version);
+        }
+    }
+}
+
+fn snapshot_lifecycle(state: &SharedLifecycleState) -> (LifecyclePhase, KnownStatus) {
+    state
+        .lock()
+        .map(|guard| (guard.phase, guard.status.clone()))
+        .unwrap_or((
+            LifecyclePhase::Starting,
+            KnownStatus::error("Updater state unavailable"),
+        ))
+}
+
+fn set_status(app: &AppHandle, state: &SharedLifecycleState, status: KnownStatus) {
+    if let Ok(mut guard) = state.lock() {
+        guard.status = status.clone();
+    }
+    emit_status(app, &status);
+}
+
+fn set_phase(state: &SharedLifecycleState, phase: LifecyclePhase) {
+    if let Ok(mut guard) = state.lock() {
+        guard.phase = phase;
+    }
+}
+
+fn begin_check(state: &SharedLifecycleState) -> bool {
+    let Ok(mut guard) = state.lock() else {
+        return false;
+    };
+    if guard.phase != LifecyclePhase::Idle {
+        return false;
+    }
+    guard.phase = LifecyclePhase::Checking;
+    true
+}
+
+fn accept_manual_check(state: &SharedLifecycleState) -> bool {
+    state
+        .lock()
+        .map(|guard| guard.phase.accepts_manual_check())
+        .unwrap_or(false)
 }
 
 /// Emit `updater://available` to the main webview and wait for the user's
@@ -76,7 +285,9 @@ async fn prompt_via_overlay(app: &AppHandle, version: &str) -> bool {
     let tx_action = Arc::clone(&tx);
     let action_id = app.listen("updater://action", move |event| {
         let payload = event.payload();
-        let install = payload.contains("install");
+        let Some(install) = parse_action(payload) else {
+            return;
+        };
         if let Ok(mut g) = tx_action.lock() {
             if let Some(sender) = g.take() {
                 let _ = sender.send(install);
@@ -84,65 +295,79 @@ async fn prompt_via_overlay(app: &AppHandle, version: &str) -> bool {
         }
     });
 
-    let app_for_ready = app.clone();
-    let version_for_ready = version.to_string();
-    let ui_ready_id = app.listen("updater://ui-ready", move |_| {
-        emit_available(&app_for_ready, &version_for_ready);
-    });
-
     emit_available(app, version);
 
     let accepted = rx.await.unwrap_or(false);
     app.unlisten(action_id);
-    app.unlisten(ui_ready_id);
     accepted
 }
 
-/// Check for an update on startup. If one exists and the user hasn't dismissed
-/// it within the last 24 hours, prompt via an in-app overlay. The overlay uses
-/// a `updater://ui-ready` handshake so the one-shot availability event is
-/// replayed while the user has not answered; on accept, download + install +
-/// relaunch with progress events. Failures are logged and surfaced in the
-/// overlay, never blocking.
-pub async fn check_and_prompt(app: AppHandle) {
-    if crate::lifecycle::data_dir_env_overridden() {
-        log::warn!("[updater] skipping update check: isolated run (data-dir env override)");
-        return;
-    }
+async fn check_once_after_begin(
+    app: &AppHandle,
+    state: &SharedLifecycleState,
+    trigger: CheckTrigger,
+) {
+    set_status(app, state, KnownStatus::checking());
 
-    tokio::time::sleep(STARTUP_DELAY).await;
-
-    let updater = match app.updater() {
-        Ok(u) => u,
-        Err(e) => {
-            log::warn!("updater unavailable: {e}");
+    let updater = match configure_network(app.updater_builder()).build() {
+        Ok(updater) => updater,
+        Err(error) => {
+            let message = error.to_string();
+            log::warn!("updater unavailable: {message}");
+            set_status(app, state, KnownStatus::error(message));
+            set_phase(state, LifecyclePhase::Idle);
             return;
         }
     };
 
-    let update = match updater.check().await {
-        Ok(Some(u)) => u,
-        Ok(None) => return,
-        Err(e) => {
-            log::warn!("update check failed: {e}");
+    let mut update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) => {
+            set_status(app, state, KnownStatus::current());
+            set_phase(state, LifecyclePhase::Idle);
+            return;
+        }
+        Err(error) => {
+            let message = error.to_string();
+            log::warn!("update check failed: {message}");
+            set_status(app, state, KnownStatus::error(message));
+            set_phase(state, LifecyclePhase::Idle);
             return;
         }
     };
 
     let version = update.version.clone();
+    let suppressed = !should_prompt(trigger, was_recently_dismissed(app, &version));
+    if !suppressed {
+        // Mark the prompt pending before publishing availability so a
+        // ready-handshake arriving in this tiny window can still replay it.
+        set_phase(state, LifecyclePhase::Prompting);
+    }
+    set_status(
+        app,
+        state,
+        KnownStatus {
+            state: StatusState::Available,
+            version: Some(version.clone()),
+            error: None,
+        },
+    );
 
-    if was_recently_dismissed(&app, &version) {
+    if suppressed {
         log::info!("update v{version} suppressed (dismissed within 24h)");
+        set_phase(state, LifecyclePhase::Idle);
         return;
     }
 
-    let accepted = prompt_via_overlay(&app, &version).await;
+    let accepted = prompt_via_overlay(app, &version).await;
 
     if !accepted {
-        record_dismissal(&app, &version);
+        record_dismissal(app, &version);
+        set_phase(state, LifecyclePhase::Idle);
         return;
     }
 
+    set_phase(state, LifecyclePhase::Installing);
     let app_chunk = app.clone();
     let on_chunk = move |chunk_len: usize, total: Option<u64>| {
         let _ = app_chunk.emit(
@@ -158,15 +383,322 @@ pub async fn check_and_prompt(app: AppHandle) {
         let _ = app_done.emit("updater://progress", serde_json::json!({ "done": true }));
     };
 
-    if let Err(e) = update.download_and_install(on_chunk, on_done).await {
-        log::error!("update install failed: {e}");
+    // Update starts with timeout None even when the builder timeout is set, so
+    // bind the package budget here; configure_client carries over for body reads.
+    configure_download(&mut update);
+    if let Err(error) = update.download_and_install(on_chunk, on_done).await {
+        let message = error.to_string();
+        log::error!("update install failed: {message}");
         let _ = app.emit(
             "updater://progress",
-            serde_json::json!({ "error": format!("{e}") }),
+            serde_json::json!({ "error": message }),
         );
+        set_status(
+            app,
+            state,
+            KnownStatus {
+                state: StatusState::Error,
+                version: Some(version),
+                error: Some(message),
+            },
+        );
+        set_phase(state, LifecyclePhase::Idle);
         return;
     }
 
     tokio::time::sleep(Duration::from_millis(800)).await;
     app.restart();
 }
+
+async fn check_once(app: &AppHandle, state: &SharedLifecycleState, trigger: CheckTrigger) {
+    if !begin_check(state) {
+        return;
+    }
+    check_once_after_begin(app, state, trigger).await;
+}
+
+async fn next_check_trigger(
+    interval: &mut tokio::time::Interval,
+    check_rx: &mut tokio::sync::mpsc::Receiver<CheckTrigger>,
+    state: &SharedLifecycleState,
+) -> CheckTrigger {
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                // Claim the lifecycle before draining a request that raced
+                // with the scheduled tick. This guarantees one check, with a
+                // manual request winning over the scheduled trigger.
+                if begin_check(state) {
+                    let mut trigger = CheckTrigger::Scheduled;
+                    if check_rx.try_recv().is_ok() {
+                        trigger = CheckTrigger::Manual;
+                        while check_rx.try_recv().is_ok() {}
+                    }
+                    return trigger;
+                }
+            }
+            result = check_rx.recv() => {
+                match result {
+                    Some(trigger) => {
+                        if begin_check(state) {
+                            while check_rx.try_recv().is_ok() {}
+                            return trigger;
+                        }
+                    }
+                    None => {
+                        // Sender dropped (tests only); wait for the schedule
+                        // instead of spinning on a closed channel. The outer
+                        // loop retries until begin_check succeeds.
+                        interval.tick().await;
+                        if begin_check(state) {
+                            return CheckTrigger::Scheduled;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Run the serialized updater lifecycle. The first check waits briefly for the
+/// main webview, then checks every 30 minutes. The frontend can request an
+/// immediate check with `updater://check-now`; requests received while a check,
+/// prompt, or install is active are dropped instead of queued.
+pub async fn check_and_prompt(app: AppHandle) {
+    if crate::lifecycle::data_dir_env_overridden() {
+        let status = KnownStatus {
+            state: StatusState::Error,
+            version: None,
+            error: Some("Update checks are disabled for isolated runs".to_string()),
+        };
+        log::warn!("[updater] skipping update check: isolated run (data-dir env override)");
+        emit_status(&app, &status);
+
+        // Keep the frontend's manual check control from remaining in a
+        // checking state when an isolated development run is active. These
+        // listeners intentionally never call the real updater.
+        let app_for_ready = app.clone();
+        let status_for_ready = status.clone();
+        app.listen("updater://ui-ready", move |_| {
+            emit_status(&app_for_ready, &status_for_ready);
+        });
+        let app_for_check = app.clone();
+        app.listen("updater://check-now", move |_| {
+            emit_status(&app_for_check, &status);
+        });
+        return;
+    }
+
+    if UPDATER_STARTED.swap(true, Ordering::AcqRel) {
+        log::debug!("[updater] lifecycle already running; ignoring duplicate start");
+        return;
+    }
+
+    let state = Arc::new(Mutex::new(LifecycleState {
+        phase: LifecyclePhase::Starting,
+        status: KnownStatus::checking(),
+    }));
+
+    // Keep the latest status replayable for the webview. This listener is set
+    // up before the startup delay so a webview loaded early still receives the
+    // known state through its ready handshake.
+    let app_for_ready = app.clone();
+    let state_for_ready = Arc::clone(&state);
+    app.listen("updater://ui-ready", move |_| {
+        replay_status(&app_for_ready, &state_for_ready);
+    });
+
+    let (check_tx, mut check_rx) = tokio::sync::mpsc::channel::<CheckTrigger>(1);
+    let app_for_check = app.clone();
+    let state_for_check = Arc::clone(&state);
+    app.listen("updater://check-now", move |_| {
+        if accept_manual_check(&state_for_check) && check_tx.try_send(CheckTrigger::Manual).is_ok()
+        {
+            return;
+        }
+        replay_status(&app_for_check, &state_for_check);
+    });
+
+    // Emit the initial known state for any already-mounted consumers. The
+    // ready handshake above also replays it after listeners are registered.
+    emit_status(&app, &KnownStatus::checking());
+    tokio::time::sleep(STARTUP_DELAY).await;
+    set_phase(&state, LifecyclePhase::Idle);
+    check_once(&app, &state, CheckTrigger::Startup).await;
+    let mut interval = tokio::time::interval(CHECK_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Consume the immediate first tick; subsequent ticks are 30 minutes apart.
+    interval.tick().await;
+
+    loop {
+        let trigger = next_check_trigger(&mut interval, &mut check_rx, &state).await;
+        check_once_after_begin(&app, &state, trigger).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manual_checks_are_accepted_only_when_idle() {
+        assert!(!LifecyclePhase::Starting.accepts_manual_check());
+        assert!(LifecyclePhase::Idle.accepts_manual_check());
+        assert!(!LifecyclePhase::Checking.accepts_manual_check());
+        assert!(!LifecyclePhase::Prompting.accepts_manual_check());
+        assert!(!LifecyclePhase::Installing.accepts_manual_check());
+    }
+
+    #[test]
+    fn manual_check_bypasses_recent_dismissal() {
+        assert!(!should_prompt(CheckTrigger::Startup, true));
+        assert!(!should_prompt(CheckTrigger::Scheduled, true));
+        assert!(should_prompt(CheckTrigger::Manual, true));
+        assert!(should_prompt(CheckTrigger::Scheduled, false));
+    }
+
+    #[test]
+    fn action_payload_requires_an_exact_known_action() {
+        assert_eq!(parse_action("\"install\""), Some(true));
+        assert_eq!(parse_action("later"), Some(false));
+        assert_eq!(parse_action("please install now"), None);
+        assert_eq!(parse_action("{\"action\":\"install\"}"), None);
+    }
+
+    #[test]
+    fn status_payload_keeps_optional_fields_absent_when_unknown() {
+        assert_eq!(
+            status_payload(&KnownStatus::current()),
+            serde_json::json!({
+                "state": "current"
+            })
+        );
+
+        assert_eq!(
+            status_payload(&KnownStatus {
+                state: StatusState::Error,
+                version: Some("0.18.5".to_string()),
+                error: Some("network unavailable".to_string()),
+            }),
+            serde_json::json!({
+                "state": "error",
+                "version": "0.18.5",
+                "error": "network unavailable"
+            })
+        );
+    }
+
+    #[test]
+    fn dismissal_file_suppresses_same_version_within_24h() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dismissal_file_path(dir.path());
+        // No file yet: nothing suppressed.
+        assert!(!was_recently_dismissed_at(&path, "0.18.5", 1_000_000));
+
+        let now = 1_000_000u64;
+        record_dismissal_at(&path, "0.18.5", now);
+        // Read back from disk, representing a relaunch.
+        assert!(was_recently_dismissed_at(&path, "0.18.5", now + 3600));
+        assert!(was_recently_dismissed_at(
+            &path,
+            "0.18.5",
+            now + SUPPRESS_TTL.as_secs() - 1
+        ));
+        // Different version is not suppressed.
+        assert!(!was_recently_dismissed_at(&path, "0.18.6", now + 3600));
+        // Expiry at exactly 24h is allowed (TTL is exclusive).
+        assert!(!was_recently_dismissed_at(
+            &path,
+            "0.18.5",
+            now + SUPPRESS_TTL.as_secs()
+        ));
+        // Manual checks bypass suppression; scheduled ones do not.
+        assert!(should_prompt(
+            CheckTrigger::Manual,
+            was_recently_dismissed_at(&path, "0.18.5", now + 3600)
+        ));
+        assert!(!should_prompt(
+            CheckTrigger::Scheduled,
+            was_recently_dismissed_at(&path, "0.18.5", now + 3600)
+        ));
+    }
+
+    #[test]
+    fn dismissal_file_with_malformed_json_is_ignored() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dismissal_file_path(dir.path());
+        std::fs::write(&path, b"{not json").expect("write malformed");
+        assert!(!was_recently_dismissed_at(&path, "0.18.5", 1_000_000));
+    }
+
+    fn idle_state() -> SharedLifecycleState {
+        Arc::new(Mutex::new(LifecycleState {
+            phase: LifecyclePhase::Idle,
+            status: KnownStatus::checking(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn scheduled_triggers_repeat_when_idle_restored() {
+        let state = idle_state();
+        let mut interval = tokio::time::interval(Duration::from_millis(20));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Consume the immediate first tick; subsequent ticks drive the schedule.
+        interval.tick().await;
+        let (_tx, mut rx) = tokio::sync::mpsc::channel::<CheckTrigger>(1);
+        for _ in 0..3 {
+            let trigger = tokio::time::timeout(
+                Duration::from_secs(5),
+                next_check_trigger(&mut interval, &mut rx, &state),
+            )
+            .await
+            .expect("scheduled trigger within bound");
+            assert_eq!(trigger, CheckTrigger::Scheduled);
+            set_phase(&state, LifecyclePhase::Idle);
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_trigger_is_accepted_promptly() {
+        let state = idle_state();
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<CheckTrigger>(1);
+        tx.send(CheckTrigger::Manual)
+            .await
+            .expect("queue manual check");
+        let trigger = tokio::time::timeout(
+            Duration::from_secs(5),
+            next_check_trigger(&mut interval, &mut rx, &state),
+        )
+        .await
+        .expect("manual trigger within bound");
+        assert_eq!(trigger, CheckTrigger::Manual);
+    }
+
+    #[tokio::test]
+    async fn queued_manual_wins_over_ready_scheduled_tick() {
+        let state = idle_state();
+        let mut interval = tokio::time::interval(Duration::from_millis(20));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<CheckTrigger>(1);
+        // Let a scheduled tick become pending, then queue a manual request so
+        // both sources are ready when the helper selects.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tx.try_send(CheckTrigger::Manual)
+            .expect("queue manual check");
+        let trigger = tokio::time::timeout(
+            Duration::from_secs(5),
+            next_check_trigger(&mut interval, &mut rx, &state),
+        )
+        .await
+        .expect("trigger within bound");
+        assert_eq!(trigger, CheckTrigger::Manual);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "updater_native_tests.rs"]
+mod native_tests;

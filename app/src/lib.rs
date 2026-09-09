@@ -64,6 +64,111 @@ fn set_main_window_dock_visibility<R: tauri::Runtime>(app: &tauri::AppHandle<R>,
 #[cfg(not(target_os = "macos"))]
 fn set_main_window_dock_visibility<R: tauri::Runtime>(_app: &tauri::AppHandle<R>, _visible: bool) {}
 
+/// Keep the AppKit traffic lights on the same centreline as Wenlan's header.
+///
+/// Tao's `trafficLightPosition.y` is an inset used to size and place the
+/// titlebar container. AppKit may give the buttons different local frames
+/// between window styles and after a resize, so that inset cannot be treated
+/// as the visible button centre. Measure the close button in the window's
+/// coordinate system, then translate all three controls by the delta to the
+/// product target. The correction is idempotent and can safely run after each
+/// geometry change.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub(crate) fn align_main_window_traffic_lights(window: &tauri::WebviewWindow) {
+    use cocoa::appkit::{NSWindow, NSWindowButton};
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSRect;
+    use raw_window_handle::HasWindowHandle;
+
+    let Ok(raw_handle) = window.window_handle() else {
+        return;
+    };
+    let raw_window_handle::RawWindowHandle::AppKit(appkit) = raw_handle.as_raw() else {
+        return;
+    };
+
+    let ns_view = appkit.ns_view.as_ptr() as id;
+    unsafe {
+        let ns_window: id = objc::msg_send![ns_view, window];
+        if ns_window == nil {
+            return;
+        }
+
+        let close = ns_window.standardWindowButton_(NSWindowButton::NSWindowCloseButton);
+        let miniaturize =
+            ns_window.standardWindowButton_(NSWindowButton::NSWindowMiniaturizeButton);
+        let zoom = ns_window.standardWindowButton_(NSWindowButton::NSWindowZoomButton);
+        if close == nil {
+            return;
+        }
+
+        // `frame` is expressed in the button's superview. Converting the
+        // button's bounds avoids applying that origin twice and gives us the
+        // actual position in the NSWindow base coordinate system.
+        let close_bounds: NSRect = objc::msg_send![close, bounds];
+        let close_window_rect: NSRect = objc::msg_send![close, convertRect:close_bounds toView:nil];
+        let window_frame: NSRect = objc::msg_send![ns_window, frame];
+        let (horizontal_delta, vertical_delta) = traffic_light_deltas(
+            window_frame.size.height,
+            close_window_rect.origin.x,
+            close_window_rect.origin.y,
+            close_window_rect.size.height,
+        );
+
+        for button in [close, miniaturize, zoom] {
+            if button == nil {
+                continue;
+            }
+            let mut frame: NSRect = objc::msg_send![button, frame];
+            frame.origin.x += horizontal_delta;
+            frame.origin.y += vertical_delta;
+            let _: () = objc::msg_send![button, setFrameOrigin:frame.origin];
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+const MAIN_HEADER_HEIGHT: f64 = 52.0;
+
+#[cfg(target_os = "macos")]
+const MAIN_TRAFFIC_LIGHT_X: f64 = 16.0;
+
+#[cfg(target_os = "macos")]
+const MAIN_TRAFFIC_LIGHT_CENTER_Y: f64 = MAIN_HEADER_HEIGHT / 2.0;
+
+/// Return the translation in NSWindow base coordinates needed to place the
+/// measured button centre on the header target. Keeping this pure makes the
+/// coordinate conversion independently testable without launching AppKit.
+#[cfg(target_os = "macos")]
+fn traffic_light_deltas(
+    window_height: f64,
+    button_origin_x: f64,
+    button_origin_y: f64,
+    button_height: f64,
+) -> (f64, f64) {
+    let current_center_from_top = window_height - (button_origin_y + button_height / 2.0);
+    (
+        MAIN_TRAFFIC_LIGHT_X - button_origin_x,
+        current_center_from_top - MAIN_TRAFFIC_LIGHT_CENTER_Y,
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn schedule_main_window_traffic_lights_alignment(window: &tauri::WebviewWindow) {
+    // Window events can already be delivered on AppKit's main thread, where
+    // `run_on_main_thread` executes synchronously. Hop through Tauri's runtime
+    // first so the correction is dispatched after the current AppKit event
+    // returns and any titlebar layout it triggered has settled.
+    let scheduler = window.clone();
+    tauri::async_runtime::spawn(async move {
+        let target = scheduler.clone();
+        let _ = scheduler.run_on_main_thread(move || {
+            align_main_window_traffic_lights(&target);
+        });
+    });
+}
+
 fn app_log_dir() -> std::path::PathBuf {
     if let Some(state_dir) = crate::identity_paths::isolated_dev_state_dir() {
         return state_dir.join("logs");
@@ -689,6 +794,18 @@ pub fn run() {
                             let _ = win.hide();
                             set_main_window_dock_visibility(&app_for_close, false);
                         }
+
+                        #[cfg(target_os = "macos")]
+                        if matches!(
+                            event,
+                            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
+                        ) {
+                            // AppKit can rebuild the titlebar controls after
+                            // the resize event. Queue the correction after
+                            // that layout pass rather than using a fixed y
+                            // value that only matches one window style.
+                            schedule_main_window_traffic_lights_alignment(&win);
+                        }
                     });
                 }
             }
@@ -779,6 +896,12 @@ pub fn run() {
                         1280.0, 720.0,
                     )));
                     let _ = win.center();
+
+                    // The initial Tao inset is only a starting point. Run the
+                    // AppKit correction after the titlebar has laid out so
+                    // review and installed windows use their actual button
+                    // geometry.
+                    schedule_main_window_traffic_lights_alignment(&win);
 
                     if let Ok(raw_handle) = win.window_handle() {
                         if let raw_window_handle::RawWindowHandle::AppKit(appkit) =
@@ -2001,6 +2124,16 @@ mod platform_tests {
 mod tests {
     use super::*;
     use crate::test_env::EnvGuard;
+
+    #[test]
+    fn traffic_light_delta_targets_the_main_header_centerline() {
+        // Review geometry observed a 14px button centred at y=22; the
+        // installed geometry observed a 12px button centred at y=30. Both
+        // should converge on x=16 and y=MAIN_HEADER_HEIGHT / 2.
+        assert_eq!(MAIN_TRAFFIC_LIGHT_CENTER_Y, 26.0);
+        assert_eq!(traffic_light_deltas(760.0, 22.0, 731.0, 14.0), (-6.0, -4.0));
+        assert_eq!(traffic_light_deltas(720.0, 22.0, 684.0, 12.0), (-6.0, 4.0));
+    }
 
     /// Every variable `validate_debug_runtime_isolation` reads, plus the home
     /// directory the protected production roots hang off.

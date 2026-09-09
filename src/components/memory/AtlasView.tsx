@@ -5,6 +5,30 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import Graph from "graphology";
 import Sigma from "sigma";
+import {
+  ArrowCounterClockwise,
+  CornersOut,
+  Minus,
+  Plus,
+} from "@phosphor-icons/react";
+import {
+  captureAtlasViewpoint,
+  frameAtlasView,
+  restoreAtlasViewpoint,
+  type AtlasFrameMode,
+  type AtlasViewpoint,
+} from "../../lib/graph/viewpoint";
+import {
+  overviewLabelMaxWidth,
+  selectOverviewFallbackLabels,
+  truncateOverviewLabel,
+} from "../../lib/graph/overviewLabels";
+import "./atlasControls.css";
+import AtlasInspector from "./AtlasInspector";
+import AtlasSelect from "./AtlasSelect";
+import AtlasTooltip from "./AtlasTooltip";
+import AtlasTypeFilters from "./AtlasTypeFilters";
+import { entityTypeHidden, filterGraphEntityTypes } from "../../lib/graph/typeFilter";
 import { getKnowledgeGraph } from "../../lib/tauri";
 import type { Entity, KnowledgeGraph } from "../../lib/tauri";
 import {
@@ -23,12 +47,13 @@ import {
 import type { GraphLayers, GraphModel, GraphNode } from "../../lib/graph/model";
 import {
   buildAtlasGraph,
+  applyAtlasHierarchy,
   runAtlasLayout,
   createAtlasSimulation,
   hoverStateFor,
   nodeDisplay,
   edgeDisplay,
-  drawRadialNodeLabel,
+  labelAnchor,
   lodFor,
   OPENING_LOD,
   drawNodeLabelAt,
@@ -43,6 +68,7 @@ import {
   communitiesFor,
   cartographyScene,
   drawRegionNames,
+  drawRegionAreas,
   isUnscopedSpace,
   MIN_REGION_SIZE,
 } from "../../lib/graph/cartography";
@@ -114,19 +140,6 @@ export function readStoredLayers(raw: string | null): GraphLayers {
   }
 }
 
-// Same 5-slot legend as the retired canvas graph (ConstellationMap): place,
-// event, and unknown types fold to neutral and get no swatch; concept is
-// labeled "Theme" to match the product copy.
-const LEGEND_ITEMS: { label: string; key: string }[] = [
-  { label: "Project", key: "project" },
-  { label: "Technology", key: "technology" },
-  { label: "Organization", key: "organization" },
-  { label: "Person", key: "person" },
-  { label: "Theme", key: "concept" },
-  { label: "Wiki page", key: PAGE_NODE_TYPE },
-  { label: "Memory", key: MEMORY_NODE_TYPE },
-];
-
 /** What a click on a drawn node resolves to. Memories carry their own
  *  `source_id`, not the prefixed graph-node id. */
 export type AtlasNodeTarget =
@@ -172,6 +185,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const palette = useGraphPalette();
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
+  const viewpointRef = useRef<{ scope: string | null; view: AtlasViewpoint; body: Map<string, { x: number; y: number }> } | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const simRef = useRef<AtlasSimulation | null>(null);
   // Reducer inputs, read from refs so hover/theme changes repaint without a
@@ -195,6 +209,13 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // 66 regions; the scene only actually changes when node positions or
   // communities do, so paints mark it dirty and the afterRender handler
   // rebuilds only then.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedRef = useRef<string | null>(null);
+  const overviewRef = useRef<AtlasViewpoint | null>(null);
+  const pendingFocusRef = useRef<string | null>(null);
+  const openingRatioRef = useRef(1);
+  const focusNodeRef = useRef<(id: string) => void>(() => {});
+  const returnToMapRef = useRef<() => void>(() => {});
   const sceneRef = useRef<CartographyScene | null>(null);
   const sceneDirtyRef = useRef(true);
 
@@ -223,6 +244,9 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       ).sort(),
     [entities],
   );
+  const [excludedTypes, setExcludedTypes] = useState<Set<string>>(() => new Set());
+  const excludedTypesRef = useRef<ReadonlySet<string>>(excludedTypes);
+  excludedTypesRef.current = excludedTypes;
   const [spaceFilter, setSpaceFilter] = useState<string | null>(null);
 
   // Which node kinds are drawn. Wiki pages and entities on, memories off by
@@ -263,6 +287,15 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     setShowSmallGroups(next);
     try {
       window.localStorage.setItem(SMALL_GROUPS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Private mode / quota: the choice still applies for this session.
+    }
+  };
+  const revealSmallGroupsForFocus = () => {
+    if (showSmallGroups) return;
+    setShowSmallGroups(true);
+    try {
+      window.localStorage.setItem(SMALL_GROUPS_STORAGE_KEY, JSON.stringify(true));
     } catch {
       // Private mode / quota: the choice still applies for this session.
     }
@@ -371,6 +404,18 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // was current when the sigma renderer was built.
   const communitiesRef = useRef<Map<string, string>>(communities);
 
+  const filteredModel = useMemo(() => filterGraphEntityTypes(visibleModel, excludedTypes), [visibleModel, excludedTypes]);
+  const entityTypes = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const node of visibleModel.nodes) if (node.kind === "entity") counts.set(node.entityType, (counts.get(node.entityType) ?? 0) + 1);
+    return [...counts].sort(([a, countA], [b, countB]) => countB - countA || a.localeCompare(b));
+  }, [visibleModel]);
+  const toggleEntityType = (type: string) => setExcludedTypes((previous) => {
+    const next = new Set(previous);
+    if (next.has(type)) next.delete(type); else next.add(type);
+    return next;
+  });
+
   // Region count for the toolbar count line — membership only, so it agrees
   // with the regions the cartography scene actually names without needing
   // node positions. Counted over the DRAWN nodes for the same reason:
@@ -378,7 +423,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // community is not on the map.
   const regionCount = useMemo(() => {
     const groups = new Map<string, GraphNode[]>();
-    for (const node of visibleModel.nodes) {
+    for (const node of filteredModel.nodes) {
       const community = communities.get(node.id);
       if (community === undefined) continue;
       const list = groups.get(community);
@@ -390,7 +435,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       if (members.length >= MIN_REGION_SIZE) count += 1;
     }
     return count;
-  }, [visibleModel, communities]);
+  }, [filteredModel, communities]);
 
   // Toolbar search (artifact screen 01): type → listbox of entity names,
   // Enter/click → camera fly + the same emphasis hover applies.
@@ -398,19 +443,20 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [searchFocused, setSearchFocused] = useState(false);
-  // Regions on/off governs only the place-name overlay canvas; the count line
-  // keeps reporting regions either way.
+  // Start with a clean map; Regions reveals community contours and names.
+  // The count line keeps reporting regions either way.
   // Ref mirror so the sigma mount effect (which recreates the overlay per
   // model) can apply the current choice without re-running on toggle.
-  const [showRegions, setShowRegions] = useState(true);
-  const showRegionsRef = useRef(true);
+  const [showRegions, setShowRegions] = useState(false);
+  const showRegionsRef = useRef(false);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const areasRef = useRef<HTMLCanvasElement | null>(null);
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
-    return model.nodes.filter((node) => node.name.toLowerCase().includes(needle)).slice(0, 8);
-  }, [model, query]);
+    return model.nodes.filter((node) => !entityTypeHidden(node.entityType, excludedTypes) && node.name.toLowerCase().includes(needle)).slice(0, 8);
+  }, [model, query, excludedTypes]);
 
   // ⌘K / Ctrl+K jumps to the search box from anywhere in the window.
   useEffect(() => {
@@ -431,28 +477,138 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     const renderer = sigmaRef.current;
     const drawn = graphRef.current;
     // A degree-0 node is not on the map at all (see visibleModel), but search
-    // can still name it, so focusing opens the node's own page rather than
-    // flying the camera to nothing.
+    // can still name it. Reveal hidden small groups first so the same search
+    // action can select the node in the map, including in the browser preview
+    // where no details callback is present.
     if (!drawn || !drawn.hasNode(nodeId)) {
-      if (model.nodes.some((node) => node.id === nodeId)) onNodeClick?.(targetForNode(nodeId));
+      if (model.nodes.some((node) => node.id === nodeId)) {
+        pendingFocusRef.current = nodeId;
+        revealSmallGroupsForFocus();
+      }
       return;
     }
     const graph = drawn;
     if (!renderer) return;
-    // Same emphasis as hovering the node: its neighborhood stays lit, the
-    // rest dims. Cleared naturally by the next enter/leaveNode.
+    if (!selectedRef.current) overviewRef.current = captureAtlasViewpoint(renderer, graph);
+    selectedRef.current = nodeId;
+    setSelectedId(nodeId);
+    // Selection persists while reading the inspector or traversing neighbors.
     hoverStateRef.current = hoverStateFor(graph, nodeId);
     const display = renderer.getNodeDisplayData(nodeId);
     if (display) {
       const camera = renderer.getCamera();
       // Ratio only ever shrinks (zooms in) — landing further out than the
       // current view would read as the map running away from the match.
-      const state = { x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1) };
+      const state = { x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1, openingRatioRef.current / 2.5) };
+      const { width, height } = renderer.getDimensions();
+      if (width <= 640) {
+        // The narrow inspector occupies the lower canvas. Keep the selected
+        // neighborhood above it, using Sigma's projection (also handles rotation).
+        const center = renderer.viewportToFramedGraph({ x: width / 2, y: height / 2 });
+        const target = renderer.viewportToFramedGraph({ x: width / 2, y: height * 0.16 });
+        const scale = state.ratio / camera.ratio;
+        state.x += (center.x - target.x) * scale;
+        state.y += (center.y - target.y) * scale;
+      }
       if (prefersReducedMotion()) camera.setState(state);
       else camera.animate(state, { duration: 450 });
     }
     renderer.refresh();
   };
+
+  focusNodeRef.current = focusEntity;
+  const returnToMap = () => {
+    selectedRef.current = null;
+    setSelectedId(null);
+    const renderer = sigmaRef.current;
+    const drawn = graphRef.current;
+    if (renderer && drawn) {
+      hoverStateRef.current = hoverStateFor(drawn, null);
+      if (overviewRef.current) restoreAtlasViewpoint(renderer, drawn, overviewRef.current);
+      const camera = renderer.getCamera();
+      // setState does not cancel Sigma's pending fly-to frame. Replace that
+      // animation with the restored state so an immediate Escape stays put.
+      if (camera.isAnimated()) void camera.animate({ x: camera.x, y: camera.y, ratio: camera.ratio, angle: camera.angle }, { duration: 1 });
+      renderer.refresh();
+    }
+    overviewRef.current = null;
+    searchInputRef.current?.focus();
+  };
+  returnToMapRef.current = returnToMap;
+  const frameMap = (mode: AtlasFrameMode) => {
+    const renderer = sigmaRef.current;
+    const drawn = graphRef.current;
+    selectedRef.current = null;
+    setSelectedId(null);
+    overviewRef.current = null;
+    focusLayoutRef.current = null;
+    if (!renderer || !drawn) return;
+
+    const camera = renderer.getCamera();
+    const wasAnimated = camera.isAnimated();
+    const visibleNodeIds = new Set(
+      drawn.nodes().filter((id) => !entityTypeHidden(drawn.getNodeAttribute(id, "entityType"), excludedTypesRef.current)),
+    );
+    frameAtlasView(renderer, drawn, { mode, visibleNodeIds, padding: 56 });
+    // Replace a pending search animation with the NEW frame. Animating the
+    // old state before fitting would overwrite the fit on its next frame.
+    if (wasAnimated) void camera.animate({ x: camera.x, y: camera.y, ratio: camera.ratio, angle: camera.angle }, { duration: 1 });
+    hoverStateRef.current = hoverStateFor(drawn, null);
+    lodRef.current = OPENING_LOD;
+    openingRatioRef.current = camera.ratio;
+    renderer.refresh();
+  };
+  const zoomMap = (factor: number) => {
+    const renderer = sigmaRef.current;
+    if (!renderer) return;
+    const camera = renderer.getCamera();
+    const ratio = camera.getBoundedRatio(camera.ratio * factor);
+    if (ratio === camera.ratio) return;
+    const state = { x: camera.x, y: camera.y, ratio, angle: camera.angle };
+    if (prefersReducedMotion()) camera.setState(state);
+    else void camera.animate(state, { duration: 180 });
+  };
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && selectedRef.current) returnToMapRef.current();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, []);
+  useEffect(() => {
+    if (selectedRef.current && !filteredModel.nodes.some((node) => node.id === selectedRef.current)) {
+      selectedRef.current = null;
+      setSelectedId(null);
+      overviewRef.current = null;
+    }
+  }, [filteredModel]);
+  useEffect(() => {
+    selectedRef.current = null;
+    setSelectedId(null);
+    overviewRef.current = null;
+  }, [spaceFilter]);
+  const selectedNode = filteredModel.nodes.find((node) => node.id === selectedId);
+  const selectedNeighbors = useMemo(() => {
+    if (!selectedId) return [];
+    const ids = new Set<string>();
+    for (const edge of filteredModel.edges) {
+      if (edge.source === selectedId && edge.target !== selectedId) ids.add(edge.target);
+      if (edge.target === selectedId && edge.source !== selectedId) ids.add(edge.source);
+    }
+    return filteredModel.nodes.filter((node) => ids.has(node.id)).sort((a, b) =>
+      Number(a.kind === "memory") - Number(b.kind === "memory") || b.degree - a.degree || a.name.localeCompare(b.name));
+  }, [selectedId, filteredModel]);
+
+  useEffect(() => {
+    const renderer = sigmaRef.current;
+    const drawn = graphRef.current;
+    if (drawn && hoverStateRef.current.hovered && entityTypeHidden(drawn.getNodeAttribute(hoverStateRef.current.hovered, "entityType"), excludedTypes)) {
+      hoverStateRef.current = hoverStateFor(drawn, null);
+    }
+    focusLayoutRef.current = null;
+    sceneDirtyRef.current = true;
+    renderer?.refresh();
+  }, [excludedTypes]);
 
   const onSearchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
@@ -485,6 +641,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     const graph = buildAtlasGraph(visibleModel, palette);
     runAtlasLayout(graph);
     graphRef.current = graph;
+    hoverStateRef.current = hoverStateFor(graph, null);
     sceneRef.current = null;
     sceneDirtyRef.current = true;
 
@@ -495,17 +652,62 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       sceneDirtyRef.current = true;
       sigmaRef.current?.refresh();
     });
+    const previous = viewpointRef.current;
+    const bodyIds = graph.nodes().filter((id) => graph.getNodeAttribute(id, "entityType") !== MEMORY_NODE_TYPE);
+    if (previous?.scope === spaceFilter && bodyIds.length > 0) {
+      // Layer/small-group changes may add or remove nodes. Restore every
+      // survivor rather than requiring an identical set, so the learned map
+      // stays put while the changed layer settles around it.
+      const survivorPositions = new Map(
+        bodyIds
+          .map((id) => [id, previous.body.get(id)] as const)
+          .filter((entry): entry is readonly [string, { x: number; y: number }] => entry[1] !== undefined),
+      );
+      if (survivorPositions.size > 0) sim.restorePositions(survivorPositions);
+    }
+    applyAtlasHierarchy(graph);
+    // Large maps intentionally label only hierarchy landmarks at overview
+    // zoom. Keep one stable name for a represented component that has no
+    // landmark (a revealed pair or an all-disconnected young graph), so the
+    // view does not erase names solely because their degrees are small.
+    const fallbackCandidates: { id: string; x: number; y: number }[] = [];
+    const components = new Map<string, string[]>();
+    graph.forEachNode((id, attrs) => {
+      if (attrs.entityType === MEMORY_NODE_TYPE) return;
+      const componentId = attrs.componentId as string | undefined;
+      if (!componentId) return;
+      const members = components.get(componentId);
+      if (members) members.push(id);
+      else components.set(componentId, [id]);
+    });
+    for (const members of components.values()) {
+      if (members.some((id) => graph.getNodeAttribute(id, "landmark") === true)) continue;
+      const candidate = [...members].sort((a, b) => {
+        const degreeDelta = Number(graph.getNodeAttribute(b, "structuralDegree") ?? 0)
+          - Number(graph.getNodeAttribute(a, "structuralDegree") ?? 0);
+        return degreeDelta || (a < b ? -1 : a > b ? 1 : 0);
+      })[0];
+      if (candidate) {
+        const attrs = graph.getNodeAttributes(candidate);
+        fallbackCandidates.push({
+          id: candidate,
+          x: Number(attrs.x),
+          y: Number(attrs.y),
+        });
+      }
+    }
+    const overviewFallbackLabels = selectOverviewFallbackLabels(fallbackCandidates);
+    const hasMeaningfulComponent = [...components.values()].some((members) =>
+      members.some((id) => graph.getNodeAttribute(id, "landmark") === true),
+    );
+    const showOverviewFallbackLabels = showSmallGroups || !hasMeaningfulComponent;
     simRef.current = sim;
     if (import.meta.env.DEV) {
       // Preview/debug handle only — stripped from prod builds.
       (window as unknown as Record<string, unknown>).__ATLAS_SIM = sim;
     }
-    // Place-name overlay — a plain 2D canvas appended AFTER sigma mounts
-    // (below) so it stacks ABOVE sigma's canvases: region names sit on top
-    // of the nodes like names on a map, never under them. Redrawn on every
-    // afterRender, so the names follow drags and camera moves for free. It
-    // is the only thing the Atlas paints outside sigma — nothing is drawn
-    // under the nodes.
+    // Community contours sit below the graph; their names sit above it.
+    // Both use the same current scene and follow camera moves and drags.
     const overlay = document.createElement("canvas");
     overlay.dataset.testid = "atlas-region-names";
     overlay.style.position = "absolute";
@@ -513,8 +715,12 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     overlay.style.width = "100%";
     overlay.style.height = "100%";
     overlay.style.pointerEvents = "none";
-    overlay.style.display = showRegionsRef.current ? "" : "none";
+    overlay.style.display = showRegionsRef.current || layers.memory ? "" : "none";
     overlayRef.current = overlay;
+    const areas = overlay.cloneNode() as HTMLCanvasElement;
+    areas.dataset.testid = "atlas-community-areas";
+    areas.style.display = showRegionsRef.current ? "" : "none";
+    areasRef.current = areas;
 
     // The label painter for both the labels layer and the hover layer. With a
     // node focused (hover or search jump) the lit neighborhood's names come
@@ -536,7 +742,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
         const display = sigma.getNodeDisplayData(id);
         if (!display || display.hidden) return null;
         const { x, y } = sigma.framedGraphToViewport(display);
-        return { key: id, x, y, size: display.size, label: display.label ?? "" };
+        return { key: id, x, y, size: sigma.scaleSize(display.size), label: display.label ?? "" };
       };
       const focus = nodeAt(state.hovered);
       if (!focus) return null;
@@ -549,20 +755,65 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       focusLayoutRef.current = { key, placements };
       return placements;
     };
+    // Sigma's grid budgets label count, but long labels can cross cell boundaries.
+    // Reserve actual painted rectangles and share them with the region overlay.
+    const labelBoxes: { left: number; right: number; top: number; bottom: number }[] = [];
+    const reserveLabel = (ctx: CanvasRenderingContext2D, label: string, at: LabelPlacement) => {
+      ctx.font = NODE_LABEL_FONT;
+      const width = ctx.measureText(label).width;
+      const left = at.align === "center" ? at.x - width / 2 : at.align === "right" ? at.x - width : at.x;
+      const top = at.baseline === "middle" ? at.y - 6 : at.baseline === "top" ? at.y : at.y - 12;
+      const box = { left: left - 4, right: left + width + 4, top: top - 3, bottom: top + 15 };
+      if (labelBoxes.some((other) => other.left < box.right && box.left < other.right && other.top < box.bottom && box.top < other.bottom)) return false;
+      labelBoxes.push(box);
+      return true;
+    };
     const drawLabel = (ctx: CanvasRenderingContext2D, data: Record<string, any>, s: Record<string, any>) => {
+      // Truncation, collision reservation, and drawNodeLabelAt must all use
+      // the same body face or a measured width is not a screen-space bound.
+      ctx.font = NODE_LABEL_FONT;
       const placements = focusLayout(ctx);
       if (placements) {
         const at = placements.get(data.key);
         if (at) {
-          drawNodeLabelAt(ctx, data, s, at, paletteRef.current.surface);
+          // Focus labels retain the full source string for inspection and
+          // selection; overview truncation is deliberately scoped below.
+          const focusedData = { ...data, label: String(data.label || graph.getNodeAttribute(data.key, "label") || "") };
+          const rawLabel = focusedData.label;
+          reserveLabel(ctx, rawLabel, at);
+          drawNodeLabelAt(ctx, focusedData, s, at, paletteRef.current.surface);
           return;
         }
         const state = hoverStateRef.current;
         if (state.hovered === data.key || (state.neighbors.has(data.key) && state.neighbors.size <= NEIGHBOR_LABEL_MAX)) return;
+        // Unrelated nodes are intentionally blank while a neighborhood is in
+        // focus; do not recover their raw label from graphology here.
+        return;
       }
-      drawRadialNodeLabel(ctx, data, s, graph, paletteRef.current.surface);
+      const rawLabel = String(
+        data.label || (showOverviewFallbackLabels && overviewFallbackLabels.has(data.key)
+          ? graph.getNodeAttribute(data.key, "label")
+          : "") || "",
+      );
+      if (!rawLabel) return;
+      const overview = lodRef.current.phase === "overview" && hoverStateRef.current.hovered === null;
+      if (overview) ctx.font = NODE_LABEL_FONT;
+      const maxWidth = overviewLabelMaxWidth(labelSigma?.getDimensions().width ?? 160);
+      const label = overview ? truncateOverviewLabel(ctx, rawLabel, maxWidth) : rawLabel;
+      if (!label) return;
+      const angle = Math.atan2(-(graph.getNodeAttribute(data.key, "y") as number), graph.getNodeAttribute(data.key, "x") as number);
+      const sector = Math.round((angle + Math.PI) / (Math.PI / 2)) % 4;
+      const at = labelAnchor(data.x, data.y, data.size, sector === 0 ? "right" : sector === 2 ? "left" : sector === 1 ? "below" : "above");
+      if (reserveLabel(ctx, label, at)) drawNodeLabelAt(ctx, { ...data, label }, s, at, paletteRef.current.surface);
     };
+    let minimumGraphRadius = 0;
+    let graphUnitsPerPixel = Infinity;
     const renderer = new Sigma(graph, container, {
+      // Collision radii are graph units. Pixel-sized discs used to outgrow
+      // their spacing at overview zoom, turning otherwise separated hubs into
+      // overlapping blobs. Keep discs and positions on the same zoom scale.
+      itemSizesReference: "positions",
+      zoomToSizeRatioFunction: (ratio: number) => ratio,
       // Only nodes at least this big carry a label. With the log2 size scale
       // (atlas.ts) that is roughly degree >= 5 for an entity and >= 6 for a
       // page, so the zoomed-out map shows hub names only; sigma's own label
@@ -598,10 +849,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       // layoutFocusLabels. The labels-layer copy underneath is fully covered
       // by this one's halo, so a lifted name never reads darker.
       defaultDrawNodeHover: drawLabel,
-      // Node/edge sizes are true CSS px at every zoom. The default divides
-      // sizes by sqrt(camera ratio), which shrinks items badly once the
-      // density cap below zooms the camera out ~5x from fit.
-      zoomToSizeRatioFunction: () => 1,
       // Edges are a 1 px hairline (0.6 for shared-source); sigma's default
       // floor of 1.7 would silently bump them back up.
       minEdgeThickness: 0.5,
@@ -609,10 +856,29 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       // cluster center, over a ground-coloured halo — sigma's default is
       // 14px Arial pinned to the right.
       defaultDrawNodeLabel: drawLabel,
-      nodeReducer: (node, attrs) =>
-        nodeDisplay(hoverStateRef.current, node, attrs, paletteRef.current, lodRef.current),
+      nodeReducer: (node, attrs) => {
+        if (entityTypeHidden(attrs.entityType, excludedTypesRef.current)) return { ...attrs, hidden: true };
+        const display = nodeDisplay(hoverStateRef.current, node, attrs, paletteRef.current, lodRef.current);
+        if (
+          showOverviewFallbackLabels &&
+          hoverStateRef.current.hovered === null &&
+          !display.hidden &&
+          overviewFallbackLabels.has(node) &&
+          attrs.label
+        ) {
+          // `nodeDisplay` blanks non-landmarks for the semantic overview. A
+          // revealed small group (or a young graph with no core) still gets
+          // one stable, source-backed name at the view layer.
+          display.label = attrs.label;
+          display.forceLabel = true;
+        }
+        const floor = lodRef.current.phase === "overview" && attrs.landmark ? minimumGraphRadius * 2 : minimumGraphRadius;
+        const cap = node === hoverStateRef.current.hovered ? 12 : attrs.entityType === MEMORY_NODE_TYPE ? 2.8 : 8;
+        return { ...display, size: Math.min(Math.max(display.size, floor), cap * graphUnitsPerPixel) };
+      },
       edgeReducer: (edge, attrs) => {
         const [source, target] = graph.extremities(edge);
+        if ([source, target].some((id) => entityTypeHidden(graph.getNodeAttribute(id, "entityType"), excludedTypesRef.current))) return { ...attrs, hidden: true };
         return edgeDisplay(
           hoverStateRef.current,
           edge,
@@ -627,6 +893,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     });
     labelSigma = renderer;
     sigmaRef.current = renderer;
+    container.prepend(areas);
     container.appendChild(overlay);
     if (import.meta.env.DEV) {
       // Preview/debug handle only — stripped from prod builds.
@@ -649,6 +916,16 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       const lod = lodRef.current;
       // A dim island carries no name yet; its name comes up with its colour.
       const named = lod.islandsSolid ? scene : { regions: scene.regions.filter((r) => !r.island) };
+      const areaContext = areas.getContext("2d");
+      if (areaContext) {
+        if (areas.width !== width * dpr || areas.height !== height * dpr) {
+          areas.width = width * dpr;
+          areas.height = height * dpr;
+        }
+        areaContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+        areaContext.clearRect(0, 0, width, height);
+        if (showRegionsRef.current) drawRegionAreas(areaContext, named, project, paletteRef.current, { width, height });
+      }
       // Sigma (3.0.3) keeps the nodes it drew a label for this paint on a
       // private field with no public getter. A region is named after its
       // hub, so while the hub's own label is on screen the region name would
@@ -656,71 +933,94 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       // drops the field the names simply stay on, as before.
       const labelledNodes = (renderer as unknown as { displayedNodeLabels?: ReadonlySet<string> })
         .displayedNodeLabels;
-      drawRegionNames(ctx, named, project, paletteRef.current, { width, height }, labelledNodes);
+      if (showRegionsRef.current) drawRegionNames(ctx, named, project, paletteRef.current, { width, height }, labelledNodes, labelBoxes);
       drawDustCounts(
         ctx,
         graph,
-        dustAnchors,
+        dustAnchors.filter((id) => !entityTypeHidden(graph.getNodeAttribute(id, "entityType"), excludedTypesRef.current)),
         project,
         paletteRef.current,
         lod,
         hoverStateRef.current.hovered,
         { width, height },
+        renderer.scaleSize(1),
+        labelBoxes,
       );
     };
     // One handler paints the overlay from one scene — rebuilt only when a
     // paint marked it dirty — and sigma sees a single afterRender listener.
+    renderer.on("beforeRender", () => { labelBoxes.length = 0; });
     renderer.on("afterRender", () => {
       if (sceneDirtyRef.current || sceneRef.current === null) {
-        sceneRef.current = cartographyScene(graph, communitiesRef.current);
+        const sceneGraph = excludedTypesRef.current.size ? graph.copy() : graph;
+        if (sceneGraph !== graph) for (const id of sceneGraph.nodes()) {
+          if (entityTypeHidden(sceneGraph.getNodeAttribute(id, "entityType"), excludedTypesRef.current)) sceneGraph.dropNode(id);
+        }
+        sceneRef.current = cartographyScene(sceneGraph, communitiesRef.current);
         sceneDirtyRef.current = false;
       }
       drawOverlay(sceneRef.current);
     });
-    // Default zoom: sigma's fit stretches a small cluster edge-to-edge no
-    // matter how big the container (7.3 px/graph-unit in preview) — links
-    // render ~5x longer than the old graph's ("too wide"). A fixed density
-    // cap at the old graph's exact 1.5 px/unit overshot the other way: in a
-    // large container the cluster filled <20% of the view ("too far away").
-    // The liked reference — the old Graph tab — sits at ~60% fill of the
-    // smaller container axis, so target that fill, clamped to [1.5, 3]
-    // px/unit: never denser than the old graph's spacing floor, never back
-    // to the fit sprawl on huge screens. Only ever zoom OUT from fit.
-    const o = renderer.graphToViewport({ x: 0, y: 0 });
-    const u = renderer.graphToViewport({ x: 1, y: 0 });
-    const pxPerUnit = Math.hypot(u.x - o.x, u.y - o.y);
-    const bbox = renderer.getBBox();
-    const span = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0]);
-    const { width, height } = renderer.getDimensions();
-    const targetDensity = Math.min(3, Math.max(1.5, (0.6 * Math.min(width, height)) / span));
-    if (pxPerUnit > targetDensity) {
-      const camera = renderer.getCamera();
-      camera.setState({ ratio: camera.ratio * (pxPerUnit / targetDensity) });
-    }
+    // The opening frame follows the hierarchy's meaningful components. A
+    // later rebuild restores its saved viewpoint below; only a fresh graph
+    // receives this initial fit.
+    const visibleNodeIds = new Set(
+      graph.nodes().filter((id) => !entityTypeHidden(graph.getNodeAttribute(id, "entityType"), excludedTypesRef.current)),
+    );
+    const saved = viewpointRef.current;
+    const restored = saved?.scope === spaceFilter && restoreAtlasViewpoint(renderer, graph, saved.view);
+    if (!restored) frameAtlasView(renderer, graph, { mode: "main", visibleNodeIds, padding: 56 });
     // Zoom level of detail, relative to THIS opening view: how much memory
     // dust each anchor shows, and whether the islands are solid yet (see
     // atlas.ts's lodFor). The reducers only re-run on refresh(), not on a
-    // camera move, so a tier crossing forces one; every other move just
-    // repaints, which is all the overlay needs.
+    // camera move, so zoom refreshes both LOD and the visible-radius floor;
+    // panning only repaints, which is all the overlay needs.
     const mountRatio = renderer.getCamera().ratio;
+    openingRatioRef.current = mountRatio;
+    // A subpixel disc disappears in a large production graph. Keep a tiny
+    // visible point at overview; zoomed discs still follow their spacing.
+    const updateRadiusScale = () => {
+      const camera = renderer.getCamera();
+      const override = { cameraState: { x: camera.x, y: camera.y, angle: camera.angle, ratio: camera.ratio } };
+      // Sigma's scaleSize uses the previous paint's matrix during a camera
+      // event. Project with the current state so caps hold on the first frame.
+      const a = renderer.graphToViewport({ x: 0, y: 0 }, override);
+      const b = renderer.graphToViewport({ x: 1, y: 0 }, override);
+      graphUnitsPerPixel = 1 / Math.max(0.000001, Math.hypot(b.x - a.x, b.y - a.y));
+      minimumGraphRadius = 1.3 * graphUnitsPerPixel;
+    };
+    updateRadiusScale();
+    renderer.on("resize", () => { updateRadiusScale(); renderer.refresh(); });
+    let previousRatio = mountRatio;
     lodRef.current = OPENING_LOD;
     renderer.getCamera().on("updated", ({ ratio }) => {
-      const next = lodFor(mountRatio / ratio);
+      const next = lodFor(openingRatioRef.current / ratio);
       const prev = lodRef.current;
-      if (next.dustVisible === prev.dustVisible && next.islandsSolid === prev.islandsSolid) return;
+      const zoomChanged = ratio !== previousRatio;
+      previousRatio = ratio;
+      updateRadiusScale();
+      if (!zoomChanged && next.dustVisible === prev.dustVisible && next.islandsSolid === prev.islandsSolid && next.phase === prev.phase) return;
       lodRef.current = next;
       renderer.refresh();
     });
     // Overlay entry point: land already centered on the focused entity with
     // the same emphasis the search fly applies. setState, never animate —
     // this is the first frame the user sees, not a camera move.
-    if (focusEntityId && graph.hasNode(focusEntityId)) {
+    if (!restored && focusEntityId && graph.hasNode(focusEntityId)) {
       hoverStateRef.current = hoverStateFor(graph, focusEntityId);
       const display = renderer.getNodeDisplayData(focusEntityId);
       if (display) {
         const camera = renderer.getCamera();
         camera.setState({ x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1) });
       }
+    }
+    const pendingFocus = pendingFocusRef.current;
+    if (pendingFocus && graph.hasNode(pendingFocus)) {
+      pendingFocusRef.current = null;
+      focusNodeRef.current(pendingFocus);
+    }
+    if (selectedRef.current && graph.hasNode(selectedRef.current)) {
+      hoverStateRef.current = hoverStateFor(graph, selectedRef.current);
     }
     // First paint of THIS renderer, and the only thing that draws the
     // overlay canvas above at all. Sigma's constructor render already happened
@@ -737,8 +1037,9 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     renderer.on("clickNode", ({ node }) => {
       // A moved drag must not also navigate on release.
       if (movedDuringPressRef.current) return;
-      onNodeClick?.(targetForNode(node));
+      focusNodeRef.current(node);
     });
+    renderer.on("clickStage", () => { if (selectedRef.current) returnToMapRef.current(); });
     // Hover is LOCKED while a drag is live: our drag doesn't capture the
     // pointer (sigma's captor keeps picking), so sweeping the grabbed node
     // across other hit areas would fire enter/leave mid-drag — the graph
@@ -746,13 +1047,13 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     // default. force-graph never shows this (d3-drag captures the pointer,
     // hover is inert mid-drag), and the flashing reads as jank.
     renderer.on("enterNode", ({ node }) => {
-      if (draggedNodeRef.current) return;
+      if (draggedNodeRef.current || selectedRef.current) return;
       hoverStateRef.current = hoverStateFor(graph, node);
       container.style.cursor = "pointer";
       renderer.refresh();
     });
     renderer.on("leaveNode", () => {
-      if (draggedNodeRef.current) return;
+      if (draggedNodeRef.current || selectedRef.current) return;
       hoverStateRef.current = hoverStateFor(graph, null);
       container.style.cursor = "default";
       renderer.refresh();
@@ -871,6 +1172,13 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     });
 
     return () => {
+      viewpointRef.current = {
+        scope: spaceFilter,
+        view: captureAtlasViewpoint(renderer, graph),
+        body: new Map(graph.nodes()
+          .filter((id) => graph.getNodeAttribute(id, "entityType") !== MEMORY_NODE_TYPE)
+          .map((id) => [id, { x: graph.getNodeAttribute(id, "x"), y: graph.getNodeAttribute(id, "y") }])),
+      };
       sim.stop();
       simRef.current = null;
       sigmaRef.current = null;
@@ -878,6 +1186,9 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       renderer.kill();
       // Sigma removes its own canvases; the overlay is ours to remove.
       overlay.remove();
+      areas.remove();
+      overlayRef.current = null;
+      areasRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleModel]);
@@ -927,11 +1238,12 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
-    overlay.style.display = showRegions ? "" : "none";
+    overlay.style.display = showRegions || layers.memory ? "" : "none";
+    if (areasRef.current) areasRef.current.style.display = showRegions ? "" : "none";
     // The canvas keeps its last frame while hidden; repaint on re-show so it
     // matches wherever the camera and drags went in the meantime.
     if (showRegions) sigmaRef.current?.refresh();
-  }, [showRegions]);
+  }, [showRegions, layers.memory]);
 
   const statusStyle = {
     height: "100%",
@@ -986,7 +1298,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // Counts describe what is actually ON THE MAP: layer on, and connected to
   // something. What the degree-0 filter took out is reported by its own chip,
   // and a layer that is off contributes nothing rather than a zero.
-  const drawn = visibleModel.nodes;
+  const drawn = filteredModel.nodes;
   const pageCount = drawn.filter((node) => node.kind === "page").length;
   const memoryCount = drawn.filter((node) => node.kind === "memory").length;
   const entityCount = drawn.length - pageCount - memoryCount;
@@ -1083,7 +1395,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
             <kbd
               style={{
                 font: "400 10px var(--mem-font-mono)",
-                color: "var(--mem-text-tertiary)",
+                color: "var(--mem-text-secondary)",
                 border: "1px solid var(--mem-border)",
                 borderRadius: 4,
                 padding: "1px 5px",
@@ -1157,225 +1469,147 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
                 </li>
               ))}
               {matches.length === 0 && (
-                <li style={{ padding: "6px 10px", fontSize: 12, color: "var(--mem-text-tertiary)" }}>
+                <li style={{ padding: "6px 10px", fontSize: 12, color: "var(--mem-text-secondary)" }}>
                   {t("atlas.noMatches")}
                 </li>
               )}
             </ul>
           )}
         </div>
-        {/* Layer chips — which node kinds the map draws. The last lit chip is
-            disabled: an empty map is not a view. */}
-        {(
-          [
-            { key: "page" as const, label: t("atlas.layer.page") },
-            { key: "entity" as const, label: t("atlas.layer.entity") },
-            { key: "memory" as const, label: t("atlas.layer.memory") },
-          ]
-        ).map(({ key, label }) => {
-          const on = layers[key];
-          const locked = onlyLayerOn(key);
-          return (
-            <button
-              key={key}
-              type="button"
-              aria-pressed={on}
-              disabled={locked}
-              onClick={() => toggleLayer(key)}
-              style={{
-                fontSize: 12,
-                color: on ? "var(--mem-text)" : "var(--mem-text-secondary)",
-                border: `1px solid ${on ? "var(--mem-distilled-border)" : "var(--mem-border)"}`,
-                borderRadius: "var(--mem-radius-full)",
-                padding: "4px 12px",
-                background: on ? "var(--mem-indigo-bg)" : "transparent",
-                cursor: locked ? "default" : "pointer",
-                opacity: locked ? 0.7 : 1,
-                fontFamily: "inherit",
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          aria-pressed={showRegions}
-          onClick={() => {
-            showRegionsRef.current = !showRegions;
-            setShowRegions(!showRegions);
-          }}
-          style={{
-            fontSize: 12,
-            color: showRegions ? "var(--mem-text)" : "var(--mem-text-secondary)",
-            border: `1px solid ${showRegions ? "var(--mem-distilled-border)" : "var(--mem-border)"}`,
-            borderRadius: "var(--mem-radius-full)",
-            padding: "4px 12px",
-            background: showRegions ? "var(--mem-indigo-bg)" : "transparent",
-            cursor: "pointer",
-            fontFamily: "inherit",
-          }}
-        >
-          {t("atlas.regionsToggle")}
-        </button>
         {spaces.length > 0 && (
-          <select
-            aria-label={t("atlas.spaceLabel")}
+          <AtlasSelect
+            label={t("atlas.spaceLabel")}
             value={spaceFilter ?? ""}
-            onChange={(event) => setSpaceFilter(event.target.value || null)}
-            style={{
-              fontSize: 12,
-              color: spaceFilter ? "var(--mem-text)" : "var(--mem-text-secondary)",
-              border: `1px solid ${spaceFilter ? "var(--mem-distilled-border)" : "var(--mem-border)"}`,
-              borderRadius: "var(--mem-radius-full)",
-              padding: "4px 10px",
-              background: spaceFilter ? "var(--mem-indigo-bg)" : "transparent",
-              cursor: "pointer",
-              fontFamily: "inherit",
-            }}
-          >
-            <option value="">{t("atlas.spaceAll")}</option>
-            {spaces.map((space) => (
-              <option key={space} value={space}>
-                {space}
-              </option>
-            ))}
-          </select>
-        )}
-        {cartographyStatus && (
-          <span
-            role={cartographyStatus === "partial-error" ? "alert" : undefined}
-            style={{
-              fontSize: 11,
-              fontFamily: "var(--mem-font-mono)",
-              color:
-                cartographyStatus === "partial-error"
-                  ? "var(--mem-danger)"
-                  : "var(--mem-text-tertiary)",
-              border: `1px solid ${cartographyStatus === "partial-error" ? "var(--mem-danger)" : "var(--mem-border)"}`,
-              borderRadius: "var(--mem-radius-full)",
-              padding: "3px 10px",
-            }}
-          >
-            {t(
-              cartographyStatus === "ready"
-                ? "atlas.cartographyReady"
-                : cartographyStatus === "partial-error"
-                  ? "atlas.cartographyPartialError"
-                  : "atlas.cartographyFallback",
-            )}
-          </span>
-        )}
-        {smallGroupCount > 0 && (
-          <button
-            type="button"
-            onClick={toggleSmallGroups}
-            aria-pressed={showSmallGroups}
-            aria-label={t(showSmallGroups ? "atlas.hideSmallGroups" : "atlas.showSmallGroups")}
-            style={{
-              font: "400 11px var(--mem-font-mono)",
-              color: showSmallGroups ? "var(--mem-text-secondary)" : "var(--mem-text-tertiary)",
-              background: "transparent",
-              border: "1px solid var(--mem-border)",
-              borderRadius: "var(--mem-radius-full)",
-              padding: "3px 10px",
-              cursor: "pointer",
-            }}
-          >
-            {showSmallGroups
-              ? t("atlas.hideSmallGroups")
-              : t("atlas.smallGroupsHidden", { count: smallGroupCount })}
-          </button>
+            onChange={(value) => setSpaceFilter(value || null)}
+            options={[{ value: "", label: t("atlas.spaceAll") }, ...spaces.map((space) => ({ value: space, label: space }))]}
+            searchLabel={t("atlas.searchSpaces")}
+            noMatchesLabel={t("atlas.noMatches")}
+          />
         )}
         <span
           style={{
             marginLeft: "auto",
             font: "400 11px var(--mem-font-mono)",
-            color: "var(--mem-text-tertiary)",
+            color: "var(--mem-text-secondary)",
           }}
         >
           {countLine}
         </span>
       </div>
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-      <div ref={containerRef} data-testid="atlas-view" style={{ height: "100%", width: "100%" }} />
+      <div className="atlas-content-controls" role="group" aria-label={t("atlas.graphContent")}>
+        <div className="atlas-content-row">
+          {(
+            [
+              { key: "page" as const },
+              { key: "entity" as const },
+              { key: "memory" as const },
+            ]
+          ).map(({ key }) => {
+            const label = t(`atlas.layer.${key}`);
+            const on = layers[key];
+            const locked = onlyLayerOn(key);
+            return (
+              <AtlasTooltip key={key} content={t(`atlas.layerDescription.${key}`)}>
+                <button
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={on}
+                  disabled={locked}
+                  onClick={() => toggleLayer(key)}
+                  className="atlas-content-toggle"
+                >
+                  <span
+                    className="atlas-content-dot"
+                    aria-hidden="true"
+                    style={{ color: key === "page" ? palette.page : key === "memory" ? palette.memory : palette.neutral }}
+                  />
+                  <span>{label}</span>
+                </button>
+              </AtlasTooltip>
+            );
+          })}
+          <div className="atlas-content-actions">
+            <div className="atlas-content-toolgroup">
+            {layers.entity && entityTypes.length > 0 && <AtlasTypeFilters
+              types={entityTypes} excluded={excludedTypes} palette={palette} onToggle={toggleEntityType}
+              onReset={() => setExcludedTypes(new Set())}
+            />}
 
-      {/* Legend — top-right, same furniture as the old canvas graph (minus
-          the memories/pages/labels toggles Atlas doesn't have yet). */}
-      <div
-        style={{
-          position: "absolute",
-          top: 10,
-          right: 10,
-          display: "flex",
-          flexDirection: "column",
-          gap: 5,
-          padding: "6px 10px",
-          fontSize: 10,
-          fontFamily: "var(--mem-font-body)",
-          color: "var(--mem-text-tertiary)",
-          background: "var(--mem-surface)",
-          border: "1px solid var(--mem-border)",
-          borderRadius: 6,
-          opacity: 0.85,
-          pointerEvents: "none",
-        }}
-      >
-        {LEGEND_ITEMS.map(({ label, key }) => (
-          <div key={key} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span
-              style={{
-                display: "inline-block",
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor:
-                  key === MEMORY_NODE_TYPE
-                    ? palette.memory
-                    : key === PAGE_NODE_TYPE
-                      ? palette.page
-                      : colorForEntityType(key, palette),
-                opacity: 0.7,
-                flexShrink: 0,
+            <AtlasTooltip content={t("atlas.regionsDescription")}>
+            <button
+              type="button"
+              className="atlas-content-secondary-toggle"
+              aria-pressed={showRegions}
+              aria-label={t("atlas.regionsToggle")}
+              onClick={() => {
+                showRegionsRef.current = !showRegions;
+                setShowRegions(!showRegions);
               }}
-            />
-            <span>{label}</span>
+            >
+              <span className="atlas-content-dot" aria-hidden="true" />
+              <span>{t("atlas.regionsToggle")}</span>
+            </button>
+            </AtlasTooltip>
+            {smallGroupCount > 0 && (
+              <AtlasTooltip content={t(showSmallGroups ? "atlas.hideSmallGroups" : "atlas.smallGroupsHidden", { count: smallGroupCount })}>
+              <button
+                type="button"
+                onClick={toggleSmallGroups}
+                aria-pressed={showSmallGroups}
+                aria-label={t(showSmallGroups ? "atlas.hideSmallGroups" : "atlas.showSmallGroups")}
+                className="atlas-content-secondary-toggle"
+              >
+                <span className="atlas-content-dot" aria-hidden="true" />
+                <span>{t("atlas.smallGroupsLabel")}</span>
+              </button>
+              </AtlasTooltip>
+            )}
+            </div>
+            {cartographyStatus === "partial-error" && (
+              <span role="alert" className="atlas-cartography-alert">
+                {t("atlas.cartographyPartialError")}
+              </span>
+            )}
           </div>
-        ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          <span
-            style={{
-              display: "inline-block",
-              width: 12,
-              height: 0,
-              borderTop: "1px solid var(--mem-text-tertiary)",
-              opacity: 0.5,
-              flexShrink: 0,
-            }}
-          />
-          <span>{t("constellationMap.legendConnection")}</span>
         </div>
       </div>
 
-      {/* Hint chip — bottom-left, artifact's map affordance line. */}
-      <span
-        style={{
-          position: "absolute",
-          left: 14,
-          bottom: 12,
-          font: "400 10.5px var(--mem-font-mono)",
-          color: "var(--mem-text-tertiary)",
-          background: "var(--mem-surface)",
-          border: "1px solid var(--mem-border)",
-          borderRadius: "var(--mem-radius-full)",
-          padding: "4px 11px",
-          pointerEvents: "none",
-          opacity: 0.9,
-        }}
-      >
-        {t("atlas.hint")}
-      </span>
+
+      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+      <div ref={containerRef} data-testid="atlas-view" style={{ height: "100%", width: "100%" }} />
+
+      {filteredModel.nodes.length === 0 && excludedTypes.size > 0 && <div className="atlas-filter-empty">
+        <p>{t("atlas.noTypeMatches")}</p><button type="button" className="atlas-action" onClick={() => setExcludedTypes(new Set())}>{t("atlas.allEntityTypes")}</button>
+      </div>}
+      {selectedNode && <AtlasInspector key={selectedNode.id} node={selectedNode} neighbors={selectedNeighbors}
+        edges={filteredModel.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id)}
+        onSelect={focusEntity} onClose={returnToMap}
+        onOpen={onNodeClick ? () => onNodeClick(targetForNode(selectedNode.id)) : undefined} />}
+
+      <div className="atlas-camera-controls" role="group" aria-label={t("atlas.cameraControls")}>
+        <AtlasTooltip content={t("atlas.zoomOut")}>
+          <button type="button" className="atlas-icon-button" aria-label={t("atlas.zoomOut")} onClick={() => zoomMap(1.25)}>
+            <Minus size={16} weight="regular" aria-hidden="true" />
+          </button>
+        </AtlasTooltip>
+        <AtlasTooltip content={t("atlas.zoomIn")}>
+          <button type="button" className="atlas-icon-button" aria-label={t("atlas.zoomIn")} onClick={() => zoomMap(0.8)}>
+            <Plus size={16} weight="regular" aria-hidden="true" />
+          </button>
+        </AtlasTooltip>
+        <AtlasTooltip content={t("atlas.mainNetwork")}>
+          <button type="button" className="atlas-icon-button" aria-label={t("atlas.mainNetwork")} onClick={() => frameMap("main")}>
+            <ArrowCounterClockwise size={16} weight="regular" aria-hidden="true" />
+          </button>
+        </AtlasTooltip>
+        <AtlasTooltip content={t("atlas.fitAll")}>
+          <button type="button" className="atlas-icon-button" aria-label={t("atlas.fitAll")} onClick={() => frameMap("all")}>
+            <CornersOut size={16} weight="regular" aria-hidden="true" />
+          </button>
+        </AtlasTooltip>
+      </div>
+
       </div>
     </div>
   );

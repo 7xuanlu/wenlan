@@ -130,6 +130,123 @@ export function buildAtlasGraph(model: GraphModel, palette: GraphPalette): Graph
   return graph;
 }
 
+/**
+ * Precompute the semantic hierarchy used by the overview zoom.
+ *
+ * Components and degree are intentionally built from non-memory edges only:
+ * memories are evidence attached to a subject, not structural weight. Every
+ * component contributes its highest-degree representative as a landmark;
+ * larger maps then add up to twenty-four of the strongest structural hubs and
+ * keep the twelve strongest landmarks labelled.
+ * Small maps stay readable as a whole, while still capping labels.
+ *
+ * This is a union/find pass over nodes and edges followed by bounded ranking
+ * (O((V+E) log V)), so callers can safely run it after each graph rebuild.
+ * The helper mutates node attributes and returns no derived graph state; the
+ * reducers can read the tags without traversing the graph per frame.
+ */
+export function applyAtlasHierarchy(graph: Graph): void {
+  const parent = new Map<string, string>();
+  const structuralDegree = new Map<string, number>();
+  const structuralNeighbors = new Map<string, Set<string>>();
+
+  graph.forEachNode((id, attrs) => {
+    if (attrs.entityType === MEMORY_NODE_TYPE) return;
+    parent.set(id, id);
+    structuralDegree.set(id, 0);
+    structuralNeighbors.set(id, new Set());
+  });
+
+  const find = (start: string): string => {
+    let root = start;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    let current = start;
+    while (parent.get(current) !== root) {
+      const next = parent.get(current) as string;
+      parent.set(current, root);
+      current = next;
+    }
+    return root;
+  };
+
+  const union = (a: string, b: string): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  };
+
+  graph.forEachEdge((_key, _attrs, source, target) => {
+    if (!parent.has(source) || !parent.has(target)) return;
+    if (source === target) return;
+    structuralNeighbors.get(source)?.add(target);
+    structuralNeighbors.get(target)?.add(source);
+    union(source, target);
+  });
+
+  for (const [id, neighbors] of structuralNeighbors) {
+    structuralDegree.set(id, neighbors.size);
+  }
+
+  const components = new Map<string, string[]>();
+  for (const id of parent.keys()) {
+    const root = find(id);
+    const ids = components.get(root);
+    if (ids) ids.push(id);
+    else components.set(root, [id]);
+  }
+  const orderedComponents = [...components.values()]
+    .map((ids) => ids.sort())
+    .sort((a, b) => {
+      const aFirst = a[0] as string;
+      const bFirst = b[0] as string;
+      return aFirst < bFirst ? -1 : aFirst > bFirst ? 1 : 0;
+    });
+
+  const representatives: string[] = [];
+  for (const [componentIndex, ids] of orderedComponents.entries()) {
+    let representative = ids[0] as string;
+    for (const id of ids.slice(1)) {
+      const degreeDelta = (structuralDegree.get(id) ?? 0) - (structuralDegree.get(representative) ?? 0);
+      if (degreeDelta > 0 || (degreeDelta === 0 && id < representative)) representative = id;
+    }
+    representatives.push(representative);
+    for (const id of ids) {
+      graph.mergeNodeAttributes(id, {
+        componentId: `component-${componentIndex}`,
+        structuralDegree: structuralDegree.get(id) ?? 0,
+        landmark: false,
+        landmarkLabel: false,
+      });
+    }
+  }
+
+  const smallGraph = parent.size <= 60;
+  const landmarkIds = new Set<string>(smallGraph ? [...parent.keys()] : representatives.filter((id) => (structuralDegree.get(id) ?? 0) >= 2));
+  if (!smallGraph) {
+    const additionalHubs = [...parent.keys()]
+      .filter((id) => !landmarkIds.has(id) && (structuralDegree.get(id) ?? 0) >= 3)
+      .sort((a, b) => {
+        const degreeDelta = (structuralDegree.get(b) ?? 0) - (structuralDegree.get(a) ?? 0);
+        return degreeDelta || (a < b ? -1 : a > b ? 1 : 0);
+      })
+      .slice(0, 24);
+    for (const id of additionalHubs) landmarkIds.add(id);
+  }
+  const labelledLandmarks = [...landmarkIds]
+    .sort((a, b) => {
+      const degreeDelta = (structuralDegree.get(b) ?? 0) - (structuralDegree.get(a) ?? 0);
+      return degreeDelta || (a < b ? -1 : a > b ? 1 : 0);
+    })
+    .slice(0, 12);
+  const landmarkLabelIds = new Set(labelledLandmarks);
+  for (const id of parent.keys()) {
+    graph.mergeNodeAttributes(id, {
+      landmark: landmarkIds.has(id),
+      landmarkLabel: landmarkLabelIds.has(id),
+    });
+  }
+}
+
 /** Iteration budget for FA2: 600 on anything up to 200 nodes (unchanged from
  *  round 2 at demo scale), decaying to the 60 floor by ~2,000 nodes. The whole
  *  layout is synchronous on the main thread, so the budget has to shrink as
@@ -235,36 +352,13 @@ export interface Satellite {
   anchor: string;
   angle: number;
   radius: number;
-  /** 0-based place in the anchor's halo, inner ring first, ids ascending
-   *  within a ring. The zoom tiers (see dustVisibleCount) show the first N. */
+  /** 0-based place along the anchor's spiral, assigned in stable ID order.
+   *  The zoom tiers (see dustVisibleCount) show the first N. */
   rank: number;
 }
 
-/** Smallest arc a satellite may claim on its ring: two disc diameters plus a
- *  pixel, so consecutive leaves read as separate dots with clear sky between
- *  them rather than a bead chain. */
-function satelliteMinArc(leafSize: number): number {
-  return 4 * leafSize + 1;
-}
-
-/** Radial step from one shell to the next: a disc diameter plus 3, so a leaf
- *  on the outer ring cannot touch the one it sits behind. */
-function satelliteRingStep(leafSize: number): number {
-  return 2 * leafSize + 3;
-}
-
-/**
- * Deterministic orbits for the memories: each hangs off its anchor (see
- * satelliteAnchor), sorted by id so the answer never depends on iteration
- * order. Isolates are skipped — they have no anchor to orbit.
- *
- * Round 5: leaves fill SHELLS, not a single circle. A ring takes as many
- * leaves as fit at satelliteMinArc spacing and the rest start a new ring
- * satelliteRingStep further out. One circle was fine for the handful of
- * leaves a test fixture has, but the real capture has an entity anchoring
- * 374 of them — at radius anchorSize + SATELLITE_GAP that is 0.2 graph units
- * of arc each, drawn as a solid donut of overlapping discs.
- */
+/** Stable, spaced memory points on a golden-angle spiral, independent of
+ * graph iteration order. */
 export function satellitePlan(graph: Graph): Satellite[] {
   const leavesByAnchor = new Map<string, string[]>();
   for (const id of nonSimulatedIds(graph)) {
@@ -278,33 +372,28 @@ export function satellitePlan(graph: Graph): Satellite[] {
   const plan: Satellite[] = [];
   for (const [anchor, leaves] of leavesByAnchor) {
     const sorted = [...leaves].sort();
-    // One spacing for the whole halo, taken from the widest leaf in it: a
-    // per-leaf spacing would make ring capacity depend on which leaves
-    // happened to land on that ring.
+    // Uniform clearance based on the widest leaf keeps every pair separated.
     let leafSize = 0;
     for (const id of sorted) {
       leafSize = Math.max(leafSize, (graph.getNodeAttribute(id, "size") as number) ?? 0);
     }
-    const minArc = satelliteMinArc(leafSize);
-    const step = satelliteRingStep(leafSize);
-    let radius = (graph.getNodeAttribute(anchor, "size") as number) + SATELLITE_GAP;
-    let placed = 0;
-    while (placed < sorted.length) {
-      // At least one per ring even when the anchor disc is tiny, or a small
-      // circumference would stall the loop.
-      const capacity = Math.max(1, Math.floor((2 * Math.PI * radius) / minArc));
-      const count = Math.min(capacity, sorted.length - placed);
-      for (let i = 0; i < count; i += 1) {
-        plan.push({
-          id: sorted[placed + i] as string,
-          anchor,
-          angle: (2 * Math.PI * i) / count,
-          radius,
-          rank: placed + i,
-        });
-      }
-      placed += count;
-      radius += step;
+    const clearance = 2 * leafSize + 3;
+    const startRadius = (graph.getNodeAttribute(anchor, "size") as number) + SATELLITE_GAP;
+    let seed = 0;
+    for (const char of anchor) seed = (Math.imul(seed, 31) + char.charCodeAt(0)) >>> 0;
+    const rotation = (seed / 0xffffffff) * 2 * Math.PI;
+    const accepted: { x: number; y: number }[] = [];
+    let candidate = 0;
+    for (let rank = 0; rank < sorted.length; rank++) {
+      let radius: number, angle: number, x: number, y: number;
+      do {
+        angle = rotation + candidate * Math.PI * (3 - Math.sqrt(5));
+        radius = Math.sqrt(startRadius * startRadius + clearance * clearance * candidate);
+        x = radius * Math.cos(angle); y = radius * Math.sin(angle);
+        candidate++;
+      } while (accepted.some((point) => Math.hypot(point.x - x, point.y - y) < clearance));
+      accepted.push({ x, y });
+      plan.push({ id: sorted[rank]!, anchor, angle, radius, rank });
     }
   }
   return plan;
@@ -346,22 +435,22 @@ export function annotateDust(graph: Graph, plan: Satellite[]): void {
  * of the zoom the map opened at (`zoomIn` = mount ratio / current ratio, so 1
  * at the opening view and 2 when the viewer has zoomed in twice). At the
  * opening view an anchor shows a pinch of dust — six dots — and a count of
- * the rest (AtlasView's overlay); closer in, a full first ring and more;
- * closer still, everything. Hovering the anchor shows everything at any zoom
- * (see nodeDisplay).
+ * the rest (AtlasView's overlay); closer in, twelve representative points;
+ * closer still, eighteen. Focusing an anchor reveals up to 36; its inspector
+ * retains every memory, including those represented by the count.
  */
 export function dustVisibleCount(zoomIn: number): number {
   if (zoomIn < 2) return 6;
-  if (zoomIn < 4) return 18;
-  return Infinity;
+  if (zoomIn < 4) return 12;
+  return 18;
 }
 
 /** How many of an anchor's memories a hover reveals at most. Everything
  *  would be the honest answer, but the busiest anchor on real data carries
- *  698 and at the opening zoom they pack into a solid disc; the first rings
- *  say "a lot" without the blob, and the count beside the anchor says how
- *  many. Zoom in past 4x to see them all. */
-export const HOVER_DUST_MAX = 48;
+ *  hundreds and at the opening zoom they pack into a solid disc. Bounded
+ *  representative points preserve the subject; the inspector exposes the
+ *  complete group. */
+export const HOVER_DUST_MAX = 36;
 
 /** How many neighbors a hover names outright (`forceLabel`). Beyond this the
  *  label grid decides, so a hub with dozens of memories stays readable. */
@@ -372,31 +461,45 @@ export const NEIGHBOR_LABEL_MAX = 12;
  *  sit dim at the rim so the core is the one thing the eye lands on. */
 export const ISLANDS_SOLID_ZOOM = 2;
 
+/** The semantic zoom phase. The opening map presents a few landmarks first;
+ * zooming in reveals the neighbourhood, then the full detail layer. */
+export type AtlasZoomPhase = "overview" | "neighborhood" | "detail";
+
 /** What the reducers need to know about the camera, refreshed by AtlasView
  *  before every render. */
 export interface LodState {
   dustVisible: number;
   islandsSolid: boolean;
+  phase: AtlasZoomPhase;
 }
 
 /** The opening view's state: a pinch of dust, islands dim. */
-export const OPENING_LOD: LodState = { dustVisible: dustVisibleCount(1), islandsSolid: false };
+export const OPENING_LOD: LodState = {
+  dustVisible: dustVisibleCount(1),
+  islandsSolid: false,
+  phase: "overview",
+};
 
 export function lodFor(zoomIn: number): LodState {
-  return { dustVisible: dustVisibleCount(zoomIn), islandsSolid: zoomIn >= ISLANDS_SOLID_ZOOM };
+  const phase: AtlasZoomPhase = zoomIn < 2 ? "overview" : zoomIn < 4 ? "neighborhood" : "detail";
+  return { dustVisible: dustVisibleCount(zoomIn), islandsSolid: zoomIn >= ISLANDS_SOLID_ZOOM, phase };
 }
 
-/** Clearance between the core's box and the nearest island, and between any
+/** Clearance between the core's occupied discs and the nearest island, and between any
  *  two islands, in graph units — a moat, so an island never reads as a
  *  peninsula of the core or of its neighbour. */
 export const ISLAND_GAP = 34;
-/** Islands ring the core on a slight ellipse: screens are wider than tall, so
- *  a ring squashed to this fraction on y fills the frame instead of piling
- *  islands into the top and bottom margins. */
-export const ISLAND_RING_SQUASH = 0.8;
-/** How far out an island probes per step while looking for clear water. */
-const ISLAND_STEP = 4;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+/** Keep pathological geometry from turning placement into an unbounded loop. */
+const MAX_ISLAND_PROBES = 768;
+/** The protection mask is adaptive, but never grows beyond this many cells on
+ * one side. Sparse occupied cells keep an elongated core from becoming a
+ * filled rectangle just because its bounds are large. */
+const MAX_PROTECTION_GRID_SIDE = 192;
+const MIN_PROTECTION_CELL_SIZE = 8;
+const MAX_PROTECTION_QUERY_CELLS = 16_384;
+const EDGE_INK_RADIUS = 2;
+const EDGE_SAMPLE_STEP = 16;
+const MAX_EDGE_INDEX_SAMPLES = 512;
 
 /** One component's drawn extent, in graph units. */
 interface ComponentBox {
@@ -449,7 +552,7 @@ function graphComponents(graph: Graph, anchorOf: Map<string, string>): string[][
     if (list) list.push(id);
     else groups.set(root, [id]);
   });
-  return [...groups.values()];
+  return [...groups.values()].map((ids) => ids.sort());
 }
 
 /** Bounding box of a component's ink: every node's disc. Satellites are
@@ -486,33 +589,577 @@ interface Island {
   r: number;
 }
 
-/** Shortest distance from a point to an axis-aligned box (0 inside it). */
-function distanceToBox(x: number, y: number, box: ComponentBox): number {
-  const dx = Math.max(box.minX - x, 0, x - box.maxX);
-  const dy = Math.max(box.minY - y, 0, y - box.maxY);
-  return Math.hypot(dx, dy);
+/** A compact spatial index for occupied component discs. Keeping this index
+ * by centre cell makes the 2,000+ node case cheap without changing the exact
+ * circle-to-circle clearance check. */
+interface CircleIndex {
+  cellSize: number;
+  maxRadius: number;
+  cells: Map<string, Island[]>;
+  /** Circles too large to index safely by the normal candidate grid. */
+  oversized: Island[];
+}
+
+const circleCell = (value: number, cellSize: number): number => Math.floor(value / cellSize);
+const circleCellKey = (x: number, y: number): string => `${x},${y}`;
+const MAX_INDEXED_RADIUS = 384;
+const MAX_QUERY_CELLS = 16_384;
+
+function newCircleIndex(cellSize = 48): CircleIndex {
+  return { cellSize, maxRadius: 0, cells: new Map(), oversized: [] };
+}
+
+function addCircle(index: CircleIndex, circle: Island): void {
+  if (circle.r > MAX_INDEXED_RADIUS) {
+    index.oversized.push(circle);
+    return;
+  }
+  const cx = circleCell(circle.x, index.cellSize);
+  const cy = circleCell(circle.y, index.cellSize);
+  const key = circleCellKey(cx, cy);
+  const bucket = index.cells.get(key);
+  if (bucket) bucket.push(circle);
+  else index.cells.set(key, [circle]);
+  index.maxRadius = Math.max(index.maxRadius, circle.r);
+}
+
+/** True when a candidate circle has the requested moat from every indexed
+ * circle. The candidate radius is included in the query range, so no nearby
+ * obstacle can be missed at a cell boundary. */
+function clearOfCircles(index: CircleIndex, x: number, y: number, radius: number): boolean {
+  for (const circle of index.oversized) {
+    if (Math.hypot(circle.x - x, circle.y - y) < circle.r + radius + ISLAND_GAP) return false;
+  }
+  const range = radius + index.maxRadius + ISLAND_GAP;
+  const minX = circleCell(x - range, index.cellSize);
+  const maxX = circleCell(x + range, index.cellSize);
+  const minY = circleCell(y - range, index.cellSize);
+  const maxY = circleCell(y + range, index.cellSize);
+  // A very large candidate (or a very large indexed neighbourhood) must not
+  // turn into an enormous nested cell walk. Directly checking the normal
+  // circles is linear in occupied ink and remains bounded in memory.
+  if ((maxX - minX + 1) * (maxY - minY + 1) > MAX_QUERY_CELLS) {
+    for (const bucket of index.cells.values()) {
+      for (const circle of bucket) {
+        if (Math.hypot(circle.x - x, circle.y - y) < circle.r + radius + ISLAND_GAP) return false;
+      }
+    }
+    return true;
+  }
+  for (let cx = minX; cx <= maxX; cx += 1) {
+    for (let cy = minY; cy <= maxY; cy += 1) {
+      const bucket = index.cells.get(circleCellKey(cx, cy));
+      if (!bucket) continue;
+      for (const circle of bucket) {
+        if (Math.hypot(circle.x - x, circle.y - y) < circle.r + radius + ISLAND_GAP) return false;
+      }
+    }
+  }
+  return true;
+}
+
+interface CoreSegment {
+  sourceX: number;
+  sourceY: number;
+  targetX: number;
+  targetY: number;
+}
+
+/** A bounded, sparse mask of the core's meaningful ink and enclosed voids.
+ * `occupied` contains cells touched by node discs or structural edges;
+ * `protectedCells` contains empty cells enclosed by that ink after a small
+ * dilation. A candidate queries both with its own radius plus ISLAND_GAP, so
+ * the mask is conservative while the circle index remains the final exact
+ * clearance check for drawn discs. */
+export interface IslandProtection {
+  minX: number;
+  minY: number;
+  cellSize: number;
+  columns: number;
+  rows: number;
+  occupied: ReadonlySet<number>;
+  protectedCells: ReadonlySet<number>;
+}
+
+export interface IslandProtectionMetrics {
+  cellSize: number;
+  columns: number;
+  rows: number;
+  occupiedCells: number;
+  protectedCells: number;
+}
+
+const protectionKey = (column: number, row: number): number =>
+  column * MAX_PROTECTION_GRID_SIDE + row;
+
+function markProtectionPoint(
+  occupied: Set<number>,
+  pointX: number,
+  pointY: number,
+  radius: number,
+  minX: number,
+  minY: number,
+  cellSize: number,
+  columns: number,
+  rows: number,
+): void {
+  const minColumn = Math.max(0, Math.floor((pointX - radius - minX) / cellSize) - 1);
+  const maxColumn = Math.min(columns - 1, Math.floor((pointX + radius - minX) / cellSize) + 1);
+  const minRow = Math.max(0, Math.floor((pointY - radius - minY) / cellSize) - 1);
+  const maxRow = Math.min(rows - 1, Math.floor((pointY + radius - minY) / cellSize) + 1);
+  for (let column = minColumn; column <= maxColumn; column += 1) {
+    const cellMinX = minX + column * cellSize;
+    const cellMaxX = cellMinX + cellSize;
+    for (let row = minRow; row <= maxRow; row += 1) {
+      const cellMinY = minY + row * cellSize;
+      const cellMaxY = cellMinY + cellSize;
+      const dx = Math.max(cellMinX - pointX, 0, pointX - cellMaxX);
+      const dy = Math.max(cellMinY - pointY, 0, pointY - cellMaxY);
+      if (Math.hypot(dx, dy) <= radius) occupied.add(protectionKey(column, row));
+    }
+  }
+}
+
+function markProtectionSegment(
+  occupied: Set<number>,
+  segment: CoreSegment,
+  minX: number,
+  minY: number,
+  cellSize: number,
+  columns: number,
+  rows: number,
+): void {
+  const length = Math.hypot(segment.targetX - segment.sourceX, segment.targetY - segment.sourceY);
+  const samples = Math.max(1, Math.ceil(length / (cellSize * 0.5)));
+  // Mark a little wider than the actual edge ink. This makes the grid useful
+  // for hole detection even when an edge passes through a cell corner, while
+  // the exact edge samples in the circle index retain the final guarantee.
+  const maskRadius = EDGE_INK_RADIUS + cellSize * 0.75;
+  for (let sample = 0; sample <= samples; sample += 1) {
+    const t = sample / samples;
+    markProtectionPoint(
+      occupied,
+      segment.sourceX + (segment.targetX - segment.sourceX) * t,
+      segment.sourceY + (segment.targetY - segment.sourceY) * t,
+      maskRadius,
+      minX,
+      minY,
+      cellSize,
+      columns,
+      rows,
+    );
+  }
+}
+
+function dilateProtection(
+  occupied: ReadonlySet<number>,
+  columns: number,
+  rows: number,
+): Set<number> {
+  const dilated = new Set<number>();
+  for (const key of occupied) {
+    const column = Math.floor(key / MAX_PROTECTION_GRID_SIDE);
+    const row = key % MAX_PROTECTION_GRID_SIDE;
+    for (let dc = -1; dc <= 1; dc += 1) {
+      const nextColumn = column + dc;
+      if (nextColumn < 0 || nextColumn >= columns) continue;
+      for (let dr = -1; dr <= 1; dr += 1) {
+        const nextRow = row + dr;
+        if (nextRow >= 0 && nextRow < rows) dilated.add(protectionKey(nextColumn, nextRow));
+      }
+    }
+  }
+  return dilated;
+}
+
+/** Build the core mask from node discs and non-memory edges. Bounds are
+ * deliberately only the drawn core extent; candidates outside those bounds
+ * remain eligible, so a long thin component cannot turn its bounding box into
+ * a giant protected rectangle. */
+export function buildIslandProtection(
+  graph: Graph,
+  coreIds: readonly string[],
+  satellites: ReadonlySet<string> = new Set(),
+): IslandProtection {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  const coreSet = new Set(coreIds);
+  const discs: Island[] = [];
+  for (const id of coreIds) {
+    if (satellites.has(id) || !graph.hasNode(id)) continue;
+    const x = graph.getNodeAttribute(id, "x") as number;
+    const y = graph.getNodeAttribute(id, "y") as number;
+    const radius = (graph.getNodeAttribute(id, "size") as number) ?? 0;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    discs.push({ x, y, r: radius });
+    minX = Math.min(minX, x - radius);
+    maxX = Math.max(maxX, x + radius);
+    minY = Math.min(minY, y - radius);
+    maxY = Math.max(maxY, y + radius);
+  }
+
+  const segments: CoreSegment[] = [];
+  graph.forEachEdge((_key, _attrs, source, target) => {
+    if (!coreSet.has(source) || !coreSet.has(target)) return;
+    if (satellites.has(source) || satellites.has(target)) return;
+    const sourceX = graph.getNodeAttribute(source, "x") as number;
+    const sourceY = graph.getNodeAttribute(source, "y") as number;
+    const targetX = graph.getNodeAttribute(target, "x") as number;
+    const targetY = graph.getNodeAttribute(target, "y") as number;
+    if (![sourceX, sourceY, targetX, targetY].every(Number.isFinite)) return;
+    segments.push({ sourceX, sourceY, targetX, targetY });
+    minX = Math.min(minX, sourceX, targetX);
+    maxX = Math.max(maxX, sourceX, targetX);
+    minY = Math.min(minY, sourceY, targetY);
+    maxY = Math.max(maxY, sourceY, targetY);
+  });
+
+  if (minX === Infinity) {
+    minX = -MIN_PROTECTION_CELL_SIZE;
+    maxX = MIN_PROTECTION_CELL_SIZE;
+    minY = -MIN_PROTECTION_CELL_SIZE;
+    maxY = MIN_PROTECTION_CELL_SIZE;
+  }
+  const span = Math.max(maxX - minX, maxY - minY, MIN_PROTECTION_CELL_SIZE);
+  const cellSize = Math.max(MIN_PROTECTION_CELL_SIZE, span / (MAX_PROTECTION_GRID_SIDE - 1));
+  const columns = Math.min(MAX_PROTECTION_GRID_SIDE, Math.max(1, Math.ceil((maxX - minX) / cellSize) + 1));
+  const rows = Math.min(MAX_PROTECTION_GRID_SIDE, Math.max(1, Math.ceil((maxY - minY) / cellSize) + 1));
+  const occupied = new Set<number>();
+  for (const disc of discs) {
+    markProtectionPoint(occupied, disc.x, disc.y, disc.r, minX, minY, cellSize, columns, rows);
+  }
+  for (const segment of segments) {
+    markProtectionSegment(occupied, segment, minX, minY, cellSize, columns, rows);
+  }
+
+  // One-cell dilation closes only gaps on the scale of the actual grid. A
+  // flood fill from the grid boundary then identifies enclosed negative space;
+  // open space around an irregular core remains available to islands.
+  const dilated = dilateProtection(occupied, columns, rows);
+  const outside = new Set<number>();
+  const queue: number[] = [];
+  const enqueue = (column: number, row: number) => {
+    const key = protectionKey(column, row);
+    if (dilated.has(key) || outside.has(key)) return;
+    outside.add(key);
+    queue.push(key);
+  };
+  for (let column = 0; column < columns; column += 1) {
+    enqueue(column, 0);
+    if (rows > 1) enqueue(column, rows - 1);
+  }
+  for (let row = 1; row < rows - 1; row += 1) {
+    enqueue(0, row);
+    if (columns > 1) enqueue(columns - 1, row);
+  }
+  for (let index = 0; index < queue.length; index += 1) {
+    const key = queue[index] as number;
+    const column = Math.floor(key / MAX_PROTECTION_GRID_SIDE);
+    const row = key % MAX_PROTECTION_GRID_SIDE;
+    if (column > 0) enqueue(column - 1, row);
+    if (column + 1 < columns) enqueue(column + 1, row);
+    if (row > 0) enqueue(column, row - 1);
+    if (row + 1 < rows) enqueue(column, row + 1);
+  }
+  const protectedCells = new Set<number>();
+  for (let column = 0; column < columns; column += 1) {
+    for (let row = 0; row < rows; row += 1) {
+      const key = protectionKey(column, row);
+      if (!dilated.has(key) && !outside.has(key)) protectedCells.add(key);
+    }
+  }
+  return { minX, minY, cellSize, columns, rows, occupied, protectedCells };
+}
+
+export function islandProtectionMetrics(protection: IslandProtection): IslandProtectionMetrics {
+  return {
+    cellSize: protection.cellSize,
+    columns: protection.columns,
+    rows: protection.rows,
+    occupiedCells: protection.occupied.size,
+    protectedCells: protection.protectedCells.size,
+  };
+}
+
+/** Conservative grid predicate for a candidate island centre. Its square
+ * footprint is queried because that is cheaper and safer than accepting a
+ * circle that clips a protected cell corner. */
+export function isIslandCenterProtected(
+  protection: IslandProtection,
+  x: number,
+  y: number,
+  radius: number,
+): boolean {
+  if (![x, y, radius].every(Number.isFinite) || radius < 0) return true;
+  const reach = radius + ISLAND_GAP;
+  const minColumn = Math.max(0, Math.floor((x - reach - protection.minX) / protection.cellSize));
+  const maxColumn = Math.min(
+    protection.columns - 1,
+    Math.floor((x + reach - protection.minX) / protection.cellSize),
+  );
+  const minRow = Math.max(0, Math.floor((y - reach - protection.minY) / protection.cellSize));
+  const maxRow = Math.min(
+    protection.rows - 1,
+    Math.floor((y + reach - protection.minY) / protection.cellSize),
+  );
+  if (minColumn > maxColumn || minRow > maxRow) return false;
+
+  const span = (maxColumn - minColumn + 1) * (maxRow - minRow + 1);
+  if (span > MAX_PROTECTION_QUERY_CELLS) {
+    for (const key of [...protection.occupied, ...protection.protectedCells]) {
+      const column = Math.floor(key / MAX_PROTECTION_GRID_SIDE);
+      const row = key % MAX_PROTECTION_GRID_SIDE;
+      if (column >= minColumn && column <= maxColumn && row >= minRow && row <= maxRow) return true;
+    }
+    return false;
+  }
+  for (let column = minColumn; column <= maxColumn; column += 1) {
+    for (let row = minRow; row <= maxRow; row += 1) {
+      const key = protectionKey(column, row);
+      if (protection.occupied.has(key) || protection.protectedCells.has(key)) return true;
+    }
+  }
+  return false;
+}
+
+function hashIslandIds(ids: readonly string[]): number {
+  let hash = 2_166_136_261;
+  for (const id of ids) {
+    for (let index = 0; index < id.length; index += 1) {
+      hash ^= id.charCodeAt(index);
+      hash = Math.imul(hash, 16_777_619);
+    }
+    hash ^= 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+}
+
+function islandRandom(seed: number, probe: number, stream: number): number {
+  let value = (seed + Math.imul(probe + 1, 1_664_525) + Math.imul(stream + 1, 1_013_904_223)) >>> 0;
+  value ^= value >>> 16;
+  value = Math.imul(value, 2_246_822_507);
+  value ^= value >>> 13;
+  value = Math.imul(value, 3_266_489_909);
+  return (value ^ (value >>> 16)) >>> 0;
+}
+
+function islandGaussianCandidate(seed: number, probe: number, sigma: number): { x: number; y: number } {
+  // Start with a Box-Muller field, then smoothly compress rare outliers below.
+  // Clamping u1 avoids log(0); no samples are snapped onto an outer ring.
+  const u1 = Math.max(1e-7, islandRandom(seed, probe, 0) / 4_294_967_296);
+  const u2 = islandRandom(seed, probe, 1) / 4_294_967_296;
+  const gaussianMagnitude = Math.sqrt(-2 * Math.log(u1));
+  // Keep the Gaussian's soft, non-geometric support while compressing rare
+  // six-sigma samples. Without this gentle tail bend, a few late singletons
+  // can dominate fit-to-screen even though no placement fallback occurred.
+  const magnitude = gaussianMagnitude / Math.sqrt(1 + 0.06 * gaussianMagnitude * gaussianMagnitude);
+  const angle = 2 * Math.PI * u2;
+  const skew = (islandRandom(seed, probe, 2) / 4_294_967_296 - 0.5) * 0.18;
+  const x = magnitude * Math.cos(angle) * sigma;
+  return { x, y: (magnitude * Math.sin(angle) + skew * Math.cos(angle)) * sigma };
+}
+
+interface IslandPlan {
+  box: ComponentBox;
+  r: number;
+  spacing: number;
+  seed: number;
+}
+
+function coreCollisionIndex(
+  graph: Graph,
+  core: ComponentBox,
+  satellites: ReadonlySet<string>,
+): { index: CircleIndex; discs: Island[] } {
+  const coreDiscs: Island[] = core.ids
+    .filter((id) => !satellites.has(id))
+    .map((id) => ({
+      x: graph.getNodeAttribute(id, "x") as number,
+      y: graph.getNodeAttribute(id, "y") as number,
+      r: (graph.getNodeAttribute(id, "size") as number) ?? 0,
+    }));
+  const index = newCircleIndex();
+  for (const disc of coreDiscs) addCircle(index, disc);
+  // Edge circles use the same spatial index as node discs for the final
+  // clearance check. The occupancy mask is intentionally conservative too,
+  // but samples here prevent a candidate from slipping through a long edge's
+  // cells at a corner.
+  const coreSet = new Set(core.ids);
+  graph.forEachEdge((_key, _attrs, source, target) => {
+    if (!coreSet.has(source) || !coreSet.has(target)) return;
+    if (satellites.has(source) || satellites.has(target)) return;
+    const sourceX = graph.getNodeAttribute(source, "x") as number;
+    const sourceY = graph.getNodeAttribute(source, "y") as number;
+    const targetX = graph.getNodeAttribute(target, "x") as number;
+    const targetY = graph.getNodeAttribute(target, "y") as number;
+    const length = Math.hypot(targetX - sourceX, targetY - sourceY);
+    const samples = Math.min(MAX_EDGE_INDEX_SAMPLES, Math.max(1, Math.ceil(length / EDGE_SAMPLE_STEP)));
+    for (let sample = 0; sample <= samples; sample += 1) {
+      const t = sample / samples;
+      addCircle(index, {
+        x: sourceX + (targetX - sourceX) * t,
+        y: sourceY + (targetY - sourceY) * t,
+        r: EDGE_INK_RADIUS,
+      });
+    }
+  });
+  return { index, discs: coreDiscs };
+}
+
+function islandPlan(box: ComponentBox, satellites: ReadonlySet<string>): IslandPlan {
+  const r = Math.max(1, Math.hypot(boxWidth(box), boxHeight(box)) / 2);
+  return {
+    box,
+    r,
+    spacing: Math.max(48, r + ISLAND_GAP),
+    seed: hashIslandIds(box.ids.filter((id) => !satellites.has(id)).sort()),
+  };
+}
+
+function translateComponent(graph: Graph, box: ComponentBox, dx: number, dy: number): void {
+  for (const id of box.ids) {
+    graph.setNodeAttribute(id, "x", (graph.getNodeAttribute(id, "x") as number) + dx);
+    graph.setNodeAttribute(id, "y", (graph.getNodeAttribute(id, "y") as number) + dy);
+  }
+  box.minX += dx;
+  box.maxX += dx;
+  box.minY += dy;
+  box.maxY += dy;
+}
+
+function placeIslandBoxes(
+  graph: Graph,
+  core: ComponentBox,
+  boxesToPlace: ComponentBox[],
+  existingBoxes: ComponentBox[],
+  satellites: ReadonlySet<string>,
+): IslandPlacementMetrics {
+  const protection = buildIslandProtection(graph, core.ids, satellites);
+  const { index: coreIndex, discs: coreDiscs } = coreCollisionIndex(graph, core, satellites);
+  const placedIndex = newCircleIndex();
+  const existingIslands = existingBoxes.map((box) => ({
+    x: (box.minX + box.maxX) / 2,
+    y: (box.minY + box.maxY) / 2,
+    r: Math.max(1, Math.hypot(boxWidth(box), boxHeight(box)) / 2),
+  }));
+  for (const island of existingIslands) addCircle(placedIndex, island);
+  const placedIslands = [...existingIslands];
+  const plans = boxesToPlace.map((box) => islandPlan(box, satellites));
+  const totalSpacingSquared = [...existingIslands, ...plans].reduce(
+    (sum, island) => sum + ("spacing" in island ? island.spacing * island.spacing : (island.r + ISLAND_GAP) ** 2),
+    0,
+  );
+  const coreExtent = Math.hypot(boxWidth(core), boxHeight(core)) / 2;
+  const globalSigma = Math.max(96, Math.sqrt(totalSpacingSquared / 2) * 1.08 + coreExtent * 0.22);
+  let totalProbes = 0;
+  let maxProbes = 0;
+  let fallbackCount = 0;
+  let placedSpacingSquared = existingIslands.reduce(
+    (sum, island) => sum + (island.r + ISLAND_GAP) ** 2,
+    0,
+  );
+
+  for (const { box, r, spacing, seed } of plans) {
+    // Occupied footprint grows as components are accepted, so each later
+    // group gets a gentle widening even when its first deterministic sample is
+    // rejected. The batch cap keeps every per-island walk bounded.
+    const occupiedSigma = Math.sqrt((placedSpacingSquared + spacing * spacing) / 2) * 1.04;
+    const baseSigma = Math.max(globalSigma, occupiedSigma + coreExtent * 0.12);
+    let candidate: Island | undefined;
+    let probes = 0;
+    for (; probes < MAX_ISLAND_PROBES; probes += 1) {
+      const batch = Math.min(12, Math.floor(probes / 32));
+      const point = islandGaussianCandidate(seed, probes, baseSigma * (1 + batch * 0.12));
+      if (
+        !isIslandCenterProtected(protection, point.x, point.y, r) &&
+        clearOfCircles(coreIndex, point.x, point.y, r) &&
+        clearOfCircles(placedIndex, point.x, point.y, r)
+      ) {
+        candidate = { ...point, r };
+        break;
+      }
+    }
+    if (candidate) {
+      probes += 1;
+      totalProbes += probes;
+      maxProbes = Math.max(maxProbes, probes);
+    }
+    // The bounded probe loop normally finds a slot long before this. A
+    // deterministic outer fallback keeps adversarial geometry finite while
+    // retaining the same protection and circle-clearance guarantees.
+    if (!candidate) {
+      totalProbes += MAX_ISLAND_PROBES;
+      maxProbes = Math.max(maxProbes, MAX_ISLAND_PROBES);
+      fallbackCount += 1;
+      let reach = r + ISLAND_GAP + 1;
+      for (const disc of coreDiscs) {
+        reach = Math.max(reach, Math.hypot(disc.x, disc.y) + disc.r + r + ISLAND_GAP);
+      }
+      for (const island of placedIslands) {
+        reach = Math.max(reach, Math.hypot(island.x, island.y) + island.r + r + ISLAND_GAP);
+      }
+      // Include the farthest corner of the bounded mask so a fallback cannot
+      // land on a structural edge even when the core has few node discs.
+      const farthestCorner = Math.max(
+        Math.hypot(protection.minX, protection.minY),
+        Math.hypot(protection.minX + protection.cellSize * protection.columns, protection.minY),
+        Math.hypot(protection.minX, protection.minY + protection.cellSize * protection.rows),
+        Math.hypot(
+          protection.minX + protection.cellSize * protection.columns,
+          protection.minY + protection.cellSize * protection.rows,
+        ),
+      );
+      reach = Math.max(reach, farthestCorner + r + ISLAND_GAP + 1);
+      const angle = (islandRandom(seed, MAX_ISLAND_PROBES, 0) / 4_294_967_296) * 2 * Math.PI;
+      for (let attempt = 0; attempt < 64; attempt += 1) {
+        const radius = reach + attempt * Math.max(16, r + ISLAND_GAP);
+        const point = { x: radius * Math.cos(angle), y: radius * Math.sin(angle) };
+        if (
+          !isIslandCenterProtected(protection, point.x, point.y, r) &&
+          clearOfCircles(coreIndex, point.x, point.y, r) &&
+          clearOfCircles(placedIndex, point.x, point.y, r)
+        ) {
+          candidate = { ...point, r };
+          break;
+        }
+      }
+      // The fallback radius is outside every indexed obstacle by construction;
+      // retain a finite defensive value for an otherwise malformed graph.
+      candidate ??= { x: reach, y: 0, r };
+    }
+    const placedPlan = { x: candidate.x, y: candidate.y, r: candidate.r };
+    addCircle(placedIndex, placedPlan);
+    placedIslands.push(placedPlan);
+    placedSpacingSquared += (candidate.r + ISLAND_GAP) ** 2;
+    translateComponent(graph, box, candidate.x - (box.minX + box.maxX) / 2, candidate.y - (box.minY + box.maxY) / 2);
+  }
+  return {
+    islandCount: plans.length,
+    totalProbes,
+    maxProbes,
+    fallbackCount,
+    protection: islandProtectionMetrics(protection),
+  };
 }
 
 /**
- * Round 7. Islands, not wings.
+ * Pack disconnected components as a natural field around the core.
  *
  * The biggest component is the CORE: it keeps the layout the sim gave it and
  * is recentred so its bbox centre is the origin. Every other component is an
- * ISLAND — a circle the size of its own half-diagonal — placed largest first
- * on a golden-angle spiral round the core: each walks out along its own angle
- * until it clears the core's box and every island already placed by
- * ISLAND_GAP. Big islands therefore sit nearest the core and the singletons
- * (lone nodes, shown only when the reader turns the small groups on) end up
- * on the outer rim. The ring is squashed to ISLAND_RING_SQUASH on y so it
- * fills a landscape viewport.
+ * ISLAND, placed largest first. Island centres come from an ID-seeded,
+ * irregular field with smoothly compressed tails. A bounded
+ * protection mask keeps centres out of meaningful enclosed core voids, and
+ * the circle index supplies the exact moat around the drawn core discs and
+ * earlier islands. Each component is translated rigidly by its own centre, so
+ * its internal geometry survives packing.
  *
- * A full ring was tried once before (round 4) and dropped because it read as
- * a false core-and-periphery hierarchy and shrank the core; the wings that
- * replaced it (round 6) were rejected by the reader outright. The difference
- * now is zoom: at the opening view the islands are drawn dim, no names, no
- * edges (see LodState), so the eye lands on the core and the islands are a
- * rim the viewer knows is there. Zoom in past ISLANDS_SOLID_ZOOM and they
- * come up solid.
+ * At the opening view the islands are drawn dim, with no names or edges (see
+ * LodState), so the eye lands on the core while the islands remain available
+ * as quiet context. Zoom in past ISLANDS_SOLID_ZOOM and they come up solid.
  *
  * Returns the node ids of each component in placement order — the core first,
  * so the caller can tell it from the islands and hold each kind the way it
@@ -521,8 +1168,32 @@ function distanceToBox(x: number, y: number, box: ComponentBox): number {
  * Pure in the sense that matters here: it reads x/y/size off the graph and
  * writes x/y back, touching nothing else and consulting no clock or random.
  */
-export function shelveComponents(graph: Graph): string[][] {
-  if (graph.order === 0) return [];
+export interface IslandPlacementMetrics {
+  islandCount: number;
+  totalProbes: number;
+  maxProbes: number;
+  fallbackCount: number;
+  protection: IslandProtectionMetrics;
+}
+
+export interface IslandPlacementReport {
+  placement: string[][];
+  metrics: IslandPlacementMetrics;
+}
+
+function shelveComponentsDetailed(graph: Graph): IslandPlacementReport {
+  if (graph.order === 0) {
+    return {
+      placement: [],
+      metrics: {
+        islandCount: 0,
+        totalProbes: 0,
+        maxProbes: 0,
+        fallbackCount: 0,
+        protection: { cellSize: 0, columns: 0, rows: 0, occupiedCells: 0, protectedCells: 0 },
+      },
+    };
+  }
   const anchorOf = new Map(satellitePlan(graph).map((satellite) => [satellite.id, satellite.anchor]));
   const satellites = new Set(anchorOf.keys());
   // Ranked by the nodes that take room — satellites count for nothing here
@@ -530,42 +1201,83 @@ export function shelveComponents(graph: Graph): string[][] {
   const weight = (box: ComponentBox) => box.ids.filter((id) => !satellites.has(id)).length;
   const boxes = graphComponents(graph, anchorOf)
     .map((ids) => measureComponent(graph, ids, satellites))
-    .sort((a, b) => weight(b) - weight(a) || ((a.ids[0] as string) < (b.ids[0] as string) ? -1 : 1));
-
-  const translate = (box: ComponentBox, dx: number, dy: number) => {
-    for (const id of box.ids) {
-      graph.setNodeAttribute(id, "x", (graph.getNodeAttribute(id, "x") as number) + dx);
-      graph.setNodeAttribute(id, "y", (graph.getNodeAttribute(id, "y") as number) + dy);
-    }
-    box.minX += dx;
-    box.maxX += dx;
-    box.minY += dy;
-    box.maxY += dy;
-  };
+    .sort((a, b) => {
+      const aKey = a.ids[0] as string;
+      const bKey = b.ids[0] as string;
+      return weight(b) - weight(a) || (aKey < bKey ? -1 : aKey > bKey ? 1 : 0);
+    });
 
   const core = boxes[0] as ComponentBox;
-  translate(core, -(core.minX + core.maxX) / 2, -(core.minY + core.maxY) / 2);
+  translateComponent(graph, core, -(core.minX + core.maxX) / 2, -(core.minY + core.maxY) / 2);
+  const metrics = placeIslandBoxes(graph, core, boxes.slice(1), [], satellites);
+  return {
+    placement: [core.ids, ...boxes.slice(1).map((box) => box.ids)],
+    metrics,
+  };
+}
 
-  const placed: Island[] = [];
-  boxes.slice(1).forEach((box, i) => {
-    const r = Math.hypot(boxWidth(box), boxHeight(box)) / 2;
-    const angle = i * GOLDEN_ANGLE;
-    // Start at the core's nearer half-extent: nothing closer can clear it.
-    let d = Math.min(boxWidth(core), boxHeight(core)) / 2;
-    for (;;) {
-      const x = Math.cos(angle) * d;
-      const y = Math.sin(angle) * d * ISLAND_RING_SQUASH;
-      const clearOfCore = distanceToBox(x, y, core) >= r + ISLAND_GAP;
-      if (clearOfCore && placed.every((p) => Math.hypot(p.x - x, p.y - y) >= p.r + r + ISLAND_GAP)) {
-        placed.push({ x, y, r });
-        translate(box, x - (box.minX + box.maxX) / 2, y - (box.minY + box.maxY) / 2);
-        break;
-      }
-      d += ISLAND_STEP;
-    }
+export function shelveComponents(graph: Graph): string[][] {
+  return shelveComponentsDetailed(graph).placement;
+}
+
+export function shelveComponentsWithMetrics(graph: Graph): IslandPlacementReport {
+  return shelveComponentsDetailed(graph);
+}
+
+/** Restore-aware shelf repair used after a layer or small-group rebuild.
+ * Existing body coordinates are user state and stay where the caller put
+ * them; only components with no saved body member are placed again. Those new
+ * components are tested against the restored core and every surviving island,
+ * which keeps a partial restore from leaving a fresh island in a protected
+ * core void. */
+function placeUnrestoredComponents(
+  graph: Graph,
+  placement: readonly string[][],
+  preservedIds: ReadonlySet<string>,
+): void {
+  if (placement.length < 2) return;
+  const anchorOf = new Map(satellitePlan(graph).map((satellite) => [satellite.id, satellite.anchor]));
+  const satellites = new Set(anchorOf.keys());
+  const coreIds = placement[0] as string[];
+  const core = measureComponent(graph, coreIds, satellites);
+  const boxes = placement.slice(1).map((ids) => measureComponent(graph, ids, satellites));
+  const bodyIds = (box: ComponentBox) => box.ids.filter((id) => !satellites.has(id));
+  const newBoxes = boxes.filter((box) => {
+    const ids = bodyIds(box);
+    return ids.length > 0 && ids.every((id) => !preservedIds.has(id));
   });
-
-  return [core.ids, ...boxes.slice(1).map((box) => box.ids)];
+  if (newBoxes.length === 0) return;
+  const existingBoxes = boxes.filter((box) => !newBoxes.includes(box));
+  const existingIndex = newCircleIndex();
+  for (const box of existingBoxes) {
+    addCircle(existingIndex, {
+      x: (box.minX + box.maxX) / 2,
+      y: (box.minY + box.maxY) / 2,
+      r: Math.max(1, Math.hypot(boxWidth(box), boxHeight(box)) / 2),
+    });
+  }
+  const protection = buildIslandProtection(graph, core.ids, satellites);
+  const coreIndex = coreCollisionIndex(graph, core, satellites).index;
+  const keptNewBoxes: ComponentBox[] = [];
+  const boxesToPlace: ComponentBox[] = [];
+  for (const box of newBoxes) {
+    const r = Math.max(1, Math.hypot(boxWidth(box), boxHeight(box)) / 2);
+    const x = (box.minX + box.maxX) / 2;
+    const y = (box.minY + box.maxY) / 2;
+    const valid =
+      !isIslandCenterProtected(protection, x, y, r) &&
+      clearOfCircles(coreIndex, x, y, r) &&
+      clearOfCircles(existingIndex, x, y, r);
+    if (valid) {
+      keptNewBoxes.push(box);
+      addCircle(existingIndex, { x, y, r });
+    } else {
+      boxesToPlace.push(box);
+    }
+  }
+  if (boxesToPlace.length > 0) {
+    placeIslandBoxes(graph, core, boxesToPlace, [...existingBoxes, ...keptNewBoxes], satellites);
+  }
 }
 
 /** The sim plus the one thing the view has to tell it: which node the pointer
@@ -573,6 +1285,10 @@ export function shelveComponents(graph: Graph): string[][] {
  *  to be told to leave the dragged one alone (see placeSatellites). */
 export interface AtlasSimulation extends Simulation<AtlasSimNode, undefined> {
   setDraggingId(id: string | null): void;
+  /** Restore a previously settled non-memory body without running the shelf
+   *  pack again. Used when only the memory layer changed; the saved body map
+   *  is authoritative for both graphology and the live force nodes. */
+  restorePositions(positions: ReadonlyMap<string, { x: number; y: number }>): void;
   /** Put every unheld shelf component back on its slot right now, instead of
    *  over the cooling tail. The release path uses it when there will be no
    *  cooling tail (see shelfAnchorForce's `settle`). */
@@ -1038,6 +1754,7 @@ export function createAtlasSimulation(
       radius: (attrs.size as number) + COLLIDE_PAD,
     });
   });
+  const simNodeById = new Map(nodes.map((node) => [node.id, node]));
 
   const linkByPair = new Map<string, AtlasSimLink>();
   graph.forEachEdge((_edge, attrs, source, target) => {
@@ -1096,7 +1813,7 @@ export function createAtlasSimulation(
   // mid-frame only runs on the next one — a constant extra frame of drag
   // latency (the old force-graph loop ticked and painted together).
   let draggingId: string | null = null;
-  const writeBack = () => {
+  const writeBack = (notify = true) => {
     for (const node of nodes) {
       if (node.fx != null && node.fy != null) continue;
       graph.setNodeAttribute(node.id, "x", node.x);
@@ -1107,7 +1824,7 @@ export function createAtlasSimulation(
     // dragged entity's memories along with it. The one exception is a memory
     // the pointer is holding: that one is being positioned by hand.
     placeSatellites(graph, satellites, draggingId);
-    onTick?.();
+    if (notify) onTick?.();
   };
   sim.on("tick", writeBack);
 
@@ -1187,6 +1904,49 @@ export function createAtlasSimulation(
   atlasSim.setDraggingId = (id: string | null) => {
     draggingId = id;
   };
+  atlasSim.restorePositions = (positions) => {
+    for (const [id, position] of positions) {
+      if (!graph.hasNode(id)) continue;
+      // The caller normally supplies only the non-memory body, but keep this
+      // boundary defensive so stale memory coordinates can never fight the
+      // satellite placement below.
+      if (graph.getNodeAttribute(id, "entityType") === MEMORY_NODE_TYPE) continue;
+      if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) continue;
+      graph.setNodeAttribute(id, "x", position.x);
+      graph.setNodeAttribute(id, "y", position.y);
+      const simNode = simNodeById.get(id);
+      if (!simNode) continue;
+      simNode.x = position.x;
+      simNode.y = position.y;
+      simNode.vx = 0;
+      simNode.vy = 0;
+    }
+    // A rebuild can add whole components after this simulation's initial
+    // shelf pass. Keep restored survivors fixed, then place only those new
+    // components against the restored core and surviving islands.
+    const preservedIds = new Set(positions.keys());
+    placeUnrestoredComponents(graph, placement, preservedIds);
+    for (const node of nodes) {
+      if (preservedIds.has(node.id)) continue;
+      const x = graph.getNodeAttribute(node.id, "x") as number;
+      const y = graph.getNodeAttribute(node.id, "y") as number;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      node.x = x;
+      node.y = y;
+      node.vx = 0;
+      node.vy = 0;
+    }
+    // The component membership and placement remain those from the settled
+    // graph. Only the actual coordinates and their force targets move.
+    center.retarget();
+    shelfAnchor.setPlacement(placement.slice(1));
+    sim.alpha(0).alphaTarget(0).stop();
+    // The renderer has not been installed yet. Re-place satellites through
+    // the normal writeback path, but do not notify a previous renderer via
+    // onTick while the new graph is still mounting.
+    writeBack(false);
+    sim.alpha(0).alphaTarget(0).stop();
+  };
   atlasSim.settleShelf = () => {
     shelfAnchor.settle();
     writeBack();
@@ -1212,19 +1972,28 @@ export function hoverStateFor(graph: Graph, hovered: string | null): HoverState 
 // pulling in graphology-types as a new direct dependency. `any` matches what
 // sigma already passes through, so it typechecks both ways without one.
 
-/** Dim fill for an island at the opening view: the node's own ink at 30%
+/** Dim fill for an island at the opening view: the node's own ink at 72%
  *  over the ground. Cached per (ink, ground) pair — the reducer runs per node
  *  per frame. */
 const dimFillCache = new Map<string, string>();
 function dimFill(color: string, surface: string): string {
-  const key = `${color}|${surface}`;
+  return dimFillAt(color, surface, 0.72);
+}
+
+function dimFillAt(color: string, surface: string, alpha: number): string {
+  const key = `${color}|${surface}|${alpha}`;
   let dim = dimFillCache.get(key);
   if (dim === undefined) {
-    dim = compositeOver(color, surface, 0.3);
+    dim = compositeOver(color, surface, alpha);
     dimFillCache.set(key, dim);
   }
   return dim;
 }
+
+/** Overview ink for ordinary nodes: visible enough to preserve map texture,
+ * quiet enough that the selected landmarks establish the first hierarchy. */
+const SEMANTIC_SUBDUED_ALPHA = 0.78;
+const LANDMARK_MIN_SIZE = 4;
 
 /**
  * Node display override for sigma's nodeReducer — pure so it's unit-testable
@@ -1262,22 +2031,45 @@ export function nodeDisplay(
   if (attrs.island && !lod.islandsSolid) {
     base = { ...attrs, color: dimFill(attrs.color as string, palette.surface), label: "" };
   }
+  // Keep orientation names through the middle zoom range, where ordinary
+  // discs have not yet reached Sigma's label-size threshold.
+  if (attrs.landmarkLabel === true && attrs.entityType !== MEMORY_NODE_TYPE) {
+    base = { ...base, forceLabel: true };
+  }
+  // `landmark` is deliberately checked by key presence as well as value: an
+  // untagged graph is a legacy fixture/caller and must retain its old display
+  // behavior until applyAtlasHierarchy has been run.
+  if (lod.phase === "overview" && Object.prototype.hasOwnProperty.call(attrs, "landmark") && attrs.entityType !== MEMORY_NODE_TYPE) {
+    if (attrs.landmark === true) {
+      base = {
+        ...base,
+        size: Math.max((base.size as number) ?? 0, LANDMARK_MIN_SIZE),
+        ...(attrs.landmarkLabel === true ? { forceLabel: true } : {}),
+      };
+    } else {
+      base = {
+        ...base,
+        color: dimFillAt((base.color as string) ?? palette.edge, palette.surface, SEMANTIC_SUBDUED_ALPHA),
+        label: "",
+      };
+    }
+  }
   if (state.hovered === null) return base;
-  if (nodeId === state.hovered) return { ...attrs, forceLabel: true, highlighted: true, zIndex: 2 };
+  if (nodeId === state.hovered) return { ...attrs, color: attrs.entityType ? nodeFillFor(attrs.entityType, true, palette) : attrs.color, size: attrs.size * 1.15, forceLabel: true, highlighted: true, zIndex: 2 };
   if (state.neighbors.has(nodeId)) {
     return state.neighbors.size <= NEIGHBOR_LABEL_MAX
-      ? { ...attrs, forceLabel: true, highlighted: true, zIndex: 1 }
-      : { ...attrs, zIndex: 1 };
+      ? { ...attrs, color: attrs.entityType ? nodeFillFor(attrs.entityType, true, palette) : attrs.color, forceLabel: true, highlighted: true, zIndex: 1 }
+      : { ...attrs, color: attrs.entityType ? nodeFillFor(attrs.entityType, true, palette) : attrs.color, zIndex: 1 };
   }
-  return { ...base, color: palette.edge, label: "", zIndex: 0 };
+  return { ...base, color: dimFillAt(palette.neutral, palette.surface, 0.17), label: "", forceLabel: false, zIndex: 0 };
 }
 
 /**
- * Edge display override for sigma's edgeReducer. A memory's thread to its
- * anchor is drawn whenever the memory itself is (the zoom's `dustVisible`
- * tier, see nodeDisplay), so a shown dot is never loose; its other edges, and
- * a hidden memory's thread, wait for a hover of the memory or either endpoint.
- * An island's edges are hidden while the island is dim. Then the hover rule:
+ * Edge display override for sigma's edgeReducer. Memory edges are quiet at
+ * rest, including the thread to the anchor: the satellites already show the
+ * relationship spatially, and persistent spokes turn a busy halo into a
+ * tangle. Hovering/focusing either endpoint reveals its incident edges. An
+ * island's edges are hidden while the island is dim. Then the hover rule:
  * edges incident to the hovered node get emphasized, everything else hides.
  */
 export function edgeDisplay(
@@ -1291,16 +2083,31 @@ export function edgeDisplay(
   endpointAttrs?: { source: Record<string, any>; target: Record<string, any> },
 ): Record<string, any> {
   const incident = state.hovered !== null && (source === state.hovered || target === state.hovered);
-  if (incident) return { ...attrs, color: palette.edgeStrong, zIndex: 1 };
+  if (incident && endpointAttrs && state.neighbors.size > HOVER_DUST_MAX) {
+    const memorySource = endpointAttrs.source.dustRank !== undefined;
+    const memoryTarget = endpointAttrs.target.dustRank !== undefined;
+    const memoryFocused = (memorySource && state.hovered === source) || (memoryTarget && state.hovered === target);
+    // A busy hub's satellites already express membership. Hundreds of lit
+    // spokes obscure both them and the structural links; reveal the threads
+    // when one particular memory is inspected instead.
+    if ((memorySource || memoryTarget) && !memoryFocused) return { ...attrs, hidden: true };
+  }
+  if (incident) return { ...attrs, color: palette.edgeStrong, size: Math.max(attrs.size ?? 0, 0.9), zIndex: 1 };
   if (state.hovered !== null) return { ...attrs, hidden: true };
   if (endpointAttrs) {
     const { source: s, target: t } = endpointAttrs;
+    // Satellite position is enough context at rest. Every memory edge waits
+    // for the memory or one of its endpoints to be hovered/focused, including
+    // the anchor thread; this removes the baseline spoke clutter while
+    // keeping the existing incident-edge emphasis above.
     if (s.dustRank !== undefined || t.dustRank !== undefined) {
-      const [dust, dustId, other] = s.dustRank !== undefined ? [s, source, target] : [t, target, source];
-      const shown = (dust.dustRank as number) < lod.dustVisible;
-      if (!shown || dust.dustOf !== other || dustId === other) return { ...attrs, hidden: true };
+      return { ...attrs, hidden: true };
     }
     if ((s.island || t.island) && !lod.islandsSolid) return { ...attrs, hidden: true };
+    const hierarchyApplied = Object.prototype.hasOwnProperty.call(s, "landmark") || Object.prototype.hasOwnProperty.call(t, "landmark");
+    if (hierarchyApplied && lod.phase === "overview" && s.landmark !== true && t.landmark !== true) {
+      return { ...attrs, hidden: true };
+    }
   }
   return attrs;
 }

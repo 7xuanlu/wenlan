@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
 
@@ -80,14 +80,18 @@ vi.mock("sigma", () => {
         y: mockDimensions.height / 2 + coords.y * 6,
       };
     }
+    viewportToFramedGraph(coords: { x: number; y: number }) { return coords; }
     camera = {
+      x: 0.5, y: 0.5, angle: 0,
       ratio: 1,
       setState: vi.fn(),
       animate: vi.fn(),
+      isAnimated: vi.fn(() => false),
       getBoundedRatio: (r: number) => r,
       // The zoom level-of-detail listener (AtlasView mount) subscribes here.
       on: vi.fn(),
     };
+    scaleSize(size: number) { return size; }
     getCamera() {
       return this.camera;
     }
@@ -252,6 +256,14 @@ function foldGraph(entities: Entity[], details: EntityDetail[]): KnowledgeGraph 
   };
 }
 
+function openDisplayControls() {
+  // Display controls are inline now; keep this helper as a no-op so the
+  // behavior tests below stay focused on the control they exercise.
+}
+function displayControl(name: string) {
+  return screen.getByRole("button", { name });
+}
+
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return { ...render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>), qc };
@@ -278,7 +290,8 @@ function makeEntity(overrides: Partial<import("../../lib/tauri").Entity> = {}): 
 }
 
 describe("AtlasView", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
     vi.clearAllMocks();
     capturedSigmaInstances.length = 0;
     mockDimensions = { width: 400, height: 600 };
@@ -388,7 +401,9 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView onNodeClick={onNodeClick} />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "e1" });
+    act(() => capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "e1" }));
+    expect(onNodeClick).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Open details" }));
 
     expect(onNodeClick).toHaveBeenCalledWith({ kind: "entity", id: "e1" });
   });
@@ -430,6 +445,8 @@ describe("AtlasView", () => {
     // Edges are 1 CSS px (0.6 shared-source) — sigma's default floor (1.7)
     // would bump them up.
     expect(settings.minEdgeThickness).toBe(0.5);
+    expect(settings.itemSizesReference).toBe("positions");
+    expect(settings.zoomToSizeRatioFunction(0.25)).toBe(0.25);
 
     // Drives the real drawRadialNodeLabel through the graph closure: the
     // drawer reads e1's graph position for the sector, so this throws if the
@@ -444,6 +461,7 @@ describe("AtlasView", () => {
       globalAlpha: 1,
       textAlign: "",
       textBaseline: "",
+      measureText: (text: string) => ({ width: text.length * 7 }),
       strokeText: vi.fn(() => order.push("stroke")),
       fillText: vi.fn(() => order.push("fill")),
     };
@@ -464,20 +482,47 @@ describe("AtlasView", () => {
     document.documentElement.style.removeProperty("--mem-surface");
   });
 
-  it("renders the legend chips, connection sample, and count line over the graph", async () => {
+  it("renders the content controls and count line over the graph", async () => {
     mockConnectedPair();
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    for (const label of ["Project", "Technology", "Organization", "Person", "Theme", "Connection"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+    for (const label of ["Wiki pages", "Entities", "Memories"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
+    expect(screen.getByRole("group", { name: "Show in graph" })).toBeInTheDocument();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     // Alice, Bob and Carol form one community of three, so the toolbar count
     // line reports the entities and the single region (artifact format).
     expect(screen.getByText("3 entities · 1 region")).toBeInTheDocument();
-    // Map affordance hint, bottom-left.
-    expect(screen.getByText("scroll to zoom · more labels appear as you approach")).toBeInTheDocument();
+  });
+
+  it("shows layer and camera explanations on focus without adding chrome", async () => {
+    mockConnectedPair();
+
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+
+    const wikiPages = screen.getByRole("button", { name: "Wiki pages" });
+    fireEvent.focus(wikiPages);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Knowledge written from your memories, with links to its sources.",
+    );
+    expect(wikiPages).toHaveAttribute("aria-describedby");
+    fireEvent.keyDown(wikiPages, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    const instance = capturedSigmaInstances[0];
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+    fireEvent.click(zoomIn);
+    expect(instance.camera.animate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ratio: 0.8 }),
+      { duration: 180 },
+    );
+    const zoomOut = screen.getByRole("button", { name: "Zoom out" });
+    fireEvent.focus(zoomOut);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Zoom out");
   });
 
   it("refreshes on enterNode and again on leaveNode", async () => {
@@ -610,7 +655,7 @@ describe("AtlasView", () => {
     expect(onNodeClick).not.toHaveBeenCalled();
   });
 
-  it("still fires onNodeClick for a plain click with no prior drag", async () => {
+  it("opens an inspector before navigating through Open details", async () => {
     // A drawn node needs an edge now that degree-0 nodes are hidden, so this
     // interacts with the connected pair rather than a lone entity.
     mockConnectedPair();
@@ -619,9 +664,69 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView onNodeClick={onNodeClick} />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "e1" });
+    act(() => capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "e1" }));
+    expect(onNodeClick).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Open details" }));
 
     expect(onNodeClick).toHaveBeenCalledWith({ kind: "entity", id: "e1" });
+  });
+
+  it("filters entity types without remounting or moving the map and clears a hidden selection", async () => {
+    mockConnectedPair();
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    const instance = capturedSigmaInstances[0];
+    const positions = instance.graph.nodes().map((id: string) => [id, instance.graph.getNodeAttribute(id, "x"), instance.graph.getNodeAttribute(id, "y")]);
+    act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
+    expect(await screen.findByRole("heading", { name: "Alice" })).toBeInTheDocument();
+    const typesTrigger = screen.getByRole("button", { name: "Filter entity types" });
+    fireEvent.click(typesTrigger);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Entity types" }), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Entity types" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Alice" })).toBeInTheDocument();
+    expect(typesTrigger).toHaveFocus();
+    fireEvent.click(typesTrigger);
+    fireEvent.click(screen.getByRole("button", { name: "Theme" }));
+    expect(screen.queryByRole("heading", { name: "Alice" })).not.toBeInTheDocument();
+    expect(screen.getByText("No nodes match these type filters.")).toBeInTheDocument();
+    expect(instance.settings.nodeReducer!("e1", instance.graph.getNodeAttributes("e1")).hidden).toBe(true);
+    const edge = instance.graph.edges()[0];
+    expect(instance.settings.edgeReducer!(edge, instance.graph.getEdgeAttributes(edge)).hidden).toBe(true);
+    expect(capturedSigmaInstances).toHaveLength(1);
+    expect(instance.graph.nodes().map((id: string) => [id, instance.graph.getNodeAttribute(id, "x"), instance.graph.getNodeAttribute(id, "y")])).toEqual(positions);
+    fireEvent.click(screen.getByRole("button", { name: "Restore all" }));
+    expect(screen.queryByText("No nodes match these type filters.")).not.toBeInTheDocument();
+    expect(instance.settings.nodeReducer!("e1", instance.graph.getNodeAttributes("e1")).hidden).not.toBe(true);
+  });
+
+  it("removes a hidden type from search and selected connections", async () => {
+    const entities = mockConnectedPair();
+    entities[0].entity_type = "technology";
+    entities[1].entity_type = "person";
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    act(() => capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "e1" }));
+    expect(await screen.findByRole("button", { name: "Bob" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Filter entity types" }));
+    fireEvent.click(screen.getByRole("button", { name: "Person" }));
+    expect(screen.queryByRole("button", { name: "Bob" })).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByRole("combobox", { name: "Jump to an entity" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Jump to an entity" }), { target: { value: "Bob" } });
+    expect(screen.queryByRole("option", { name: "Bob" })).not.toBeInTheDocument();
+    expect(screen.getByText("No matches")).toBeInTheDocument();
+  });
+
+  it("replaces an in-flight camera animation when returning to the map", async () => {
+    mockConnectedPair();
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    const instance = capturedSigmaInstances[0];
+    act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
+    instance.camera.isAnimated.mockReturnValue(true);
+    fireEvent.click(screen.getAllByRole("button", { name: "Return to full map" })[0]);
+    expect(instance.camera.animate).toHaveBeenLastCalledWith(
+      { x: instance.camera.x, y: instance.camera.y, ratio: instance.camera.ratio, angle: instance.camera.angle }, { duration: 1 },
+    );
   });
 
   // A hub connected to two neighbors — enough to prove drag-follow moves a
@@ -733,15 +838,21 @@ describe("AtlasView", () => {
     original: { preventDefault: () => {}, stopPropagation: () => {} },
   });
 
-  it("zooms the fitted camera out to the fill-aware default density (60% fill, clamped [1.5, 3])", async () => {
+  it("frames the opening network and replaces a pending search animation with an explicit fit", async () => {
     mockConnectedPair();
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     const instance = capturedSigmaInstances[0];
-    // Mock fit density 6 px/unit (graphToViewport scales by 6); target is
-    // 0.6 * min(400, 600) / span 100 = 2.4 px/unit → ratio 6 / 2.4 = 2.5.
-    expect(instance.camera.setState).toHaveBeenCalledWith({ ratio: 2.5 });
+    expect(instance.camera.setState).toHaveBeenCalledWith(expect.objectContaining({
+      x: 0.42, y: 0.24, ratio: expect.any(Number),
+    }));
+    instance.camera.setState.mockImplementation((state: Record<string, number>) => Object.assign(instance.camera, state));
+    instance.camera.isAnimated.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Fit entire graph" }));
+    const fitted = instance.camera.setState.mock.calls.at(-1)[0];
+    expect(instance.camera.animate).toHaveBeenLastCalledWith(fitted, { duration: 1 });
+    expect(screen.getByRole("button", { name: "Reset view" })).toBeVisible();
   });
 
   it("paints synchronously on every physics tick — the writeback drives sigma's refresh", async () => {
@@ -844,7 +955,9 @@ describe("AtlasView", () => {
     expect(graph.hasNode("e3")).toBe(true);
     expect(graph.hasNode("e4")).toBe(false);
     expect(graph.order).toBe(5);
-    expect(screen.getByText("1 node in small groups hidden")).toBeInTheDocument();
+    fireEvent.focus(displayControl("Show small groups"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("1 node in small groups hidden");
+    fireEvent.blur(displayControl("Show small groups"));
     // The count line describes what is drawn; the sixth entity is
     // unconnected, so it is reported by the chip beside it rather than
     // counted here.
@@ -894,6 +1007,7 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    openDisplayControls();
     const graph = capturedSigmaInstances[0].graph;
 
     // The star is drawn; the pair is not, even though both its nodes have a
@@ -903,7 +1017,9 @@ describe("AtlasView", () => {
     expect(graph.hasNode("p1")).toBe(false);
     expect(graph.hasNode("p2")).toBe(false);
     expect(graph.hasEdge("p1", "p2")).toBe(false);
-    expect(screen.getByText("2 nodes in small groups hidden")).toBeInTheDocument();
+    fireEvent.focus(displayControl("Show small groups"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("2 nodes in small groups hidden");
+    fireEvent.blur(displayControl("Show small groups"));
     expect(screen.getByText("5 entities · 1 region")).toBeInTheDocument();
   });
 
@@ -955,11 +1071,14 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    openDisplayControls();
     expect(latestGraph().hasNode("p1")).toBe(false);
 
-    const chip = screen.getByRole("button", { name: "Show small groups" });
+    const chip = displayControl("Show small groups");
     expect(chip).toHaveAttribute("aria-pressed", "false");
-    expect(chip).toHaveTextContent("2 nodes in small groups hidden");
+    fireEvent.focus(chip);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("2 nodes in small groups hidden");
+    fireEvent.blur(chip);
 
     fireEvent.click(chip);
 
@@ -968,9 +1087,9 @@ describe("AtlasView", () => {
     expect(graph.hasNode("p2")).toBe(true);
     expect(graph.hasEdge("p1", "p2")).toBe(true);
     // The chip keeps its place and now offers the way back.
-    const shown = screen.getByRole("button", { name: "Hide small groups" });
+    const shown = displayControl("Hide small groups");
     expect(shown).toHaveAttribute("aria-pressed", "true");
-    expect(shown).toHaveTextContent("Hide small groups");
+    expect(shown).toHaveTextContent("Small groups");
     expect(window.localStorage.getItem("atlas.smallGroups")).toBe("true");
 
     fireEvent.click(shown);
@@ -978,7 +1097,7 @@ describe("AtlasView", () => {
     expect(window.localStorage.getItem("atlas.smallGroups")).toBe("false");
   });
 
-  it("puts the revealed small group on a wing beside the core, clear of its bounds", async () => {
+  it("keeps revealed small-group discs clear of the core without imposing a rectangular boundary", async () => {
     window.localStorage.setItem("atlas.smallGroups", "true");
     mockStarWithSmallPair();
 
@@ -990,14 +1109,13 @@ describe("AtlasView", () => {
     const x = (id: string) => graph.getNodeAttribute(id, "x") as number;
     const size = (id: string) => graph.getNodeAttribute(id, "size") as number;
     const core = ["e1", "e2", "e3", "e4", "e5"];
-    const coreLeft = Math.min(...core.map((id) => x(id) - size(id)));
-    const coreRight = Math.max(...core.map((id) => x(id) + size(id)));
-    // The pair is the largest shelf component, so it takes the first wing:
-    // wholly to one side of the core, never tucked into a gap inside it.
-    const pair = ["p1", "p2"];
-    const pairLeft = Math.min(...pair.map((id) => x(id) - size(id)));
-    const pairRight = Math.max(...pair.map((id) => x(id) + size(id)));
-    expect(pairLeft > coreRight || pairRight < coreLeft).toBe(true);
+    const y = (id: string) => graph.getNodeAttribute(id, "y") as number;
+    for (const island of ["p1", "p2"]) {
+      for (const node of core) {
+        expect(Math.hypot(x(island) - x(node), y(island) - y(node)))
+          .toBeGreaterThan(size(island) + size(node));
+      }
+    }
   });
 
   /** A five-node star (the core) plus a four-node star that MIN_COMPONENT_SIZE
@@ -1055,14 +1173,18 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    fireEvent.click(displayControl("Regions"));
 
     // Stub the prototype, not one canvas: the chip rebuilds the renderer, and
     // the overlay this has to watch does not exist until that happens.
     const painter = recordingOverlayCtx();
     const originalGetContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(painter.ctx) as any;
+    HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement) {
+      // This recorder observes name paints only; area geometry has its own tests.
+      return this.dataset.testid === "atlas-region-names" ? painter.ctx : null;
+    }) as any;
     try {
-      fireEvent.click(screen.getByRole("button", { name: "Show small groups" }));
+      fireEvent.click(displayControl("Show small groups"));
       await waitFor(() => expect(capturedSigmaInstances).toHaveLength(2));
 
       // Nothing fires afterRender by hand here, and nothing else can: the chip
@@ -1083,12 +1205,16 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    fireEvent.click(displayControl("Regions"));
 
     const painter = recordingOverlayCtx();
     const originalGetContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(painter.ctx) as any;
+    HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement) {
+      // This recorder observes name paints only; area geometry has its own tests.
+      return this.dataset.testid === "atlas-region-names" ? painter.ctx : null;
+    }) as any;
     try {
-      fireEvent.click(screen.getByRole("button", { name: "Show small groups" }));
+      fireEvent.click(displayControl("Show small groups"));
       await waitFor(() => expect(capturedSigmaInstances).toHaveLength(2));
 
       // At the opening view the island is dim and nameless: only the core's
@@ -1121,7 +1247,7 @@ describe("AtlasView", () => {
     // nodes are hidden nothing draws or names it — so it must not be counted.
     expect(screen.getByText("5 entities · 1 region")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show small groups" }));
+    fireEvent.click(displayControl("Show small groups"));
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(2));
     expect(screen.getByText("9 entities · 2 regions")).toBeInTheDocument();
   });
@@ -1134,7 +1260,7 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
     expect(latestGraph().hasNode("p1")).toBe(false);
-    expect(screen.getByRole("button", { name: "Show small groups" })).toHaveAttribute(
+    expect(displayControl("Show small groups")).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -1150,7 +1276,7 @@ describe("AtlasView", () => {
     expect(screen.queryByRole("button", { name: "Hide small groups" })).not.toBeInTheDocument();
   });
 
-  it("mounts the place-name overlay canvas above sigma, and nothing under it, and removes it on unmount", async () => {
+  it("mounts community areas below sigma and names above it, and removes both on unmount", async () => {
     mockConnectedPair();
 
     const { unmount } = renderWithQuery(<AtlasView />);
@@ -1161,16 +1287,17 @@ describe("AtlasView", () => {
     expect(overlay).toBeInTheDocument();
     // Appended AFTER the sigma mock ran, so it stacks above sigma's canvases.
     expect(overlay!.parentElement).toBe(container);
-    // The overlay is the only canvas the Atlas adds: no terrain or wash
-    // underlay exists to put a shadow or an aura under the nodes.
-    expect(container.querySelectorAll("canvas")).toHaveLength(1);
-    expect(container.querySelector('canvas[data-testid="atlas-cartography"]')).toBeNull();
+    expect(container.querySelectorAll("canvas")).toHaveLength(2);
+    const areas = container.querySelector('canvas[data-testid="atlas-community-areas"]');
+    expect(areas).toBe(container.firstChild);
+    expect(overlay).toBe(container.lastChild);
 
     unmount();
     // Query the DETACHED container, not the document: React unmount removes
     // the whole subtree from the document either way, so a document-level
     // query passes even if the cleanup leaks the canvas (mutation-proven).
     expect(container.querySelector('canvas[data-testid="atlas-region-names"]')).toBeNull();
+    expect(container.querySelector('canvas[data-testid="atlas-community-areas"]')).toBeNull();
   });
 
   it("repaints the place-name overlay on every sigma afterRender, names over the nodes", async () => {
@@ -1178,6 +1305,7 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    fireEvent.click(displayControl("Regions"));
     const instance = capturedSigmaInstances[0];
 
     const handler = instance.handlers.get("afterRender");
@@ -1299,24 +1427,22 @@ describe("AtlasView", () => {
     expect(screen.getByText("6 entities · 2 regions")).toBeInTheDocument();
   });
 
-  it("opens a hidden isolate's page from search instead of flying the camera to nothing", async () => {
+  it("reveals a hidden isolate from search before flying the camera to it", async () => {
     mockConnectedPairWithIsolate();
-    const onNodeClick = vi.fn();
 
-    renderWithQuery(<AtlasView onNodeClick={onNodeClick} />);
+    renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-    const instance = capturedSigmaInstances[0];
 
-    // The isolate is not drawn (degree 0, see visibleModel), but search still
-    // lists it; Enter navigates to its entity page rather than animating the
-    // camera onto empty map.
+    // The isolate starts outside the map (degree 0, see visibleModel), but
+    // search reveals small groups and selects it in the rebuilt renderer.
     const input = screen.getByPlaceholderText("Jump to anything…");
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: "isol" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(onNodeClick).toHaveBeenCalledWith({ kind: "entity", id: "e4" });
-    expect(instance.camera.animate).not.toHaveBeenCalled();
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(2));
+    expect(capturedSigmaInstances[1].graph.hasNode("e4")).toBe(true);
+    expect(await screen.findByRole("heading", { name: "Isolate" })).toBeInTheDocument();
   });
 
   it("focuses the search input on ⌘K", async () => {
@@ -1356,7 +1482,7 @@ describe("AtlasView", () => {
     // Camera target comes from getNodeDisplayData (mock: 0.42/0.24); ratio
     // never grows past the current view (mock camera ratio 1).
     expect(instance.camera.animate).toHaveBeenCalledWith(
-      { x: 0.42, y: 0.24, ratio: 1 },
+      { x: 0.42, y: expect.any(Number), ratio: 0.4 },
       { duration: 450 },
     );
     expect(settings.nodeReducer("e3", attrs)).not.toEqual(before);
@@ -1385,27 +1511,30 @@ describe("AtlasView", () => {
     expect(document.getElementById("atlas-search-option-1")).toHaveTextContent("Isolate");
   });
 
-  it("Regions chip hides the place-name overlay and repaints it on re-show", async () => {
+  it("Regions starts off and reveals both overlays when enabled", async () => {
     mockConnectedPair();
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     const instance = capturedSigmaInstances[0];
 
-    const chip = screen.getByRole("button", { name: "Regions" });
+    const chip = displayControl("Regions");
     const overlay = document.querySelector('[data-testid="atlas-region-names"]') as HTMLCanvasElement;
-    expect(chip).toHaveAttribute("aria-pressed", "true");
-    expect(overlay.style.display).not.toBe("none");
-
-    fireEvent.click(chip);
     expect(chip).toHaveAttribute("aria-pressed", "false");
     expect(overlay.style.display).toBe("none");
+    expect((document.querySelector('[data-testid="atlas-community-areas"]') as HTMLCanvasElement).style.display).toBe("none");
 
     // Re-show must refresh: the hidden canvas kept its stale last frame.
     const refreshSpy = vi.spyOn(instance, "refresh");
     fireEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
     expect(overlay.style.display).not.toBe("none");
+    expect((document.querySelector('[data-testid="atlas-community-areas"]') as HTMLCanvasElement).style.display).not.toBe("none");
     expect(refreshSpy).toHaveBeenCalled();
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(overlay.style.display).toBe("none");
+    expect((document.querySelector('[data-testid="atlas-community-areas"]') as HTMLCanvasElement).style.display).toBe("none");
   });
 
   it("Space selector scopes the graph to one space and back", async () => {
@@ -1442,22 +1571,29 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    openDisplayControls();
 
     const select = screen.getByRole("combobox", { name: "Space" });
+    fireEvent.click(select);
     expect(
-      Array.from((select as HTMLSelectElement).options).map((o) => o.textContent),
+      screen.getAllByRole("option").map((o) => o.textContent),
     ).toEqual(["All spaces", "personal", "wenlan-dev"]);
     // Only the wenlan-dev star is connected, so the count line reads 5 either
     // way; the scoping is visible in the graph itself and in the hidden chip.
     expect(screen.getByText("5 entities · 1 region")).toBeInTheDocument();
-    expect(screen.getByText("1 node in small groups hidden")).toBeInTheDocument();
+    fireEvent.focus(displayControl("Show small groups"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("1 node in small groups hidden");
+    fireEvent.blur(displayControl("Show small groups"));
 
-    fireEvent.change(select, { target: { value: "wenlan-dev" } });
+    fireEvent.click(screen.getByRole("option", { name: "wenlan-dev" }));
     expect(await screen.findByText("5 entities · 1 region")).toBeInTheDocument();
     expect(screen.queryByText("1 node in small groups hidden")).not.toBeInTheDocument();
 
-    fireEvent.change(select, { target: { value: "" } });
-    expect(await screen.findByText("1 node in small groups hidden")).toBeInTheDocument();
+    fireEvent.click(select);
+    fireEvent.click(screen.getByRole("option", { name: "All spaces" }));
+    fireEvent.focus(displayControl("Show small groups"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("1 node in small groups hidden");
+    fireEvent.blur(displayControl("Show small groups"));
   });
 
   it("hides the Space selector when no entity carries a space", async () => {
@@ -1467,7 +1603,7 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
     // Toolbar is provably rendered (Regions chip present) before the absence claim.
-    expect(screen.getByRole("button", { name: "Regions" })).toBeInTheDocument();
+    expect(displayControl("Regions")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Space" })).not.toBeInTheDocument();
   });
 
@@ -1514,7 +1650,7 @@ describe("AtlasView", () => {
     };
   }
 
-  it("badges the toolbar with durable-regions once the space's community read comes back ready", async () => {
+  it("keeps region readiness out of the primary controls", async () => {
     mockOneSpaceEntity();
     const pages = readyCommunityPages("wenlan-dev");
     mockListCommunities.mockResolvedValue(pages.communities);
@@ -1522,11 +1658,12 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-
-    expect(await screen.findByText("Durable regions")).toBeInTheDocument();
+    expect(screen.queryByText("Durable regions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Estimated regions")).not.toBeInTheDocument();
+    expect(displayControl("Regions")).toBeInTheDocument();
   });
 
-  it("keeps the badge honest when a space-less entity sits beside an otherwise-ready space", async () => {
+  it("does not label fallback regions as estimated", async () => {
     // "e1" carries a real space and its own community read comes back ready;
     // "ghost" is a real entity with no space at all, drawn on the fallback
     // climb — the aggregate must never read as all-durable while that
@@ -1560,39 +1697,39 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-
-    expect(await screen.findByText("Estimated regions")).toBeInTheDocument();
+    expect(screen.queryByText("Estimated regions")).not.toBeInTheDocument();
     expect(screen.queryByText("Durable regions")).not.toBeInTheDocument();
+    expect(displayControl("Regions")).toBeInTheDocument();
   });
 
-  it("badges the toolbar with estimated-regions while no durable data has been published for the space yet", async () => {
+  it("does not show an estimated badge while region data is pending", async () => {
     mockOneSpaceEntity();
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-
-    expect(await screen.findByText("Estimated regions")).toBeInTheDocument();
+    expect(screen.queryByText("Estimated regions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Durable regions")).not.toBeInTheDocument();
   });
 
   // An entity's OWN space can be null or empty (model.ts's GraphNode.space) —
   // it does not take a relation-only neighbor to put unscoped nodes on the
-  // map. Such a graph renders entirely on the fallback climb, so the badge
-  // must say so even though there is no relation, and no known space, to give
-  // it away.
+  // map. Such a graph renders entirely on the fallback climb, without putting
+  // a readiness label into the reader's controls.
   it.each([
     ["null", null],
     ["empty-string", ""],
-  ])("badges the toolbar as estimated for a relation-free graph whose entity carries a %s space", async (_label, space) => {
+  ])("keeps readiness labels out of a relation-free graph with a %s space", async (_label, space) => {
     const entity = makeEntity({ id: "e1", name: "Alice", domain: null, space });
     mockListEntities.mockResolvedValue([entity]);
     mockGetEntityDetail.mockResolvedValue({ entity, observations: [], relations: [] });
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-
-    // Toolbar is provably rendered before the badge claim.
-    expect(screen.getByRole("button", { name: "Regions" })).toBeInTheDocument();
-    expect(await screen.findByText("Estimated regions")).toBeInTheDocument();
+    // The Regions action remains available, while both transient and durable
+    // status badges stay out of the primary UI.
+    expect(displayControl("Regions")).toBeInTheDocument();
+    expect(screen.queryByText("Estimated regions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Durable regions")).not.toBeInTheDocument();
   });
 
   // Scoping to a space drops the other space's entities AND every relation
@@ -1665,23 +1802,19 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-
-    // Unfiltered, every rendered node carries a ready space.
-    expect(await screen.findByText("Durable regions")).toBeInTheDocument();
     expect(capturedSigmaInstances[0].graph.hasEdge("e1", "e2")).toBe(true);
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Space" }), {
-      target: { value: "Work" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Space" }));
+    fireEvent.click(screen.getByRole("option", { name: "Work" }));
 
     // Bob is gone and so is the edge to him — and no space-less node was
-    // invented to stand in for him, so the badge stays durable.
+    // invented to stand in for him.
     await waitFor(() => expect(capturedSigmaInstances.length).toBeGreaterThan(1));
     const scoped = capturedSigmaInstances[capturedSigmaInstances.length - 1].graph;
     expect(scoped.hasNode("e2")).toBe(false);
     expect(scoped.order).toBe(5);
     expect(scoped.hasEdge("e1", "e2")).toBe(false);
-    expect(screen.getByText("Durable regions")).toBeInTheDocument();
+    expect(screen.queryByText("Durable regions")).not.toBeInTheDocument();
     expect(screen.queryByText("Estimated regions")).not.toBeInTheDocument();
   });
 
@@ -1691,6 +1824,7 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    openDisplayControls();
 
     const badge = await screen.findByText("Region sync issue");
     expect(badge).toHaveAttribute("role", "alert");
@@ -1780,17 +1914,21 @@ describe("AtlasView", () => {
     return { ctx, state };
   }
 
-  it("paints the names on mount through the post-mount effects, with no second draw of its own", async () => {
+  it("paints names when Regions is enabled through the refresh path, without a second draw", async () => {
     mockTwoTrianglesInSpace();
     mockDimensions = { width: 2000, height: 1200 }; // both triangles in view, like a real fit
     // The helper canvases only exist once the mount effect has run, so stub
     // the prototype to catch the very first paint.
     const painter = recordingOverlayCtx();
     const originalGetContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(painter.ctx) as any;
+    HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement) {
+      // This recorder observes name paints only; area geometry has its own tests.
+      return this.dataset.testid === "atlas-region-names" ? painter.ctx : null;
+    }) as any;
     try {
       renderWithQuery(<AtlasView />);
       await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    fireEvent.click(displayControl("Regions"));
 
       // Nothing here fired afterRender by hand: the theme and cartography
       // effects both refresh() right after the mount effect, and that is the
@@ -1809,6 +1947,7 @@ describe("AtlasView", () => {
     // "rb" — an ordinary edge; nothing is painted as a bridge any more.
     const { qc } = renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    fireEvent.click(displayControl("Regions"));
     const instance = capturedSigmaInstances[0];
     const graph = instance.graph;
 
@@ -1901,27 +2040,28 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    openDisplayControls();
 
     expect(await screen.findByText("Region sync issue")).toBeInTheDocument();
   });
 
-  it("renders the badge text in zh-Hans and zh-Hant, not just English", async () => {
+  it("localizes the remaining region-sync alert in zh-Hans and zh-Hant", async () => {
     mockOneSpaceEntity();
-    const pages = readyCommunityPages("wenlan-dev");
-    mockListCommunities.mockResolvedValue(pages.communities);
-    mockListCommunityMembers.mockResolvedValue(pages.members);
+    mockListCommunities.mockRejectedValue(new Error("connection reset"));
 
     await i18n.changeLanguage("zh-Hans");
     const simplified = renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-    expect(await screen.findByText("稳定区域")).toBeInTheDocument();
+    openDisplayControls();
+    expect(await screen.findByText("区域同步异常")).toBeInTheDocument();
     simplified.unmount();
     capturedSigmaInstances.length = 0;
 
     await i18n.changeLanguage("zh-Hant");
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-    expect(await screen.findByText("穩定區域")).toBeInTheDocument();
+    openDisplayControls();
+    expect(await screen.findByText("區域同步異常")).toBeInTheDocument();
 
     await i18n.changeLanguage("en");
   });
@@ -1941,7 +2081,7 @@ describe("AtlasView", () => {
       fireEvent.change(input, { target: { value: "alice" } });
       fireEvent.keyDown(input, { key: "Enter" });
 
-      expect(instance.camera.setState).toHaveBeenCalledWith({ x: 0.42, y: 0.24, ratio: 1 });
+      expect(instance.camera.setState).toHaveBeenCalledWith({ x: 0.42, y: expect.any(Number), ratio: 0.4 });
       expect(instance.camera.animate).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
@@ -2094,7 +2234,7 @@ describe("AtlasView", () => {
     expect(Math.hypot(dx, dy)).toBeCloseTo(anchorRadius, 6);
   });
 
-  it("draws memories as nodes linked to their entities, counts them, and legends them", async () => {
+  it("draws memories as nodes linked to their entities and counts them", async () => {
     withMemoryLayerOn();
     mockConnectedPairWithMemory();
 
@@ -2110,17 +2250,20 @@ describe("AtlasView", () => {
       graph.getNodeAttribute("e1", "size") as number,
     );
     expect(screen.getByText("3 entities · 1 memory · 1 region")).toBeInTheDocument();
-    expect(screen.getByText("Memory")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Memories" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("routes a click on a memory node to the memory, not to an entity", async () => {
+    withMemoryLayerOn();
     mockConnectedPairWithMemory();
     const onNodeClick = vi.fn();
 
     renderWithQuery(<AtlasView onNodeClick={onNodeClick} />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "mem:m1" });
+    act(() => capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "mem:m1" }));
+    expect(onNodeClick).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Open details" }));
 
     // The "mem:" prefix keeps memory ids from colliding with entity ids and
     // is stripped here, so the caller gets the memory's own source_id.
@@ -2177,9 +2320,8 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     expect(capturedSigmaInstances[0].graph.hasNode("mem:m1")).toBe(true);
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Space" }), {
-      target: { value: "Work" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Space" }));
+    fireEvent.click(screen.getByRole("option", { name: "Work" }));
 
     await waitFor(() => expect(capturedSigmaInstances.length).toBeGreaterThan(1));
     const scoped = capturedSigmaInstances[capturedSigmaInstances.length - 1].graph;
@@ -2212,6 +2354,7 @@ describe("AtlasView", () => {
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    openDisplayControls();
     const graph = capturedSigmaInstances[0].graph;
 
     expect(graph.hasNode("page:p1")).toBe(true);
@@ -2222,7 +2365,7 @@ describe("AtlasView", () => {
     expect(graph.hasNode("mem:m1")).toBe(false);
     expect(graph.hasEdge("page:p1", "page:p2")).toBe(true);
     expect(screen.getByText("2 pages · 3 entities · 1 region")).toBeInTheDocument();
-    expect(screen.getByText("Wiki page")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Wiki pages" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("gives each layer a chip whose pressed state matches what is drawn", async () => {
@@ -2231,21 +2374,31 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    const pages = screen.getByRole("button", { name: "Wiki pages" });
-    const entities = screen.getByRole("button", { name: "Entities" });
-    const memories = screen.getByRole("button", { name: "Memories" });
+    const pages = displayControl("Wiki pages");
+    const entities = displayControl("Entities");
+    const memories = displayControl("Memories");
     expect(pages).toHaveAttribute("aria-pressed", "true");
     expect(entities).toHaveAttribute("aria-pressed", "true");
     expect(memories).toHaveAttribute("aria-pressed", "false");
 
+    const originalGraph = capturedSigmaInstances[0].graph;
+    const originalPositions = new Map<string, { x: number; y: number }>(originalGraph.nodes().map((id: string) =>
+      [id, { x: originalGraph.getNodeAttribute(id, "x"), y: originalGraph.getNodeAttribute(id, "y") }]));
     fireEvent.click(memories);
     await waitFor(() => expect(capturedSigmaInstances.length).toBeGreaterThan(1));
     const withMemories = capturedSigmaInstances[capturedSigmaInstances.length - 1].graph;
     expect(withMemories.hasNode("mem:m1")).toBe(true);
+    for (const [id, position] of originalPositions) {
+      expect(withMemories.getNodeAttribute(id, "x")).toBeCloseTo(position.x, 6);
+      expect(withMemories.getNodeAttribute(id, "y")).toBeCloseTo(position.y, 6);
+    }
     expect(memories).toHaveAttribute("aria-pressed", "true");
+    const rebuilt = capturedSigmaInstances[capturedSigmaInstances.length - 1];
+    expect(rebuilt.camera.setState.mock.calls.some(([state]: [{ x?: number; y?: number }]) =>
+      Number.isFinite(state.x) && Number.isFinite(state.y))).toBe(true);
     expect(screen.getByText("2 pages · 3 entities · 1 memory · 1 region")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Entities" }));
+    fireEvent.click(displayControl("Entities"));
     await waitFor(() => {
       const graph = capturedSigmaInstances[capturedSigmaInstances.length - 1].graph;
       expect(graph.hasNode("e1")).toBe(false);
@@ -2259,8 +2412,8 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    fireEvent.click(screen.getByRole("button", { name: "Entities" }));
-    const pages = screen.getByRole("button", { name: "Wiki pages" });
+    fireEvent.click(displayControl("Entities"));
+    const pages = displayControl("Wiki pages");
     // Pages are now the only lit layer: the chip stays pressed and stops
     // taking clicks, because an empty map is not a view.
     expect(pages).toHaveAttribute("aria-pressed", "true");
@@ -2274,7 +2427,7 @@ describe("AtlasView", () => {
 
     const first = renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-    fireEvent.click(screen.getByRole("button", { name: "Memories" }));
+    fireEvent.click(displayControl("Memories"));
     expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).toEqual({
       page: true,
       entity: true,
@@ -2304,8 +2457,36 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView onNodeClick={onNodeClick} />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "page:p1" });
+    act(() => capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "page:p1" }));
+    expect(onNodeClick).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Open details" }));
 
     expect(onNodeClick).toHaveBeenCalledWith({ kind: "page", id: "p1" });
   });
+  it("keeps graph content controls inline without a Display menu", async () => {
+    mockConnectedPair();
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    expect(screen.queryByRole("button", { name: "Display" })).not.toBeInTheDocument();
+    const regions = displayControl("Regions");
+    expect(regions).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(regions);
+    expect(regions).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps selection while leaving a node and clears it on return to the map", async () => {
+    mockConnectedPair();
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    const instance = capturedSigmaInstances[0];
+    act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
+    expect(screen.getByRole("complementary", { name: "Graph selection" })).toBeInTheDocument();
+    act(() => instance.handlers.get("leaveNode")?.({ node: "e1" }));
+    expect(instance.settings.nodeReducer("e1", instance.graph.getNodeAttributes("e1")).highlighted).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Bob" }));
+    expect(screen.getByRole("heading", { name: "Bob" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("complementary", { name: "Graph selection" })).not.toBeInTheDocument();
+  });
+
 });

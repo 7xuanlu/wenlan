@@ -766,7 +766,7 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   list_pinned_memories: () => get("/api/memory/pinned").then((r) => r.memories ?? r),
   list_unconfirmed_memories: (a) =>
     get(`/api/memory/unconfirmed${qs({ limit: a?.limit ?? 50 })}`).then((r) => r.memories ?? r),
-  get_memory_stats_cmd: () => get("/api/memory/stats"),
+  get_memory_stats_cmd: () => get("/api/memory/stats").then((r) => r.stats),
   get_memory_revisions: (a) => get(`/api/memory/${enc(a.sourceId)}/revisions`),
   get_version_chain_cmd: (a) => get(`/api/memory/${enc(a.sourceId)}/versions`),
   search: (a) =>

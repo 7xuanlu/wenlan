@@ -398,6 +398,212 @@ export function cartographyScene(graph: Graph, communities: Map<string, string>)
   return { regions: communityRegions(graph, communities) };
 }
 
+/** The area underlay is intentionally quieter than the nodes and names. It
+ * gives each real community a little geography without putting a hard box
+ * around the map. */
+export const REGION_AREA_PAD_PX = 16;
+/** Tiny projected communities read as decorative bubbles at overview zoom.
+ * Keep the area layer for footprints that have enough room to orient the eye. */
+export const MIN_REGION_AREA_SPAN_PX = 75;
+const REGION_AREA_FILL_ALPHA = 0.045;
+const REGION_AREA_STROKE_ALPHA = 0.28;
+const REGION_AREA_MAX_BBOX_AREA_PER_MEMBER = 30000;
+const REGION_AREA_MAX_ASPECT_RATIO = 18;
+
+type Point = { x: number; y: number };
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+}
+
+function distance(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointBounds(points: Point[]): { minX: number; maxX: number; minY: number; maxY: number } {
+  return points.reduce(
+    (bounds, point) => ({
+      minX: Math.min(bounds.minX, point.x),
+      maxX: Math.max(bounds.maxX, point.x),
+      minY: Math.min(bounds.minY, point.y),
+      maxY: Math.max(bounds.maxY, point.y),
+    }),
+    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+  );
+}
+
+/** Andrew's monotone chain, kept local to the area underlay so the scene's
+ * membership and label geometry remain untouched. */
+function convexHull(points: Point[]): Point[] {
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (sorted.length <= 2) return sorted;
+  const cross = (o: Point, a: Point, b: Point) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Point[] = [];
+  for (const point of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+      lower.pop();
+    }
+    lower.push(point);
+  }
+  const upper: Point[] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const point = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+      upper.pop();
+    }
+    upper.push(point);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+/**
+ * Pick the compact, trustworthy part of a region for its contour. Community
+ * assignment is never changed here: an outer member may still be a member
+ * of the region, it simply does not pull a huge enclosing shape around the
+ * rest of the map. A median-radius cutoff handles long tails; the final
+ * aspect/density checks skip a genuinely scattered region instead of making
+ * a misleading continent out of it.
+ */
+function compactRegionPoints(region: Region, project: (pos: Point) => Point): Point[] {
+  if (region.memberCount < MIN_REGION_SIZE) return [];
+  const all = [region.hub, ...region.otherMembers].map(project);
+  if (all.length < MIN_REGION_SIZE || all.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+    return [];
+  }
+
+  const center = {
+    x: median(all.map((point) => point.x)),
+    y: median(all.map((point) => point.y)),
+  };
+  const radii = all.map((point) => distance(point, center));
+  const cutoff = Math.max(median(radii) * 2.5, REGION_AREA_PAD_PX * 3);
+  const compact = all.filter((point) => distance(point, center) <= cutoff);
+  const points = compact.length >= MIN_REGION_SIZE ? compact : all;
+
+  const bounds = pointBounds(points);
+  const spanX = bounds.maxX - bounds.minX;
+  const spanY = bounds.maxY - bounds.minY;
+  const maxSpan = Math.max(spanX, spanY);
+  if (maxSpan < MIN_REGION_AREA_SPAN_PX) return [];
+  const minSpan = Math.max(Math.min(spanX, spanY), REGION_AREA_PAD_PX);
+  const aspectRatio = maxSpan / minSpan;
+  const bboxAreaPerMember =
+    ((spanX + REGION_AREA_PAD_PX * 2) * (spanY + REGION_AREA_PAD_PX * 2)) / points.length;
+  if (
+    (maxSpan > 220 && aspectRatio > REGION_AREA_MAX_ASPECT_RATIO) ||
+    bboxAreaPerMember > REGION_AREA_MAX_BBOX_AREA_PER_MEMBER
+  ) {
+    return [];
+  }
+  return points;
+}
+
+function moveToward(from: Point, to: Point, amount: number): Point {
+  const length = distance(from, to);
+  if (length <= 1e-6) return from;
+  const ratio = Math.min(amount / length, 0.45);
+  return { x: from.x + (to.x - from.x) * ratio, y: from.y + (to.y - from.y) * ratio };
+}
+
+/** Draw a rounded contour around a compact hull. The quadratic corners keep
+ * the underlay organic without introducing a second layout or physics pass. */
+function traceRoundedArea(ctx: CanvasRenderingContext2D, hull: Point[], pad: number): void {
+  if (hull.length === 0) return;
+  if (hull.length === 1) {
+    ctx.moveTo(hull[0].x + pad, hull[0].y);
+    ctx.arc(hull[0].x, hull[0].y, pad, 0, 2 * Math.PI);
+    return;
+  }
+  if (hull.length === 2) {
+    const [a, b] = hull;
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    ctx.moveTo(a.x + pad * Math.cos(angle + Math.PI / 2), a.y + pad * Math.sin(angle + Math.PI / 2));
+    ctx.arc(a.x, a.y, pad, angle + Math.PI / 2, angle - Math.PI / 2);
+    ctx.arc(b.x, b.y, pad, angle - Math.PI / 2, angle + Math.PI / 2);
+    return;
+  }
+
+  const center = {
+    x: hull.reduce((sum, point) => sum + point.x, 0) / hull.length,
+    y: hull.reduce((sum, point) => sum + point.y, 0) / hull.length,
+  };
+  const expanded = hull.map((point) => {
+    const length = distance(point, center) || 1;
+    return { x: point.x + ((point.x - center.x) / length) * pad, y: point.y + ((point.y - center.y) / length) * pad };
+  });
+  const n = expanded.length;
+  for (let i = 0; i < n; i++) {
+    const previous = expanded[(i + n - 1) % n];
+    const current = expanded[i];
+    const next = expanded[(i + 1) % n];
+    const start = moveToward(current, previous, Math.min(pad, distance(current, previous) / 3));
+    const end = moveToward(current, next, Math.min(pad, distance(current, next) / 3));
+    if (i === 0) ctx.moveTo(start.x, start.y);
+    else ctx.lineTo(start.x, start.y);
+    ctx.quadraticCurveTo(current.x, current.y, end.x, end.y);
+  }
+}
+
+function colorWithAlpha(color: string, alpha: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) return color;
+  const channels = [0, 2, 4].map((offset) => parseInt(match[1].slice(offset, offset + 2), 16));
+  return `rgba(${channels.join(",")},${alpha})`;
+}
+
+/**
+ * Paint restrained community areas beneath Sigma's nodes. Areas are built
+ * from the current region members, clipped to the viewport, and skipped when
+ * their compact members are too sparse to describe honestly. Call this from
+ * the underlay canvas before drawRegionNames.
+ */
+export function drawRegionAreas(
+  ctx: CanvasRenderingContext2D,
+  scene: CartographyScene,
+  project: (pos: Point) => Point,
+  palette: GraphPalette,
+  viewport?: { width: number; height: number },
+): void {
+  ctx.save();
+  if (viewport) {
+    ctx.beginPath();
+    ctx.rect(0, 0, viewport.width, viewport.height);
+    ctx.clip();
+  }
+  for (const region of scene.regions) {
+    const points = compactRegionPoints(region, project);
+    if (points.length < MIN_REGION_SIZE) continue;
+    const hull = convexHull(points);
+    if (hull.length === 0) continue;
+    const bounds = pointBounds(hull);
+    if (
+      viewport &&
+      (bounds.maxX + REGION_AREA_PAD_PX < 0 ||
+        bounds.minX - REGION_AREA_PAD_PX > viewport.width ||
+        bounds.maxY + REGION_AREA_PAD_PX < 0 ||
+        bounds.minY - REGION_AREA_PAD_PX > viewport.height)
+    ) {
+      continue;
+    }
+    ctx.beginPath();
+    traceRoundedArea(ctx, hull, REGION_AREA_PAD_PX);
+    ctx.closePath();
+    ctx.fillStyle = colorWithAlpha(palette.labelMuted, REGION_AREA_FILL_ALPHA);
+    ctx.fill();
+    ctx.strokeStyle = colorWithAlpha(palette.labelMuted, REGION_AREA_STROKE_ALPHA);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /** One region name that earned its place on this paint, in viewport CSS px. */
 export interface PlacedLabel {
   name: string;
@@ -438,9 +644,10 @@ export function placeRegionLabels(
   measure: (text: string, size: number) => number,
   viewport?: { width: number; height: number },
   labelledNodes?: ReadonlySet<string>,
+  occupiedLabels: ReadonlyArray<{ left: number; right: number; top: number; bottom: number }> = [],
 ): PlacedLabel[] {
   const placed: PlacedLabel[] = [];
-  const boxes: { left: number; right: number; top: number; bottom: number }[] = [];
+  const boxes = [...occupiedLabels];
   for (const region of scene.regions) {
     if (placed.length >= MAX_REGION_LABELS) break;
     // The hub's own label is on screen: the place already has its name.
@@ -528,6 +735,7 @@ export function drawRegionNames(
   palette: GraphPalette,
   viewport?: { width: number; height: number },
   labelledNodes?: ReadonlySet<string>,
+  occupiedLabels: ReadonlyArray<{ left: number; right: number; top: number; bottom: number }> = [],
 ): void {
   const measure = (text: string, size: number): number => {
     ctx.font = regionLabelFont(size);
@@ -543,7 +751,7 @@ export function drawRegionNames(
   ctx.lineWidth = LABEL_HALO_WIDTH;
   ctx.strokeStyle = palette.surface;
   ctx.fillStyle = palette.labelMuted;
-  for (const label of placeRegionLabels(scene, project, measure, viewport, labelledNodes)) {
+  for (const label of placeRegionLabels(scene, project, measure, viewport, labelledNodes, occupiedLabels)) {
     ctx.font = regionLabelFont(label.size);
     // Same tracking the measurement used; jsdom's mock ctx simply ignores it.
     ctx.letterSpacing = regionLabelTracking(label.size);

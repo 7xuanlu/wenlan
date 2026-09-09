@@ -10,6 +10,14 @@ interface ProgressPayload {
   error?: string;
 }
 
+type UpdaterStatusState = "checking" | "current" | "available" | "error";
+
+interface StatusPayload {
+  state: UpdaterStatusState;
+  version?: string;
+  error?: string;
+}
+
 /**
  * In-app updater toast. Mirrors the MilestoneToaster visual language
  * (eyebrow + heading + body + mem-shadow-toast + mem-fade-up animation),
@@ -18,9 +26,11 @@ interface ProgressPayload {
  * Driven by Tauri events from `app/src/updater.rs`:
  *   - `updater://available`  payload `{ version }` → show toast
  *   - `updater://progress`   payload `{ chunk, total, error }`
+ *   - `updater://status`     payload `{ state, version?, error? }`
  *   - `updater://ui-ready`   → ask the backend to replay a pending prompt
  * Sends back:
  *   - `updater://action`     payload `"install"` | `"later"`
+ *   - `updater://check-now`   after a failed install to retry manually
  */
 export default function UpdaterDialog() {
   const { t } = useTranslation();
@@ -30,10 +40,12 @@ export default function UpdaterDialog() {
   const [downloaded, setDownloaded] = useState(0);
   const [total, setTotal] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     const unlistenAvail = listen<{ version: string }>("updater://available", (e) => {
       setVersion(e.payload.version);
+      setChecking(false);
       setInstalling(false);
       setDownloaded(0);
       setTotal(null);
@@ -44,28 +56,70 @@ export default function UpdaterDialog() {
       const p = e.payload;
       if (p.error) {
         setErrorMsg(p.error);
+        setInstalling(false);
         return;
       }
       if (p.chunk) setDownloaded((prev) => prev + (p.chunk ?? 0));
       if (p.total !== undefined && p.total !== null) setTotal(p.total);
     });
-    void Promise.all([unlistenAvail, unlistenProg])
+    const unlistenStatus = listen<StatusPayload>("updater://status", (e) => {
+      const status = e.payload;
+      setChecking(status.state === "checking");
+      if (status.state === "checking") {
+        setInstalling(true);
+        setErrorMsg(null);
+      } else if (status.state === "current") {
+        setVisible(false);
+        setInstalling(false);
+        setErrorMsg(null);
+      } else if (status.state === "error") {
+        setInstalling(false);
+        if (status.error) setErrorMsg(status.error);
+      }
+      if (status.version) setVersion(status.version);
+    });
+    void Promise.all([unlistenAvail, unlistenProg, unlistenStatus])
       .then(() => emit("updater://ui-ready"))
       .catch(() => {});
     return () => {
       unlistenAvail.then((fn) => fn());
       unlistenProg.then((fn) => fn());
+      unlistenStatus.then((fn) => fn());
     };
   }, []);
 
   const handleInstall = async () => {
+    if (installing || checking) return;
     setInstalling(true);
-    await emit("updater://action", "install");
+    try {
+      await emit("updater://action", "install");
+    } catch (error) {
+      setInstalling(false);
+      setErrorMsg(String(error));
+    }
   };
 
   const handleLater = async () => {
     setVisible(false);
-    await emit("updater://action", "later");
+    try {
+      await emit("updater://action", "later");
+    } catch {
+      setVisible(true);
+    }
+  };
+
+  const handleRetry = async () => {
+    if (checking) return;
+    setChecking(true);
+    setInstalling(true);
+    setErrorMsg(null);
+    try {
+      await emit("updater://check-now");
+    } catch (error) {
+      setChecking(false);
+      setInstalling(false);
+      setErrorMsg(String(error));
+    }
   };
 
   if (!visible) return null;
@@ -160,25 +214,28 @@ export default function UpdaterDialog() {
         </div>
       )}
 
-      {!installing && !errorMsg && (
+      {!installing && (
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 12 }}>
+          {!errorMsg && (
+            <button
+              onClick={handleLater}
+              style={{
+                padding: "5px 12px",
+                borderRadius: 6,
+                border: "1px solid var(--mem-border)",
+                background: "transparent",
+                color: "var(--mem-text)",
+                fontSize: 12,
+                cursor: "pointer",
+                fontFamily: "var(--mem-font-body)",
+              }}
+            >
+              {t("updater.later")}
+            </button>
+          )}
           <button
-            onClick={handleLater}
-            style={{
-              padding: "5px 12px",
-              borderRadius: 6,
-              border: "1px solid var(--mem-border)",
-              background: "transparent",
-              color: "var(--mem-text)",
-              fontSize: 12,
-              cursor: "pointer",
-              fontFamily: "var(--mem-font-body)",
-            }}
-          >
-            {t("updater.later")}
-          </button>
-          <button
-            onClick={handleInstall}
+            onClick={errorMsg ? handleRetry : handleInstall}
+            disabled={checking}
             style={{
               padding: "5px 12px",
               borderRadius: 6,
@@ -187,8 +244,9 @@ export default function UpdaterDialog() {
               color: "white",
               fontSize: 12,
               fontWeight: 500,
-              cursor: "pointer",
+              cursor: checking ? "wait" : "pointer",
               fontFamily: "var(--mem-font-body)",
+              opacity: checking ? 0.7 : 1,
             }}
           >
             {t("updater.install")}

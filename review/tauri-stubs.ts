@@ -29,6 +29,10 @@ export async function once<T = unknown>(
 }
 
 export async function emit(event: string, payload?: unknown): Promise<void> {
+  // Fixture-only updater: exercise the status path without release network calls.
+  if (event === "updater://check-now") {
+    await emit("updater://status", { state: "current" });
+  }
   for (const handler of listeners.get(event) ?? []) {
     queueMicrotask(() => handler({ event, payload }));
   }

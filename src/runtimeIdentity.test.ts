@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  MACOS_TRAFFIC_LIGHT_CENTER_Y,
+  MACOS_TRAFFIC_LIGHT_X,
+  MAIN_HEADER_HEIGHT,
+} from "./lib/windowChrome";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -24,6 +29,8 @@ describe("runtime product identity", () => {
       readFileSync(resolve(root, "app/tauri.review.conf.json"), "utf8"),
     );
 
+    expect(MACOS_TRAFFIC_LIGHT_CENTER_Y).toBe(MAIN_HEADER_HEIGHT / 2);
+    expect(MACOS_TRAFFIC_LIGHT_X).toBe(16);
     expect(production.app.windows[0].trafficLightPosition).toEqual({
       x: 16,
       y: 28,
@@ -107,14 +114,20 @@ describe("runtime product identity", () => {
       readFileSync(resolve(root, "app/tauri.conf.json"), "utf8"),
     );
     const lib = readFileSync(resolve(root, "app/src/lib.rs"), "utf8");
+    const review = readFileSync(resolve(root, "app/src/review.rs"), "utf8");
 
     expect(tauri.app.windows[0].visible).toBe(true);
     expect(lib).toContain('handle.listen("app-ready"');
     expect(lib).toContain("set_activation_policy(activation_policy_for_main_window_visible(false))");
     expect(lib).toContain("startup_reveal_fallback_delay");
     expect(lib).toContain("app-ready did not reveal the main window");
-    expect(lib).not.toContain("align_macos_traffic_lights");
-    expect(lib).not.toContain("setFrameOrigin(button");
+    expect(lib).toContain("align_main_window_traffic_lights");
+    expect(lib).toContain("const MAIN_HEADER_HEIGHT: f64 = 52.0;");
+    expect(lib).toContain("const MAIN_TRAFFIC_LIGHT_CENTER_Y: f64 = MAIN_HEADER_HEIGHT / 2.0;");
+    expect(lib).toContain("convertRect:close_bounds toView:nil");
+    expect(lib).toContain("setFrameOrigin:frame.origin");
+    expect(review).toContain("schedule_main_window_traffic_lights_alignment");
+    expect(review).toContain("WindowEvent::Resized");
   });
 
   it("routes native and tray quit requests through the frontend persistence gate", () => {
