@@ -38,3 +38,32 @@ These flags control ignored, target-Mac profiling tests; they are not daemon run
 | Flag | Contract |
 |---|---|
 | `WENLAN_TELEMETRY_DISABLED` | Set to `1` to make product telemetry unavailable: the daemon reports telemetry as unavailable and does not record or send operation counters, even when persisted consent is enabled. When unset, telemetry remains available only in non-debug builds with an initialized HTTP client. |
+
+### Local delivery observations
+
+`GET /api/telemetry` additionally returns nullable `last_delivery`. This is a
+process-local observation for the latest batch in the current consent epoch:
+`http_accepted` (204), `http_capped` (429), `http_unavailable` (503),
+`http_rejected` (other 4xx), `unexpected_http_status` (all other responses),
+`transport_error`, or `cancelled`. No attempt is `null`, not success. A pending
+count of zero only means the volatile batch was drained/dropped.
+
+The observation is not included in the four-field outbound payload, not persisted,
+and cleared on revocation/restart. A late response from an old consent epoch cannot
+repopulate it. It contains no IDs, timestamps, body, URL, error details or operation
+counts. `http_accepted` proves only the HTTP response, not unique-client attribution,
+independent database persistence, installs or real-user usage. The existing desktop
+Settings IPC currently projects only consent/availability/pending fields; operators
+read this diagnostic through the isolated daemon HTTP API, not the Settings UI.
+
+The hourly clock begins at daemon startup, not at opt-in. Short sessions, restarts,
+failed requests and capped responses intentionally lose counters; there is no retry
+or disk queue. Search counters also include topic-scoped Brief retrieval, not only
+manual search-button actions.
+
+Revocation turns off the live gate even if preference persistence fails. A failed
+write is returned as an error, not durable success: an old `enabled: true` file may
+be read after restart. After such an error, keep the process disabled (or set the
+emergency-off environment flag), resolve the filesystem failure, retry revocation,
+and verify the persisted state before restarting. Never describe an errored revoke
+as a successfully persisted opt-out.

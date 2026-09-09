@@ -106,6 +106,33 @@ pub struct TelemetryStatus {
     pub enabled: bool,
     pub available: bool,
     pub pending_operations: usize,
+    /// Process-local HTTP observation, not proof of durable storage or usage.
+    /// Cleared on revocation/restart; never sent in the event payload.
+    pub last_delivery: Option<DeliveryOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryOutcome {
+    HttpAccepted,
+    HttpCapped,
+    HttpUnavailable,
+    HttpRejected,
+    UnexpectedHttpStatus,
+    TransportError,
+    Cancelled,
+}
+
+impl DeliveryOutcome {
+    fn from_status(status: reqwest::StatusCode) -> Self {
+        match status.as_u16() {
+            204 => Self::HttpAccepted,
+            429 => Self::HttpCapped,
+            503 => Self::HttpUnavailable,
+            400..=499 => Self::HttpRejected,
+            _ => Self::UnexpectedHttpStatus,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -121,6 +148,7 @@ struct Inner {
     epoch: u64,
     pending_operations: usize,
     counters: Counters,
+    last_delivery: Option<DeliveryOutcome>,
 }
 
 /// Process-local telemetry owner. The daemon stores one `Arc<Telemetry>` in
@@ -211,6 +239,7 @@ impl Telemetry {
                 epoch: 0,
                 pending_operations: 0,
                 counters: Counters::default(),
+                last_delivery: None,
             }),
             preferences_path,
             endpoint: endpoint.into(),
@@ -245,6 +274,7 @@ impl Telemetry {
             enabled: inner.enabled,
             available: self.available(),
             pending_operations: inner.pending_operations,
+            last_delivery: inner.last_delivery,
         }
     }
 
@@ -260,6 +290,7 @@ impl Telemetry {
             inner.enabled = false;
             inner.pending_operations = 0;
             inner.counters.clear();
+            inner.last_delivery = None;
             let _ = self.changes.send(());
         }
         let persist_result = self
@@ -281,6 +312,7 @@ impl Telemetry {
         let mut inner = lock_unpoisoned(&self.inner);
         if inner.enabled != enabled {
             inner.epoch = inner.epoch.wrapping_add(1);
+            inner.last_delivery = None;
         }
         inner.enabled = enabled;
         let _ = self.changes.send(());
@@ -372,8 +404,17 @@ impl Telemetry {
             }
             result = request => Some(result),
         };
-        if let Some(Err(error)) = result {
-            tracing::debug!("telemetry batch dropped: {error}");
+        let outcome = match result {
+            Some(Ok(response)) => DeliveryOutcome::from_status(response.status()),
+            // Do not retain/log request URLs, proxy details, bodies or errors.
+            Some(Err(_)) => DeliveryOutcome::TransportError,
+            None => DeliveryOutcome::Cancelled,
+        };
+        let mut inner = lock_unpoisoned(&self.inner);
+        // A late response must not repopulate diagnostics after revocation,
+        // or be attributed to a later off/on consent epoch.
+        if inner.enabled && inner.epoch == epoch && self.available() {
+            inner.last_delivery = Some(outcome);
         }
     }
 
@@ -487,11 +528,19 @@ mod tests {
             .unwrap();
         assert!(!telemetry.status().enabled);
         assert_eq!(telemetry.status().pending_operations, 0);
+        assert_eq!(telemetry.status().last_delivery, None);
         receiver.abort();
     }
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn receive_request(listener: tokio::net::TcpListener) -> serde_json::Value {
+        receive_request_with_status(listener, 204).await
+    }
+
+    async fn receive_request_with_status(
+        listener: tokio::net::TcpListener,
+        status: u16,
+    ) -> serde_json::Value {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
         let body_start = loop {
@@ -522,7 +571,10 @@ mod tests {
         };
 
         stream
-            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .write_all(
+                format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
             .await
             .unwrap();
         serde_json::from_slice(&bytes[body_start..]).unwrap()
@@ -698,6 +750,97 @@ mod tests {
         assert!(!telemetry.status().enabled);
         assert_eq!(telemetry.status().pending_operations, 0);
         assert!(telemetry.pending_counters().is_empty());
+        // The failed write did not replace the previous durable preference.
+        // A new process may read that old opt-in: callers must not report the
+        // error as a successfully persisted revoke.
+        let restarted =
+            Telemetry::for_test(dir.path(), "http://127.0.0.1:1/events", BATCH_INTERVAL);
+        assert!(restarted.status().enabled);
+        assert_eq!(restarted.status().last_delivery, None);
+    }
+
+    #[tokio::test]
+    async fn old_inflight_result_cannot_populate_a_new_consent_epoch() {
+        let dir = tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/events", listener.local_addr().unwrap());
+        let (accepted, received) = tokio::sync::oneshot::channel();
+        let receiver = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            assert!(stream.read(&mut bytes).await.unwrap() > 0);
+            let _ = accepted.send(());
+            std::future::pending::<()>().await;
+        });
+        let telemetry = Arc::new(Telemetry::for_test(dir.path(), endpoint, BATCH_INTERVAL));
+        telemetry.set_enabled(true).unwrap();
+        telemetry.record(TelemetryEvent::SaveSuccess);
+        let mut changes = telemetry.changes.subscribe();
+        let (_shutdown_sender, mut shutdown) = watch::channel(false);
+        let sender = telemetry.clone();
+        let flushing = tokio::spawn(async move { sender.flush(&mut changes, &mut shutdown).await });
+        tokio::time::timeout(std::time::Duration::from_secs(2), received)
+            .await
+            .unwrap()
+            .unwrap();
+        telemetry.set_enabled(false).unwrap();
+        telemetry.set_enabled(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), flushing)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(telemetry.status().enabled);
+        assert_eq!(telemetry.status().last_delivery, None);
+        receiver.abort();
+        let _ = receiver.await;
+    }
+
+    #[tokio::test]
+    async fn delivery_status_distinguishes_http_acceptance_from_dropped_batches() {
+        for (code, expected) in [
+            (204, "http_accepted"),
+            (429, "http_capped"),
+            (503, "http_unavailable"),
+            (400, "http_rejected"),
+            (200, "unexpected_http_status"),
+            (302, "unexpected_http_status"),
+        ] {
+            let dir = tempdir().unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/events", listener.local_addr().unwrap());
+            let receiver = tokio::spawn(receive_request_with_status(listener, code));
+            let telemetry = Telemetry::for_test(dir.path(), endpoint.clone(), BATCH_INTERVAL);
+            assert_eq!(
+                serde_json::to_value(telemetry.status()).unwrap()["last_delivery"],
+                serde_json::Value::Null
+            );
+            telemetry.set_enabled(true).unwrap();
+            telemetry.record(TelemetryEvent::SaveSuccess);
+            let (_changes_sender, mut changes) = watch::channel(());
+            let (_shutdown_sender, mut shutdown) = watch::channel(false);
+            telemetry.flush(&mut changes, &mut shutdown).await;
+            let wire = receiver.await.unwrap();
+            assert_eq!(
+                wire.as_object().unwrap().len(),
+                4,
+                "diagnostics must never enter wire payload"
+            );
+            let status = serde_json::to_value(telemetry.status()).unwrap();
+            assert_eq!(status["last_delivery"], expected, "HTTP {code}");
+            assert_eq!(status["pending_operations"], 0);
+            let restored = Telemetry::for_test(dir.path(), endpoint, BATCH_INTERVAL);
+            assert_eq!(
+                serde_json::to_value(restored.status()).unwrap()["last_delivery"],
+                serde_json::Value::Null,
+                "delivery observations are not persisted"
+            );
+            telemetry.set_enabled(false).unwrap();
+            assert_eq!(
+                serde_json::to_value(telemetry.status()).unwrap()["last_delivery"],
+                serde_json::Value::Null,
+                "revocation clears observations"
+            );
+        }
     }
 
     #[tokio::test]
@@ -720,6 +863,10 @@ mod tests {
         .await
         .expect("connection failure must not block the telemetry loop");
         assert_eq!(telemetry.status().pending_operations, 0);
+        assert_eq!(
+            serde_json::to_value(telemetry.status()).unwrap()["last_delivery"],
+            "transport_error"
+        );
 
         // There is no durable queue: a second tick has no payload to retry.
         telemetry.flush(&mut changes, &mut shutdown).await;
