@@ -176,6 +176,24 @@ pub fn app_data_dir() -> PathBuf {
     app_data_dir_for_base(&data_local_base())
 }
 
+/// Resolve the data root selected by an installed release without consulting
+/// either data-dir override. The updater uses this as its production-root
+/// reference so an explicit override can be accepted only when it names that
+/// same root. This is a read-only probe: root selection checks for existing
+/// state but does not create or modify any files.
+pub(crate) fn production_app_data_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        std::env::var_os(TEST_DATA_LOCAL_DIR_ENV)
+            .map(PathBuf::from)
+            .map(|base| app_data_dir_for_base(&base))
+    }
+    #[cfg(not(test))]
+    {
+        dirs::data_local_dir().map(|base| app_data_dir_for_base(&base))
+    }
+}
+
 pub(crate) fn app_data_dir_for_base(base: &std::path::Path) -> PathBuf {
     let current = base.join("wenlan");
     let legacy = base.join("origin");

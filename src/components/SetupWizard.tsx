@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import {
   detectMcpClients,
   writeMcpConfig,
@@ -19,13 +19,14 @@ import {
   deleteMemory,
   type McpClient,
   type ImportResult,
+  type ImportChatExportResponse,
   type SyncStats,
   type ResolvedRouting,
   type UndeterminedInput,
 } from "../lib/tauri";
 import { readingIsYes } from "../lib/reading";
 import { dragStripHeight } from "../lib/windowChrome";
-import { ImportView } from "./memory/ImportView";
+import { ImportFlow } from "./ChatImport/ImportFlow";
 import VaultConnectCard, { type VaultPick } from "./memory/sources/VaultConnectCard";
 import { isPluginClient } from "./connect/pluginClients";
 import { unreadPluginWriteRisk } from "./connect/setupRisk";
@@ -425,48 +426,55 @@ function IntelligenceChoiceStep({
 function ImportStep({
   onBack,
   onAdvance,
-  onComplete,
-  onPhaseChange,
-  importHint,
+  onImportAccepted,
   hideDots,
 }: {
   onBack: () => void;
   // This step only records a pick (or null); step 5 runs addSource +
   // syncRegisteredSource and shows the real SyncStats it gets back.
   onAdvance: (pick: VaultPick | null) => void;
-  onComplete: (source: string, result: ImportResult) => void;
-  onPhaseChange: (phase: string) => void;
-  importHint: React.ReactNode;
+  onImportAccepted: (result: ImportChatExportResponse) => void;
   hideDots: boolean;
 }) {
   const { t } = useTranslation();
   const [pathChoice, setPathChoice] = useState<"none" | "chat">("none");
   const [pick, setPick] = useState<VaultPick | null>(null);
+  const [chatImportBusy, setChatImportBusy] = useState(false);
+  const [chatImportAccepted, setChatImportAccepted] = useState(false);
 
   if (pathChoice === "chat") {
-    // ImportView owns its own internal Back/Skip/Continue and layout math
-    // (`calc(100vh - 120px)`); it is not migrated to StepShell (out of
-    // scope — §4.3 "no structural redesign"). This wrapper reproduces the
-    // same ~120px of chrome (drag region + optional dots) it always sat
-    // under so its height math keeps working unmodified.
     return (
-      <div className="flex flex-col" style={{ height: "100vh", backgroundColor: "var(--mem-bg)" }}>
-        <div data-tauri-drag-region style={{ height: dragStripHeight(), flexShrink: 0 }} />
-        {!hideDots && <StepIndicator currentStep="import" />}
-        <div
-          className="flex-1"
-          style={{ maxWidth: "640px", width: "100%", margin: "0 auto", padding: "0 24px 48px" }}
-        >
-          <ImportView
-            onBack={() => setPathChoice("none")}
-            wizardMode
-            wizardHint={importHint}
-            onPhaseChange={onPhaseChange}
-            onSkip={() => onAdvance(null)}
-            onComplete={onComplete}
+      <StepShell
+        hideDots={hideDots}
+        activeStep="import"
+        leftActions={[
+          { label: t("setup.back"), onClick: () => setPathChoice("none"), disabled: chatImportBusy },
+          { label: t("setup.skip"), onClick: () => onAdvance(null), disabled: chatImportBusy },
+        ]}
+        primaryAction={{
+          label: t("setup.continue"),
+          onClick: () => onAdvance(null),
+          disabled: chatImportBusy || !chatImportAccepted,
+        }}
+      >
+        <div className="flex flex-col" style={{ gap: "24px", paddingTop: "24px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <h1 style={{ fontFamily: "var(--mem-font-heading)", fontSize: "var(--mem-text-2xl)", fontWeight: 500, color: "var(--mem-text)" }}>
+              {t("setup.import.title")}
+            </h1>
+            <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: "var(--mem-text-secondary)", lineHeight: "1.5" }}>
+              {t("setup.import.chatPathDescription")}
+            </p>
+          </div>
+          <ImportFlow
+            onBusyChange={setChatImportBusy}
+            onImportAccepted={(result) => {
+              setChatImportAccepted(true);
+              onImportAccepted(result);
+            }}
           />
         </div>
-      </div>
+      </StepShell>
     );
   }
 
@@ -1751,12 +1759,14 @@ const MAX_AGENT_CHIPS = 6;
 
 export function DoneStep({
   importResult,
+  chatImportResult,
   connectedAgents,
   onComplete,
   hideDots,
   wireRouting,
 }: {
   importResult: ImportResult | null;
+  chatImportResult?: Pick<ImportChatExportResponse, "memories_stored"> | null;
   connectedAgents: string[];
   onComplete: () => void;
   hideDots: boolean;
@@ -1764,13 +1774,18 @@ export function DoneStep({
 }) {
   const { t } = useTranslation();
   const { data: agentConnections } = useQuery({ queryKey: ["agents"], queryFn: listAgents });
-  const hasImportData = importResult && importResult.imported > 0;
+  const hasLegacyImportData = importResult !== null && importResult.imported > 0;
+  const chatImportedMemories = chatImportResult?.memories_stored ?? 0;
+  const importedMemoryCount = hasLegacyImportData
+    ? importResult.imported
+    : chatImportedMemories;
+  const hasImportData = importedMemoryCount > 0;
   const hasConnectedAgents = connectedAgents.length > 0;
   const isSkipPath = !hasImportData && !hasConnectedAgents;
-  const breakdownEntries = hasImportData
+  const breakdownEntries = hasLegacyImportData
     ? Object.entries(importResult.breakdown).filter(([, count]) => count > 0)
     : [];
-  const kgTotal = hasImportData
+  const kgTotal = hasLegacyImportData
     ? importResult.entities_created +
       importResult.observations_added +
       importResult.relations_created
@@ -2016,7 +2031,7 @@ export function DoneStep({
                 margin: 0,
               }}
             >
-              {t("setup.done.memoriesImported", { count: importResult.imported })}
+              {t("setup.done.memoriesImported", { count: importedMemoryCount })}
             </p>
 
             {/* Type breakdown badges */}
@@ -2036,7 +2051,7 @@ export function DoneStep({
               proper two-stat row. This is the knowledge graph surfacing
               into the onboarding: every topic is a potential anchor for a
               page. */}
-          {kgTotal > 0 && (
+          {hasLegacyImportData && kgTotal > 0 && (
             <div
               className="flex items-stretch"
               style={{
@@ -2062,7 +2077,7 @@ export function DoneStep({
 
           {/* Potential-pages expectation. Honest (no fabricated number):
               just the promise that distillation is next. */}
-          <p
+          {hasLegacyImportData && <p
             style={{
               fontFamily: "var(--mem-font-body)",
               fontStyle: "italic",
@@ -2073,7 +2088,7 @@ export function DoneStep({
             }}
           >
             {t("setup.done.pagesWillDistill")}
-          </p>
+          </p>}
         </div>
       )}
 
@@ -2119,12 +2134,13 @@ export function SetupWizard({
 }: SetupWizardProps) {
   const startStep = initialStep ?? "welcome";
   const [step, setStep] = useState<WizardStep>(startStep);
-  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [chatImportResult, setChatImportResult] = useState<
+    Pick<ImportChatExportResponse, "memories_stored"> | null
+  >(null);
   const [connectedAgents, setConnectedAgents] = useState<string[]>([]);
   const [selectedClients, setSelectedClients] = useState<McpClient[]>([]);
   const [pendingModelId, setPendingModelId] = useState<string | null>(initialPendingModelId);
   const [pendingImportPick, setPendingImportPick] = useState<VaultPick | null>(initialPendingImportPick);
-  const [, setImportPhase] = useState<string>("input");
   const wizardEnteredAtRef = useRef<number>(Math.floor(Date.now() / 1000));
   // Step dots hide when entering at a specific step (unchanged semantics).
   const hideDots = !!initialStep;
@@ -2162,21 +2178,11 @@ export function SetupWizard({
       <ImportStep
         hideDots={hideDots}
         onBack={() => setStep("intelligence-choice")}
-        importHint={(
-          <Trans
-            i18nKey="setup.import.laterHint"
-            components={{ strong: <strong /> }}
-          />
-        )}
-        onPhaseChange={setImportPhase}
         onAdvance={(pick) => {
           setPendingImportPick(pick);
           setStep("connect");
         }}
-        onComplete={(_source, result) => {
-          setImportResult(result);
-          setStep("connect");
-        }}
+        onImportAccepted={setChatImportResult}
       />
     );
   }
@@ -2214,7 +2220,8 @@ export function SetupWizard({
     <DoneStep
       hideDots={hideDots}
       wireRouting={!initialStep}
-      importResult={importResult}
+      importResult={null}
+      chatImportResult={chatImportResult}
       connectedAgents={connectedAgents}
       onComplete={onComplete}
     />

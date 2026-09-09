@@ -131,6 +131,70 @@ fn should_prompt(trigger: CheckTrigger, recently_dismissed: bool) -> bool {
     trigger == CheckTrigger::Manual || !recently_dismissed
 }
 
+fn selected_data_dir_override() -> Option<PathBuf> {
+    std::env::var_os("WENLAN_DATA_DIR")
+        .or_else(|| std::env::var_os("ORIGIN_DATA_DIR"))
+        .map(PathBuf::from)
+}
+
+fn canonical_absolute_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    // First launch may precede creation of the data directory. Resolve the
+    // existing ancestor, retaining only genuinely absent path components.
+    // Broken symlinks and inaccessible paths remain unknown, not equivalent.
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(mut resolved) => {
+                for name in missing.iter().rev() {
+                    resolved.push(name);
+                }
+                return Some(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::symlink_metadata(ancestor) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => return None,
+                }
+                missing.push(ancestor.file_name()?);
+                ancestor = ancestor.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+fn updater_enabled_for_paths(
+    debug_build: bool,
+    production_root: Option<&Path>,
+    override_root: Option<&Path>,
+) -> bool {
+    if debug_build {
+        return false;
+    }
+
+    let Some(override_root) = override_root else {
+        // The default release root is safe to use even on first launch, when
+        // the daemon has not created its directory yet. An unresolved default
+        // root only matters if an override needs to be compared with it.
+        return true;
+    };
+
+    let Some(production_root) = production_root.and_then(canonical_absolute_path) else {
+        return false;
+    };
+    canonical_absolute_path(override_root)
+        .is_some_and(|override_root| override_root == production_root)
+}
+
+fn updater_enabled_for_environment(debug_build: bool, production_root: Option<&Path>) -> bool {
+    let override_root = selected_data_dir_override();
+    updater_enabled_for_paths(debug_build, production_root, override_root.as_deref())
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct DismissedUpdate {
     version: String,
@@ -465,13 +529,18 @@ async fn next_check_trigger(
 /// immediate check with `updater://check-now`; requests received while a check,
 /// prompt, or install is active are dropped instead of queued.
 pub async fn check_and_prompt(app: AppHandle) {
-    if crate::lifecycle::data_dir_env_overridden() {
+    if !updater_enabled_for_environment(
+        cfg!(debug_assertions),
+        crate::identity_paths::production_app_data_dir().as_deref(),
+    ) {
         let status = KnownStatus {
             state: StatusState::Error,
             version: None,
-            error: Some("Update checks are disabled for isolated runs".to_string()),
+            error: Some(
+                "Update checks are disabled for development or custom data directories".to_string(),
+            ),
         };
-        log::warn!("[updater] skipping update check: isolated run (data-dir env override)");
+        log::warn!("[updater] skipping update check: development or custom data-dir path");
         emit_status(&app, &status);
 
         // Keep the frontend's manual check control from remaining in a
@@ -539,6 +608,7 @@ pub async fn check_and_prompt(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::EnvGuard;
 
     #[test]
     fn manual_checks_are_accepted_only_when_idle() {
@@ -547,6 +617,162 @@ mod tests {
         assert!(!LifecyclePhase::Checking.accepts_manual_check());
         assert!(!LifecyclePhase::Prompting.accepts_manual_check());
         assert!(!LifecyclePhase::Installing.accepts_manual_check());
+    }
+
+    #[test]
+    fn release_default_and_selected_legacy_roots_allow_update_checks() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("wenlan");
+        let legacy = root.path().join("origin");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+
+        assert!(updater_enabled_for_paths(false, Some(&current), None));
+        assert!(updater_enabled_for_paths(
+            false,
+            Some(&current),
+            Some(&current)
+        ));
+        assert!(updater_enabled_for_paths(
+            false,
+            Some(&legacy),
+            Some(&legacy)
+        ));
+    }
+
+    #[test]
+    fn release_explicit_production_root_allows_first_launch_before_directory_creation() {
+        let profile = tempfile::tempdir().unwrap();
+        let missing = profile.path().join("new-profile").join("wenlan");
+        assert!(updater_enabled_for_paths(
+            false,
+            Some(&missing),
+            Some(&missing)
+        ));
+        assert!(!updater_enabled_for_paths(
+            true,
+            Some(&missing),
+            Some(&missing)
+        ));
+        assert!(!updater_enabled_for_paths(
+            false,
+            Some(&missing),
+            Some(&profile.path().join("scratch"))
+        ));
+        assert!(!missing.exists(), "eligibility must not create directories");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unresolved_symlinks_do_not_establish_path_equivalence() {
+        let profile = tempfile::tempdir().unwrap();
+        let broken = profile.path().join("broken");
+        std::os::unix::fs::symlink(profile.path().join("absent"), &broken).unwrap();
+        assert!(!updater_enabled_for_paths(
+            false,
+            Some(&broken),
+            Some(&broken)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_accepts_a_symlink_alias_of_the_selected_root() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("wenlan");
+        let alias = root.path().join("alias");
+        std::fs::create_dir_all(&current).unwrap();
+        std::os::unix::fs::symlink(&current, &alias).unwrap();
+
+        assert!(updater_enabled_for_paths(
+            false,
+            Some(&current),
+            Some(&alias)
+        ));
+    }
+
+    #[test]
+    fn scratch_relative_and_unresolved_roots_stay_disabled() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("wenlan");
+        let scratch = root.path().join("scratch");
+        let missing = root.path().join("missing");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        assert!(!updater_enabled_for_paths(
+            false,
+            Some(&current),
+            Some(&scratch)
+        ));
+        assert!(!updater_enabled_for_paths(
+            false,
+            Some(&current),
+            Some(Path::new("relative/wenlan"))
+        ));
+        assert!(!updater_enabled_for_paths(
+            false,
+            Some(&current),
+            Some(&missing)
+        ));
+        assert!(updater_enabled_for_paths(false, None, None));
+        assert!(updater_enabled_for_paths(false, Some(&missing), None));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn data_dir_override_precedence_matches_identity_paths() {
+        let _env = EnvGuard::capture(&["WENLAN_DATA_DIR", "ORIGIN_DATA_DIR"]);
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("wenlan");
+        let scratch = root.path().join("scratch");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        std::env::set_var("WENLAN_DATA_DIR", &current);
+        std::env::set_var("ORIGIN_DATA_DIR", &scratch);
+        assert!(updater_enabled_for_environment(false, Some(&current)));
+
+        std::env::set_var("WENLAN_DATA_DIR", &scratch);
+        std::env::set_var("ORIGIN_DATA_DIR", &current);
+        assert!(!updater_enabled_for_environment(false, Some(&current)));
+
+        std::env::remove_var("WENLAN_DATA_DIR");
+        assert!(updater_enabled_for_environment(false, Some(&current)));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn legacy_origin_selection_is_shared_with_the_updater_reference_root() {
+        let _env = EnvGuard::capture(&["WENLAN_DATA_DIR", "ORIGIN_DATA_DIR"]);
+        let profile = tempfile::tempdir().unwrap();
+        let _roots = crate::test_env::isolate_app_roots(profile.path());
+        let legacy = profile.path().join("origin");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("config.json"), b"{}").unwrap();
+        std::env::remove_var("WENLAN_DATA_DIR");
+        std::env::remove_var("ORIGIN_DATA_DIR");
+
+        let selected = crate::identity_paths::production_app_data_dir().unwrap();
+        assert_eq!(selected, legacy);
+        assert!(updater_enabled_for_environment(false, Some(&selected)));
+
+        std::env::set_var("ORIGIN_DATA_DIR", &selected);
+        assert!(updater_enabled_for_environment(false, Some(&selected)));
+    }
+
+    #[test]
+    fn debug_builds_keep_update_checks_disabled() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("wenlan");
+        std::fs::create_dir_all(&current).unwrap();
+
+        assert!(!updater_enabled_for_paths(true, Some(&current), None));
+        assert!(!updater_enabled_for_paths(
+            true,
+            Some(&current),
+            Some(&current)
+        ));
     }
 
     #[test]
