@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.5](https://github.com/7xuanlu/wenlan/compare/v0.18.4...v0.18.5) (2026-09-09)
+
+
+### Bug Fixes
+
+* improve graph exploration and desktop update UX ([#722](https://github.com/7xuanlu/wenlan/issues/722)) ([2339163](https://github.com/7xuanlu/wenlan/commit/23391639f5a45e1c265e2424d8966311671142ff))
+
 ## [0.18.4](https://github.com/7xuanlu/wenlan/compare/v0.18.3...v0.18.4) (2026-09-08)
 
 
