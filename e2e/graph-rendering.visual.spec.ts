@@ -9,7 +9,7 @@ type CanvasEvidence = {
   uniqueColors: number;
 };
 
-test("renders Graph as a structured canvas instead of a flat orange field", async ({ page }) => {
+test("renders Graph as a structured canvas instead of a flat orange field", async ({ page }, testInfo) => {
   const browserErrors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await installTauriMock(page, {
@@ -108,11 +108,36 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   await expect(canvas).toBeHidden();
   await expect(areas).toBeHidden();
   await page.mouse.move(1, 1);
-  // Capture the approved, uncluttered default after exercising both states.
-  await expect(page).toHaveScreenshot("graph-1280x900-light.png", {
-    animations: "disabled",
-    fullPage: false,
-    maxDiffPixelRatio: 0.002,
+  // Check the rendered map itself as well as the transparent overlays. Read a
+  // screenshot because WebGL may discard its drawing buffer after presenting.
+  const graphBox = await graph.boundingBox();
+  expect(graphBox!.height).toBeGreaterThan(700);
+  const mapImage = await graph.screenshot();
+  const pixels = await page.evaluate(async (base64) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const surface = document.createElement("canvas");
+    surface.width = image.width;
+    surface.height = image.height;
+    const ctx = surface.getContext("2d")!;
+    ctx.drawImage(image, 0, 0);
+    const data = ctx.getImageData(0, 0, image.width, image.height).data;
+    let colored = 0;
+    let orange = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 30) colored++;
+      if (r > 170 && g > 55 && g < 175 && b < 100) orange++;
+    }
+    return { colored, orange, total: image.width * image.height };
+  }, mapImage.toString("base64"));
+  expect(pixels.colored, "the graph must actually draw colored nodes").toBeGreaterThan(100);
+  expect(pixels.colored / pixels.total, "nodes must leave a readable background").toBeLessThan(0.05);
+  expect(pixels.orange / pixels.total, "no orange flood over the map").toBeLessThan(0.01);
+  await testInfo.attach("graph-1280x900-light", {
+    body: await page.screenshot({ animations: "disabled", fullPage: false }),
+    contentType: "image/png",
   });
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);

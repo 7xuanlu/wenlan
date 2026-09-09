@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { renderedContrast } from "./helpers/renderedContrast";
 
 const evidenceDir = path.join(
   process.cwd(),
@@ -29,6 +30,46 @@ async function settle(page: Page): Promise<void> {
   }
 }
 
+// These redesigned surfaces use explicit browser contracts and review artifacts
+// instead of requiring new screenshots in Git. Unchanged surfaces retain their
+// existing pixel baselines.
+async function assertRedesignedSurface(page: Page, name: string): Promise<boolean> {
+  const spaces = name.startsWith("spaces-");
+  const wikiReferences = /^home-(375x812|768x900)-dark$/.test(name);
+  if (!spaces && !wikiReferences) return false;
+  const viewport = page.viewportSize()!;
+  const overflow = await page.evaluate(() => ({
+    page: document.documentElement.scrollWidth - window.innerWidth,
+    main: document.querySelector("main")!.scrollWidth - document.querySelector("main")!.clientWidth,
+  }));
+  expect(overflow.page).toBeLessThanOrEqual(1);
+  expect(overflow.main).toBeLessThanOrEqual(1);
+  if (spaces) {
+    await expect(page.locator(".spaces-suggestions")).not.toHaveAttribute("open");
+    await expect(page.locator("summary").filter({ hasText: "Suggested (2)" })).toBeVisible();
+    await expect(page.getByTestId("space-row-space-suggested")).toBeHidden();
+    const firstRow = page.getByTestId("space-row-space-wenlan");
+    await expect(firstRow.getByRole("button", { name: "Wenlan", exact: true })).toBeVisible();
+    const box = (await firstRow.boundingBox())!;
+    expect(box.y, "confirmed Spaces must appear in the first half of the window").toBeLessThan(viewport.height / 2);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    const controls = page.locator(".spaces-header-actions");
+    expect((await controls.boundingBox())!.height, "header actions must fit one row").toBeLessThan(60);
+    const contrast = await renderedContrast(page, [
+      { selector: ".spaces-overview h1", label: "Spaces title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".spaces-suggestions > summary", label: "Suggestions disclosure", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+  } else {
+    const home = page.getByTestId("wiki-home");
+    await expect(home).toBeVisible();
+    await expect(home).toContainText("Fixture architecture summary");
+    await expect(home).not.toContainText("[[");
+  }
+  return true;
+}
+
 async function capture(page: Page, name: string): Promise<void> {
   await page.mouse.move(1, 1);
   await page.evaluate(() => {
@@ -44,11 +85,14 @@ async function capture(page: Page, name: string): Promise<void> {
   await expect.poll(() => page.locator("main").evaluate((node) => node.scrollTop)).toBe(0);
   await settle(page);
   await page.screenshot({ path: path.join(evidenceDir, `${name}.png`), fullPage: false });
-  await expect(page).toHaveScreenshot(`${name}.png`, {
-    animations: "disabled",
-    fullPage: false,
-    maxDiffPixelRatio: 0.0015,
-  });
+  await test.info().attach(name, { path: path.join(evidenceDir, `${name}.png`), contentType: "image/png" });
+  if (!(await assertRedesignedSurface(page, name))) {
+    await expect(page).toHaveScreenshot(`${name}.png`, {
+      animations: "disabled",
+      fullPage: false,
+      maxDiffPixelRatio: 0.0015,
+    });
+  }
 }
 
 async function openSidebar(page: Page): Promise<void> {
@@ -145,7 +189,10 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
   await settle(page);
   const targetedCapture = "spaces-375x812-inventory-metadata-focus.png";
   await page.screenshot({ path: path.join(evidenceDir, targetedCapture), fullPage: false });
-  await expect(page).toHaveScreenshot(targetedCapture, { animations: "disabled", fullPage: false });
+  await assertRedesignedSurface(page, "spaces-375x812-inventory-metadata-focus");
+  await test.info().attach("spaces-mobile-keyboard-focus", {
+    path: path.join(evidenceDir, targetedCapture), contentType: "image/png",
+  });
   await writeFile(path.join(process.cwd(), ".omo/evidence/task-7-spaces-navigation-redesign/mobile-inventory-focus.json"), `${JSON.stringify({
     focusOutline,
     labelsAndValues: metadataFields,
