@@ -445,9 +445,13 @@ describe("SetupWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose file" }));
 
     await waitFor(() => expect(screen.getByText("Importing conversations...")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    // The child reports busy to the containing wizard in an effect. Observe
+    // the navigation state itself before releasing the pending import.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    });
 
     resolveImport({
       import_id: "imp-wizard",
