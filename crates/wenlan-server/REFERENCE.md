@@ -32,3 +32,9 @@ These flags control ignored, target-Mac profiling tests; they are not daemon run
 | `WENLAN_RB01_THERMAL_HELPER` | Optional path to the frozen helper executable that prints the macOS `ProcessInfo.thermalState` raw value; the test falls back to `/usr/bin/swift` when absent. |
 | `WENLAN_RB01_CALIBRATION_LOAD_DUTIES` | Comma-separated synthetic-load duty percentages, each `1..=100`, with a total cap of `300`; must be supplied together with the CPU band. |
 | `WENLAN_RB01_CALIBRATION_CPU_BAND` | Required `min:max` observed system-CPU percentage band for a calibrated profile; must be supplied together with load duties. Outside the band, the test records a skipped calibration and performs no inference. |
+
+## Product telemetry flag
+
+| Flag | Contract |
+|---|---|
+| `WENLAN_TELEMETRY_DISABLED` | Set to `1` to make product telemetry unavailable: the daemon reports telemetry as unavailable and does not record or send operation counters, even when persisted consent is enabled. When unset, telemetry remains available only in non-debug builds with an initialized HTTP client. |

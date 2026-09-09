@@ -25,10 +25,16 @@ vi.mock("../../lib/tauri", () => ({
     avatar_path: null,
     created_at: 0,
   })),
+  getTelemetryStatus: vi.fn(() =>
+    Promise.resolve({ enabled: false, available: true, pending_operations: 0 }),
+  ),
   isRunAtLoginEnabled: vi.fn(() => Promise.resolve(false)),
   listAgents: vi.fn(() => Promise.resolve([])),
   setAvatar: vi.fn(() => Promise.resolve()),
   setRunAtLogin: vi.fn(() => Promise.resolve()),
+  setTelemetryEnabled: vi.fn((enabled: boolean) =>
+    Promise.resolve({ enabled, available: true, pending_operations: 0 }),
+  ),
   setSetupCompleted: vi.fn(() => Promise.resolve()),
   removeAvatar: vi.fn(() => Promise.resolve()),
   updateAgent: vi.fn(() => Promise.resolve()),
