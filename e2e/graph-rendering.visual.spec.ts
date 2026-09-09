@@ -135,8 +135,11 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   expect(pixels.colored, "the graph must actually draw colored nodes").toBeGreaterThan(100);
   expect(pixels.colored / pixels.total, "nodes must leave a readable background").toBeLessThan(0.05);
   expect(pixels.orange / pixels.total, "no orange flood over the map").toBeLessThan(0.01);
+  // Persist the image even with CI's text reporter, so artifact upload sees it.
+  const screenshotPath = testInfo.outputPath("graph-1280x900-light.png");
+  await page.screenshot({ path: screenshotPath, animations: "disabled", fullPage: false });
   await testInfo.attach("graph-1280x900-light", {
-    body: await page.screenshot({ animations: "disabled", fullPage: false }),
+    path: screenshotPath,
     contentType: "image/png",
   });
   expect(browserErrors.pageErrors).toEqual([]);
