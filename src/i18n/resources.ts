@@ -2601,7 +2601,7 @@ const zhHans = {
         "文澜无法读取该项是否已开启——launchctl 没有响应。下方开关可能与实际设置不符。",
       telemetryTitle: "分享可选使用统计",
       telemetryDescription:
-        "仅会将保存次数、检索结果、Wiki 生成与错误等固定计数，以及你的平台和文澜版本发送到 wenlan.app。不会发送内容、电子邮件、文件路径或 ID。关闭后会清除尚未发送的计数；已经发送的汇总计数无法单独删除。",
+        "仅会将保存次数、检索结果、Wiki 生成与错误等固定计数，以及你的平台和文澜版本发送到 wenlan.app。不会发送内容、电子邮件、文件路径或 ID。关闭会清除待发送计数；已发送的汇总无法单独删除。",
       telemetryPending_one: "有 {{count}} 个使用事件等待发送",
       telemetryPending_other: "有 {{count}} 个使用事件等待发送",
       telemetryReadFailed:
