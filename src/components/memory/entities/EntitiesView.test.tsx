@@ -147,8 +147,8 @@ describe("EntitiesView", () => {
     expect(screen.getByText("Charles Babbage")).toBeInTheDocument();
     expect(screen.queryByText("Analytical Engine")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Detected/ })).toHaveAttribute("aria-selected", "true");
-    // 1 established (Engine), 2 detected (Ada, Babbage), 1 archived (Countess).
-    expect(screen.getByRole("tab", { name: /Established/ })).toHaveTextContent("1");
+    // 1 confirmed (Engine), 2 detected (Ada, Babbage), 1 archived (Countess).
+    expect(screen.getByRole("tab", { name: /Confirmed/ })).toHaveTextContent("1");
     expect(screen.getByRole("tab", { name: /Detected/ })).toHaveTextContent("2");
     expect(screen.getByRole("tab", { name: /Archived/ })).toHaveTextContent("1");
   });
@@ -163,24 +163,24 @@ describe("EntitiesView", () => {
     expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
   });
 
-  it("establishes a selected entity from the selection bar", async () => {
+  it("confirms a selected entity from the selection bar", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
 
     await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
-    await user.click(screen.getByRole("button", { name: "Establish selected" }));
+    await user.click(screen.getByRole("button", { name: "Confirm selected" }));
 
     await screen.findByText("Charles Babbage");
     expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
 
-    await openTab(user, /Established/);
+    await openTab(user, /Confirmed/);
     expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
   });
 
-  it("opens the dossier from an Established row", async () => {
+  it("opens the dossier from a Confirmed row", async () => {
     const { user, onEntityClick } = renderView();
     await screen.findByText("Ada Lovelace");
-    await openTab(user, /Established/);
+    await openTab(user, /Confirmed/);
 
     await user.click(await screen.findByRole("button", { name: "Analytical Engine" }));
     expect(onEntityClick).toHaveBeenCalledWith("engine");
@@ -225,12 +225,12 @@ describe("EntitiesView", () => {
     await user.click(selectAll);
     await user.click(screen.getByRole("button", { name: "Restore selected" }));
 
-    // Ada and Babbage were never established, so they land back on Detected;
-    // the Countess was confirmed before archiving, so she returns Established.
+    // Ada and Babbage were never confirmed, so they land back on Detected;
+    // the Countess was confirmed before archiving, so she returns Confirmed.
     await openTab(user, /Detected/);
     await screen.findByText("Ada Lovelace");
     await screen.findByText("Charles Babbage");
-    await openTab(user, /Established/);
+    await openTab(user, /Confirmed/);
     await screen.findByText("Countess of Lovelace");
   });
 
@@ -382,16 +382,16 @@ describe("EntitiesView", () => {
     expect(fixture.find((candidate) => candidate.id === "babbage")?.status).toBe("detected");
   });
 
-  it("filters the Established tab by search", async () => {
+  it("filters the Confirmed tab by search", async () => {
     const tauri = await import("../../../lib/tauri");
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
-    await openTab(user, /Established/);
+    await openTab(user, /Confirmed/);
     await screen.findByText("Analytical Engine");
 
     await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Engine");
 
-    // The debounced search narrows the Established request to the match.
+    // The debounced search narrows the Confirmed request to the match.
     await waitFor(() => {
       const calls = vi.mocked(tauri.queryEntities).mock.calls;
       const last = calls[calls.length - 1][0];
@@ -403,41 +403,41 @@ describe("EntitiesView", () => {
     const searchbox = screen.getByRole("searchbox", { name: "Find a name" });
     await user.clear(searchbox);
     await user.type(searchbox, "zzz");
-    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
   });
 
-  it("archives selected entities from the Established tab", async () => {
+  it("archives selected entities from the Confirmed tab", async () => {
     const tauri = await import("../../../lib/tauri");
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
 
-    // Give Established a second row through the real establish flow.
+    // Give Confirmed a second row through the real confirm flow.
     await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
-    await user.click(screen.getByRole("button", { name: "Establish selected" }));
-    await openTab(user, /Established/);
+    await user.click(screen.getByRole("button", { name: "Confirm selected" }));
+    await openTab(user, /Confirmed/);
     await screen.findByText("Analytical Engine");
     await screen.findByText("Ada Lovelace");
 
     await user.click(screen.getByRole("checkbox", { name: "Select Analytical Engine" }));
-    // Establish makes no sense for already-established rows: only archiving.
-    expect(screen.queryByRole("button", { name: "Establish selected" })).not.toBeInTheDocument();
+    // Confirm makes no sense for already-confirmed rows: only archiving.
+    expect(screen.queryByRole("button", { name: "Confirm selected" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Archive selected" }));
 
     const applied = vi.mocked(tauri.archiveEntities).mock.calls.find(([req]) => !req.dry_run);
     expect([...(applied?.[0].ids ?? [])].sort()).toEqual(["ada", "engine"]);
-    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
 
     await openTab(user, /Archived/);
     await screen.findByText("Analytical Engine");
     await screen.findByText("Ada Lovelace");
   });
 
-  it("archives all matching on Established with the active filter read back", async () => {
+  it("archives all matching on Confirmed with the active filter read back", async () => {
     const tauri = await import("../../../lib/tauri");
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
-    await openTab(user, /Established/);
+    await openTab(user, /Confirmed/);
     await screen.findByText("Analytical Engine");
 
     await user.click(screen.getByRole("button", { name: "Concept" }));
@@ -446,7 +446,7 @@ describe("EntitiesView", () => {
     await user.click(screen.getByRole("button", { name: "Archive all matching" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Archive 1 established entity?")).toBeInTheDocument();
+    expect(within(dialog).getByText("Archive 1 confirmed entity?")).toBeInTheDocument();
     expect(within(dialog).getByText(/Concept/)).toBeInTheDocument();
     // The Engine holds 5 memories, so the dialog warns archiving takes them along.
     expect(within(dialog).getByText("Includes")).toBeInTheDocument();
@@ -463,7 +463,7 @@ describe("EntitiesView", () => {
     expect(applied?.[0].filter?.status).toBe("established");
     expect(applied?.[0].filter?.entity_type).toBe("concept");
 
-    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
     await openTab(user, /Archived/);
     await screen.findByText("Analytical Engine");
   });
@@ -615,12 +615,12 @@ describe("EntitiesView", () => {
     await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
     expect(screen.getByRole("button", { name: "Archive selected" })).toBeInTheDocument();
 
-    await openTab(user, /Established/);
+    await openTab(user, /Confirmed/);
     // The Person chip persists (the Concept Engine is filtered out) while the
     // Detected selection does not follow.
     expect(screen.getByRole("button", { name: "Person" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: "Archive selected" })).not.toBeInTheDocument();
-    expect(await screen.findByText("No established entities yet")).toBeInTheDocument();
+    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
 
     await openTab(user, /Detected/);
     expect(screen.getByRole("button", { name: "Person" })).toHaveAttribute("aria-pressed", "true");
@@ -639,7 +639,7 @@ describe("EntitiesView", () => {
     expect(await screen.findByText("Countess of Lovelace")).toBeInTheDocument();
 
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: /Established/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /Confirmed/ })).toHaveAttribute("aria-selected", "true");
     await user.keyboard("{End}");
     expect(screen.getByRole("tab", { name: /Archived/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel", { name: /Archived/ })).toBeInTheDocument();

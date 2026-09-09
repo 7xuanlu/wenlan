@@ -8,9 +8,14 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
+
 vi.mock("../lib/tauri", () => ({
-  importMemories: vi.fn(),
-  getImportBatchStatus: vi.fn(),
+  importChatExport: vi.fn(),
+  saveTempFile: vi.fn(),
+  listPendingImports: vi.fn(),
   IMPORT_CHUNK_SIZE: 500,
   shouldShowWizard: vi.fn().mockResolvedValue(true),
   setSetupCompleted: vi.fn().mockResolvedValue(undefined),
@@ -115,8 +120,9 @@ vi.mock("../lib/tauri", () => ({
 }));
 
 import {
-  importMemories,
-  getImportBatchStatus,
+  importChatExport,
+  saveTempFile,
+  listPendingImports,
   detectMcpClients,
   writeMcpConfig,
   installClientPlugin,
@@ -136,6 +142,7 @@ import {
   getMemoryDetail,
   deleteMemory,
 } from "../lib/tauri";
+import { open } from "@tauri-apps/plugin-dialog";
 import { deriveOnboardingPins, DoneStep } from "./SetupWizard";
 import { NO, YES, unreadable } from "../test/readings";
 
@@ -224,6 +231,17 @@ describe("SetupWizard", () => {
       }),
     );
     (deleteMemory as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (importChatExport as ReturnType<typeof vi.fn>).mockResolvedValue({
+      import_id: "imp-1",
+      vendor: "chatgpt",
+      conversations_total: 0,
+      conversations_new: 0,
+      conversations_skipped_existing: 0,
+      memories_stored: 0,
+    });
+    (saveTempFile as ReturnType<typeof vi.fn>).mockResolvedValue("/tmp/export.zip");
+    (listPendingImports as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
   it("renders Welcome step by default", () => {
@@ -390,16 +408,23 @@ describe("SetupWizard", () => {
     expect(screen.queryByText("Obsidian vault / notes folder")).not.toBeInTheDocument();
   });
 
-  it("shows chat-history guidance after choosing the chat path and routes directly to connect", async () => {
+  it("routes chat history to the ZIP flow and keeps wizard actions in the StepShell", async () => {
     renderWizard();
     fireEvent.click(screen.getByText("Get started"));
     fireEvent.click(screen.getByText("Continue"));
 
     fireEvent.click(screen.getByText("Import chat history"));
 
-    expect(screen.getByText("Import Memories")).toBeInTheDocument();
-    expect(screen.getByText(/Settings > Sources/i)).toBeInTheDocument();
+    expect(screen.getByTestId("chat-import-drop-zone")).toBeInTheDocument();
+    expect(screen.getByText("Drop export ZIP here")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
 
+    // Back returns to the two-path import step without leaving the wizard.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText("Chat history")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Import chat history"));
+
+    // Skip remains available without a file and advances to the next wizard step.
     fireEvent.click(screen.getByText("Skip"));
 
     await waitFor(() => {
@@ -407,57 +432,38 @@ describe("SetupWizard", () => {
     });
   });
 
-  it("import step chat path shows the same real phases, never a timer", async () => {
-    vi.stubGlobal("crypto", { randomUUID: () => "batch-wizard" });
+  it("shows the accepted ZIP result without auto-advancing, then Continue advances", async () => {
     let resolveImport!: (value: unknown) => void;
-    (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
+    (open as ReturnType<typeof vi.fn>).mockResolvedValue("/tmp/chat-export.zip");
+    (importChatExport as ReturnType<typeof vi.fn>).mockImplementation(
       () => new Promise((resolve) => { resolveImport = resolve; }),
     );
-    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
-      batch_id: "batch-wizard",
-      source: "chatgpt",
-      started_at: 1_700_000_000,
-      updated_at: 1_700_000_100,
-      chunks_received: 1,
-      memories_imported: 1,
-      memories_skipped: 0,
-      entities_detected: 0,
-      entities_established: 0,
-      pages_distilled: 0,
-      phases: [
-        { phase: "ingest", state: "complete", done: 1, total: 1, failed: 0 },
-        { phase: "store", state: "complete", done: 1, total: 1, failed: 0 },
-        { phase: "detect", state: "running", done: 5, total: 12, failed: 0 },
-        { phase: "enrich", state: "pending", done: 0, total: 0, failed: 0 },
-        { phase: "link", state: "pending", done: 0, total: 0, failed: 0 },
-        { phase: "distill", state: "pending", done: 0, total: 0, failed: 0 },
-      ],
-      complete: false,
-      space: null,
-    });
 
     renderWizard({ initialStep: "import" });
     fireEvent.click(screen.getByText("Import chat history"));
 
-    const textarea = screen.getByPlaceholderText(/paste your memories/i);
-    fireEvent.change(textarea, { target: { value: "Memory 1" } });
-    fireEvent.click(screen.getByText("Import"));
+    fireEvent.click(screen.getByRole("button", { name: "Choose file" }));
 
-    // The wizard reuses ImportView, so its phases are the daemon's row
-    // counts — not a forked copy and not an elapsed-time bar.
-    await waitFor(() => {
-      expect(screen.getByText("Detecting entities")).toBeInTheDocument();
-    });
-    expect(screen.getByText("5 of 12")).toBeInTheDocument();
-    expect(screen.queryByText(/Processing your memories/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Importing conversations...")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
 
     resolveImport({
-      imported: 1, skipped: 0,
-      breakdown: { fact: 1 },
-      entities_created: 0, observations_added: 0, relations_created: 0,
-      batch_id: "batch-wizard",
+      import_id: "imp-wizard",
+      vendor: "chatgpt",
+      conversations_total: 2,
+      conversations_new: 2,
+      conversations_skipped_existing: 0,
+      memories_stored: 4,
     });
-    vi.unstubAllGlobals();
+
+    await waitFor(() => expect(screen.getByText(/2 conversations imported from chatgpt/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+    expect(screen.getByTestId("chat-import-drop-zone")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByText("Connect your AI tools")).toBeInTheDocument());
   });
 
   // ── Round 5, defect 4 ──────────────────────────────────────────────────
@@ -2176,7 +2182,10 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     pool,
   });
 
-  function renderDone(wireRouting: boolean) {
+  function renderDone(
+    wireRouting: boolean,
+    chatImportResult: { memories_stored: number } | null = null,
+  ) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(
       <QueryClientProvider client={queryClient}>
@@ -2184,6 +2193,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
           wireRouting={wireRouting}
           hideDots={false}
           importResult={null}
+          chatImportResult={chatImportResult}
           connectedAgents={[]}
           onComplete={vi.fn()}
         />
@@ -2198,6 +2208,15 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     (setSourcePin as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     // Legacy by default; the pinned cases override per test.
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+  });
+
+  it("shows only the exact ZIP memories count in the Done summary", () => {
+    renderDone(false, { memories_stored: 4 });
+
+    expect(screen.getByText("4 memories imported")).toBeInTheDocument();
+    expect(screen.queryByText("Topics")).not.toBeInTheDocument();
+    expect(screen.queryByText("Connections")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pages will distill/)).not.toBeInTheDocument();
   });
 
   it("pinned daemon: writes the derived pins and shows the wired-routing summary", async () => {

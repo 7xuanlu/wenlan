@@ -15,7 +15,7 @@ test("archives every detected entity matching the current filter, then restores 
   await openEntities(page);
 
   // The fixture ships exactly one detected entity (Ada Lovelace, never
-  // confirmed) alongside six already-established ones, so Detected starts at
+  // confirmed) alongside six already-confirmed ones, so Detected starts at
   // one row and no filter needs to be set for "all matching" to mean "all".
   await expect(page.getByRole("tab", { name: "Detected" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Ada Lovelace", exact: true })).toBeVisible();
@@ -41,7 +41,7 @@ test("archives every detected entity matching the current filter, then restores 
   await page.getByRole("row", { name: /Ada Lovelace/ }).getByRole("button", { name: "Restore" }).click();
 
   // Ada was never confirmed before archiving, so she comes back Detected, not
-  // Established -- the exact inverse of the archive, not a reset to a fixed
+  // Confirmed -- the exact inverse of the archive, not a reset to a fixed
   // state (crates/wenlan-core/src/db.rs: restore only flips `pages.status`).
   await expect(page.getByText("No archived entities")).toBeVisible();
   await page.getByRole("tab", { name: "Detected" }).click();
@@ -51,23 +51,23 @@ test("archives every detected entity matching the current filter, then restores 
   expect(browserErrors.consoleErrors).toEqual([]);
 });
 
-test("archives every established entity matching the current filter, then restores them all back to Established", async ({ page }) => {
+test("archives every confirmed entity matching the current filter, then restores them all back to Confirmed", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
   await installTauriMock(page, { locale: "en", rawActions: [] });
   await openEntities(page);
 
-  // The fixture ships six confirmed established entities (Babbage plus five),
-  // so Established starts at six rows with the default unfiltered view.
-  await page.getByRole("tab", { name: "Established" }).click();
+  // The fixture ships six confirmed entities (Babbage plus five),
+  // so Confirmed starts at six rows with the default unfiltered view.
+  await page.getByRole("tab", { name: "Confirmed" }).click();
   await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Archive all matching" }).click();
 
   const archiveDialog = page.getByRole("dialog");
-  await expect(archiveDialog.getByText("Archive 6 established entities?")).toBeVisible();
+  await expect(archiveDialog.getByText("Archive 6 confirmed entities?")).toBeVisible();
   await expect(archiveDialog.getByText("Filter", { exact: true })).toBeVisible();
   await expect(archiveDialog.getByText("Any, any number of memories")).toBeVisible();
-  // Every established fixture row already has a memory, so the dialog warns
+  // Every confirmed fixture row already has a memory, so the dialog warns
   // that archiving takes memories with it.
   await expect(archiveDialog.getByText("Includes", { exact: true })).toBeVisible();
   await expect(
@@ -77,7 +77,7 @@ test("archives every established entity matching the current filter, then restor
   await archiveDialog.getByRole("button", { name: "Archive", exact: true }).click();
 
   await expect(archiveDialog).toHaveCount(0);
-  await expect(page.getByText("No established entities yet")).toBeVisible();
+  await expect(page.getByText("No confirmed entities yet")).toBeVisible();
 
   await page.getByRole("tab", { name: "Archived" }).click();
   await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
@@ -85,9 +85,9 @@ test("archives every established entity matching the current filter, then restor
   await page.getByRole("button", { name: "Restore all" }).click();
 
   // All six were confirmed before archiving, so they all come back
-  // Established -- the exact inverse of the archive.
+  // Confirmed -- the exact inverse of the archive.
   await expect(page.getByText("No archived entities")).toBeVisible();
-  await page.getByRole("tab", { name: "Established" }).click();
+  await page.getByRole("tab", { name: "Confirmed" }).click();
   await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
 
   expect(browserErrors.pageErrors).toEqual([]);

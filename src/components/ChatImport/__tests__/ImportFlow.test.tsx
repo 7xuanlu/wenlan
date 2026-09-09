@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { i18n } from "../../../i18n";
+
+const mockSendNotification = vi.fn();
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -12,7 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
-  sendNotification: vi.fn(),
+  sendNotification: (...args: unknown[]) => mockSendNotification(...args),
   isPermissionGranted: vi.fn(() => Promise.resolve(true)),
   requestPermission: vi.fn(() => Promise.resolve("granted")),
 }));
@@ -45,9 +48,10 @@ vi.mock("../../../lib/tauri", () => {
 import { ImportFlow } from "../ImportFlow";
 
 describe("ImportFlow", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    await i18n.changeLanguage("en");
     // Default: no pending imports
     mockListPendingImports.mockResolvedValue([]);
   });
@@ -71,6 +75,7 @@ describe("ImportFlow", () => {
       { id: "imp_1", vendor: "chatgpt", stage: "stage_b", total_conversations: 77 },
     ]);
     const { getByTestId } = render(<ImportFlow />);
+    await act(async () => { await Promise.resolve(); });
     // DropZone is always present regardless of import state
     expect(getByTestId("chat-import-drop-zone")).toBeTruthy();
   });
@@ -152,5 +157,118 @@ describe("ImportFlow", () => {
     const icons = container.querySelectorAll("svg");
     expect(icons.length).toBeGreaterThan(0);
     icons.forEach((svg) => expect(svg).toHaveAttribute("aria-hidden", "true"));
+  });
+
+  it("reports busy while the daemon accepts an import and blocks duplicates", async () => {
+    const mockOpen = open as ReturnType<typeof vi.fn>;
+    mockOpen.mockResolvedValue("/tmp/export.zip");
+    let resolveImport!: (value: unknown) => void;
+    mockImportChatExport.mockImplementation(
+      () => new Promise((resolve) => { resolveImport = resolve; }),
+    );
+    const onBusyChange = vi.fn();
+
+    render(<ImportFlow onBusyChange={onBusyChange} />);
+    const chooseFile = screen.getByRole("button", { name: /choose file/i });
+    await act(async () => {
+      chooseFile.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    expect(chooseFile).toBeDisabled();
+    expect(screen.getByText(/importing conversations/i)).toBeInTheDocument();
+
+    resolveImport({
+      import_id: "imp_1",
+      vendor: "chatgpt",
+      conversations_total: 1,
+      conversations_new: 1,
+      conversations_skipped_existing: 0,
+      memories_stored: 1,
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+    expect(chooseFile).toBeEnabled();
+  });
+
+  it("surfaces File.arrayBuffer failures so the user can retry", async () => {
+    const file = new File(["zip bytes"], "export.zip", { type: "application/zip" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: vi.fn().mockRejectedValue(new Error("read failed")),
+    });
+    const { getByTestId } = render(<ImportFlow />);
+    fireEvent.drop(getByTestId("chat-import-drop-zone"), {
+      dataTransfer: { files: [file], items: [], types: ["Files"] },
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/read failed/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /choose file/i })).toBeEnabled();
+  });
+
+  it("surfaces saveTempFile failures so the user can retry", async () => {
+    mockSaveTempFile.mockRejectedValue(new Error("temporary file failed"));
+    const file = new File(["zip bytes"], "export.zip", { type: "application/zip" });
+    const { getByTestId } = render(<ImportFlow />);
+    fireEvent.drop(getByTestId("chat-import-drop-zone"), {
+      dataTransfer: { files: [file], items: [], types: ["Files"] },
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/temporary file failed/i)).toBeInTheDocument();
+    expect(mockImportChatExport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["en", "Drop export ZIP here"],
+    ["zh-Hans", "将导出 ZIP 拖到这里"],
+    ["zh-Hant", "將匯出 ZIP 拖到這裡"],
+  ] as const)("keeps the existing DropZone copy in %s", async (locale, expected) => {
+    await i18n.changeLanguage(locale);
+    render(<ImportFlow />);
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it("does not announce refinement success after an error row", async () => {
+    mockListPendingImports
+      .mockResolvedValueOnce([
+        { id: "imp_1", vendor: "chatgpt", stage: "error", total_conversations: 1 },
+      ])
+      .mockResolvedValueOnce([]);
+    render(<ImportFlow />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+    expect(mockSendNotification).not.toHaveBeenCalledWith(
+      expect.objectContaining({ body: "Import refinement complete" }),
+    );
+  });
+
+  it("does not announce refinement success after a failed status query", async () => {
+    mockListPendingImports
+      .mockResolvedValueOnce([
+        { id: "imp_1", vendor: "chatgpt", stage: "stage_b", total_conversations: 1 },
+      ])
+      .mockRejectedValueOnce(new Error("status unavailable"))
+      .mockResolvedValueOnce([]);
+    render(<ImportFlow />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+    expect(mockSendNotification).not.toHaveBeenCalledWith(
+      expect.objectContaining({ body: "Import refinement complete" }),
+    );
   });
 });

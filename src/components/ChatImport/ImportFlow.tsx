@@ -17,6 +17,13 @@ type LocalAction =
   | { kind: "done"; result: ImportChatExportResponse }
   | { kind: "error"; message: string };
 
+export interface ImportFlowProps {
+  /** Reports the short frontend read/upload window to a containing flow. */
+  onBusyChange?: (busy: boolean) => void;
+  /** Reports the daemon-accepted result without navigating the containing flow. */
+  onImportAccepted?: (result: ImportChatExportResponse) => void;
+}
+
 const POLL_INTERVAL_MS = 5_000;
 
 async function maybeNotify(title: string, body: string) {
@@ -36,67 +43,103 @@ async function maybeNotify(title: string, body: string) {
   }
 }
 
-export function ImportFlow() {
+export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps = {}) {
   const { t } = useTranslation();
   const [localAction, setLocalAction] = useState<LocalAction>(null);
   const [pending, setPending] = useState<PendingImport | null>(null);
+  const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const prevPendingRef = useRef<PendingImport | null>(null);
+  const pollFailedRef = useRef(false);
+  const busyRef = useRef(false);
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
 
   // Poll daemon for actual import state. Survives page switches because the
   // daemon is the source of truth, not React state.
   useEffect(() => {
     let alive = true;
     const poll = () => {
-      listPendingImports()
+      // Resolve first so a synchronous mock/runtime failure follows the same
+      // visible failure-safe path as an IPC rejection.
+      Promise.resolve()
+        .then(() => listPendingImports())
         .then((imports) => {
           if (!alive) return;
+          const previous = prevPendingRef.current;
+          const hadPollError = pollFailedRef.current;
+          pollFailedRef.current = false;
           if (imports.length > 0) {
             const next = imports[0];
-            if (next.id !== prevPendingRef.current?.id) setDismissed(false);
+            if (next.id !== previous?.id) setDismissed(false);
             setPending(next);
-          } else if (prevPendingRef.current) {
+          } else if (previous) {
             // Was pending, now done
             setPending(null);
-            maybeNotify("Wenlan", t("chatImport.importFlow.refinementComplete"));
+            // An error row, or a failed status query immediately before the
+            // empty response, cannot prove that refinement completed.
+            if (!hadPollError && previous.stage !== "error") {
+              maybeNotify("Wenlan", t("chatImport.importFlow.refinementComplete"));
+            }
           } else {
             setPending(null);
           }
           prevPendingRef.current = imports[0] ?? null;
         })
-        .catch(() => {});
+        .catch(() => {
+          if (alive) pollFailedRef.current = true;
+        });
     };
     poll();
     const id = setInterval(poll, POLL_INTERVAL_MS);
     return () => { alive = false; clearInterval(id); };
   }, [t]);
 
-  const runImport = useCallback(async (path: string) => {
+  const acceptImport = useCallback(async (path: string) => {
+    const result = await importChatExport(path);
+    setLocalAction({ kind: "done", result });
+    onImportAccepted?.(result);
+    const msg = result.conversations_new > 0
+      ? t("chatImport.importFlow.notificationImported", {
+          conversations: result.conversations_new,
+          memories: result.memories_stored,
+          vendor: result.vendor,
+        })
+      : t("chatImport.importFlow.notificationAlreadyImported", {
+          count: result.conversations_total,
+        });
+    maybeNotify("Wenlan", msg);
+  }, [onImportAccepted, t]);
+
+  const beginImport = useCallback(async (operation: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     setLocalAction({ kind: "reading" });
     setDismissed(false);
     try {
-      const result = await importChatExport(path);
-      setLocalAction({ kind: "done", result });
-      const msg = result.conversations_new > 0
-        ? t("chatImport.importFlow.notificationImported", {
-            conversations: result.conversations_new,
-            memories: result.memories_stored,
-            vendor: result.vendor,
-          })
-        : t("chatImport.importFlow.notificationAlreadyImported", {
-            count: result.conversations_total,
-          });
-      maybeNotify("Wenlan", msg);
-    } catch (e: any) {
+      await operation();
+    } catch (e: unknown) {
       setLocalAction({ kind: "error", message: String(e) });
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
-  }, [t]);
+  }, []);
 
-  const handleFileSelected = useCallback(async (file: File) => {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const tempPath = await saveTempFile(bytes, file.name);
-    await runImport(tempPath);
-  }, [runImport]);
+  const runImport = useCallback((path: string) => {
+    return beginImport(() => acceptImport(path));
+  }, [acceptImport, beginImport]);
+
+  const handleFileSelected = useCallback((file: File) => {
+    return beginImport(async () => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const tempPath = await saveTempFile(bytes, file.name);
+      await acceptImport(tempPath);
+    });
+  }, [acceptImport, beginImport]);
 
   const handlePathSelected = useCallback(async (path: string) => {
     await runImport(path);
@@ -104,6 +147,7 @@ export function ImportFlow() {
 
   // Derive display state from local action + daemon state
   const isRefining = pending !== null;
+  const pendingFailed = pending?.stage === "error";
   const showLocal = localAction !== null && !dismissed;
   const showRefining = isRefining && !dismissed;
   const showStrip = showLocal || showRefining;
@@ -113,6 +157,7 @@ export function ImportFlow() {
       <DropZone
         onFileSelected={handleFileSelected}
         onPathSelected={handlePathSelected}
+        disabled={busy}
       />
 
       {showStrip && (
@@ -140,8 +185,8 @@ export function ImportFlow() {
         >
           <StatusIcon
             reading={localAction?.kind === "reading"}
-            error={localAction?.kind === "error"}
-            refining={isRefining}
+            error={localAction?.kind === "error" || pendingFailed}
+            refining={isRefining && !pendingFailed}
           />
 
           <span style={{

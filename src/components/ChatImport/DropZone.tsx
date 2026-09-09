@@ -8,17 +8,20 @@ interface DropZoneProps {
   onFileSelected: (file: File) => void;
   /** Called when a file is picked via the native dialog (receives a path string — no temp file needed). */
   onPathSelected?: (path: string) => void;
+  /** Prevents a second import while the current file is being read or uploaded. */
+  disabled?: boolean;
 }
 
-export function DropZone({ onFileSelected, onPathSelected }: DropZoneProps) {
+export function DropZone({ onFileSelected, onPathSelected, disabled = false }: DropZoneProps) {
   const { t } = useTranslation();
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    if (disabled) return;
     setIsDragging(true);
-  }, []);
+  }, [disabled]);
 
   const handleDragLeave = useCallback(() => {
     setIsDragging(false);
@@ -29,6 +32,7 @@ export function DropZone({ onFileSelected, onPathSelected }: DropZoneProps) {
       e.preventDefault();
       setIsDragging(false);
       setError(null);
+      if (disabled) return;
       const file = e.dataTransfer.files[0];
       if (!file) return;
       if (!file.name.toLowerCase().endsWith(".zip")) {
@@ -37,10 +41,11 @@ export function DropZone({ onFileSelected, onPathSelected }: DropZoneProps) {
       }
       onFileSelected(file);
     },
-    [onFileSelected, t],
+    [disabled, onFileSelected, t],
   );
 
   const handlePickFile = useCallback(async () => {
+    if (disabled) return;
     try {
       const selected = await open({
         multiple: false,
@@ -58,7 +63,7 @@ export function DropZone({ onFileSelected, onPathSelected }: DropZoneProps) {
     } catch (e) {
       setError(t("chatImport.dropZone.pickerFailed", { error: String(e) }));
     }
-  }, [onPathSelected, t]);
+  }, [disabled, onPathSelected, t]);
 
   return (
     <div
@@ -66,6 +71,7 @@ export function DropZone({ onFileSelected, onPathSelected }: DropZoneProps) {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      aria-busy={disabled}
       style={{
         border: `1.5px dashed ${isDragging ? "var(--mem-accent-indigo)" : "var(--mem-border)"}`,
         borderRadius: "10px",
@@ -119,7 +125,7 @@ export function DropZone({ onFileSelected, onPathSelected }: DropZoneProps) {
         {t("chatImport.dropZone.subtitle")}
       </div>
 
-      <Button type="button" variant="secondary" size="sm" onClick={handlePickFile}>
+      <Button type="button" variant="secondary" size="sm" onClick={handlePickFile} disabled={disabled}>
         {t("chatImport.dropZone.chooseFile")}
       </Button>
 

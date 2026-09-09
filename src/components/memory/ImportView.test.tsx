@@ -274,7 +274,7 @@ describe("ImportView", () => {
     });
     expect(screen.getByText(/1 skipped/i)).toBeInTheDocument();
     expect(screen.getByText("4 detected entities")).toBeInTheDocument();
-    expect(screen.getByText("2 entities established")).toBeInTheDocument();
+    expect(screen.getByText("2 entities confirmed")).toBeInTheDocument();
     expect(screen.getByText("7 pages distilled")).toBeInTheDocument();
     // Honest that background work continues — no final total that is not final.
     expect(screen.getByText(/Still working:/)).toBeInTheDocument();
