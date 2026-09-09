@@ -50,7 +50,6 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const prevPendingRef = useRef<PendingImport | null>(null);
-  const pollFailedRef = useRef(false);
   const busyRef = useRef(false);
 
   useEffect(() => {
@@ -69,28 +68,18 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
         .then((imports) => {
           if (!alive) return;
           const previous = prevPendingRef.current;
-          const hadPollError = pollFailedRef.current;
-          pollFailedRef.current = false;
           if (imports.length > 0) {
             const next = imports[0];
             if (next.id !== previous?.id) setDismissed(false);
             setPending(next);
-          } else if (previous) {
-            // Was pending, now done
-            setPending(null);
-            // An error row, or a failed status query immediately before the
-            // empty response, cannot prove that refinement completed.
-            if (!hadPollError && previous.stage !== "error") {
-              maybeNotify("Wenlan", t("chatImport.importFlow.refinementComplete"));
-            }
           } else {
+            // Both done and failed imports leave this list. Only the explicit
+            // import response can establish success; enrichment runs separately.
             setPending(null);
           }
           prevPendingRef.current = imports[0] ?? null;
         })
-        .catch(() => {
-          if (alive) pollFailedRef.current = true;
-        });
+        .catch(() => {});
     };
     poll();
     const id = setInterval(poll, POLL_INTERVAL_MS);

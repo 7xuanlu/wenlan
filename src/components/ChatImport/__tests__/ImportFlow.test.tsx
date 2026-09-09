@@ -154,6 +154,12 @@ describe("ImportFlow", () => {
     });
 
     expect(getByText(/imported/i)).toBeInTheDocument();
+    await vi.waitFor(() => {
+      expect(mockSendNotification).toHaveBeenCalledWith({
+        title: "Wenlan",
+        body: "Imported 3 conversations (5 memories) from chatgpt",
+      });
+    });
     const icons = container.querySelectorAll("svg");
     expect(icons.length).toBeGreaterThan(0);
     icons.forEach((svg) => expect(svg).toHaveAttribute("aria-hidden", "true"));
@@ -240,22 +246,23 @@ describe("ImportFlow", () => {
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
 
-  it("does not announce refinement success after an error row", async () => {
-    mockListPendingImports
-      .mockResolvedValueOnce([
-        { id: "imp_1", vendor: "chatgpt", stage: "error", total_conversations: 1 },
-      ])
-      .mockResolvedValueOnce([]);
-    render(<ImportFlow />);
-    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  it.each(["stage_a", "stage_b"])(
+    "does not infer refinement success when a %s import disappears",
+    async (stage) => {
+      mockListPendingImports
+        .mockResolvedValueOnce([
+          { id: "imp_1", vendor: "chatgpt", stage, total_conversations: 1 },
+        ])
+        .mockResolvedValueOnce([]);
+      render(<ImportFlow />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
 
-    expect(mockSendNotification).not.toHaveBeenCalledWith(
-      expect.objectContaining({ body: "Import refinement complete" }),
-    );
-  });
+      expect(mockSendNotification).not.toHaveBeenCalled();
+    },
+  );
 
-  it("does not announce refinement success after a failed status query", async () => {
+  it("does not infer refinement success after a failed status query", async () => {
     mockListPendingImports
       .mockResolvedValueOnce([
         { id: "imp_1", vendor: "chatgpt", stage: "stage_b", total_conversations: 1 },
@@ -267,8 +274,19 @@ describe("ImportFlow", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
 
-    expect(mockSendNotification).not.toHaveBeenCalledWith(
-      expect.objectContaining({ body: "Import refinement complete" }),
-    );
+    expect(mockSendNotification).not.toHaveBeenCalled();
+  });
+
+  it("does not infer refinement success when an error import disappears", async () => {
+    mockListPendingImports
+      .mockResolvedValueOnce([
+        { id: "imp_1", vendor: "chatgpt", stage: "error", total_conversations: 1 },
+      ])
+      .mockResolvedValueOnce([]);
+    render(<ImportFlow />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+    expect(mockSendNotification).not.toHaveBeenCalled();
   });
 });
