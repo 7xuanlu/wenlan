@@ -61,6 +61,12 @@ pub(super) async fn prepare_startup_state(
     // Build state and restore the process-local fence while recovery is still
     // sealed. No background acquisition can start before `finish_recovery`.
     let mut server_state = ServerState::new();
+    // Telemetry consent is intentionally a separate strict file in the daemon
+    // data root; `ServerState::new()` remains inert for tests and router-only
+    // construction.
+    server_state.telemetry = Arc::new(wenlan_server::telemetry::Telemetry::from_data_root(
+        wenlan_root.clone(),
+    ));
     server_state.brief_status_root = Some(brief_status_root.clone());
     server_state.optional_runtime_workers_suspended = repair_recovery_pending;
     server_state.repair_root = Some(repair_store.root().to_path_buf());

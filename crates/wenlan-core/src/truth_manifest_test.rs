@@ -214,7 +214,7 @@ fn manifest_counts_match_the_spec() {
     // `/api/import/batches/{batch_id}/status`.
     assert_eq!(
         HTTP_READERS.len(),
-        175,
+        177,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -225,7 +225,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        179,
+        181,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -233,7 +233,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        173,
+        175,
         "main builder entries"
     );
     assert_eq!(
@@ -409,7 +409,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        169
+        171 // includes the GET/PUT telemetry consent routes, which carry no page markers
     );
 }
 

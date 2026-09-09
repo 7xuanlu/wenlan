@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import GeneralSection from "./GeneralSection";
-import { isRunAtLoginEnabled, setRunAtLogin } from "../../../../lib/tauri";
+import {
+  getTelemetryStatus,
+  isRunAtLoginEnabled,
+  setRunAtLogin,
+  setTelemetryEnabled,
+} from "../../../../lib/tauri";
 
 vi.mock("../../../../lib/tauri", () => ({
   getProfile: vi.fn(() =>
@@ -23,6 +28,12 @@ vi.mock("../../../../lib/tauri", () => ({
   setSetupCompleted: vi.fn(() => Promise.resolve()),
   isRunAtLoginEnabled: vi.fn(() => Promise.resolve(false)),
   setRunAtLogin: vi.fn(() => Promise.resolve()),
+  getTelemetryStatus: vi.fn(() =>
+    Promise.resolve({ enabled: false, available: true, pending_operations: 0 }),
+  ),
+  setTelemetryEnabled: vi.fn((enabled: boolean) =>
+    Promise.resolve({ enabled, available: true, pending_operations: 0 }),
+  ),
 }));
 
 vi.mock("../../../../lib/theme", () => ({
@@ -254,4 +265,108 @@ describe("GeneralSection run-at-login value retained across a failed refresh", (
       expect(vi.mocked(setRunAtLogin).mock.calls.length).toBe(callsBefore);
     },
   );
+});
+
+describe("GeneralSection optional usage stats consent", () => {
+  const telemetryToggle = () => screen.getByLabelText("Share optional usage stats");
+  const status = (enabled: boolean, available = true, pending_operations = 0) => ({
+    enabled,
+    available,
+    pending_operations,
+  });
+
+  it("keeps the toggle unknown and inert when the status cannot be read", async () => {
+    vi.mocked(getTelemetryStatus).mockRejectedValueOnce(new Error("daemon unavailable"));
+
+    renderGeneralSection();
+
+    expect(
+      await screen.findByText(/could not read the usage-stats setting/i),
+    ).toBeInTheDocument();
+    expect(telemetryToggle()).toBeDisabled();
+    expect(telemetryToggle()).not.toHaveAttribute("aria-pressed");
+    const callsBefore = vi.mocked(setTelemetryEnabled).mock.calls.length;
+    fireEvent.click(telemetryToggle());
+    expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsBefore);
+  });
+
+  it("renders a measured default-off status and enables it only after an explicit click", async () => {
+    vi.mocked(getTelemetryStatus).mockResolvedValueOnce(status(false));
+
+    renderGeneralSection();
+
+    await screen.findByLabelText("Share optional usage stats");
+    await waitFor(() => expect(telemetryToggle()).not.toBeDisabled());
+    expect(telemetryToggle()).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(telemetryToggle());
+    await waitFor(() =>
+      expect(vi.mocked(setTelemetryEnabled)).toHaveBeenCalledWith(true, expect.anything()),
+    );
+  });
+
+  it("renders intentional opt-in as on and reflects a successful opt-out reload", async () => {
+    vi.mocked(getTelemetryStatus)
+      .mockResolvedValueOnce(status(true))
+      .mockResolvedValueOnce(status(false));
+    vi.mocked(setTelemetryEnabled).mockResolvedValueOnce(status(false));
+
+    renderGeneralSection();
+
+    await screen.findByLabelText("Share optional usage stats");
+    await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true"));
+    fireEvent.click(telemetryToggle());
+
+    await waitFor(() => {
+      expect(vi.mocked(setTelemetryEnabled)).toHaveBeenCalledWith(false, expect.anything());
+      expect(telemetryToggle()).toHaveAttribute("aria-pressed", "false");
+    });
+  });
+
+  it("shows a generic localized save failure and reloads the daemon's actual state", async () => {
+    vi.mocked(getTelemetryStatus)
+      .mockResolvedValueOnce(status(true))
+      .mockResolvedValueOnce(status(true));
+    vi.mocked(setTelemetryEnabled).mockRejectedValueOnce(new Error("HTTP 500: secret detail"));
+
+    renderGeneralSection();
+
+    await screen.findByLabelText("Share optional usage stats");
+    await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true"));
+    fireEvent.click(telemetryToggle());
+
+    expect(
+      await screen.findByText(
+        "Wenlan could not persist your usage-stats setting. Check the current switch state and retry before restarting Wenlan.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/secret detail/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true"));
+  });
+
+  it("keeps an unavailable build disabled without claiming that telemetry is off", async () => {
+    vi.mocked(getTelemetryStatus).mockResolvedValueOnce(status(false, false));
+
+    renderGeneralSection();
+
+    expect(
+      await screen.findByText(/unavailable in this build or environment/i),
+    ).toBeInTheDocument();
+    expect(telemetryToggle()).toBeDisabled();
+    expect(telemetryToggle()).not.toHaveAttribute("aria-pressed");
+    const callsBefore = vi.mocked(setTelemetryEnabled).mock.calls.length;
+    fireEvent.click(telemetryToggle());
+    expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsBefore);
+  });
+
+  it("surfaces pending operations without adding an automatic opt-in", async () => {
+    vi.mocked(getTelemetryStatus).mockResolvedValueOnce(status(true, true, 2));
+    const callsBefore = vi.mocked(setTelemetryEnabled).mock.calls.length;
+
+    renderGeneralSection();
+
+    expect(await screen.findByText("2 usage events waiting to send")).toBeInTheDocument();
+    expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true");
+    expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsBefore);
+  });
 });

@@ -2,6 +2,7 @@
 use crate::error::ServerError;
 use crate::route_registry::{delete, post, TrackedRouter};
 use crate::state::{ServerState, SharedState};
+use crate::telemetry::TelemetryEvent;
 use axum::{
     extract::{Path, State},
     response::Json,
@@ -72,6 +73,20 @@ pub async fn handle_ingest_text(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<IngestTextRequest>,
 ) -> Result<Json<IngestResponse>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_ingest_text_inner(State(state), Json(req)).await;
+    telemetry.record(if result.is_ok() {
+        TelemetryEvent::SaveSuccess
+    } else {
+        TelemetryEvent::SaveError
+    });
+    result
+}
+
+async fn handle_ingest_text_inner(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Json(req): Json<IngestTextRequest>,
+) -> Result<Json<IngestResponse>, ServerError> {
     let document_id = req.source_id.clone();
 
     let doc = RawDocument {
@@ -114,6 +129,20 @@ pub async fn handle_ingest_text(
 
 /// POST /api/ingest/webpage
 pub async fn handle_ingest_webpage(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Json(req): Json<IngestWebpageRequest>,
+) -> Result<Json<IngestResponse>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_ingest_webpage_inner(State(state), Json(req)).await;
+    telemetry.record(if result.is_ok() {
+        TelemetryEvent::SaveSuccess
+    } else {
+        TelemetryEvent::SaveError
+    });
+    result
+}
+
+async fn handle_ingest_webpage_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<IngestWebpageRequest>,
 ) -> Result<Json<IngestResponse>, ServerError> {
@@ -170,6 +199,20 @@ pub async fn handle_ingest_webpage(
 
 /// POST /api/ingest/memory
 pub async fn handle_ingest_memory(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Json(req): Json<IngestMemoryRequest>,
+) -> Result<Json<IngestResponse>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_ingest_memory_inner(State(state), Json(req)).await;
+    telemetry.record(if result.is_ok() {
+        TelemetryEvent::SaveSuccess
+    } else {
+        TelemetryEvent::SaveError
+    });
+    result
+}
+
+async fn handle_ingest_memory_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<IngestMemoryRequest>,
 ) -> Result<Json<IngestResponse>, ServerError> {

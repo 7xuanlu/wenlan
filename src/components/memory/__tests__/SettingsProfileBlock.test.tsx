@@ -18,6 +18,11 @@ vi.mock("../../../lib/tauri", () => ({
     avatar_path: null,
     created_at: 1709251200,
   }),
+  getTelemetryStatus: vi.fn().mockResolvedValue({
+    enabled: false,
+    available: true,
+    pending_operations: 0,
+  }),
   updateProfile: updateProfileMock,
   setAvatar: vi.fn().mockResolvedValue(null),
   removeAvatar: vi.fn().mockResolvedValue(null),
@@ -29,6 +34,9 @@ vi.mock("../../../lib/tauri", () => ({
   setSetupCompleted: vi.fn().mockResolvedValue(null),
   isRunAtLoginEnabled: vi.fn().mockResolvedValue(false),
   setRunAtLogin: setRunAtLoginMock,
+  setTelemetryEnabled: vi.fn().mockImplementation((enabled: boolean) =>
+    Promise.resolve({ enabled, available: true, pending_operations: 0 }),
+  ),
 }));
 
 vi.mock("../../../lib/theme", () => ({

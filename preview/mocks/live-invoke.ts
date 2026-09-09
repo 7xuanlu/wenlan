@@ -972,6 +972,11 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
 export const DEFAULTS: Record<string, unknown> = {
   should_show_wizard: false,
   get_setup_completed: true,
+  // Telemetry is not exercised by the fixture harness. Keep its response
+  // shaped like the daemon contract while remaining unavailable rather than
+  // implying that preview can collect or send usage data.
+  get_telemetry_status: { enabled: false, available: false, pending_operations: 0 },
+  set_telemetry_enabled: { enabled: false, available: false, pending_operations: 0 },
   // Shapes below mirror src/lib/tauri.ts exactly. A stub that returns null or the
   // wrong keys where the Rust command returns a struct doesn't just render empty —
   // it white-screens the step (RemoteAccessPanel reads status.status unguarded).
