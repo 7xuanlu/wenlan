@@ -27,6 +27,38 @@ describe("translation resources", () => {
     expect(resources.en.translation.settings.language.label).toBe("Language");
   });
 
+  it("keeps telemetry consent and conditional privacy copy explicit in every locale", () => {
+    const telemetry = supportedAppLocales.map(
+      (locale) => resources[locale].translation.settings.general,
+    );
+
+    expect(telemetry.map((copy) => copy.telemetryTitle)).toEqual([
+      "Share optional usage stats",
+      "分享可选使用统计",
+      "分享選用使用統計",
+    ]);
+    expect(
+      telemetry.every(
+        (copy) =>
+          copy.telemetryDescription.includes("wenlan.app") &&
+          copy.telemetryDescription.includes("ID") &&
+          copy.telemetryPending_one.includes("{{count}}"),
+      ),
+    ).toBe(true);
+    expect(telemetry.map((copy) => copy.telemetrySaveFailed)).toEqual([
+      "Wenlan could not persist your usage-stats setting. Check the current switch state and retry before restarting Wenlan.",
+      "文澜无法持久保存使用统计设置。请确认开关当前状态，并在重启文澜前重试。",
+      "文瀾無法持久儲存使用統計設定。請確認開關目前狀態，並在重啟文瀾前重試。",
+    ]);
+    expect(
+      supportedAppLocales.map((locale) => resources[locale].translation.settings.footer),
+    ).toEqual([
+      "Your memories stay on this machine unless you configure a feature that sends them, such as a cloud model or Remote Access. Optional usage stats are sent only with your permission; normal network metadata may still be visible to services you use.",
+      "你的记忆会保留在这台设备上，除非你配置了会发送数据的功能，例如云端模型或远程访问。可选使用统计只有在你许可后才会发送；你使用的服务仍可能看到正常的网络元数据。",
+      "你的記憶會保留在這台裝置上，除非你設定了會傳送資料的功能，例如雲端模型或遠端存取。選用使用統計只有在你許可後才會傳送；你使用的服務仍可能看見正常的網路中繼資料。",
+    ]);
+  });
+
   it("describes one editing view without exposing Markdown as a peer mode", () => {
     for (const locale of supportedAppLocales) {
       const editor = resources[locale].translation.pageDetail.editor;

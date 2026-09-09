@@ -11,6 +11,8 @@ import {
   setSetupCompleted,
   isRunAtLoginEnabled,
   setRunAtLogin,
+  getTelemetryStatus,
+  setTelemetryEnabled,
 } from "../../../../lib/tauri";
 import { type Theme, useTheme } from "../../../../lib/theme";
 import {
@@ -278,6 +280,43 @@ export default function GeneralSection() {
       .filter(Boolean)
       .join(" ") || null;
 
+  // Product telemetry is daemon-owned and opt-in. Until the latest read has
+  // succeeded with an available daemon, the switch must not paint an off
+  // state or derive a write from a value nobody measured.
+  const telemetryQuery = useQuery({
+    queryKey: ["telemetryStatus"],
+    queryFn: getTelemetryStatus,
+  });
+  const telemetryStatus = telemetryQuery.isSuccess ? telemetryQuery.data : undefined;
+  const telemetryAvailable = telemetryStatus?.available === true;
+  const telemetryUnreadable = telemetryQuery.isError;
+  const telemetryUnavailable = telemetryStatus?.available === false;
+  const telemetryMutation = useMutation({
+    mutationFn: setTelemetryEnabled,
+    onSettled: async () => {
+      // The PUT response is useful for the immediate path, but a fresh GET is
+      // the authoritative reload. This also makes a failed save visible as
+      // the daemon's actual state rather than a client-side optimistic guess.
+      await telemetryQuery.refetch();
+    },
+  });
+  const telemetryProblem = telemetryUnreadable
+    ? t("settings.general.telemetryReadFailed")
+    : telemetryUnavailable
+      ? t("settings.general.telemetryUnavailable")
+      : null;
+  const telemetrySaveError = telemetryMutation.isError
+    ? t("settings.general.telemetrySaveFailed")
+    : null;
+  const telemetryUnknown =
+    telemetryStatus === undefined || (!telemetryAvailable && !telemetryStatus.enabled) || telemetryMutation.isPending;
+  const telemetryPending =
+    telemetryAvailable && telemetryStatus.enabled && telemetryStatus.pending_operations > 0
+      ? t("settings.general.telemetryPending", {
+          count: telemetryStatus.pending_operations,
+        })
+      : null;
+
   return (
     <>
       <ProfileSettingsBlock />
@@ -347,6 +386,23 @@ export default function GeneralSection() {
             // change it was refused -- and showing only the first drops the
             // one that names what to actually do about it.
             error={runAtLoginProblem}
+          />
+          <SettingRow
+            title={t("settings.general.telemetryTitle")}
+            description={t("settings.general.telemetryDescription")}
+            enabled={telemetryStatus?.enabled ?? false}
+            valueUnknown={telemetryUnknown}
+            onToggle={() => {
+              if (telemetryMutation.isPending || !telemetryStatus) return;
+              const nextEnabled = !telemetryStatus.enabled;
+              // A kill switch or debug build blocks enabling collection, not
+              // revoking persisted consent before the next normal launch.
+              if (nextEnabled && !telemetryAvailable) return;
+              telemetryMutation.mutate(nextEnabled);
+            }}
+            statusLine={telemetryPending}
+            warning={telemetryProblem}
+            error={telemetrySaveError}
           />
           {/* Re-run setup wizard — a proper row with an inline two-step
               confirm; data is preserved regardless. */}

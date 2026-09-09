@@ -275,7 +275,7 @@ If the local daemon is unreachable, `wenlan capture` and `wenlan brief update` w
 - **Optional on-device synthesis:** Enrichment and Page synthesis can use user-selected [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) or [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) through [llama.cpp](https://github.com/ggml-org/llama.cpp). Wenlan does not download or activate a language model until you choose one.
 - **Other providers:** An OpenAI-compatible local endpoint such as Ollama or LM Studio, or a configured cloud provider, can supply model-backed enrichment and synthesis instead.
 - **Cloud disclosure:** If the model endpoint you select is remote, Wenlan sends that task's system and user prompts to it. Local retrieval and on-device synthesis stay on your machine.
-- **No telemetry:** Wenlan sends no telemetry.
+- **Optional usage statistics:** Off by default. If you opt in, Wenlan sends bounded operation counts, version and platform—not your knowledge content or an installation ID. See [privacy](docs/PRIVACY.md#telemetry).
 
 Full workflow reference: [plugin/skills](plugin/skills/README.md). Technical model roles: [technical foundations](docs/technical-foundations.md#model-roles).
 

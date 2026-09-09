@@ -49,6 +49,8 @@ pub mod source_routes;
 pub mod space_header;
 pub mod spaces_routes;
 pub mod state;
+pub mod telemetry;
+pub mod telemetry_routes;
 pub mod truth_guard;
 pub mod websocket;
 

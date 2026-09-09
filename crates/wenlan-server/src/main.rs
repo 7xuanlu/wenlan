@@ -768,6 +768,7 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
 
     let shared: SharedState = Arc::new(RwLock::new(server_state));
 
+    let shutdown = { shared.read().await.shutdown.clone() };
     runtime::register_optional_runtime_workers(
         shared.clone(),
         repair_recovery_pending,
@@ -778,7 +779,6 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
     )
     .await;
 
-    let shutdown = { shared.read().await.shutdown.clone() };
     let signal_shutdown = shutdown.clone();
     tokio::spawn(async move {
         termination_signals.wait().await;
@@ -797,6 +797,13 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
     } else {
         tokio::spawn(async {})
     };
+
+    // Record readiness only after startup workers and the scheduler have been
+    // registered, immediately before the listener enters its serve loop.
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
+        let telemetry = { shared.read().await.telemetry.clone() };
+        telemetry.start(shutdown.clone());
+    }
 
     runtime::serve_and_drain(
         repair_recovery_pending,

@@ -2,6 +2,7 @@
 use crate::error::ServerError;
 use crate::route_registry::{get, post, TrackedRouter};
 use crate::state::{ServerState, SharedState};
+use crate::telemetry::TelemetryEvent;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, HeaderValue},
@@ -187,6 +188,34 @@ pub async fn handle_search(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     view: crate::truth_guard::TruthView,
     Json(req): Json<SearchRequest>,
+) -> Result<Json<SearchResponse>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_search_inner(state, headers, header_space, view, req).await;
+    match &result {
+        Ok(Json(response)) => telemetry.record(
+            if response.results.is_empty()
+                && response
+                    .supplemental_pages
+                    .as_ref()
+                    .map(Vec::is_empty)
+                    .unwrap_or(true)
+            {
+                TelemetryEvent::SearchEmpty
+            } else {
+                TelemetryEvent::SearchNonempty
+            },
+        ),
+        Err(_) => telemetry.record(TelemetryEvent::SearchError),
+    }
+    result
+}
+
+async fn handle_search_inner(
+    state: Arc<RwLock<ServerState>>,
+    headers: HeaderMap,
+    header_space: Option<String>,
+    view: crate::truth_guard::TruthView,
+    req: SearchRequest,
 ) -> Result<Json<SearchResponse>, ServerError> {
     let start = std::time::Instant::now();
 
@@ -531,6 +560,34 @@ pub struct DistillRequest {
 /// `Automatic` today. Taking the view anyway is what keeps that a fact about the
 /// manifest rather than an assumption baked into the handler.
 pub async fn handle_distill(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    view: crate::truth_guard::TruthView,
+    body: axum::body::Bytes,
+) -> Result<Json<serde_json::Value>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_distill_inner(State(state), view, body).await;
+    match &result {
+        Ok(Json(response)) if distill_response_generated(response) => {
+            telemetry.record(TelemetryEvent::WikiGenerated)
+        }
+        Ok(_) => {}
+        Err(_) => telemetry.record(TelemetryEvent::WikiError),
+    }
+    result
+}
+
+fn distill_response_generated(response: &serde_json::Value) -> bool {
+    response
+        .get("pages_created")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|count| count > 0)
+        || response
+            .get("updated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+}
+
+async fn handle_distill_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     view: crate::truth_guard::TruthView,
     body: axum::body::Bytes,
@@ -899,6 +956,22 @@ pub async fn handle_distill(
 /// failure mode is documented in the response so the skill can surface
 /// it to the user.
 pub async fn handle_redistill(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(page_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_redistill_inner(State(state), Path(page_id)).await;
+    match &result {
+        Ok(Json(response)) if distill_response_generated(response) => {
+            telemetry.record(TelemetryEvent::WikiGenerated)
+        }
+        Ok(_) => {}
+        Err(_) => telemetry.record(TelemetryEvent::WikiError),
+    }
+    result
+}
+
+async fn handle_redistill_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(page_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {

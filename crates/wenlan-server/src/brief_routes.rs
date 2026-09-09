@@ -3,7 +3,7 @@
 use crate::route_registry::{post, TrackedRouter};
 use crate::{
     brief_files::project_brief_receipt, error::ServerError, space_header::SpaceHeader,
-    state::SharedState,
+    state::SharedState, telemetry::TelemetryEvent,
 };
 use axum::{extract::State, response::Json};
 use std::{future::Future, sync::Arc};
@@ -79,6 +79,15 @@ pub async fn handle_read_brief(
     view: crate::truth_guard::TruthView,
     Json(request): Json<BriefReadRequest>,
 ) -> Result<Json<BriefReadResponse>, ServerError> {
+    // A topic turns the Brief read into one authoritative related-context
+    // search. The legacy `/api/context` adapter delegates here, so recording
+    // at this shared boundary covers both APIs exactly once.
+    let has_topic = request
+        .topic
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|topic| !topic.is_empty());
+    let telemetry = { state.read().await.telemetry.clone() };
     let db = {
         let state = state.read().await;
         state.db.clone().ok_or(ServerError::DbNotInitialized)?
@@ -152,7 +161,30 @@ pub async fn handle_read_brief(
             Ok(results)
         }
     })
-    .await?;
+    .await;
+    let related_context = match related_context {
+        Ok(related_context) => {
+            if has_topic {
+                telemetry.record(
+                    if related_context
+                        .as_ref()
+                        .is_some_and(|related| !related.results.is_empty())
+                    {
+                        TelemetryEvent::SearchNonempty
+                    } else {
+                        TelemetryEvent::SearchEmpty
+                    },
+                );
+            }
+            related_context
+        }
+        Err(error) => {
+            if has_topic {
+                telemetry.record(TelemetryEvent::SearchError);
+            }
+            return Err(error);
+        }
+    };
 
     Ok(Json(BriefReadResponse {
         state: BriefReadState::Ready,

@@ -2948,6 +2948,23 @@ export async function setRunAtLogin(enabled: boolean): Promise<void> {
   return invoke("set_run_at_login", { enabled });
 }
 
+// ── Product telemetry consent ─────────────────────────────────────────
+
+/** Daemon-owned, opt-in product telemetry status. */
+export interface TelemetryStatus {
+  enabled: boolean;
+  available: boolean;
+  pending_operations: number;
+}
+
+export async function getTelemetryStatus(): Promise<TelemetryStatus> {
+  return invoke<TelemetryStatus>("get_telemetry_status");
+}
+
+export async function setTelemetryEnabled(enabled: boolean): Promise<TelemetryStatus> {
+  return invoke<TelemetryStatus>("set_telemetry_enabled", { enabled });
+}
+
 export async function quitWenlanFull(): Promise<void> {
   return invoke("quit_wenlan_full");
 }

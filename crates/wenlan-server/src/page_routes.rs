@@ -3,6 +3,7 @@ use crate::error::ServerError;
 use crate::memory_routes::extract_agent_name;
 use crate::route_registry::{get, post, put, TrackedRouter};
 use crate::state::{ServerState, SharedState};
+use crate::telemetry::TelemetryEvent;
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -307,6 +308,36 @@ pub async fn handle_search_pages(
 /// If the DB insert fails after the md write succeeds, the md file is
 /// removed so the two stores stay consistent.
 pub async fn handle_create_page(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(req): Json<CreateConceptRequest>,
+) -> Result<Json<CreatePageResponse>, ServerError> {
+    // The core writer treats an omitted creation_kind as distilled. Keep the
+    // telemetry classification aligned so MCP's compact write_page payload is
+    // counted exactly like an explicit distilled request.
+    let is_distilled = req.creation_kind.as_deref().unwrap_or("distilled") == "distilled";
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_create_page_inner(
+        State(state),
+        headers,
+        crate::space_header::SpaceHeader(header_space),
+        Json(req),
+    )
+    .await;
+    if is_distilled {
+        match &result {
+            Ok(Json(response)) if response.attached_to.is_none() => {
+                telemetry.record(TelemetryEvent::WikiGenerated)
+            }
+            Ok(_) => {}
+            Err(_) => telemetry.record(TelemetryEvent::WikiError),
+        }
+    }
+    result
+}
+
+async fn handle_create_page_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
@@ -989,6 +1020,29 @@ pub async fn handle_refresh_page(
     Path(id): Path<String>,
     Json(req): Json<wenlan_types::requests::RefreshPageRequest>,
 ) -> Result<Json<wenlan_types::responses::PageWriteResponse>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_refresh_page_inner(State(state), Path(id), Json(req)).await;
+    match &result {
+        Ok((wenlan_core::post_write::WriteOutcome::Wrote, _)) => {
+            telemetry.record(TelemetryEvent::WikiGenerated)
+        }
+        Ok(_) => {}
+        Err(_) => telemetry.record(TelemetryEvent::WikiError),
+    }
+    result.map(|(_, response)| Json(response))
+}
+
+async fn handle_refresh_page_inner(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Path(id): Path<String>,
+    Json(req): Json<wenlan_types::requests::RefreshPageRequest>,
+) -> Result<
+    (
+        wenlan_core::post_write::WriteOutcome,
+        wenlan_types::responses::PageWriteResponse,
+    ),
+    ServerError,
+> {
     // Validate the body before touching the filesystem. Empty content would
     // produce an empty md; empty source list would orphan the page from its
     // provenance trail — both contradict the route's documented contract.
@@ -1057,11 +1111,14 @@ pub async fn handle_refresh_page(
         )
         .await
         .map_err(ServerError::from)?;
-        return Ok(Json(wenlan_types::responses::PageWriteResponse {
-            ok: true,
-            revision_card_id: result.revision_card_id,
-            gated: true,
-        }));
+        return Ok((
+            wenlan_core::post_write::WriteOutcome::Gated,
+            wenlan_types::responses::PageWriteResponse {
+                ok: true,
+                revision_card_id: result.revision_card_id,
+                gated: true,
+            },
+        ));
     }
 
     let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
@@ -1212,11 +1269,14 @@ pub async fn handle_refresh_page(
         }
     }
 
-    Ok(Json(wenlan_types::responses::PageWriteResponse {
-        ok: true,
-        revision_card_id: result.revision_card_id,
-        gated: result.gated,
-    }))
+    Ok((
+        result.outcome,
+        wenlan_types::responses::PageWriteResponse {
+            ok: true,
+            revision_card_id: result.revision_card_id,
+            gated: result.gated,
+        },
+    ))
 }
 
 // ===== Revision history endpoints =====
@@ -1541,6 +1601,130 @@ mod create_page_endpoint_tests {
             body["error"], "distilled page requires at least 3 distinct source memories (got 2)",
             "error should explain the exact source floor: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn telemetry_counts_wiki_creation_without_explicit_creation_kind() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let (state, _tmp) = build_state_with_db(3).await;
+        let telemetry_tmp = tempfile::tempdir().unwrap();
+        let telemetry = Arc::new(crate::telemetry::Telemetry::for_test(
+            telemetry_tmp.path(),
+            "http://127.0.0.1:1/events",
+            std::time::Duration::from_secs(3600),
+        ));
+        telemetry.set_enabled(true).unwrap();
+        {
+            state.write().await.telemetry = telemetry.clone();
+        }
+        let app = crate::router::build_router(state);
+        let body = json!({
+            "title": "Rust Safety Without An Explicit Kind",
+            "content": "Rust ownership borrowing and lifetimes keep references memory safe by validating references",
+            "summary": "Rust safety",
+            "source_memory_ids": [
+                "mem-page-floor-a",
+                "mem-page-floor-b",
+                "mem-page-floor-c"
+            ]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/pages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(telemetry.status().pending_operations, 1);
+        drop(response);
+        drop(telemetry_tmp);
+    }
+
+    #[tokio::test]
+    async fn telemetry_refresh_page_wrote_counts_one_wiki_generation() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let (state, _tmp) = build_state_with_db(3).await;
+        let db = {
+            let s = state.read().await;
+            s.db.as_ref().cloned().unwrap()
+        };
+        let page_id = seed_distilled_page(
+            &db,
+            "Rust Refresh Target",
+            Some("Rust refresh target"),
+            "Rust ownership and borrowing prevent memory safety bugs by validating references",
+            None,
+            &["mem-page-floor-a", "mem-page-floor-b", "mem-page-floor-c"],
+        )
+        .await;
+        let telemetry_tmp = tempfile::tempdir().unwrap();
+        let telemetry = Arc::new(crate::telemetry::Telemetry::for_test(
+            telemetry_tmp.path(),
+            "http://127.0.0.1:1/events",
+            std::time::Duration::from_secs(3600),
+        ));
+        telemetry.set_enabled(true).unwrap();
+        {
+            state.write().await.telemetry = telemetry.clone();
+        }
+        let app = crate::router::build_router(state);
+        let body = json!({
+            "content": "Rust ownership and lifetimes keep references safe by validating borrowing rules at compile time",
+            "source_memory_ids": [
+                "mem-page-floor-a",
+                "mem-page-floor-b",
+                "mem-page-floor-c"
+            ]
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/pages/{page_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(telemetry.status().pending_operations, 1);
+
+        // Repeating the same refresh is an authoritative Unchanged outcome,
+        // not another generated page operation.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/pages/{page_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(telemetry.status().pending_operations, 1);
+        drop(response);
+        drop(telemetry_tmp);
     }
 
     #[tokio::test]

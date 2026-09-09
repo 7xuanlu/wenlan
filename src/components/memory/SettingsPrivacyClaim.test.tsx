@@ -39,10 +39,16 @@ vi.mock("../../lib/tauri", () => ({
       created_at: 0,
     }),
   ),
+  getTelemetryStatus: vi.fn(() =>
+    Promise.resolve({ enabled: false, available: true, pending_operations: 0 }),
+  ),
   isRunAtLoginEnabled: vi.fn(() => Promise.resolve(false)),
   listAgents: vi.fn(() => Promise.resolve([])),
   setAvatar: vi.fn(() => Promise.resolve()),
   setRunAtLogin: vi.fn(() => Promise.resolve()),
+  setTelemetryEnabled: vi.fn(() =>
+    Promise.resolve({ enabled: false, available: true, pending_operations: 0 }),
+  ),
   setSetupCompleted: vi.fn(() => Promise.resolve()),
   removeAvatar: vi.fn(() => Promise.resolve()),
   updateAgent: vi.fn(() => Promise.resolve()),
@@ -107,7 +113,7 @@ describe("Settings privacy claim", () => {
     // singularity; the exact string also pins the wording so a partial
     // rewrite (e.g. dropping the condition) fails the test.
     const claim = screen.getByText(
-      "Your memories live on this machine. Nothing is sent anywhere unless you connect a cloud model or turn on Remote Access.",
+      "Your memories stay on this machine unless you configure a feature that sends them, such as a cloud model or Remote Access. Optional usage stats are sent only with your permission; normal network metadata may still be visible to services you use.",
     );
     expect(claim).toBeInTheDocument();
   });
