@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.6](https://github.com/7xuanlu/wenlan/compare/v0.18.5...v0.18.6) (2026-09-09)
+
+
+### Bug Fixes
+
+* expose local telemetry delivery outcomes ([#725](https://github.com/7xuanlu/wenlan/issues/725)) ([837e05d](https://github.com/7xuanlu/wenlan/commit/837e05dd038c793ef9bbd8f2df77f1c9c848f462))
+* make first import and production update checks reliable ([#724](https://github.com/7xuanlu/wenlan/issues/724)) ([68a286d](https://github.com/7xuanlu/wenlan/commit/68a286d1ad4838ceaab323d33a2833237ed8af25))
+
 ## [0.18.5](https://github.com/7xuanlu/wenlan/compare/v0.18.4...v0.18.5) (2026-09-09)
 
 
