@@ -163,11 +163,6 @@ export default function HomePage({
   );
 }
 
-function formatPagePath(page: Page): string {
-  const domain = page.domain?.trim() || page.space?.trim();
-  const title = page.title.replace(/\s+/g, "-");
-  return `[[${domain ? `${domain}/` : ""}${title}]]`;
-}
 
 function formatSourceCount(t: TFunction, count: number): string {
   return t("home.counts.source", { count });
@@ -637,7 +632,7 @@ function PageList({
                     margin: "6px 0 0",
                   }}
                 >
-                  {formatPagePath(page)}
+                  {page.space?.trim() || page.domain?.trim() || t("pages.overview.title")}
                 </p>
                 {page.summary && (
                   <p

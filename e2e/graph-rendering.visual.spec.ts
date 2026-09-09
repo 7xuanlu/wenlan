@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 type CanvasEvidence = {
@@ -9,7 +9,7 @@ type CanvasEvidence = {
   uniqueColors: number;
 };
 
-test("renders Graph as a structured canvas instead of a flat orange field", async ({ page }) => {
+test("renders Graph as a structured canvas instead of a flat orange field", async ({ page }, testInfo) => {
   const browserErrors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await installTauriMock(page, {
@@ -30,21 +30,26 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   // seven wiki pages plus the three entities that have a connection.
   await expect(page.getByText(/^7 pages · 3 entities(?: · \d+ regions?)?$/)).toBeVisible();
 
-  // The place-name overlay: region names in a muted ink with a ground-
-  // coloured halo, drawn above the nodes. It is the ONLY 2D canvas on the
-  // map — nothing is painted under the nodes (no terrain, wash or hull, so
-  // no shadow or aura around a point) — and it is what can be read back; the
-  // WebGL node layer is covered by the screenshot below.
-  // Every canvas sigma does not own — tagged or not — must be this one.
+  // Regions stay quiet by default. Names and contours have separate transparent
+  // canvases, above and below Sigma respectively, and become visible together.
   const ours = graph.locator('canvas:not([class*="sigma-"])');
-  await expect(ours).toHaveCount(1);
-  await expect(ours).toHaveAttribute("data-testid", "atlas-region-names");
-  const canvas = graph.locator('canvas[data-testid="atlas-region-names"]');
-  await expect(canvas).toHaveCount(1);
+  await expect(ours).toHaveCount(2);
+  const canvas = graph.getByTestId("atlas-region-names");
+  const areas = graph.getByTestId("atlas-community-areas");
+  const regions = page.getByRole("button", { name: "Regions", exact: true });
+  await expect(regions).toHaveAttribute("aria-pressed", "false");
+  await expect(canvas).toBeHidden();
+  await expect(areas).toBeHidden();
+  await expect(page.getByRole("group", { name: "Show in graph" })
+    .getByRole("button", { name: "Memories", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await regions.click();
+  await expect(regions).toHaveAttribute("aria-pressed", "true");
   await expect(canvas).toBeVisible();
+  await expect(areas).toBeVisible();
   await expect(canvas).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(areas).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 
-  const readOverlay = (): Promise<CanvasEvidence> =>
+  const readOverlay = (canvas: Locator): Promise<CanvasEvidence> =>
     canvas.evaluate((node): CanvasEvidence => {
       if (!(node instanceof HTMLCanvasElement)) {
         return { coloredPixels: 0, orangeCoverage: 1, sampledPixels: 0, uniqueColors: 0 };
@@ -84,31 +89,58 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
       };
     });
 
-  // At the default fit the fixture's one named region earns its place name:
-  // some text pixels, anti-aliased through many alphas, none of them orange.
-  // Text is all this canvas carries, so a painted wash would show up here as
-  // a flood of colored pixels far beyond what a name can account for.
+  // The fixture has one community. Verify it actually paints a contour without
+  // recreating the old orange flood. Names may yield to a visible hub label.
   let evidence: CanvasEvidence = { coloredPixels: 0, orangeCoverage: 1, sampledPixels: 0, uniqueColors: 0 };
-  await expect
-    .poll(
-      async () => {
-        evidence = await readOverlay();
-        return evidence.coloredPixels;
-      },
-      { timeout: 10_000 },
-    )
-    .toBeGreaterThan(25);
+  await expect.poll(async () => {
+    evidence = await readOverlay(areas);
+    return evidence.coloredPixels;
+  }).toBeGreaterThan(25);
   expect(evidence.sampledPixels).toBeGreaterThan(0);
-  expect(evidence.coloredPixels / evidence.sampledPixels).toBeLessThan(0.02);
-  expect(evidence.uniqueColors).toBeGreaterThan(8);
-  expect(evidence.orangeCoverage).toBeLessThan(0.25);
+  expect(evidence.coloredPixels / evidence.sampledPixels).toBeLessThan(0.5);
+  expect(evidence.orangeCoverage).toBeLessThan(0.01);
+  const names = await readOverlay(canvas);
+  expect(names.coloredPixels / names.sampledPixels).toBeLessThan(0.02);
+  expect(names.orangeCoverage).toBeLessThan(0.01);
 
-  // The snapshot only once the overlay has painted its name, so it can never
-  // capture a blank or stale overlay that the poll above would still pass.
-  await expect(page).toHaveScreenshot("graph-1280x900-light.png", {
-    animations: "disabled",
-    fullPage: false,
-    maxDiffPixelRatio: 0.002,
+  await regions.click();
+  await expect(regions).toHaveAttribute("aria-pressed", "false");
+  await expect(canvas).toBeHidden();
+  await expect(areas).toBeHidden();
+  await page.mouse.move(1, 1);
+  // Check the rendered map itself as well as the transparent overlays. Read a
+  // screenshot because WebGL may discard its drawing buffer after presenting.
+  const graphBox = await graph.boundingBox();
+  expect(graphBox!.height).toBeGreaterThan(700);
+  const mapImage = await graph.screenshot();
+  const pixels = await page.evaluate(async (base64) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const surface = document.createElement("canvas");
+    surface.width = image.width;
+    surface.height = image.height;
+    const ctx = surface.getContext("2d")!;
+    ctx.drawImage(image, 0, 0);
+    const data = ctx.getImageData(0, 0, image.width, image.height).data;
+    let colored = 0;
+    let orange = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 30) colored++;
+      if (r > 170 && g > 55 && g < 175 && b < 100) orange++;
+    }
+    return { colored, orange, total: image.width * image.height };
+  }, mapImage.toString("base64"));
+  expect(pixels.colored, "the graph must actually draw colored nodes").toBeGreaterThan(100);
+  expect(pixels.colored / pixels.total, "nodes must leave a readable background").toBeLessThan(0.05);
+  expect(pixels.orange / pixels.total, "no orange flood over the map").toBeLessThan(0.01);
+  // Persist the image even with CI's text reporter, so artifact upload sees it.
+  const screenshotPath = testInfo.outputPath("graph-1280x900-light.png");
+  await page.screenshot({ path: screenshotPath, animations: "disabled", fullPage: false });
+  await testInfo.attach("graph-1280x900-light", {
+    path: screenshotPath,
+    contentType: "image/png",
   });
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);

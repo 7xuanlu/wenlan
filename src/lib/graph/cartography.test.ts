@@ -8,7 +8,9 @@ import {
   communitiesFor,
   communityRegions,
   cartographyScene,
+  drawRegionAreas,
   drawRegionNames,
+  MIN_REGION_AREA_SPAN_PX,
   placeRegionLabels,
   MAX_REGION_LABELS,
   MIN_LABELLED_SPAN_PX,
@@ -654,6 +656,12 @@ function mockCtx() {
     beginPath: vi.fn(),
     arc: vi.fn(),
     setLineDash: vi.fn(),
+    rect: vi.fn(),
+    clip: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    quadraticCurveTo: vi.fn(),
+    closePath: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(() => {
       fills.push(ctx.fillStyle);
@@ -741,6 +749,72 @@ describe("drawRegionNames", () => {
   });
 });
 
+describe("drawRegionAreas", () => {
+  const identity = (pos: { x: number; y: number }) => pos;
+
+  function areaRegion(points: { x: number; y: number }[]): Region {
+    const [hub, ...otherMembers] = points;
+    return {
+      name: "Wenlan",
+      hub: { id: "hub", ...hub, size: 5 },
+      otherMembers: otherMembers.map((point) => ({ ...point, size: 3 })),
+      memberCount: points.length,
+      island: false,
+      centroid: { x: 0, y: 0 },
+      bounds: { minX: 0, maxX: 0, minY: 0, maxY: 0 },
+    };
+  }
+
+  it("draws a quiet rounded area from the actual compact community members", () => {
+    const { ctx, fills } = mockCtx();
+    const scene: CartographyScene = {
+      regions: [areaRegion([{ x: 80, y: 80 }, { x: 180, y: 90 }, { x: 120, y: 180 }, { x: 150, y: 130 }])],
+    };
+    drawRegionAreas(ctx, scene, identity, PALETTE, { width: 400, height: 300 });
+    expect(ctx.clip).toHaveBeenCalledTimes(1);
+    expect(ctx.quadraticCurveTo).toHaveBeenCalled();
+    expect(fills).toEqual(["rgba(170,170,170,0.045)"]);
+    expect(ctx.strokeStyle).toBe("rgba(170,170,170,0.28)");
+    expect(ctx.lineWidth).toBe(1);
+  });
+
+  it("skips an excessively sparse community instead of enclosing unrelated space", () => {
+    const { ctx, fills } = mockCtx();
+    const scene: CartographyScene = {
+      regions: [areaRegion([{ x: 20, y: 100 }, { x: 520, y: 100 }, { x: 1020, y: 100 }])],
+    };
+    drawRegionAreas(ctx, scene, identity, PALETTE, { width: 1200, height: 300 });
+    expect(fills).toEqual([]);
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
+  it("skips a tiny projected community that would read as a decorative bubble", () => {
+    const { ctx, fills } = mockCtx();
+    const scene: CartographyScene = {
+      regions: [
+        areaRegion([
+          { x: 100, y: 100 },
+          { x: 100 + MIN_REGION_AREA_SPAN_PX - 1, y: 100 },
+          { x: 100, y: 100 + MIN_REGION_AREA_SPAN_PX / 2 },
+        ]),
+      ],
+    };
+    drawRegionAreas(ctx, scene, identity, PALETTE, { width: 400, height: 300 });
+    expect(fills).toEqual([]);
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
+  it("clips and skips a compact area that is wholly outside the viewport", () => {
+    const { ctx, fills } = mockCtx();
+    const scene: CartographyScene = {
+      regions: [areaRegion([{ x: -500, y: -500 }, { x: -420, y: -490 }, { x: -460, y: -420 }])],
+    };
+    drawRegionAreas(ctx, scene, identity, PALETTE, { width: 300, height: 200 });
+    expect(ctx.clip).toHaveBeenCalledTimes(1);
+    expect(fills).toEqual([]);
+  });
+});
+
 describe("placeRegionLabels", () => {
   const identity = (pos: { x: number; y: number }) => pos;
   // A fixed per-character rate keeps the overlap arithmetic in the tests exact.
@@ -761,6 +835,15 @@ describe("placeRegionLabels", () => {
   }
 
   const sceneOf = (regions: Region[]): CartographyScene => ({ regions });
+
+  it("keeps region names clear of labels already painted by the node renderer", () => {
+    const scene = sceneOf([boxRegion("Nearby", 0, 100, 200)]);
+    const [label] = placeRegionLabels(scene, identity, measure);
+    expect(label).toBeDefined();
+    expect(placeRegionLabels(scene, identity, measure, undefined, undefined, [
+      { left: label.x - 20, right: label.x + 20, top: label.y - 8, bottom: label.y + 8 },
+    ])).toHaveLength(0);
+  });
 
   it("skips a region whose bounds are a speck on screen", () => {
     const wide = boxRegion("Wide", 0, 0, MIN_LABELLED_SPAN_PX);

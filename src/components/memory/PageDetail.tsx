@@ -1289,15 +1289,16 @@ export default function PageDetail({
 
   // Strip ## Sources (shown in Page info below)
   // Convert [[wikilinks]] to markdown links if they resolve to pages, else plain text
-  const cleanedContent = processed.content
-    .replace(/^#\s+.*\n+/, "") // Strip title heading (displayed separately by UI)
+  const renderWikilinks = (content: string) => content.replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => {
+    const link = parseWikilink(inner);
+    const cid = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
+    // Self references read as the page's name, not a link back to this page.
+    if (cid && cid !== page.id) return `[${link.displayText}](${PAGE_LINK_ANCHOR_PREFIX}${cid})`;
+    return link.displayText;
+  });
+  const cleanedContent = renderWikilinks(processed.content)
+    .replace(/^#\s+.*\n+/, "")
     .replace(/## Sources\n[\s\S]*?(?=\n## |\s*$)/, "")
-    .replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => {
-      const link = parseWikilink(inner);
-      const cid = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
-      if (cid) return `[${link.displayText}](${PAGE_LINK_ANCHOR_PREFIX}${cid})`;
-      return link.displayText;
-    })
     .trim();
 
   const sourceMemoryByLocator = new Map(
@@ -1332,14 +1333,15 @@ export default function PageDetail({
   // Markers sit before the period ("... setup [1][2]."), so stripping them
   // leaves " ." behind; drop that space with the period before comparing.
   const normalizeSentence = (s: string) =>
-    stripLedeLabel(s)
+    stripLedeLabel(stripCitationLinks(renderWikilinks(s)))
       .replace(/\[\d+\]/g, "").replace(/\s+/g, " ").trim().replace(/\s*\.$/, "").toLowerCase();
-  const ledeText = page.summary ? stripLedeLabel(page.summary) : tldr;
+  const summaryMarkdown = page.summary ? renderWikilinks(stripLedeLabel(page.summary)) : "";
+  const ledeText = summaryMarkdown || tldr;
   const ledeIsFirstSentence =
     !page.summary || (tldr !== "" && normalizeSentence(page.summary) === normalizeSentence(tldr));
   // When the lede is the first sentence, render that sentence with its
   // citation links so the chips move up with it instead of disappearing.
-  const ledeMarkdown = tldr && ledeIsFirstSentence ? firstSentenceMarkdown : "";
+  const ledeMarkdown = tldr && ledeIsFirstSentence ? firstSentenceMarkdown : summaryMarkdown;
   const displayContent = tldr && ledeIsFirstSentence
     ? (cleanedContent.slice(0, leadingHeadings) + bodyAfterHeadings.slice(sentenceEnd + 1).trimStart()).trim()
     : cleanedContent;

@@ -21,7 +21,7 @@ function mockCtx() {
 function graphWith(anchors: Record<string, Partial<{ dustCount: number; island: boolean; hidden: boolean; x: number }>>): Graph {
   const graph = new Graph();
   for (const [id, attrs] of Object.entries(anchors)) {
-    graph.addNode(id, { x: 0, y: 0, size: 6, ...attrs });
+    graph.addNode(id, { x: 100, y: 100, size: 6, ...attrs });
   }
   return graph;
 }
@@ -39,14 +39,14 @@ describe("dust counts", () => {
     const graph = graphWith({ busy: { dustCount: 40, x: 100 } });
     const { ctx, texts } = mockCtx();
     drawDustCounts(ctx, graph, ["busy"], identity, PALETTE, lodFor(1), null, viewport);
-    expect(texts).toEqual([{ text: "40", x: 100 + 6 * 0.8 + 2, y: -(6 * 0.8) - 3 }]);
+    expect(texts).toEqual([{ text: "+34", x: 100 + 6 * 0.8 + 2, y: 100 - 6 * 0.8 - 3 }]);
   });
 
-  it("draws nothing once the zoom shows every memory, or while a hover is live", () => {
+  it("retains the hidden count at detail zoom and lets the focused inspector take over", () => {
     const graph = graphWith({ busy: { dustCount: 40 } });
     const a = mockCtx();
     drawDustCounts(a.ctx, graph, ["busy"], identity, PALETTE, lodFor(4), null, viewport);
-    expect(a.texts).toEqual([]);
+    expect(a.texts.map((t) => t.text)).toEqual(["+22"]);
     const b = mockCtx();
     drawDustCounts(b.ctx, graph, ["busy"], identity, PALETTE, lodFor(1), "busy", viewport);
     expect(b.texts).toEqual([]);
@@ -58,14 +58,15 @@ describe("dust counts", () => {
       island: { dustCount: 40, island: true },
       hidden: { dustCount: 40, hidden: true },
       away: { dustCount: 40, x: 5000 },
+      clipped: { dustCount: 400, x: 790 },
       shown: { dustCount: 40 },
     });
     const { ctx, texts } = mockCtx();
-    drawDustCounts(ctx, graph, ["covered", "island", "hidden", "away", "shown"], identity, PALETTE, lodFor(1), null, viewport);
-    expect(texts.map((t) => t.text)).toEqual(["40"]);
+    drawDustCounts(ctx, graph, ["covered", "island", "hidden", "away", "clipped", "shown"], identity, PALETTE, lodFor(1), null, viewport);
+    expect(texts.map((t) => t.text)).toEqual(["+34"]);
     // The island's count comes back with its colour.
     const solid = mockCtx();
     drawDustCounts(solid.ctx, graph, ["island"], identity, PALETTE, lodFor(2), null, viewport);
-    expect(solid.texts.map((t) => t.text)).toEqual(["40"]);
+    expect(solid.texts.map((t) => t.text)).toEqual(["+28"]);
   });
 });

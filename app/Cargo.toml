@@ -97,6 +97,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 
 [dev-dependencies]
 serial_test = "3"
+tauri = { version = "2", features = ["test"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy", "review-fixtures"))'] }

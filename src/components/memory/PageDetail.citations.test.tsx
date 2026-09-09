@@ -304,3 +304,20 @@ describe("PageDetail citations", () => {
     expect(screen.getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
   });
 });
+
+it("renders summary wikilinks as readable internal references, preserving aliases and plain self references", async () => {
+  tauriMocks.getPage.mockResolvedValue({ ...BASE_PAGE,
+    summary: "[[Cited Page]] connects to [[Related Page#Details|the related note]] and [[Missing Page]].",
+  });
+  tauriMocks.getPageLinks.mockResolvedValue({ outbound: [
+    {label:"Cited Page",target_page_id:"page-1"},
+    {label:"Related Page",target_page_id:"page-2"},
+  ], inbound: [] });
+  const { props, user } = renderPage();
+  const link = await screen.findByRole("link", {name:"the related note"});
+  const lede = document.querySelector(".page-detail-lede")!;
+  expect(lede.textContent).toBe("Cited Page connects to the related note and Missing Page.");
+  expect(link).not.toHaveAttribute("target", "_blank");
+  await user.click(link);
+  expect(props.onPageClick).toHaveBeenCalledWith("page-2");
+});

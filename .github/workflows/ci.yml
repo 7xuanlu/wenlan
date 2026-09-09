@@ -2492,6 +2492,16 @@ jobs:
         run: pnpm exec playwright install chromium
       - name: Frontend e2e
         run: pnpm test:e2e
+      # Keep rendered proof as a run artifact, never as new screenshots in Git.
+      # Upload before Review e2e resets Playwright's output directory.
+      - name: Desktop UI evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: desktop-ui-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Review e2e
         run: pnpm test:e2e:review
 

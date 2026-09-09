@@ -210,13 +210,36 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   await installTauriMock(page, { locale: "en", rawActions: [] });
   await page.goto("/");
   await openSpaces(page);
+  // Suggestions rest collapsed in the header disclosure while confirmed rows stay visible.
+  await expect(page.getByTestId("space-row-space-wenlan")).toBeVisible();
+  await expect(page.getByTestId("space-row-space-suggested")).toBeHidden();
+  const suggestionsDisclosure = page.locator("summary").filter({ hasText: /Suggested \(\d+\)/ });
+  await expect(suggestionsDisclosure).toBeVisible();
+  await suggestionsDisclosure.click();
+  const suggestionPopover = page.locator(".spaces-suggestions > .spaces-rows");
+  await expect(suggestionPopover).toBeVisible();
   const suggested = page.getByTestId("space-row-space-suggested");
+  await expect(suggested).toBeVisible();
   const count = page.getByTestId("space-row-space-wenlan").locator(".spaces-row-count");
   expect((await suggested.evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(2);
+  // Suggestion cards are constrained by the disclosure popover: the row stays
+  // inside the popover and the popover stays inside the viewport.
+  const popoverMetrics = await suggestionPopover.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    return { left: box.left, right: box.right, width: box.width };
+  });
+  const rowMetrics = await suggested.evaluate((node) => node.getBoundingClientRect().width);
+  expect(rowMetrics).toBeLessThanOrEqual(popoverMetrics.width + 1);
+  expect(popoverMetrics.left).toBeGreaterThanOrEqual(-1);
+  expect(popoverMetrics.right).toBeLessThanOrEqual(700 + 1);
+  await assertNoPageOverflow(page);
   await expect(count).not.toHaveCSS("display", "none");
   await page.setViewportSize({ width: 699, height: 900 });
   expect((await suggested.evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(1);
   await expect(count).toHaveCSS("display", "none");
+  // Re-collapse the disclosure so the popover cannot cover later targets.
+  await suggestionsDisclosure.click();
+  await expect(suggested).toBeHidden();
   const mobileMetadata = page.getByTestId("space-row-space-wenlan").getByTestId("space-mobile-metadata");
   await expect(mobileMetadata).toBeVisible();
   await expect(mobileMetadata.getByText("Pages", { exact: true })).toBeVisible();

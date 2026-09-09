@@ -55,6 +55,13 @@ export function hostPlatform(
   return "unknown";
 }
 
+/** One centreline for the main header and its sidebar control. */
+export const MAIN_HEADER_HEIGHT = 52;
+
+/** Target geometry for the native macOS traffic lights in the main header. */
+export const MACOS_TRAFFIC_LIGHT_X = 16;
+export const MACOS_TRAFFIC_LIGHT_CENTER_Y = MAIN_HEADER_HEIGHT / 2;
+
 /** Room for the overlaid traffic lights, matched to their x=16 origin. */
 export const MACOS_TRAFFIC_LIGHT_INSET = 82;
 

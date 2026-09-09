@@ -67,6 +67,15 @@ test("manages Spaces, cleans MRU, and preserves data after a rejected mutation",
   await journeyRow.getByRole("textbox", { name: "Name", exact: true }).press("Escape");
   await expect(journeyRow.getByRole("button", { name: "Renamed Journey", exact: true })).toBeVisible();
 
+  // Suggestions rest collapsed in the header disclosure: confirmed Spaces stay
+  // visible while suggestion decisions are hidden until the disclosure opens.
+  const suggestionsDisclosure = page.locator("summary").filter({ hasText: "Suggested (2)" });
+  await expect(suggestionsDisclosure).toBeVisible();
+  await expect(confirmedSpaceRow(page, "space-wenlan").getByRole("button", { name: "Wenlan", exact: true })).toBeVisible();
+  await expect(page.getByTestId("space-row-space-suggested")).toBeHidden();
+  await suggestionsDisclosure.click();
+  await expect(page.getByTestId("space-row-space-suggested").getByRole("button", { name: "Keep" })).toBeVisible();
+
   await page.getByTestId("space-row-space-suggested").getByRole("button", { name: "Keep" }).click();
   await page.getByTestId("space-row-space-suggested-2").getByRole("button", { name: "Discard" }).click();
   await expect(page.getByTestId("space-row-space-suggested-2")).toHaveCount(0);

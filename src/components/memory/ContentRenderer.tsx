@@ -83,17 +83,18 @@ const markdownComponents = {
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
     <a
       href={href}
-      target="_blank"
+      className={href?.startsWith("#concept:") ? "content-page-link" : undefined}
+      target={href?.startsWith("#") ? undefined : "_blank"}
       rel="noopener noreferrer"
       style={{
         color: "var(--mem-accent-indigo)",
         textDecoration: "none",
       }}
       onMouseEnter={(e) => {
-        (e.target as HTMLAnchorElement).style.textDecoration = "underline";
+        if (!href?.startsWith("#concept:")) e.currentTarget.style.textDecoration = "underline";
       }}
       onMouseLeave={(e) => {
-        (e.target as HTMLAnchorElement).style.textDecoration = "none";
+        e.currentTarget.style.textDecoration = "none";
       }}
     >
       {children}

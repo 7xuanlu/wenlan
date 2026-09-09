@@ -73,7 +73,7 @@ export function ConfirmedSpaces(props: ConfirmedSpacesProps) {
       {props.noResults ? (
         <p className="spaces-empty">{props.labels.noResults}</p>
       ) : props.spaces.length === 0 ? (
-        <p className="spaces-empty">{props.labels.noConfirmed}</p>
+        props.filter.trim() ? null : <p className="spaces-empty">{props.labels.noConfirmed}</p>
       ) : (
         <div
           className="spaces-rows"

@@ -1,0 +1,29 @@
+{
+  "productName": "Wenlan Dev",
+  "mainBinaryName": "wenlan-dev-live",
+  "identifier": "com.wenlan.desktop.dev.live",
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "",
+    "devUrl": "http://127.0.0.1:1424"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:1424 ws://127.0.0.1:1424; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'none'; object-src 'none'"
+    },
+    "windows": [{
+      "label": "main",
+      "title": "Wenlan Dev · Live data · Read-only",
+      "url": "http://127.0.0.1:1424",
+      "width": 1280,
+      "height": 800,
+      "resizable": true,
+      "decorations": true,
+      "titleBarStyle": "Overlay",
+      "hiddenTitle": true,
+      "trafficLightPosition": { "x": 16, "y": 28 },
+      "visible": true,
+      "zoomHotkeysEnabled": true
+    }]
+  }
+}
