@@ -141,7 +141,30 @@ fn canonical_absolute_path(path: &Path) -> Option<PathBuf> {
     if !path.is_absolute() {
         return None;
     }
-    std::fs::canonicalize(path).ok()
+    // First launch may precede creation of the data directory. Resolve the
+    // existing ancestor, retaining only genuinely absent path components.
+    // Broken symlinks and inaccessible paths remain unknown, not equivalent.
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(mut resolved) => {
+                for name in missing.iter().rev() {
+                    resolved.push(name);
+                }
+                return Some(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::symlink_metadata(ancestor) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => return None,
+                }
+                missing.push(ancestor.file_name()?);
+                ancestor = ancestor.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn updater_enabled_for_paths(
@@ -614,6 +637,41 @@ mod tests {
             false,
             Some(&legacy),
             Some(&legacy)
+        ));
+    }
+
+    #[test]
+    fn release_explicit_production_root_allows_first_launch_before_directory_creation() {
+        let profile = tempfile::tempdir().unwrap();
+        let missing = profile.path().join("new-profile").join("wenlan");
+        assert!(updater_enabled_for_paths(
+            false,
+            Some(&missing),
+            Some(&missing)
+        ));
+        assert!(!updater_enabled_for_paths(
+            true,
+            Some(&missing),
+            Some(&missing)
+        ));
+        assert!(!updater_enabled_for_paths(
+            false,
+            Some(&missing),
+            Some(&profile.path().join("scratch"))
+        ));
+        assert!(!missing.exists(), "eligibility must not create directories");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unresolved_symlinks_do_not_establish_path_equivalence() {
+        let profile = tempfile::tempdir().unwrap();
+        let broken = profile.path().join("broken");
+        std::os::unix::fs::symlink(profile.path().join("absent"), &broken).unwrap();
+        assert!(!updater_enabled_for_paths(
+            false,
+            Some(&broken),
+            Some(&broken)
         ));
     }
 
