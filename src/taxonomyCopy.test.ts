@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resources } from "./i18n/resources";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -90,9 +92,12 @@ describe("taxonomy and product copy", () => {
     expect(atlas).not.toContain(
       `{ label: "${legacyLabel}", key: "${legacyWireKey}" }`,
     );
-    expect(atlas).toContain(
-      `{ label: "Theme", key: "${legacyWireKey}" }`,
-    );
+    // The former inline legend now lives in the localized entity filter.
+    expect(atlas).toContain("<AtlasTypeFilters");
+    expect(read("src/components/memory/AtlasTypeFilters.tsx")).toContain("atlas.entityType.${type}");
+    expect(resources.en.translation.atlas.entityType.concept).toBe("Theme");
+    expect(resources["zh-Hant"].translation.atlas.entityType.concept).toBe("主題");
+    expect(resources["zh-Hans"].translation.atlas.entityType.concept).toBe("主题");
     // The wire key itself lives in the palette map, not the legend.
     expect(read("src/lib/graph/palette.ts")).toContain(legacyWireKey + ":");
   });

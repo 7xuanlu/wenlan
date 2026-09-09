@@ -25,7 +25,7 @@ export default function AtlasTooltip({ content, children }: AtlasTooltipProps) {
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<TooltipPosition>({ left: 0, top: 0 });
+  const [position, setTooltipPosition] = useState<TooltipPosition>({ left: 0, top: 0 });
   const [positioned, setPositioned] = useState(false);
   const tooltipId = useId();
 
@@ -71,7 +71,7 @@ export default function AtlasTooltip({ content, children }: AtlasTooltipProps) {
     );
     const above = anchor.top - tooltip.height - gap;
     const top = above >= edge ? above : Math.min(window.innerHeight - tooltip.height - edge, anchor.bottom + gap);
-    setPosition({ left, top: Math.max(edge, top) });
+    setTooltipPosition({ left, top: Math.max(edge, top) });
     setPositioned(true);
   }, [open]);
 

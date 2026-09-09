@@ -2,6 +2,7 @@
 use crate::error::ServerError;
 use crate::route_registry::{delete, get, post, put, TrackedRouter};
 use crate::state::{ServerState, SharedState};
+use crate::telemetry::TelemetryEvent;
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -283,6 +284,28 @@ impl Drop for StoreLockTestHookRegistration {
 }
 
 pub async fn handle_store_memory(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(req): Json<StoreMemoryRequest>,
+) -> Result<Json<StoreMemoryResponse>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_store_memory_inner(
+        State(state),
+        headers,
+        crate::space_header::SpaceHeader(header_space),
+        Json(req),
+    )
+    .await;
+    telemetry.record(if result.is_ok() {
+        TelemetryEvent::SaveSuccess
+    } else {
+        TelemetryEvent::SaveError
+    });
+    result
+}
+
+async fn handle_store_memory_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
@@ -971,6 +994,41 @@ pub(crate) fn partition_search_pages(
 
 /// POST /api/memory/search
 pub async fn handle_search_memory(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    headers: HeaderMap,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    view: crate::truth_guard::TruthView,
+    Json(req): Json<SearchMemoryRequest>,
+) -> Result<Json<SearchMemoryResponse>, ServerError> {
+    let telemetry = { state.read().await.telemetry.clone() };
+    let result = handle_search_memory_inner(
+        State(state),
+        headers,
+        crate::space_header::SpaceHeader(header_space),
+        view,
+        Json(req),
+    )
+    .await;
+    match &result {
+        Ok(Json(response)) => telemetry.record(
+            if response.results.is_empty()
+                && response
+                    .supplemental_pages
+                    .as_ref()
+                    .map(Vec::is_empty)
+                    .unwrap_or(true)
+            {
+                TelemetryEvent::SearchEmpty
+            } else {
+                TelemetryEvent::SearchNonempty
+            },
+        ),
+        Err(_) => telemetry.record(TelemetryEvent::SearchError),
+    }
+    result
+}
+
+async fn handle_search_memory_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,

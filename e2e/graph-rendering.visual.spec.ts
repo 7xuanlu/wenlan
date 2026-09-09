@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 type CanvasEvidence = {
@@ -30,21 +30,26 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   // seven wiki pages plus the three entities that have a connection.
   await expect(page.getByText(/^7 pages · 3 entities(?: · \d+ regions?)?$/)).toBeVisible();
 
-  // The place-name overlay: region names in a muted ink with a ground-
-  // coloured halo, drawn above the nodes. It is the ONLY 2D canvas on the
-  // map — nothing is painted under the nodes (no terrain, wash or hull, so
-  // no shadow or aura around a point) — and it is what can be read back; the
-  // WebGL node layer is covered by the screenshot below.
-  // Every canvas sigma does not own — tagged or not — must be this one.
+  // Regions stay quiet by default. Names and contours have separate transparent
+  // canvases, above and below Sigma respectively, and become visible together.
   const ours = graph.locator('canvas:not([class*="sigma-"])');
-  await expect(ours).toHaveCount(1);
-  await expect(ours).toHaveAttribute("data-testid", "atlas-region-names");
-  const canvas = graph.locator('canvas[data-testid="atlas-region-names"]');
-  await expect(canvas).toHaveCount(1);
+  await expect(ours).toHaveCount(2);
+  const canvas = graph.getByTestId("atlas-region-names");
+  const areas = graph.getByTestId("atlas-community-areas");
+  const regions = page.getByRole("button", { name: "Regions", exact: true });
+  await expect(regions).toHaveAttribute("aria-pressed", "false");
+  await expect(canvas).toBeHidden();
+  await expect(areas).toBeHidden();
+  await expect(page.getByRole("group", { name: "Show in graph" })
+    .getByRole("button", { name: "Memories", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await regions.click();
+  await expect(regions).toHaveAttribute("aria-pressed", "true");
   await expect(canvas).toBeVisible();
+  await expect(areas).toBeVisible();
   await expect(canvas).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(areas).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 
-  const readOverlay = (): Promise<CanvasEvidence> =>
+  const readOverlay = (canvas: Locator): Promise<CanvasEvidence> =>
     canvas.evaluate((node): CanvasEvidence => {
       if (!(node instanceof HTMLCanvasElement)) {
         return { coloredPixels: 0, orangeCoverage: 1, sampledPixels: 0, uniqueColors: 0 };
@@ -84,27 +89,26 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
       };
     });
 
-  // At the default fit the fixture's one named region earns its place name:
-  // some text pixels, anti-aliased through many alphas, none of them orange.
-  // Text is all this canvas carries, so a painted wash would show up here as
-  // a flood of colored pixels far beyond what a name can account for.
+  // The fixture has one community. Verify it actually paints a contour without
+  // recreating the old orange flood. Names may yield to a visible hub label.
   let evidence: CanvasEvidence = { coloredPixels: 0, orangeCoverage: 1, sampledPixels: 0, uniqueColors: 0 };
-  await expect
-    .poll(
-      async () => {
-        evidence = await readOverlay();
-        return evidence.coloredPixels;
-      },
-      { timeout: 10_000 },
-    )
-    .toBeGreaterThan(25);
+  await expect.poll(async () => {
+    evidence = await readOverlay(areas);
+    return evidence.coloredPixels;
+  }).toBeGreaterThan(25);
   expect(evidence.sampledPixels).toBeGreaterThan(0);
-  expect(evidence.coloredPixels / evidence.sampledPixels).toBeLessThan(0.02);
-  expect(evidence.uniqueColors).toBeGreaterThan(8);
-  expect(evidence.orangeCoverage).toBeLessThan(0.25);
+  expect(evidence.coloredPixels / evidence.sampledPixels).toBeLessThan(0.5);
+  expect(evidence.orangeCoverage).toBeLessThan(0.01);
+  const names = await readOverlay(canvas);
+  expect(names.coloredPixels / names.sampledPixels).toBeLessThan(0.02);
+  expect(names.orangeCoverage).toBeLessThan(0.01);
 
-  // The snapshot only once the overlay has painted its name, so it can never
-  // capture a blank or stale overlay that the poll above would still pass.
+  await regions.click();
+  await expect(regions).toHaveAttribute("aria-pressed", "false");
+  await expect(canvas).toBeHidden();
+  await expect(areas).toBeHidden();
+  await page.mouse.move(1, 1);
+  // Capture the approved, uncluttered default after exercising both states.
   await expect(page).toHaveScreenshot("graph-1280x900-light.png", {
     animations: "disabled",
     fullPage: false,

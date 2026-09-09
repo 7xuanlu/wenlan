@@ -5,6 +5,7 @@ use crate::ingest_batcher::IngestBatcher;
 use crate::lifecycle::ShutdownHandle;
 use crate::maintenance_coordinator::MaintenanceCoordinator;
 use crate::scheduler::WriteSignal;
+use crate::telemetry::Telemetry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -166,6 +167,9 @@ pub struct ServerState {
     /// and skips its whole ambient section for that tick if held — it must
     /// never block its other duties waiting for a multi-minute sweep.
     pub ambient_run_lock: Arc<Mutex<()>>,
+    /// Process-local, opt-in anonymous product telemetry. The default is inert
+    /// so router/unit tests never persist consent or issue network requests.
+    pub telemetry: Arc<Telemetry>,
 }
 
 impl Default for ServerState {
@@ -201,6 +205,7 @@ impl Default for ServerState {
             lint_observer: Arc::new(NoopLintRunObserver),
             ambient_gate: Arc::new(std::sync::Mutex::new(None)),
             ambient_run_lock: Arc::new(Mutex::new(())),
+            telemetry: Arc::new(Telemetry::disabled()),
         }
     }
 }
@@ -227,6 +232,12 @@ impl ServerState {
 
     pub fn with_bound_port(mut self, port: u16) -> Self {
         self.bound_port = port;
+        self
+    }
+
+    /// Install a telemetry owner for an isolated daemon/test instance.
+    pub fn with_telemetry(mut self, telemetry: Arc<Telemetry>) -> Self {
+        self.telemetry = telemetry;
         self
     }
 }

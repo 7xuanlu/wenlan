@@ -74,20 +74,67 @@ These are off until you turn them on. Aside from the remote images described abo
 
 ## Telemetry
 
-None is sent anywhere. No analytics or crash reporting runs in a build you install: Wenlan operates no analytics service, files no crash reports, and sends no diagnostics. The app's fonts are bundled rather than fetched.
+Optional usage statistics are **off by default**, including when you upgrade an
+existing installation. You can choose to enable them in Settings. This choice is
+separate from connecting an AI model, Remote Access, or subscribing to website
+emails. Debug builds and the `WENLAN_TELEMETRY_DISABLED=1` environment setting do
+not send usage statistics.
+
+When enabled, the daemon sends small batches of operation counts to
+`https://wenlan.app/api/app-events`: daemon readiness, successful saves, searches
+with or without results, Wiki generation, and fixed operation-error categories
+where those operations are instrumented. Batches include the Wenlan version and
+platform (macOS, Windows, Linux, or other), not an installation or account ID.
+These are operation counts, not a record of individual users or a claim that a
+search result was helpful. The receiver records them under its UTC receipt day.
+An accepted save may include a duplicate or a pending revision, not a new memory.
+Coverage is limited to the instrumented daemon save, search/Brief and page
+creation/distillation request handlers; direct source-sync writes and background
+refinery/scheduler page generation are not counted by this version.
+
+No note, query, prompt, answer, title, file path, memory/entity/source identifier,
+email, relay identity, content hash, free-text error, or crash trace is included.
+The existing local activity history and onboarding content previews are never
+uploaded by this feature. Wenlan does not install a crash-reporting SDK. The
+app's fonts remain bundled rather than fetched.
+
+The local consent preference is persisted separately from your knowledge.
+Unsent counts are bounded and kept in memory, not a durable activity log. They
+are batched at most hourly and can be lost on exit or network failure. There are no retries of an attempted
+batch and no upload of pre-consent history. Turning the setting off discards
+unsent counts and stops future batches. Cancellation is best effort: a batch
+already in flight may still arrive after you turn it off and cannot be retracted.
+CLI and MCP operations are counted at daemon boundaries
+too, so using the GUI is not a prerequisite.
+
+Vercel receives the HTTPS request and the dedicated Supabase database stores
+aggregate counts. Our application tables do not store your IP address or raw
+HTTP headers, but network providers necessarily process connection metadata.
+This is not a promise of anonymity against those providers. Aggregate records
+have no automatic expiry in this version. Because there is no installation or
+account identifier in the aggregate, we cannot retrieve or delete one person's
+past contribution separately. We do not join these counts to website visits,
+email subscriptions, Remote Access accounts, or GitHub download counters.
 
 One caveat about the dependency list, since it is public and you may read it. A development-only profiling tool, React Scan, pulls crash-reporting packages into the lock file. It is loaded only in a development build, behind two environment flags, and is not part of a release.
 
-The one thing Wenlan does record about your use is the local activity history described under "What data Wenlan stores", which stays in the database on your machine.
+The local activity history described under "What data Wenlan stores" stays in
+the database on your machine, regardless of this optional statistics setting.
 
 Opening a window starts the update check listed in the table above about three seconds later. On a first run it also triggers the search model download in that table, and if you left Remote Access on, it reopens that tunnel. Beyond those, see "Images in your notes reach their host" above, because the note you open can reach the network on its own.
 
 ## The other companies involved
 
-Wenlan reaches these services, so their own terms decide what they do with the request. None of them reports back to us about you. The one place the project can see anything at all is Cloudflare's own dashboard for the relay, which shows traffic figures for that service. One of them is not merely reached: Wenlan's relay runs on Cloudflare Workers, so the project holds a Cloudflare account and is bound by Cloudflare's own terms as a customer.
+Wenlan reaches these services, so their own terms decide what they do with the request.
+The project can see Cloudflare relay traffic figures and, when optional usage
+statistics are enabled, the aggregate counters and hosting diagnostics described
+above. Wenlan's relay runs on Cloudflare Workers, so the project holds a
+Cloudflare account and is bound by Cloudflare's own terms as a customer.
 
 | Service | Why Wenlan reaches it | Their policy |
 | --- | --- | --- |
+| Vercel | Receives optional usage-statistics batches at wenlan.app | [Vercel Privacy Policy](https://vercel.com/legal/privacy-policy) |
+| Supabase | Stores the optional aggregate operation counts behind the website receiver; the App never receives database credentials | [Supabase Privacy Policy](https://supabase.com/privacy) |
 | GitHub | The two version checks, downloading a release, and installing the Claude Code or Codex plugin from Settings, which clones this repository's plugin marketplace | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |
 | Hugging Face | Downloading the search model, and any optional model you install | [Hugging Face Privacy Policy](https://huggingface.co/privacy) |
 | npm, which GitHub operates | Only when no `wenlan-mcp` binary is installed, in which case your AI client runs `npx` to fetch it | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |

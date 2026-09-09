@@ -763,6 +763,7 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
     .await?;
 
     server_state.bound_port = listener.local_addr()?.port();
+    let telemetry = server_state.telemetry.clone();
 
     server_state.maintenance_coordinator.finish_recovery();
 
@@ -797,6 +798,12 @@ async fn run_daemon(startup_repair_claim: Option<StartupRepairClaim>) -> anyhow:
     } else {
         tokio::spawn(async {})
     };
+
+    // Record readiness only after startup workers and the scheduler have been
+    // registered, immediately before the listener enters its serve loop.
+    if optional_runtime_workers_allowed(repair_recovery_pending) {
+        telemetry.start(shutdown.clone());
+    }
 
     runtime::serve_and_drain(
         repair_recovery_pending,

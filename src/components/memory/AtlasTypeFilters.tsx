@@ -37,7 +37,7 @@ export default function AtlasTypeFilters({
   const titleId = `${panelId}-title`;
   const summaryId = `${panelId}-summary`;
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<PanelPosition>({ left: VIEWPORT_EDGE, top: VIEWPORT_EDGE });
+  const [position, setPanelPosition] = useState<PanelPosition>({ left: VIEWPORT_EDGE, top: VIEWPORT_EDGE });
   const [positioned, setPositioned] = useState(false);
 
   const total = types.length;
@@ -70,7 +70,7 @@ export default function AtlasTypeFilters({
         ? above
         : Math.min(Math.max(VIEWPORT_EDGE, below), Math.max(VIEWPORT_EDGE, window.innerHeight - panelHeight - VIEWPORT_EDGE));
 
-    setPosition({ left, top });
+    setPanelPosition({ left, top });
     setPositioned(true);
   };
 

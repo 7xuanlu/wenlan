@@ -144,11 +144,23 @@ test("keeps and discards suggested Spaces through their dossier controls", async
   await page.goto("/");
   await openSpaces(page);
 
+  // Suggestions rest collapsed in the header disclosure: confirmed Spaces stay
+  // visible while suggestion rows are hidden until the disclosure opens.
+  const suggestionsDisclosure = page.locator("summary").filter({ hasText: /Suggested \(\d+\)/ });
+  await expect(suggestionsDisclosure).toBeVisible();
+  await expect(page.getByTestId("space-row-space-wenlan")).toBeVisible();
+  await expect(page.getByTestId("space-row-space-suggested")).toBeHidden();
+  await suggestionsDisclosure.click();
+  await expect(page.getByTestId("space-row-space-suggested")).toBeVisible();
+
   await page.getByTestId("space-row-space-suggested").getByRole("button", { name: "AI Workflows" }).click();
   await page.getByRole("button", { name: "Keep", exact: true }).click();
   await expect(page.getByRole("button", { name: "Keep", exact: true })).toHaveCount(0);
   await page.locator("button.space-dossier-parent").click();
 
+  // Returning to the overview remounts it with the disclosure collapsed again.
+  await suggestionsDisclosure.click();
+  await expect(page.getByTestId("space-row-space-suggested-2")).toBeVisible();
   await page.getByTestId("space-row-space-suggested-2").getByRole("button", { name: "Product Signals" }).click();
   await page.getByRole("button", { name: "Discard", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();

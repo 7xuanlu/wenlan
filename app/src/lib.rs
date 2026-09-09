@@ -35,6 +35,7 @@ mod search;
 pub mod sources;
 pub mod state;
 pub mod system_info;
+pub mod telemetry;
 #[cfg(test)]
 mod test_env;
 // Public surface consumed by tray_menu (Task 15); suppress dead_code until then.
@@ -1684,6 +1685,8 @@ pub fn run() {
             search::list_pages_explicit_browse,
             search::get_page_explicit_browse,
             search::get_truth_status,
+            telemetry::get_telemetry_status,
+            telemetry::set_telemetry_enabled,
             // Page review (M5 D7). Mints and submits in one backend call so no
             // capability ever crosses into JavaScript.
             page_review::review_page,

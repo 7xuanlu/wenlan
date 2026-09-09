@@ -62,7 +62,13 @@ describe("fixture-only native Review flavor", () => {
     );
     expect(review).toContain("tauri::Builder::default()");
     expect(review).toContain("tauri::generate_context!()");
-    expect(review).not.toMatch(/\.plugin\(|\.manage\(|\.setup\(|\.invoke_handler\(/);
+    expect(review).not.toMatch(/\.plugin\(|\.manage\(|\.invoke_handler\(/);
+    // The fixture shell aligns native traffic lights, but may register no
+    // service state, commands or production plugins.
+    expect(review.match(/crate::[a-z_]+/g)).toEqual([
+      "crate::schedule_main_window_traffic_lights_alignment",
+      "crate::schedule_main_window_traffic_lights_alignment",
+    ]);
     expect(review).not.toMatch(/WenlanClient|launchd|sidecar|updater|tray|watcher|tunnel|mcp/i);
   });
 
