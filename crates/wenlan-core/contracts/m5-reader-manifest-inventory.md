@@ -712,6 +712,8 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `GET` | `/api/status` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/status` | repair | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/steep` | main | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/telemetry` | main | no | not_applicable | `none` | — | anonymous local consent/status counters only |
+| `PUT` | `/api/telemetry` | main | no | not_applicable | `none` | — | anonymous local consent/status counters only |
 | `GET` | `/api/suggest-tags` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/tags` | main | no | not_applicable | `none` | — | no prose fields |
 | `DELETE` | `/api/tags/{name}` | main | no | not_applicable | `none` | — | no prose fields |
