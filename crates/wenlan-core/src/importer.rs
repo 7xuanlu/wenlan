@@ -790,6 +790,193 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_status_waits_for_bounded_page_turn_and_recovers_after_expiry() {
+        use wenlan_types::import::{ImportPhase, ImportPhaseState};
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_prioritytest_0", "other", None).await;
+        let now = chrono::Utc::now().timestamp();
+        // Seeded memory dates deliberately remain in 2023: processing tracks
+        // this import, never the historical date in the note.
+        db.set_app_metadata(
+            "import_batch_priority_v1:prioritytest",
+            &(now + 600).to_string(),
+        )
+        .await
+        .unwrap();
+        for step in [
+            "entity_extract",
+            "entity_link",
+            "title_enrich",
+            "page_growth",
+        ] {
+            db.record_enrichment_step("import_prioritytest_0", step, "ok", None)
+                .await
+                .unwrap();
+        }
+        db.set_app_metadata("import_priority_until_v1", &(now + 600).to_string())
+            .await
+            .unwrap();
+        let queued = db
+            .import_batch_status("prioritytest")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !queued.complete,
+            "do not stop polling before page formation is attempted"
+        );
+        assert!(db
+            .active_import_batches(20)
+            .await
+            .unwrap()
+            .iter()
+            .any(|batch| batch.batch_id == "prioritytest"));
+        assert_eq!(
+            queued
+                .phases
+                .iter()
+                .find(|p| p.phase == ImportPhase::Distill)
+                .unwrap()
+                .state,
+            ImportPhaseState::Running
+        );
+        db.set_app_metadata("import_priority_until_v1", &(now - 1).to_string())
+            .await
+            .unwrap();
+        let expired = db
+            .import_batch_status("prioritytest")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            expired.complete,
+            "an interrupted process must not leave an immortal running state"
+        );
+        assert_eq!(expired.pages_distilled, 0);
+        assert_eq!(
+            expired
+                .phases
+                .iter()
+                .find(|p| p.phase == ImportPhase::Distill)
+                .unwrap()
+                .state,
+            ImportPhaseState::Pending
+        );
+        db.persist_import_batch_priority("prioritytest", now - 1)
+            .await
+            .unwrap();
+        let complete_status = db
+            .import_batch_status("prioritytest")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(complete_status.complete);
+        assert!(
+            !db.active_import_batches(20)
+                .await
+                .unwrap()
+                .iter()
+                .any(|batch| batch.batch_id == "prioritytest"),
+            "completed batches remain filtered even while their marker is recent"
+        );
+    }
+
+    #[tokio::test]
+    async fn active_import_batches_keeps_historical_stalled_batch_after_deadline() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_historical_stalled_0", "other", None).await;
+        let now = chrono::Utc::now().timestamp();
+        db.persist_import_batch_priority("historical_stalled", now - 1)
+            .await
+            .unwrap();
+        seed_import_memory(&db, "import_too_old_0", "other", None).await;
+        db.set_app_metadata(
+            "import_batch_priority_v1:expired_marker",
+            &(now - 24 * 60 * 60 - 1).to_string(),
+        )
+        .await
+        .unwrap();
+        db.set_app_metadata(
+            "import_batch_priority_v1:too_old",
+            &(now - 24 * 60 * 60 - 1).to_string(),
+        )
+        .await
+        .unwrap();
+        let before_prune = db.active_import_batches(20).await.unwrap();
+        assert!(
+            !before_prune.iter().any(|batch| batch.batch_id == "too_old"),
+            "batches older than the 24-hour recency floor stay excluded"
+        );
+        db.persist_import_batch_priority("historical_stalled", now - 1)
+            .await
+            .unwrap();
+
+        let active = db.active_import_batches(20).await.unwrap();
+        let stalled = active
+            .iter()
+            .find(|batch| batch.batch_id == "historical_stalled")
+            .expect("a stalled historical batch remains discoverable for 24 hours");
+        assert!(!stalled.complete);
+        assert_eq!(
+            db.get_app_metadata("import_batch_priority_v1:expired_marker")
+                .await
+                .unwrap(),
+            None,
+            "the next import prunes only stale batch priority markers"
+        );
+        assert_eq!(
+            db.get_app_metadata("import_batch_priority_v1:too_old")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_overview_archive_preserves_edits_and_original_content() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let placeholder = crate::synthesis::overview::OVERVIEW_PLACEHOLDER_CONTENT;
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute("INSERT INTO pages (id,title,content,status,version,source_revision,creation_kind,kind,created_at,last_compiled,last_modified) VALUES ('old_overview','Overview',?1,'active',1,0,'research','overview','now','now','now')", libsql::params![placeholder]).await.unwrap();
+        }
+        assert!(!db
+            .archive_legacy_overview_placeholder("old_overview", 2, 0, placeholder)
+            .await
+            .unwrap());
+        assert!(!db
+            .archive_legacy_overview_placeholder("old_overview", 1, 1, placeholder)
+            .await
+            .unwrap());
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute("UPDATE pages SET user_edited=1 WHERE id='old_overview'", ())
+                .await
+                .unwrap();
+        }
+        assert!(!db
+            .archive_legacy_overview_placeholder("old_overview", 1, 0, placeholder)
+            .await
+            .unwrap());
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute("UPDATE pages SET user_edited=0 WHERE id='old_overview'", ())
+                .await
+                .unwrap();
+        }
+        assert!(db
+            .archive_legacy_overview_placeholder("old_overview", 1, 0, placeholder)
+            .await
+            .unwrap());
+        let page = db.get_page("old_overview").await.unwrap().unwrap();
+        assert_eq!(page.status, "archived");
+        assert_eq!(
+            page.content, placeholder,
+            "archive retains the original instead of deleting it"
+        );
+    }
+
+    #[tokio::test]
     async fn batch_status_reports_phase_done_failed_and_state() {
         use wenlan_types::import::{ImportPhase, ImportPhaseState};
 

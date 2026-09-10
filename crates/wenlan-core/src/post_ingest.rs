@@ -240,12 +240,11 @@ pub async fn run_page_growth_slice(
     };
 
     let Some(page) = db
-        .find_matching_page_scoped(
+        .find_growable_page_scoped(
             input.entity_id.as_deref(),
             &mem_embedding,
             growth_threshold,
             input.space.as_deref(),
-            false,
         )
         .await?
     else {
@@ -271,12 +270,11 @@ pub async fn run_page_growth_slice(
     // against the current rows and stop when this page is no longer the answer,
     // rather than spending a model call on a write the fences would refuse.
     if db
-        .find_matching_page_scoped(
+        .find_growable_page_scoped(
             input.entity_id.as_deref(),
             &mem_embedding,
             growth_threshold,
             input.space.as_deref(),
-            false,
         )
         .await?
         .is_none_or(|matched| matched.id != page.id)
@@ -284,6 +282,18 @@ pub async fn run_page_growth_slice(
         return terminal_no_match(db, &input.source_id, input.version).await;
     }
 
+    if crate::truth_adapter::page_write_permit(db, &page.id)
+        .await?
+        .is_none()
+    {
+        // A temporary truth/write fence is not evidence of no matching page.
+        // Keep this input available after the fence clears.
+        return Ok(PageGrowthSliceReport {
+            selected: true,
+            matched: true,
+            ..Default::default()
+        });
+    }
     let clean_current = crate::citations::strip_markers(&page.content);
     let evidence = db.get_page_evidence(&page.id).await.unwrap_or_default();
     let mut locators: Vec<String> = evidence
@@ -386,6 +396,17 @@ pub async fn run_page_growth_slice(
             });
         }
     };
+    if crate::truth_adapter::page_write_permit(db, &page.id)
+        .await?
+        .is_none()
+    {
+        return Ok(PageGrowthSliceReport {
+            selected: true,
+            matched: true,
+            llm_calls: 1,
+            ..Default::default()
+        });
+    }
     let updated = crate::llm_provider::strip_think_tags(&response);
     let updated = updated.trim();
     if updated.is_empty() {
@@ -1938,6 +1959,20 @@ mod tests {
             Some("work"),
         )
         .await;
+        db.set_page_review_status("ambient-growth-page", "unconfirmed")
+            .await
+            .unwrap();
+        let embedding = db
+            .generate_embeddings(&["new evidence for the ambient page".to_string()])
+            .unwrap()
+            .remove(0);
+        assert!(
+            db.find_matching_page_scoped(Some(&entity_id), &embedding, 2.0, Some("work"), false)
+                .await
+                .unwrap()
+                .is_none(),
+            "dedup keeps its existing review gate"
+        );
         let provider = Arc::new(MutatingGrowthProvider {
             db: db.clone(),
             response: "existing machine-owned page body. New evidence.[1]".to_string(),
@@ -1968,6 +2003,145 @@ mod tests {
             .expect("page growth receipt");
         assert_eq!(receipt.status, "ok");
         assert_eq!(receipt.input_version, Some(1));
+    }
+
+    #[tokio::test]
+    async fn page_growth_write_fence_defers_without_consuming_source() {
+        let (db, _dir) = test_db().await;
+        let db = Arc::new(db);
+        let entity_id = db
+            .create_entity("Deferred Growth", "Topic", Some("work"))
+            .await
+            .unwrap();
+        insert_growth_page(
+            &db,
+            "deferred-page",
+            &entity_id,
+            "work",
+            "existing machine-owned page body",
+        )
+        .await;
+        seed_page_growth_memory(
+            &db,
+            "deferred-memory",
+            "new evidence for the ambient page",
+            Some(&entity_id),
+            Some("work"),
+        )
+        .await;
+        let provider = Arc::new(MutatingGrowthProvider {
+            db: db.clone(),
+            response: "existing machine-owned page body. New evidence.[1]".to_string(),
+            mutation: GrowthMutation::None,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let lease = db.begin_cutover().await.unwrap();
+        let deferred = run_page_growth_slice(&db, &llm, &PromptRegistry::default(), 2.0, None)
+            .await
+            .unwrap();
+        assert!(deferred.selected && deferred.matched);
+        assert!(!deferred.committed && !deferred.terminal_no_match);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(db
+            .get_enrichment_steps("deferred-memory")
+            .await
+            .unwrap()
+            .iter()
+            .all(|step| step.step != "page_growth"));
+        db.abort_cutover(lease).await.unwrap();
+        let retried = run_page_growth_slice(&db, &llm, &PromptRegistry::default(), 2.0, None)
+            .await
+            .unwrap();
+        assert!(retried.committed);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert!(db
+            .get_page("deferred-page")
+            .await
+            .unwrap()
+            .unwrap()
+            .source_memory_ids
+            .contains(&"deferred-memory".to_string()));
+    }
+
+    #[tokio::test]
+    async fn page_growth_legacy_no_match_repair_runs_once_and_preserves_linked_receipts() {
+        let (db, _dir) = test_db().await;
+        for id in ["repair-orphan", "repair-linked", "repair-archived"] {
+            seed_page_growth_memory(
+                &db,
+                id,
+                "same durable source evidence for growth repair",
+                None,
+                Some("work"),
+            )
+            .await;
+            db.record_enrichment_step_at_version(id, "page_growth", "ok", None, 1)
+                .await
+                .unwrap();
+        }
+        let entity = db
+            .create_entity("Repair", "Topic", Some("work"))
+            .await
+            .unwrap();
+        insert_growth_page(
+            &db,
+            "repair-page",
+            &entity,
+            "work",
+            "existing research content",
+        )
+        .await;
+        db.link_page_source("repair-page", "repair-linked", "page_growth")
+            .await
+            .unwrap();
+        insert_growth_page(
+            &db,
+            "archived-repair-page",
+            &entity,
+            "work",
+            "archived research content",
+        )
+        .await;
+        db.link_page_source("archived-repair-page", "repair-archived", "page_growth")
+            .await
+            .unwrap();
+        db.archive_page("archived-repair-page").await.unwrap();
+        let candidate = db
+            .get_page_growth_candidate(3, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(["repair-orphan", "repair-archived"].contains(&candidate.source_id.as_str()));
+        db.record_enrichment_step_at_version(&candidate.source_id, "page_growth", "ok", None, 1)
+            .await
+            .unwrap();
+        let second = db
+            .get_page_growth_candidate(3, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(["repair-orphan", "repair-archived"].contains(&second.source_id.as_str()));
+        assert_ne!(candidate.source_id, second.source_id);
+        db.record_enrichment_step_at_version(&second.source_id, "page_growth", "ok", None, 1)
+            .await
+            .unwrap();
+        assert!(
+            db.get_page_growth_candidate(3, true)
+                .await
+                .unwrap()
+                .is_none(),
+            "one-time repair must not restart terminal work"
+        );
+        let linked = db
+            .get_enrichment_steps("repair-linked")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|step| step.step == "page_growth")
+            .unwrap();
+        assert_eq!(linked.status, "ok");
+        assert_eq!(linked.attempts, 1);
     }
 
     #[tokio::test]

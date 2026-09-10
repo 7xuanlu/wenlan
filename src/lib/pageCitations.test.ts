@@ -22,6 +22,13 @@ const cite = (
   ...over,
 });
 
+const kindLabels = {
+  memory: "Memory",
+  external_url: "Link",
+  external_file: "File",
+  authored: "Written here",
+} as const;
+
 describe("processCitations", () => {
   it("returns state none and unchanged content when no markers and no citations", () => {
     const r = processCitations("Plain prose. No markers here.", undefined);
@@ -107,29 +114,50 @@ describe("stripCitationLinks", () => {
 });
 
 describe("citationDisplayLabel", () => {
-  it("shows memory locators as-is", () => {
-    expect(citationDisplayLabel(cite(1, 1))).toBe("mem-1");
+  it("uses a localized source kind for imported memory locators", () => {
+    expect(
+      citationDisplayLabel(
+        cite(1, 1, { locator: "import_20260908T150227Z_0_0" }),
+        kindLabels,
+      ),
+    ).toBe("Memory");
   });
 
-  it("truncates URLs to hostname", () => {
+  it("keeps a short URL hostname beside its localized kind", () => {
     const c = cite(1, 1, {
       source_kind: "external_url",
       locator: "https://docs.rs/serde/latest/serde/",
     });
-    expect(citationDisplayLabel(c)).toBe("docs.rs");
+    expect(citationDisplayLabel(c, kindLabels)).toBe("Link · docs.rs");
   });
 
-  it("truncates file paths to basename", () => {
+  it("keeps a short file basename beside its localized kind", () => {
     const c = cite(1, 1, {
       source_kind: "external_file",
       locator: "/Users/l/notes/design.md",
     });
-    expect(citationDisplayLabel(c)).toBe("design.md");
+    expect(citationDisplayLabel(c, kindLabels)).toBe("File · design.md");
   });
 
-  it("labels authored citations", () => {
-    expect(citationDisplayLabel(cite(1, 1, { source_kind: "authored" }))).toBe(
-      "authored",
-    );
+  it("keeps a relative file locator intact", () => {
+    const c = cite(1, 1, {
+      source_kind: "external_file",
+      locator: "design.md",
+    });
+    expect(citationDisplayLabel(c, kindLabels)).toBe("File · design.md");
+  });
+
+  it("does not put a long external basename in prose", () => {
+    const c = cite(1, 1, {
+      source_kind: "external_file",
+      locator: "/Users/l/notes/a-file-name-that-is-too-long-to-inline.md",
+    });
+    expect(citationDisplayLabel(c, kindLabels)).toBe("File");
+  });
+
+  it("labels authored citations with the localized source kind", () => {
+    expect(
+      citationDisplayLabel(cite(1, 1, { source_kind: "authored" }), kindLabels),
+    ).toBe("Written here");
   });
 });

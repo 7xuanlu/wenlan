@@ -1345,6 +1345,122 @@ pub async fn refresh_page(
     .await
 }
 
+/// A verified replacement body awaiting its canonical atomic write.
+/// Keeping generation separate lets Overview propose new evidence without
+/// disturbing the saved page when the candidate fails verification.
+pub(crate) struct CandidateSynthesis {
+    pub content: String,
+    pub citations_json: String,
+    pub stats_summary: String,
+    pub summary: Option<String>,
+}
+
+/// Outcome of [`synthesize_candidate_body`].
+pub(crate) enum CandidateOutcome {
+    /// Per-claim verification passed; ready for one canonical write.
+    Verified(CandidateSynthesis),
+    /// Per-claim verification failed its gate; nothing was written.
+    Discarded { discard_reason: String },
+    /// No synthesis attempted: empty source list, all sources orphaned, or
+    /// empty LLM output.
+    Unavailable,
+}
+
+/// Cap on source text length embedded in one numbered source entry.
+const CANDIDATE_MEM_SNIPPET_CAP: usize = 800;
+
+/// Synthesize one candidate body from `source_ids` under `system_prompt` and
+/// verify its per-claim `[N]` citations — the shared synthesis/verification
+/// core of [`refresh_page_with_prompt`], factored out so first-time creation
+/// can run the exact same gate before any row exists. Never writes.
+pub(crate) async fn synthesize_candidate_body(
+    db: &MemoryDB,
+    llm: &Arc<dyn LlmProvider>,
+    system_prompt: &str,
+    title: &str,
+    workspace: Option<&str>,
+    source_ids: &[String],
+) -> Result<CandidateOutcome, WenlanError> {
+    if source_ids.is_empty() {
+        return Ok(CandidateOutcome::Unavailable);
+    }
+    let memories = db.get_memory_contents_by_ids(source_ids).await?;
+    if memories.is_empty() {
+        log::warn!("[refresh] page '{title}' sources are all orphaned, skipping");
+        return Ok(CandidateOutcome::Unavailable);
+    }
+
+    // Resolve each source's typed kind (spec §5.1) so a folder-doc or webpage
+    // source cited here carries external_file / external_url, not the
+    // hardcoded 'memory' default.
+    let ids: Vec<String> = memories.iter().map(|(id, _)| id.clone()).collect();
+    let kinds = db.resolve_source_kinds(&ids).await.unwrap_or_default();
+    let numbered: Vec<crate::citations::NumberedSource> = memories
+        .iter()
+        .enumerate()
+        .map(|(i, (id, content))| crate::citations::NumberedSource {
+            index: (i + 1) as u32,
+            source_kind: kinds
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| "memory".to_string()),
+            locator: id.clone(),
+            text: content.chars().take(CANDIDATE_MEM_SNIPPET_CAP).collect(),
+        })
+        .collect();
+    let memories_block = crate::citations::build_numbered_block(&numbered);
+    let user_prompt = build_page_compile_user_prompt(db, title, workspace, &memories_block).await;
+
+    let raw = llm
+        .generate(LlmRequest {
+            system_prompt: Some(system_prompt.to_string()),
+            user_prompt,
+            max_tokens: llm.recommended_max_output(),
+            temperature: 0.1,
+            label: Some("refresh_page".into()),
+            timeout_secs: None,
+        })
+        .await
+        .map_err(|e| WenlanError::Llm(format!("refresh_page LLM: {e}")))?;
+
+    let body = crate::llm_provider::strip_think_tags(&raw)
+        .trim()
+        .to_string();
+    if body.is_empty() {
+        log::warn!("[refresh] empty LLM output for '{title}', skipping");
+        return Ok(CandidateOutcome::Unavailable);
+    }
+
+    // Verify [N] markers against the numbered sources; out-of-range markers are
+    // stripped from the body before it is saved.
+    let (content, cites, stats) = crate::citations::process_citation_output(&body, &numbered);
+
+    // Fail-closed (spec §7): discard when per-claim citation verification
+    // verifies zero claims or leaves a majority unverified. The previous
+    // whole-body sentence-majority scorer false-rejected thin-source pages:
+    // DISTILL_PAGE/OVERVIEW_SUMMARY require elaboration and Open Questions
+    // sentences that carry no markers by design.
+    if stats.verified == 0 || stats.unverified > stats.verified {
+        log::warn!(
+            "[refresh] page '{title}' synthesis failed the citation verification gate ({}); discarding",
+            stats.summary()
+        );
+        return Ok(CandidateOutcome::Discarded {
+            discard_reason: format!("citation verification failed ({})", stats.summary()),
+        });
+    }
+
+    log::info!("[refresh] page '{title}' citations: {}", stats.summary());
+    let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
+    let summary = extract_page_summary(&content);
+    Ok(CandidateOutcome::Verified(CandidateSynthesis {
+        content,
+        citations_json,
+        stats_summary: stats.summary(),
+        summary,
+    }))
+}
+
 /// Same op as [`refresh_page`], parameterized on the system prompt. Lets a
 /// caller synthesize with a different prompt than the generic `distill_page`
 /// template while still going through the ONE re-distill path (citation
@@ -1361,6 +1477,30 @@ pub(crate) async fn refresh_page_with_prompt(
     page_id: &str,
     reason: RefreshReason,
     knowledge_path: Option<&std::path::Path>,
+) -> Result<RefreshOutcome, WenlanError> {
+    refresh_page_with_candidate_sources(
+        db,
+        llm,
+        system_prompt,
+        page_id,
+        reason,
+        knowledge_path,
+        None,
+    )
+    .await
+}
+
+/// Propose evidence without invalidating the saved page before verification.
+/// The successful write commits it with the body under the original fences.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn refresh_page_with_candidate_sources(
+    db: &MemoryDB,
+    llm: &Arc<dyn LlmProvider>,
+    system_prompt: &str,
+    page_id: &str,
+    reason: RefreshReason,
+    knowledge_path: Option<&std::path::Path>,
+    candidate_sources: Option<&[String]>,
 ) -> Result<RefreshOutcome, WenlanError> {
     // The ambient sweep (`SourceChanged`) is not an HTTP route, so there is no
     // caller grant to pass -- it asks the automatic-reader permit directly,
@@ -1402,122 +1542,66 @@ pub(crate) async fn refresh_page_with_prompt(
     if source_ids.is_empty() {
         source_ids = page.source_memory_ids.clone();
     }
+    if let Some(candidate_sources) = candidate_sources {
+        source_ids = candidate_sources.to_vec();
+    }
     if source_ids.is_empty() {
         log::warn!("[refresh] page '{}' has no sources, skipping", page.id);
         return Ok(RefreshOutcome::default());
     }
 
-    let memories = db.get_memory_contents_by_ids(&source_ids).await?;
-    if memories.is_empty() {
-        log::warn!(
-            "[refresh] page '{}' sources are all orphaned, skipping",
-            page.id
-        );
-        return Ok(RefreshOutcome::default());
-    }
+    // Shared synthesis/verification core (same gate as first-time creation):
+    // synthesize the candidate, verify its [N] markers, write nothing yet.
+    let candidate = match synthesize_candidate_body(
+        db,
+        llm,
+        system_prompt,
+        &page.title,
+        page_workspace(&page),
+        &source_ids,
+    )
+    .await?
+    {
+        CandidateOutcome::Unavailable => return Ok(RefreshOutcome::default()),
+        CandidateOutcome::Discarded { discard_reason } => {
+            // Surface the discard instead of leaving the page silently
+            // "updating..." forever: persist WHY on the page row so reads can
+            // show it, and hand it back on the outcome so the re-distill routes
+            // can put it in their responses. The marker is cleared by every
+            // successful canonical page write and by every mark-stale site (a
+            // real source change re-arms the automatic retry).
+            db.set_page_refresh_blocked_reason(page_id, &discard_reason)
+                .await?;
+            return Ok(RefreshOutcome {
+                discard_reason: Some(discard_reason),
+                ..RefreshOutcome::default()
+            });
+        }
+        CandidateOutcome::Verified(candidate) => candidate,
+    };
 
-    const MEM_SNIPPET_CAP: usize = 800;
-    // Resolve each source's typed kind (spec §5.1) so a folder-doc or webpage
-    // source cited here carries external_file / external_url, not the
-    // hardcoded 'memory' default.
-    let ids: Vec<String> = memories.iter().map(|(id, _)| id.clone()).collect();
-    let kinds = db.resolve_source_kinds(&ids).await.unwrap_or_default();
-    let numbered: Vec<crate::citations::NumberedSource> = memories
-        .iter()
-        .enumerate()
-        .map(|(i, (id, content))| crate::citations::NumberedSource {
-            index: (i + 1) as u32,
-            source_kind: kinds
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| "memory".to_string()),
-            locator: id.clone(),
-            text: content.chars().take(MEM_SNIPPET_CAP).collect(),
-        })
-        .collect();
-    let memories_block = crate::citations::build_numbered_block(&numbered);
-    let user_prompt =
-        build_page_compile_user_prompt(db, &page.title, page_workspace(&page), &memories_block)
-            .await;
-
-    let raw = llm
-        .generate(LlmRequest {
-            system_prompt: Some(system_prompt.to_string()),
-            user_prompt,
-            max_tokens: llm.recommended_max_output(),
-            temperature: 0.1,
-            label: Some("refresh_page".into()),
-            timeout_secs: None,
-        })
-        .await
-        .map_err(|e| WenlanError::Llm(format!("refresh_page LLM: {e}")))?;
-
-    let body = crate::llm_provider::strip_think_tags(&raw)
-        .trim()
-        .to_string();
-    if body.is_empty() {
-        log::warn!("[refresh] empty LLM output for '{}', skipping", page.title);
-        return Ok(RefreshOutcome::default());
-    }
-
-    // Verify [N] markers against the numbered sources; out-of-range markers are
-    // stripped from the body before it is saved.
-    let (content, cites, stats) = crate::citations::process_citation_output(&body, &numbered);
-
-    // Fail-closed (spec §7): discard when per-claim citation verification
-    // verifies zero claims or leaves a majority unverified. The previous
-    // whole-body sentence-majority scorer false-rejected thin-source pages:
-    // DISTILL_PAGE/OVERVIEW_SUMMARY require elaboration and Open Questions
-    // sentences that carry no markers by design.
-    if stats.verified == 0 || stats.unverified > stats.verified {
-        log::warn!(
-            "[refresh] page '{}' synthesis failed the citation verification gate ({}); discarding",
-            page.title,
-            stats.summary()
-        );
-        // Surface the discard instead of leaving the page silently
-        // "updating..." forever: persist WHY on the page row so reads can
-        // show it, and hand it back on the outcome so the re-distill routes
-        // can put it in their responses. The marker is cleared by every
-        // successful canonical page write and by every mark-stale site (a
-        // real source change re-arms the automatic retry).
-        let discard_reason = format!("citation verification failed ({})", stats.summary());
-        db.set_page_refresh_blocked_reason(page_id, &discard_reason)
-            .await?;
-        return Ok(RefreshOutcome {
-            discard_reason: Some(discard_reason),
-            ..RefreshOutcome::default()
-        });
-    }
-
-    log::info!(
-        "[refresh] page '{}' citations: {}",
-        page.title,
-        stats.summary()
-    );
     // Atomicity (spec §5.1): pass the freshly verified [N] citation map INTO
     // update_page so content, citations, and changelog commit in ONE
     // transaction (mirrors grow_page). CAS: for source-changed refreshes
     // `require_stale = true` means the write only lands while `stale_reason IS
     // NOT NULL`, so a concurrent agent PUT that cleared staleness wins the race
     // without TOCTOU.
-    let citations_json = serde_json::to_string(&cites).unwrap_or_else(|_| "[]".to_string());
-    let summary = extract_page_summary(&content);
+    let summary = candidate.summary.clone();
     let result = crate::post_write::update_page_at_source_revision(
         db,
         page_id,
         UpdatePageRequest {
-            content,
+            content: candidate.content,
             source_memory_ids: source_ids,
-            expected_version: None,
+            expected_version: candidate_sources.map(|_| page.version),
             caller_id: None,
             operation_id: None,
         },
         reason.edited_by(),
-        true,
+        candidate_sources.is_none(),
         source_revision,
         knowledge_path,
-        Some((citations_json, stats.summary())),
+        Some((candidate.citations_json, candidate.stats_summary)),
     )
     .await?;
 

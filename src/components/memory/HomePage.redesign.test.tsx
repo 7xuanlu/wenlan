@@ -59,6 +59,7 @@ function renderHome(
     onSelectPage?: (pageId: string) => void;
     onCreatePage?: (space: string | null) => void;
     onOpenIntelligenceSettings?: () => void;
+    onStartFirstUse?: () => void;
   } = {},
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -72,6 +73,7 @@ function renderHome(
         onSelectPage={props.onSelectPage}
         onCreatePage={props.onCreatePage ?? (() => {})}
         onOpenIntelligenceSettings={props.onOpenIntelligenceSettings ?? (() => {})}
+        onStartFirstUse={props.onStartFirstUse}
       />
     </QueryClientProvider>,
   );
@@ -210,6 +212,25 @@ beforeEach(async () => {
 });
 
 describe("HomePage redesign", () => {
+  it("opens the guided experience from the existing empty page slot", async () => {
+    const onStartFirstUse = vi.fn();
+    renderHome({ onStartFirstUse });
+    const empty = await screen.findByTestId("wiki-page-empty");
+    await userEvent.click(within(empty).getByRole("button", { name: i18n.t("firstUse.entry") }));
+    expect(onStartFirstUse).toHaveBeenCalledOnce();
+    expect(screen.getAllByTestId("wiki-home")).toHaveLength(1);
+  });
+
+  it("keeps the guided experience reachable after knowledge pages exist", async () => {
+    vi.mocked(tauri.listPages).mockResolvedValue([page({ id: "real-page", title: "My knowledge" })]);
+    const onStartFirstUse = vi.fn();
+    renderHome({ onStartFirstUse });
+    await screen.findByText("My knowledge");
+    await userEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.entry") }));
+    expect(onStartFirstUse).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("wiki-page-empty")).not.toBeInTheDocument();
+  });
+
   it.each([
     ["en", "Home overview", "Index"],
     ["zh-Hans", "首页概览", "索引"],

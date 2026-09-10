@@ -8,7 +8,8 @@ export type View =
   | { readonly kind: "entity"; readonly entityId: string }
   | { readonly kind: "graph" }
   | { readonly kind: "home" }
-  | { readonly kind: "import" }
+  | { readonly kind: "first-use"; readonly showKnowledge?: boolean; readonly batchId?: string }
+  | { readonly kind: "import"; readonly fromFirstUse?: boolean }
   | { readonly kind: "memory"; readonly sourceId: string }
   | { readonly kind: "page"; readonly pageId: string }
   | { readonly kind: "page-draft"; readonly draftId?: string; readonly space: string | null }
@@ -29,6 +30,7 @@ function assertNever(value: never): never {
 export function activeNavigationForView(view: View): GlobalNavigation | null {
   switch (view.kind) {
     case "home":
+    case "first-use":
       return "home";
     case "activity":
     case "distill-review":

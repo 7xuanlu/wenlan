@@ -3229,7 +3229,7 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
     );
     assert_eq!(
         analysis.support_calls.len(),
-        1051,
+        1059,
         "PR-D integration must expose the frozen 967 support calls, the 6 PR-D test identities, \
          the 5 M5 derivation-marker fixture calls, the 10 M6 shadow-promoter fixture calls, \
          the 7 G6 BindPageLink repair-test calls (G6 Stage 2 PR 2b, item 3: \
@@ -3360,7 +3360,11 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
          batch_status_counts_distilled_pages_citing_members adds test_primary_session|1 \
          + TestDbSession::execute|1..2 for the two real `pages` rows its citation edges \
          point at -- edges_space_fence aborts an edge whose endpoint row is missing, so \
-         the distilled pages have to be real rows"
+         the distilled pages have to be real rows; plus the 8 legacy Overview regression-test \
+         calls: importer.rs::legacy_overview_archive_preserves_edits_and_original_content \
+         contributes test_primary_session|1..3 + TestDbSession::execute|1..3, and \
+         synthesis/overview.rs::user_edited_overview_is_untouched contributes \
+         test_primary_session|1 + TestDbSession::execute|1"
     );
 }
 

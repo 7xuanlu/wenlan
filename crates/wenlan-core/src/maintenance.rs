@@ -439,6 +439,11 @@ pub async fn run_maintenance_stage_slice(
                 knowledge_path,
             )
             .await?;
+            if let Some(reason) = overview.discard_reason {
+                return Err(WenlanError::Llm(format!(
+                    "Overview was not updated: {reason}"
+                )));
+            }
             progressed = overview.wrote;
             result.overview_refreshed = usize::from(overview.wrote);
         }

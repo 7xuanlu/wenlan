@@ -1,0 +1,853 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* FirstUseGuide + FirstUseSample. Fills the main content area only: no page
+   shell, sidebar, topbar, or theme controls of its own. All color and type
+   comes from the current --mem-* tokens and app font stacks. */
+
+.fug-root {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 24px 64px;
+  width: 100%;
+}
+
+.fug-root[data-view="sample"] {
+  max-width: 1000px;
+}
+
+.fug-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fug-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fug-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  padding: 4px 0;
+}
+
+.fug-eyebrow {
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  color: var(--mem-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.fug-title {
+  font-family: var(--mem-font-heading);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--mem-text);
+  margin: 0;
+  line-height: 1.25;
+}
+
+.fug-lede {
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  color: var(--mem-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+  max-width: 62ch;
+}
+
+.fug-steps,
+.fug-options {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fug-steps li,
+.fug-options li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--mem-border);
+  border-radius: 12px;
+  background-color: var(--mem-surface);
+}
+
+.fug-options li {
+  align-items: center;
+}
+
+.fug-options li div {
+  flex: 1;
+  min-width: 0;
+}
+
+.fug-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background-color: var(--mem-indigo-bg);
+  color: var(--mem-accent-indigo);
+  font-size: 18px;
+}
+
+.fug-step-title {
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--mem-text);
+  margin: 0 0 4px;
+}
+
+.fug-step-body {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.fug-button-primary,
+.fug-button-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px;
+  padding: 9px 16px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.fug-button-primary {
+  background-color: var(--mem-accent-indigo);
+  color: white;
+  border: none;
+}
+
+.fug-button-secondary {
+  background: none;
+  border: 1px solid var(--mem-border);
+  color: var(--mem-text);
+}
+
+.fug-button-secondary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.fus-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.fus-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  align-self: flex-start;
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-accent-indigo);
+  padding: 4px 0;
+}
+
+.fus-link:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Sample walkthrough ─────────────────────────────── */
+
+.fug-sample {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fus-animation-label {
+  font-family: var(--mem-font-mono);
+  font-size: 11px;
+  color: var(--mem-text-tertiary);
+  white-space: nowrap;
+}
+
+.fus-phases {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.fus-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  background-color: var(--mem-surface);
+  border: 1px solid var(--mem-border);
+  border-radius: 999px;
+  padding: 6px 12px 6px 6px;
+  cursor: pointer;
+}
+
+.fus-phase.is-active {
+  color: var(--mem-accent-indigo);
+  border-color: var(--mem-accent-indigo);
+  background-color: var(--mem-indigo-bg);
+}
+
+.fus-phase-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-color: var(--mem-hover);
+  font-size: 12px;
+}
+
+.fus-phase-body {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  margin: 0;
+}
+
+.fus-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fus-workbench {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 640px) {
+  .fus-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.fus-rack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fus-rack-heading {
+  font-family: var(--mem-font-mono);
+  font-size: 11px;
+  color: var(--mem-text-tertiary);
+  margin: 0;
+}
+
+.fus-rack-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  text-align: left;
+  width: 100%;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background-color: var(--mem-surface);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+}
+
+.fus-rack-card[data-linked="true"] {
+  border-color: color-mix(in srgb, var(--mem-accent-sage) 38%, var(--mem-border));
+}
+
+.fus-rack-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fus-rack-title {
+  font-family: var(--mem-font-heading);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--mem-text);
+}
+
+.fus-rack-excerpt,
+.fus-rack-point {
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  line-height: 1.55;
+}
+
+.fus-doc {
+  border: 1px solid var(--mem-border);
+  border-radius: 12px;
+  background-color: var(--mem-surface);
+  padding: 20px;
+  min-height: 220px;
+  min-width: 0;
+}
+
+.fus-doc > div,
+.fus-doc > ul,
+.fus-doc > article,
+.fus-doc > p {
+  animation: fus-fade-in 0.4s ease both;
+}
+
+@keyframes fus-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.fus-doc mark,
+.fus-rack-card mark,
+.fus-dialog mark {
+  background-color: color-mix(in srgb, var(--mem-accent-warm) 25%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.fus-forming {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-tertiary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.fus-doc-heading {
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--mem-text-secondary);
+  margin: 0 0 10px;
+}
+
+.fus-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  color: var(--mem-text-secondary);
+  border: 1px solid var(--mem-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-top: 6px;
+  background: none;
+  cursor: default;
+}
+
+button.fus-marker {
+  cursor: pointer;
+  margin-top: 0;
+}
+
+.fus-source-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+[data-source-type="memory"] .fus-source-icon,
+.fus-source-icon[data-source-type="memory"] {
+  color: var(--mem-accent-indigo);
+  background-color: var(--mem-indigo-bg);
+}
+
+[data-source-type="file"] .fus-source-icon {
+  color: var(--mem-accent-warm);
+  background-color: color-mix(in srgb, var(--mem-accent-warm) 12%, transparent);
+}
+
+[data-source-type="page"] .fus-source-icon {
+  color: var(--mem-accent-sage);
+  background-color: color-mix(in srgb, var(--mem-accent-sage) 12%, transparent);
+}
+
+[data-source-type="text"] .fus-source-icon {
+  color: var(--mem-accent-glow);
+  background-color: color-mix(in srgb, var(--mem-accent-glow) 12%, transparent);
+}
+
+.fus-source-kind {
+  display: block;
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+  color: var(--mem-text-tertiary);
+}
+
+.fus-extract-list,
+.fus-connect-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fus-extract-list li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text);
+  line-height: 1.6;
+  padding: 10px 12px;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background-color: var(--mem-bg);
+}
+
+.fus-connect-list li {
+  padding: 10px 12px;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background-color: var(--mem-bg);
+}
+
+.fus-connect-list p {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text);
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+
+.fus-connect-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fus-result-page h2 {
+  font-family: var(--mem-font-heading);
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--mem-text);
+  margin: 0 0 4px;
+}
+
+.fus-result-subtitle {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  margin: 0 0 12px;
+}
+
+.fus-result-rule {
+  border-top: 1px solid var(--mem-border);
+  margin: 0 0 12px;
+}
+
+.fus-result-paragraph {
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  color: var(--mem-text);
+  line-height: 1.7;
+  margin: 0 0 12px;
+}
+
+.fus-citation {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 1px 10px;
+  margin-left: 6px;
+  cursor: pointer;
+  vertical-align: middle;
+  border: 1px solid var(--mem-border);
+  background-color: var(--mem-bg);
+  color: var(--mem-text-secondary);
+}
+
+.fus-related-card {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background-color: var(--mem-bg);
+}
+
+.fus-related-eyebrow {
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mem-text-tertiary);
+  margin: 0 0 4px;
+}
+
+.fus-related-title {
+  font-family: var(--mem-font-heading);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--mem-text);
+  margin: 0 0 4px;
+}
+
+.fus-related-body {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+
+/* ── Dialogs ────────────────────────────────────────── */
+
+.fus-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.4);
+  z-index: 1100;
+  padding: 24px;
+}
+
+.fus-dialog {
+  max-width: 520px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 24px;
+  border-radius: 16px;
+  background-color: var(--mem-bg);
+  border: 1px solid var(--mem-border);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.35);
+}
+
+.fus-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.fus-dialog-header h2 {
+  font-family: var(--mem-font-heading);
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--mem-text);
+  margin: 0 0 4px;
+}
+
+.fus-dialog-origin {
+  font-family: var(--mem-font-mono);
+  font-size: 11px;
+  color: var(--mem-text-tertiary);
+  margin: 0;
+}
+
+.fus-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--mem-text-secondary);
+  font-size: 16px;
+}
+
+.fus-quote {
+  font-family: var(--mem-font-heading);
+  font-size: 15px;
+  color: var(--mem-text);
+  line-height: 1.6;
+  border-left: 3px solid var(--mem-accent-indigo);
+  padding-left: 12px;
+  margin: 0 0 16px;
+}
+
+.fus-original p {
+  display: flex;
+  gap: 10px;
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  line-height: 1.7;
+  margin: 0 0 6px;
+}
+
+.fus-original p[data-cited="true"] {
+  color: var(--mem-text);
+  background-color: var(--mem-indigo-bg);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.fus-line-number {
+  font-family: var(--mem-font-mono);
+  font-size: 11px;
+  color: var(--mem-text-tertiary);
+  min-width: 16px;
+  text-align: right;
+}
+
+/* ── AI-use panel ───────────────────────────────────── */
+
+.fus-use {
+  border: 1px solid var(--mem-border);
+  border-radius: 12px;
+  background-color: var(--mem-surface);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fus-use h2 {
+  font-family: var(--mem-font-heading);
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--mem-text);
+  margin: 0;
+}
+
+.fus-use > p {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.fus-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.fus-tab {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mem-text-tertiary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.fus-tab.is-selected {
+  color: var(--mem-accent-indigo);
+  border-bottom-color: var(--mem-accent-indigo);
+}
+
+.fus-command-label {
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  color: var(--mem-text-secondary);
+  margin: 0 0 6px;
+}
+
+.fus-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  background-color: var(--mem-bg);
+}
+
+.fus-command-row code,
+.fus-secondary-commands code {
+  flex: 1;
+  font-family: var(--mem-font-mono);
+  font-size: 12px;
+  color: var(--mem-text);
+  overflow-wrap: anywhere;
+}
+
+.fus-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  color: var(--mem-accent-indigo);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.fus-secondary-commands {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fus-secondary-commands li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fus-secondary-commands li > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fus-secondary-commands span {
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  color: var(--mem-text-tertiary);
+}
+
+.fus-copy-error {
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  color: #ef4444;
+  margin: 4px 0 0;
+}
+
+.fus-note {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.fus-warning {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: #ef4444;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ── Live view ──────────────────────────────────────── */
+
+.fus-section-title {
+  font-family: var(--mem-font-heading);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--mem-text);
+  margin: 8px 0 4px;
+}
+
+.fus-state {
+  border: 1px solid var(--mem-border);
+  border-radius: 12px;
+  background-color: var(--mem-surface);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fus-state p {
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  color: var(--mem-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.fus-pages {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fus-page-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  color: var(--mem-text);
+  background-color: var(--mem-surface);
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fus-doc > div,
+  .fus-doc > ul,
+  .fus-doc > article,
+  .fus-doc > p {
+    animation: none;
+  }
+}

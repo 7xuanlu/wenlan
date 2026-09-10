@@ -31,7 +31,7 @@ describe("taxonomy and product copy", () => {
   });
 
   it("does not advertise goal in import or agent-trust copy", () => {
-    const importView = read("src/components/memory/ImportView.tsx");
+    const importView = read("src/components/memory/importCopy.ts");
     const agents = read("src/lib/agents.ts");
 
     expect(importView).toContain(

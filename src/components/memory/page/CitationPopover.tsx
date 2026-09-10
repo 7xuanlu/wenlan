@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { openFile, type MemoryItem, type PageCitation } from "../../../lib/tauri";
+import type { CitationKindLabels } from "../../../lib/pageCitations";
 import { relativeMs } from "./format";
 
 interface CitationPopoverProps {
   id: string;
   citation: PageCitation;
+  kindLabels: CitationKindLabels;
   sourceMemory: MemoryItem | null;
   sourcesLoading: boolean;
   anchorRef: React.RefObject<HTMLButtonElement | null>;
@@ -15,6 +18,9 @@ interface CitationPopoverProps {
   /** Why the last attempt to open this citation's file or link was refused. */
   openFailure: string | null;
   onOpenTarget: () => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  onEscape: () => void;
 }
 
 const WIDTH = 280;
@@ -46,29 +52,19 @@ export async function openCitationTarget(citation: PageCitation): Promise<string
   }
 }
 
-// Spec: external_url shows a *domain* badge, other kinds a fixed label.
-function kindBadge(citation: PageCitation): string {
-  if (citation.source_kind === "external_url") {
-    try {
-      return new URL(citation.locator).hostname;
-    } catch {
-      return "Web";
-    }
-  }
-  return { memory: "Source memory", external_file: "File", authored: "Authored" }[
-    citation.source_kind
-  ];
-}
-
 export default function CitationPopover({
   id,
   citation,
+  kindLabels,
   sourceMemory,
   sourcesLoading,
   anchorRef,
   onOpenMemory,
   openFailure,
   onOpenTarget,
+  onMouseEnter,
+  onMouseLeave,
+  onEscape,
 }: CitationPopoverProps) {
   const { t } = useTranslation();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -77,15 +73,24 @@ export default function CitationPopover({
   // Minimal viewport collision handling: below the chip by default, flip
   // above when it would overflow the bottom, clamp horizontally.
   useLayoutEffect(() => {
-    const anchor = anchorRef.current?.getBoundingClientRect();
-    if (!anchor) return;
-    const height = boxRef.current?.getBoundingClientRect().height ?? 120;
-    const flip =
-      anchor.bottom + height + 8 > window.innerHeight && anchor.top - height - 8 > 0;
-    setPos({
-      top: flip ? anchor.top - height - 8 : anchor.bottom + 4,
-      left: Math.min(Math.max(anchor.left, 8), Math.max(window.innerWidth - WIDTH - 8, 8)),
-    });
+    const updatePosition = () => {
+      const anchor = anchorRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const height = boxRef.current?.getBoundingClientRect().height ?? 120;
+      const flip =
+        anchor.bottom + height + 8 > window.innerHeight && anchor.top - height - 8 > 0;
+      setPos({
+        top: flip ? anchor.top - height - 8 : anchor.bottom + 4,
+        left: Math.min(Math.max(anchor.left, 8), Math.max(window.innerWidth - WIDTH - 8, 8)),
+      });
+    };
+
+    updatePosition();
+    const box = boxRef.current;
+    if (typeof ResizeObserver === "undefined" || !box) return;
+    const resizeObserver = new ResizeObserver(updatePosition);
+    resizeObserver.observe(box);
+    return () => resizeObserver.disconnect();
   }, [anchorRef]);
 
   const mono = {
@@ -110,9 +115,61 @@ export default function CitationPopover({
     cursor: "pointer",
   } as const;
 
-  const snippet = sourceMemory?.content
-    ? sourceMemory.content.replace(/\s+/g, " ").trim().slice(0, 200)
+  const sourceExcerpt = sourceMemory?.content || sourceMemory?.summary;
+  const snippet = sourceExcerpt
+    ? sourceExcerpt.replace(/\s+/g, " ").trim().slice(0, 200)
     : null;
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onEscape();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const controls = [...
+      (boxRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), summary, a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      ) ?? []),
+    ];
+    const current = event.target as HTMLElement;
+    const index = controls.indexOf(current);
+    if (index === -1) return;
+    if (event.shiftKey) {
+      if (index === 0) {
+        event.preventDefault();
+        anchorRef.current?.focus();
+      } else {
+        event.preventDefault();
+        controls[index - 1]?.focus();
+      }
+    } else if (index < controls.length - 1) {
+      event.preventDefault();
+      controls[index + 1]?.focus();
+    } else {
+      // The portal sits at the end of body, but belongs immediately after
+      // its citation in the reading order. Skip hidden/disabled controls.
+      const anchor = anchorRef.current;
+      const next = [...document.querySelectorAll<HTMLElement>(
+        "button, a[href], input, select, textarea, summary, [tabindex]",
+      )].find((element) => {
+        if (!anchor || !(anchor.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+        if (element.tabIndex < 0 || element.matches(":disabled") || element.closest("[hidden], [inert], [data-citation-popover]")) return false;
+        const closedDetails = element.closest("details:not([open])");
+        if (closedDetails && element !== closedDetails.querySelector("summary")) return false;
+        for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          if (style.display === "none" || style.visibility === "hidden") return false;
+        }
+        return true;
+      });
+      if (next) {
+        event.preventDefault();
+        next.focus();
+      }
+    }
+  };
 
   function failureNotice(headline: "citation.openFileFailed" | "citation.openLinkFailed") {
     if (openFailure === null) return null;
@@ -128,8 +185,7 @@ export default function CitationPopover({
     if (citation.source_kind === "authored") {
       return (
         <p style={bodyText}>
-          Written by you in this page — kept unchanged when the page is
-          re-distilled from its sources.
+          {t("citation.authoredDescription")}
         </p>
       );
     }
@@ -139,7 +195,7 @@ export default function CitationPopover({
         <>
           <p style={{ ...mono, wordBreak: "break-all" }}>{filePath}</p>
           <button style={actionStyle} onClick={onOpenTarget}>
-            Open file →
+            {t("citation.openFile")}
           </button>
           {failureNotice("citation.openFileFailed")}
         </>
@@ -150,7 +206,7 @@ export default function CitationPopover({
         <>
           <p style={{ ...mono, wordBreak: "break-all" }}>{citation.locator}</p>
           <button style={actionStyle} onClick={onOpenTarget}>
-            Open in browser →
+            {t("citation.openLink")}
           </button>
           {failureNotice("citation.openLinkFailed")}
         </>
@@ -168,11 +224,13 @@ export default function CitationPopover({
     if (!sourceMemory) {
       return (
         <>
-          <p style={mono}>{citation.locator}</p>
           <p style={{ ...bodyText, fontStyle: "italic" }}>
-            This source memory no longer exists — it was deleted or merged
-            after distillation. Re-distill the page to refresh its citations.
+            {t("citation.missingMemory")}
           </p>
+          <details>
+            <summary style={actionStyle}>{t("pageDetail.editor.technicalDetails")}</summary>
+            <p style={{ ...mono, wordBreak: "break-all" }}>{citation.locator}</p>
+          </details>
         </>
       );
     }
@@ -191,26 +249,35 @@ export default function CitationPopover({
             {sourceMemory.title}
           </p>
         )}
-        <p style={mono}>
-          {citation.locator}
-          {sourceMemory.last_modified
-            ? ` · ${relativeMs(sourceMemory.last_modified * 1000)}`
-            : ""}
-        </p>
-        {snippet && <p style={bodyText}>{snippet}</p>}
+        {snippet && (
+          <p style={sourceMemory.title ? bodyText : { ...bodyText, fontWeight: 500 }}>
+            {snippet}
+          </p>
+        )}
+        {sourceMemory.last_modified && (
+          <p style={mono}>{relativeMs(sourceMemory.last_modified * 1000)}</p>
+        )}
+        <details>
+          <summary style={actionStyle}>{t("pageDetail.editor.technicalDetails")}</summary>
+          <p style={{ ...mono, wordBreak: "break-all" }}>{citation.locator}</p>
+        </details>
         <button style={actionStyle} onClick={() => onOpenMemory(citation.locator)}>
-          Open memory →
+          {t("citation.openMemory")}
         </button>
       </>
     );
   }
 
-  return (
+  const popover = (
     <div
       ref={boxRef}
       id={id}
+      data-citation-popover="true"
       role="tooltip"
       className="flex flex-col gap-1.5 rounded-lg p-3"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onKeyDown={handleKeyDown}
       style={{
         position: "fixed",
         top: pos?.top ?? -9999,
@@ -235,7 +302,7 @@ export default function CitationPopover({
             borderRadius: "3px",
           }}
         >
-          {kindBadge(citation)}
+          {kindLabels[citation.source_kind]}
         </span>
         {citation.status === "unverified" && (
           <span
@@ -245,11 +312,15 @@ export default function CitationPopover({
               color: "var(--mem-accent-amber)",
             }}
           >
-            unverified
+            {t("citation.unverified")}
           </span>
         )}
       </div>
       {body()}
     </div>
   );
+
+  return typeof document !== "undefined" && document.body
+    ? createPortal(popover, document.body)
+    : popover;
 }

@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { i18n } from "../../i18n";
 import { ImportView, chunkImportText } from "./ImportView";
+import { EXPORT_PROMPT, IMPORT_TYPE_TAGS } from "./importCopy";
 
 vi.mock("../../lib/tauri", () => ({
   importMemories: vi.fn(),
@@ -10,7 +12,7 @@ vi.mock("../../lib/tauri", () => ({
   IMPORT_CHUNK_SIZE: 500,
 }));
 
-import { importMemories, getImportBatchStatus } from "../../lib/tauri";
+import { importMemories, getImportBatchStatus, clipboardWrite } from "../../lib/tauri";
 
 function renderImport(props = {}) {
   const queryClient = new QueryClient({
@@ -89,8 +91,9 @@ describe("ImportView", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllGlobals();
+    await i18n.changeLanguage("en");
   });
 
   it("renders input form by default", () => {
@@ -249,7 +252,7 @@ describe("ImportView", () => {
     startImport("Memory 1");
 
     await waitFor(() => {
-      expect(screen.getByText("3 pages so far")).toBeInTheDocument();
+      expect(screen.getByText("3 related pages")).toBeInTheDocument();
     });
     expect(
       within(screen.getByTestId("import-phase-distill")).queryByRole("progressbar"),
@@ -275,11 +278,11 @@ describe("ImportView", () => {
     expect(screen.getByText(/1 skipped/i)).toBeInTheDocument();
     expect(screen.getByText("4 detected entities")).toBeInTheDocument();
     expect(screen.getByText("2 entities confirmed")).toBeInTheDocument();
-    expect(screen.getByText("7 pages distilled")).toBeInTheDocument();
+    expect(screen.getByText("7 related pages")).toBeInTheDocument();
     // Honest that background work continues — no final total that is not final.
-    expect(screen.getByText(/Still working:/)).toBeInTheDocument();
-    expect(screen.getByText(/Detecting entities/)).toBeInTheDocument();
-    expect(screen.getByText(/keep climbing/)).toBeInTheDocument();
+    expect(screen.getByText(/Saved and ready to use. Organization progress/)).toBeInTheDocument();
+    expect(screen.queryByText(/idle and has enough resources/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/keep climbing/)).not.toBeInTheDocument();
   });
 
   it("says background work finished once every phase settles", async () => {
@@ -294,7 +297,7 @@ describe("ImportView", () => {
     await waitFor(() => {
       expect(screen.getByText("Background work finished.")).toBeInTheDocument();
     });
-    expect(screen.queryByText(/Still working:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Saved and ready to use. Organization progress/)).not.toBeInTheDocument();
   });
 
   it("shows type breakdown badges in summary", async () => {
@@ -306,9 +309,12 @@ describe("ImportView", () => {
     startImport("a\nb\nc");
 
     await waitFor(() => {
-      expect(screen.getByText("identity")).toBeInTheDocument();
-      expect(screen.getByText("fact")).toBeInTheDocument();
+      expect(screen.getByText("Identity")).toBeInTheDocument();
+      expect(screen.getByText("Fact")).toBeInTheDocument();
     });
+    // Machine identifiers never leak into the staged summary.
+    expect(screen.queryByText("identity")).not.toBeInTheDocument();
+    expect(screen.queryByText("fact")).not.toBeInTheDocument();
   });
 
   it("shows error on import failure", async () => {
@@ -389,6 +395,305 @@ describe("ImportView", () => {
         { batchId: "batch-test-1", chunkIndex: 0, chunkTotal: 1 },
       );
     });
+  });
+
+  it.each([
+    {
+      language: "en",
+      title: "Import Memories",
+      importAction: "Import",
+      upload: "Upload file",
+      paste: "Paste output",
+      copy: "Copy prompt",
+      other: "Other",
+      exportPrompt: "Export prompt",
+      skip: "Skip",
+      intro: "paste into ChatGPT",
+    },
+    {
+      language: "zh-Hans",
+      title: "导入记忆",
+      importAction: "导入",
+      upload: "上传文件",
+      paste: "粘贴输出",
+      copy: "复制提示词",
+      other: "其他",
+      exportPrompt: "导出提示词",
+      skip: "跳过",
+      intro: "粘贴到 ChatGPT",
+    },
+    {
+      language: "zh-Hant",
+      title: "匯入記憶",
+      importAction: "匯入",
+      upload: "上傳檔案",
+      paste: "貼上輸出",
+      copy: "複製提示詞",
+      other: "其他",
+      exportPrompt: "匯出提示詞",
+      skip: "略過",
+      intro: "貼到 ChatGPT",
+    },
+  ])(
+    "localizes input chrome in $language while brands stay literal",
+    async ({ language, title, importAction, upload, paste, copy, other, exportPrompt, skip, intro }) => {
+      await i18n.changeLanguage(language);
+      renderImport({ onSkip: vi.fn() });
+
+      expect(screen.getByText(title)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: importAction })).toBeInTheDocument();
+      expect(screen.getByText(upload)).toBeInTheDocument();
+      expect(screen.getByText(paste)).toBeInTheDocument();
+      expect(screen.getByText(copy)).toBeInTheDocument();
+      expect(screen.getByText(exportPrompt)).toBeInTheDocument();
+      expect(screen.getByText(skip)).toBeInTheDocument();
+      // Brand names stay literal; only "Other" is localized.
+      expect(screen.getByText("ChatGPT")).toBeInTheDocument();
+      expect(screen.getByText("Claude")).toBeInTheDocument();
+      expect(screen.getByText(other)).toBeInTheDocument();
+      expect(screen.getByText(new RegExp(intro))).toBeInTheDocument();
+    },
+  );
+
+  it("keeps protocol tags literal in the copied prompt and signals success only after resolution", async () => {
+    (clipboardWrite as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    renderImport();
+    fireEvent.click(screen.getByText("Copy prompt"));
+
+    await waitFor(() => {
+      expect(clipboardWrite).toHaveBeenCalledTimes(1);
+    });
+    const copied = (clipboardWrite as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(copied).toBe(EXPORT_PROMPT);
+    for (const tag of IMPORT_TYPE_TAGS) {
+      expect(copied).toContain(tag);
+    }
+    await waitFor(() => {
+      expect(screen.getByText("Copied!")).toBeInTheDocument();
+    });
+  });
+
+  it.each([
+    {
+      language: "zh-Hans",
+      copy: "复制提示词",
+      copiedLabel: "已复制！",
+      prose: "每一行都必须",
+    },
+    {
+      language: "zh-Hant",
+      copy: "複製提示詞",
+      copiedLabel: "已複製！",
+      prose: "每一行都必須",
+    },
+  ])(
+    "copies a localized $language prompt preserving every literal tag",
+    async ({ language, copy, copiedLabel, prose }) => {
+      await i18n.changeLanguage(language);
+      (clipboardWrite as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      renderImport();
+      // The shown instructions are localized too, not a giant English block.
+      expect(screen.getByText(new RegExp(prose))).toBeInTheDocument();
+      fireEvent.click(screen.getByText(copy));
+
+      await waitFor(() => {
+        expect(clipboardWrite).toHaveBeenCalledTimes(1);
+      });
+      const copiedText = (clipboardWrite as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(copiedText).toContain(prose);
+      expect(copiedText).not.toBe(EXPORT_PROMPT);
+      for (const tag of IMPORT_TYPE_TAGS) {
+        expect(copiedText).toContain(tag);
+      }
+      await waitFor(() => {
+        expect(screen.getByText(copiedLabel)).toBeInTheDocument();
+      });
+    },
+  );
+
+  it("keeps protocol tags untranslated in localized instructions", async () => {
+    await i18n.changeLanguage("zh-Hant");
+    renderImport();
+
+    fireEvent.click(screen.getByText("其他"));
+    const panel = screen.getByText(/貼上事實或記憶清單/);
+    expect(panel.textContent).toContain("[identity]");
+    expect(panel.textContent).toContain("[fact]");
+    expect(panel.textContent).not.toContain("[身份]");
+    expect(panel.textContent).not.toContain("[事實]");
+  });
+
+  it("shows localized feedback when the clipboard rejects", async () => {
+    (clipboardWrite as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("denied"));
+
+    renderImport();
+    fireEvent.click(screen.getByText("Copy prompt"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't copy/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Copied!")).not.toBeInTheDocument();
+    vi.mocked(clipboardWrite).mockResolvedValueOnce(undefined);
+    fireEvent.click(screen.getByText("Copy prompt"));
+    expect(await screen.findByText("Copied!")).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't copy/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a localized read failure when FileReader errors", async () => {
+    class FailingReader {
+      onload: ((ev: unknown) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      readAsText() {
+        this.onerror?.();
+      }
+    }
+    vi.stubGlobal("FileReader", FailingReader);
+
+    renderImport();
+    const input = screen.getByLabelText("Upload file") as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["x"], "a.txt", { type: "text/plain" })] },
+    });
+
+    expect(
+      await screen.findByText("Couldn't read that file. Try again."),
+    ).toBeInTheDocument();
+  });
+
+  it("ignores a stale file read after typing newer text", async () => {
+    const readers: Array<{
+      onload: ((ev: { target: unknown }) => void) | null;
+      result: unknown;
+    }> = [];
+    class ManualReader {
+      onload: ((ev: { target: unknown }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      result: unknown = null;
+      readAsText() {
+        readers.push(this);
+      }
+    }
+    vi.stubGlobal("FileReader", ManualReader);
+
+    renderImport();
+    const textarea = screen.getByPlaceholderText(/paste your memories/i);
+    const input = screen.getByLabelText("Upload file") as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["stale"], "first.txt", { type: "text/plain" })] },
+    });
+    fireEvent.change(textarea, { target: { value: "newer typed text" } });
+
+    const first = readers[0]!;
+    first.result = "STALE FILE TEXT";
+    act(() => {
+      first.onload!({ target: first });
+    });
+
+    expect(textarea).toHaveValue("newer typed text");
+  });
+
+  it("keeps the second file when two reads race", async () => {
+    const readers: Array<{
+      onload: ((ev: { target: unknown }) => void) | null;
+      result: unknown;
+    }> = [];
+    class ManualReader {
+      onload: ((ev: { target: unknown }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      result: unknown = null;
+      readAsText() {
+        readers.push(this);
+      }
+    }
+    vi.stubGlobal("FileReader", ManualReader);
+
+    renderImport();
+    const textarea = screen.getByPlaceholderText(/paste your memories/i);
+    const input = screen.getByLabelText("Upload file") as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["a"], "first.txt", { type: "text/plain" })] },
+    });
+    fireEvent.change(input, {
+      target: { files: [new File(["b"], "second.txt", { type: "text/plain" })] },
+    });
+
+    // The second read lands first, then the stale first read completes late.
+    const [first, second] = readers as [
+      { onload: ((ev: { target: unknown }) => void) | null; result: unknown },
+      { onload: ((ev: { target: unknown }) => void) | null; result: unknown },
+    ];
+    second.result = "SECOND FILE TEXT";
+    act(() => {
+      second.onload!({ target: second });
+    });
+    expect(textarea).toHaveValue("SECOND FILE TEXT");
+    first.result = "FIRST FILE TEXT";
+    act(() => {
+      first.onload!({ target: first });
+    });
+    expect(textarea).toHaveValue("SECOND FILE TEXT");
+  });
+
+  it("preserves backend detail behind a localized heading on import failure", async () => {
+    (importMemories as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("daemon exploded: disk full"),
+    );
+
+    renderImport();
+    startImport("Memory");
+
+    await waitFor(() => {
+      expect(screen.getByText(/Import failed/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/daemon exploded: disk full/)).toBeInTheDocument();
+    // Should go back to input form after error
+    expect(screen.getByPlaceholderText(/paste your memories/i)).toBeInTheDocument();
+  });
+
+  it("localizes the import failure heading in zh-Hant", async () => {
+    await i18n.changeLanguage("zh-Hant");
+    (importMemories as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
+
+    renderImport();
+    fireEvent.change(screen.getByLabelText("貼上輸出"), { target: { value: "Memory" } });
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+
+    expect(await screen.findByText(/匯入失敗/)).toBeInTheDocument();
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
+  });
+
+  it("renders unclassified as a human label in the summary", async () => {
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(
+      chunkResult({ imported: 2, skipped: 0, breakdown: { unclassified: 2 } }),
+    );
+
+    renderImport();
+    startImport("a\nb");
+
+    await waitFor(() => {
+      expect(screen.getByText("Unclassified")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("unclassified")).not.toBeInTheDocument();
+  });
+
+  it("localizes summary categories in zh-Hant", async () => {
+    await i18n.changeLanguage("zh-Hant");
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(
+      chunkResult({ imported: 2, skipped: 0, breakdown: { unclassified: 1, fact: 1 } }),
+    );
+
+    renderImport();
+    fireEvent.change(screen.getByLabelText("貼上輸出"), { target: { value: "a\nb" } });
+    fireEvent.click(screen.getByRole("button", { name: "匯入" }));
+
+    expect(await screen.findByText("待分類")).toBeInTheDocument();
+    expect(screen.getByText("事實")).toBeInTheDocument();
+    expect(screen.queryByText("unclassified")).not.toBeInTheDocument();
   });
 });
 

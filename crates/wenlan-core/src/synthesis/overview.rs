@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Spec §5.3: the reserved machine-owned Overview page (nashsu `overview.md`
-//! parity). One well-known title, never duplicated; the maintenance pass
-//! syncs its evidence to the currently most-active pages and refreshes it in
-//! place through the ONE re-distill op -- no new write primitive, no new
-//! table: creation goes through `post_write::create_page` (floor-exempt
-//! `research` kind, same guard as any machine-owned page) and the refresh IS
-//! `refresh_page` (via `refresh_page_with_prompt`, parameterized on the
-//! dedicated `overview_summary` prompt -- the "+ a summary prompt" the spec
-//! calls for -- instead of the generic deep-dive `distill_page` template).
+//! Compatibility maintenance for Overview pages from older versions.
+//! Never creates an Overview: new libraries grow topic pages from actual user
+//! sources. Untouched legacy placeholders are archived; useful existing pages
+//! retain their content and citations if a refresh is rejected.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -16,121 +11,202 @@ use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::llm_provider::LlmProvider;
 use crate::prompts::PromptRegistry;
-use crate::synthesis::distill::{refresh_page_with_prompt, RefreshOutcome, RefreshReason};
+use crate::synthesis::distill::{
+    refresh_page_with_candidate_sources, RefreshOutcome, RefreshReason,
+};
 
-/// Reserved, well-known title for the single machine-owned overview page.
-/// Looked up case-insensitively via `find_active_page_id_by_title` so the
-/// row is created once and refreshed in place forever after -- never
-/// duplicated.
+/// Legacy title used only to find an existing page for maintenance.
 pub const OVERVIEW_PAGE_TITLE: &str = "Overview";
 
 /// How many of the most recently touched active pages feed the overview's
 /// evidence set. Small and fixed on purpose -- spec says "no new machinery".
 const OVERVIEW_TOP_PAGES: i64 = 5;
 
-/// Placeholder body for the reserved row before its first refresh populates
-/// real content. `create_page` requires non-empty content; `refresh_page`
-/// overwrites this on the first maintenance tick.
-const OVERVIEW_PLACEHOLDER_CONTENT: &str =
+/// Do not rewrite a legacy summary when there is too little source context.
+const OVERVIEW_MIN_CONCEPT_PAGES: usize = 2;
+
+/// Placeholder body minted by the pre-fix flow. Used only for conditional
+/// archival; new pages never contain this text.
+pub(crate) const OVERVIEW_PLACEHOLDER_CONTENT: &str =
     "This page is refreshed automatically to summarize the wiki's current top pages.";
 
-/// Source memory ids of the current top pages, for the overview's own
-/// evidence set. `exclude_page_id` keeps the overview page from citing its
-/// own prior summary as if it were a memory.
-async fn top_page_source_ids(
+/// Whether a page counts as Overview evidence: an active, non-empty,
+/// derived concept page that is not the Overview itself nor a shell row.
+fn is_overview_evidence_page(page: &crate::pages::Page) -> bool {
+    if page.title.eq_ignore_ascii_case(OVERVIEW_PAGE_TITLE) {
+        return false;
+    }
+    // The entity kind is a trusted mutation/read fence. All other routing is
+    // derived from the authoritative title, creation kind, and status below.
+    if page.kind == "entity" {
+        return false;
+    }
+    if crate::pages::page_kind_for(&page.title, &page.creation_kind, &page.status) != "concept" {
+        return false;
+    }
+    if page.content.trim().is_empty() {
+        return false;
+    }
+    true
+}
+
+/// Count of qualifying evidence pages among the current top pages, plus
+/// their source memory ids. A page qualifies only when its sources resolve
+/// to real memory contents. `exclude_page_id` keeps the overview from citing
+/// itself.
+async fn qualifying_top_evidence(
     db: &MemoryDB,
     exclude_page_id: Option<&str>,
-) -> Result<Vec<String>, WenlanError> {
+) -> Result<(usize, Vec<String>), WenlanError> {
     let pages = db.list_pages("active", OVERVIEW_TOP_PAGES + 1, 0).await?;
     let mut ids = Vec::new();
-    let mut included = 0i64;
+    let mut qualifying = 0usize;
     for page in pages {
-        if included >= OVERVIEW_TOP_PAGES {
+        if qualifying as i64 >= OVERVIEW_TOP_PAGES {
             break;
         }
-        if Some(page.id.as_str()) == exclude_page_id
-            || page.title.eq_ignore_ascii_case(OVERVIEW_PAGE_TITLE)
-        {
+        if Some(page.id.as_str()) == exclude_page_id || !is_overview_evidence_page(&page) {
             continue;
         }
         let sources = db.get_page_sources(&page.id).await?;
-        if !sources.is_empty() {
-            ids.extend(sources.into_iter().map(|s| s.memory_source_id));
+        let page_source_ids: Vec<String> = if sources.is_empty() {
+            page.source_memory_ids.clone()
         } else {
-            ids.extend(page.source_memory_ids.clone());
+            sources.into_iter().map(|s| s.memory_source_id).collect()
+        };
+        if page_source_ids.is_empty() {
+            continue;
         }
-        included += 1;
+        if db
+            .get_memory_contents_by_ids(&page_source_ids)
+            .await?
+            .is_empty()
+        {
+            continue;
+        }
+        ids.extend(page_source_ids);
+        qualifying += 1;
     }
-    Ok(ids)
+    Ok((qualifying, ids))
 }
 
-/// Looks up the reserved overview row by title, creating a floor-exempt
-/// placeholder if it doesn't exist yet. Returns the page id. Idempotent: the
-/// title lookup means a second call never creates a second row.
-async fn ensure_overview_page(
+/// Whether two source sets cover the same evidence, ignoring order and
+/// duplicates.
+fn same_source_set(a: &[String], b: &[String]) -> bool {
+    let mut x = a.to_vec();
+    x.sort();
+    x.dedup();
+    let mut y = b.to_vec();
+    y.sort();
+    y.dedup();
+    x == y
+}
+
+/// Whether a row is a pre-fix empty placeholder: exact placeholder body,
+/// machine-owned, never user-edited.
+fn is_legacy_placeholder(page: &crate::pages::Page) -> bool {
+    !page.user_edited
+        && page.creation_kind == "research"
+        && page.content.trim() == OVERVIEW_PLACEHOLDER_CONTENT
+}
+
+/// Refresh an existing, machine-owned, already-populated Overview in place.
+/// Skips silently while evidence is thin or unchanged since the last refresh.
+async fn refresh_existing_overview_page(
     db: &MemoryDB,
-    agent: &str,
+    llm: &Arc<dyn LlmProvider>,
+    prompts: &PromptRegistry,
+    _agent: &str,
     knowledge_path: Option<&Path>,
-) -> Result<String, WenlanError> {
-    if let Some(id) = db.find_active_page_id_by_title(OVERVIEW_PAGE_TITLE).await? {
-        return Ok(id);
+    page_id: &str,
+) -> Result<RefreshOutcome, WenlanError> {
+    let (qualifying, top_sources) = qualifying_top_evidence(db, Some(page_id)).await?;
+    if qualifying < OVERVIEW_MIN_CONCEPT_PAGES || top_sources.is_empty() {
+        log::info!("[overview] skipping refresh: only {qualifying} qualifying concept pages");
+        return Ok(RefreshOutcome::default());
     }
-    let req = wenlan_types::requests::CreateConceptRequest {
-        title: OVERVIEW_PAGE_TITLE.to_string(),
-        content: OVERVIEW_PLACEHOLDER_CONTENT.to_string(),
-        summary: None,
-        entity_id: None,
-        space: None.into(),
-        source_memory_ids: Vec::new(),
-        // "research" is machine-owned (never `user_edited`/"authored") and
-        // floor-exempt (spec §5.1: only `distilled` requires >=
-        // page_min_cluster_size sources) -- the reserved row can exist with
-        // zero sources until the first refresh populates it.
-        creation_kind: Some("research".to_string()),
-        workspace: None,
+    // No repeated LLM refresh while the evidence set is unchanged.
+    let current = db.get_page_sources(page_id).await?;
+    let current_ids: Vec<String> = if current.is_empty() {
+        db.get_page(page_id)
+            .await?
+            .map(|p| p.source_memory_ids)
+            .unwrap_or_default()
+    } else {
+        current.into_iter().map(|s| s.memory_source_id).collect()
     };
-    let result = crate::post_write::create_page(db, req, agent, knowledge_path).await?;
-    Ok(result.id)
+    if same_source_set(&current_ids, &top_sources) {
+        let Some(page) = db.get_page(page_id).await? else {
+            return Ok(RefreshOutcome::default());
+        };
+        if !db.has_page_sources_changed(&page).await? {
+            if let Some(reason) = page.refresh_blocked_reason {
+                return Ok(RefreshOutcome {
+                    discard_reason: Some(reason),
+                    ..RefreshOutcome::default()
+                });
+            }
+            if page.stale_reason.is_none() {
+                return Ok(RefreshOutcome::default());
+            }
+        }
+    }
+
+    let outcome = refresh_page_with_candidate_sources(
+        db,
+        llm,
+        &prompts.overview_summary,
+        page_id,
+        RefreshReason::SourceChanged,
+        knowledge_path,
+        Some(&top_sources),
+    )
+    .await?;
+    Ok(outcome)
 }
 
-/// Spec §5.3: refresh the reserved overview page in place. Called by the
-/// maintenance pass. Ensures the reserved row exists, REPLACES its evidence
-/// with the current top pages' sources (`replace_page_sources` -- prunes
-/// anything no longer top-ranked, so the set tracks "the current top pages"
-/// instead of accumulating the union of every page ever top-ranked over the
-/// wiki's lifetime), then goes through the same stale-mark / `refresh_page`
-/// sequence as `refinery::re_distill_stale_pages`. The refresh write or exact
-/// unchanged-result CAS owns staleness acknowledgement atomically.
+/// Maintain an existing legacy overview. A missing row is never created.
+/// User namesakes stay intact; untouched placeholders are safely archived.
 pub async fn refresh_overview_page(
     db: &MemoryDB,
     llm: &Arc<dyn LlmProvider>,
     prompts: &PromptRegistry,
-    agent: &str,
+    _agent: &str,
     knowledge_path: Option<&Path>,
 ) -> Result<RefreshOutcome, WenlanError> {
-    let page_id = ensure_overview_page(db, agent, knowledge_path).await?;
-
-    let top_sources = top_page_source_ids(db, Some(&page_id)).await?;
-    let top_source_refs: Vec<&str> = top_sources.iter().map(String::as_str).collect();
-    db.replace_page_sources(&page_id, &top_source_refs, "overview_sync")
-        .await?;
-
-    db.set_page_stale(&page_id, "overview_sync").await?;
-    // The Overview needs a "table of contents" style summary, not the
-    // deep-dive `distill_page` prompt every other page refresh uses -- so it
-    // goes through `refresh_page_with_prompt` (the same re-distill op,
-    // parameterized on the system prompt) with the dedicated
-    // `overview_summary` template.
-    let outcome = refresh_page_with_prompt(
-        db,
-        llm,
-        &prompts.overview_summary,
-        &page_id,
-        RefreshReason::SourceChanged,
-        knowledge_path,
-    )
-    .await?;
-    Ok(outcome)
+    if let Some(page_id) = db.find_active_machine_overview_id().await? {
+        let source_revision = db.get_page_source_revision(&page_id).await?;
+        let page = db.get_page(&page_id).await?;
+        if let Some(page) = page {
+            if page.user_edited || page.creation_kind == "authored" {
+                return Ok(RefreshOutcome::default());
+            }
+            if is_legacy_placeholder(&page) {
+                if !db
+                    .archive_legacy_overview_placeholder(
+                        &page_id,
+                        page.version,
+                        source_revision,
+                        OVERVIEW_PLACEHOLDER_CONTENT,
+                    )
+                    .await?
+                {
+                    return Ok(RefreshOutcome::default());
+                }
+                return Ok(RefreshOutcome::default());
+            }
+            return refresh_existing_overview_page(
+                db,
+                llm,
+                prompts,
+                _agent,
+                knowledge_path,
+                &page_id,
+            )
+            .await;
+        }
+    }
+    Ok(RefreshOutcome::default())
 }
 
 #[cfg(test)]
@@ -247,235 +323,241 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_overview_page_creates_reserved_row_summarizing_top_pages() {
+    async fn never_creates_overview_even_with_meaningful_sources() {
         let (db, _dir) = test_db().await;
-
-        let mem_content = "Rust is a systems programming language with memory safety guarantees";
-        create_research_page(&db, "Rust", "mem_overview_rust", mem_content).await;
-
-        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(&format!("{mem_content}.[1]")));
+        let provider = Arc::new(RecordingProvider::new("must not be called"));
+        let llm: Arc<dyn LlmProvider> = provider.clone();
         let prompts = PromptRegistry::default();
-
-        let outcome = refresh_overview_page(&db, &llm, &prompts, "test", None)
-            .await
-            .unwrap();
-        assert!(outcome.wrote, "overview refresh should write in place");
         assert!(
-            !outcome.gated,
-            "overview page must be machine-owned, never gated to a revision card"
-        );
-
-        let overview_id = db
-            .find_active_page_id_by_title(OVERVIEW_PAGE_TITLE)
-            .await
-            .unwrap()
-            .expect("reserved overview page must exist after refresh");
-        let page = db.get_page(&overview_id).await.unwrap().unwrap();
-        assert!(!page.user_edited, "overview page must be machine-owned");
-        assert_ne!(
-            page.creation_kind, "authored",
-            "overview page must never be human-owned (would gate refreshes into revision cards)"
-        );
-        assert!(
-            page.content.contains("Rust"),
-            "overview should summarize the current top page's evidence, got: {}",
-            page.content
-        );
-
-        // A second maintenance tick, with a NEW top page in play, must refresh
-        // the SAME reserved row in place -- never a second "Overview" page.
-        let mem_content2 =
-            "Python is a dynamically typed programming language emphasizing readability";
-        create_research_page(&db, "Python", "mem_overview_python", mem_content2).await;
-        let llm2: Arc<dyn LlmProvider> =
-            Arc::new(MockProvider::new(&format!("{mem_content2}.[1]")));
-
-        let outcome2 = refresh_overview_page(&db, &llm2, &prompts, "test", None)
-            .await
-            .unwrap();
-        assert!(
-            outcome2.wrote,
-            "second maintenance tick should refresh again"
-        );
-
-        let all_active = db.list_pages("active", 100, 0).await.unwrap();
-        let overview_pages: Vec<_> = all_active
-            .iter()
-            .filter(|p| p.title.eq_ignore_ascii_case(OVERVIEW_PAGE_TITLE))
-            .collect();
-        assert_eq!(
-            overview_pages.len(),
-            1,
-            "overview page must never duplicate across maintenance ticks"
-        );
-        assert_eq!(
-            overview_pages[0].id, overview_id,
-            "the SAME reserved row must be refreshed in place"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_overview_page_bounds_evidence_across_many_cycling_top_pages() {
-        let (db, _dir) = test_db().await;
-        let prompts = PromptRegistry::default();
-
-        // Cycle through 7 top pages -- more than OVERVIEW_TOP_PAGES (5) -- to
-        // prove the overview's evidence set tracks the CURRENT top pages
-        // instead of accumulating the union of every page that was ever
-        // top-ranked.
-        let mut mem_ids = Vec::new();
-        for i in 1..=7 {
-            let title = format!("Topic{i}");
-            let mem_id = format!("mem_overview_cycle_{i}");
-            let content =
-                format!("Topic{i} is a specific programming concept with unique details.");
-            create_research_page(&db, &title, &mem_id, &content).await;
-            mem_ids.push(mem_id);
-
-            let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(&format!("{content}[1]")));
-            let outcome = refresh_overview_page(&db, &llm, &prompts, "test", None)
+            !refresh_overview_page(&db, &llm, &prompts, "test", None)
                 .await
-                .unwrap();
-            assert!(outcome.wrote, "tick {i} should refresh the overview body");
-        }
-
-        let overview_id = db
-            .find_active_page_id_by_title(OVERVIEW_PAGE_TITLE)
+                .unwrap()
+                .wrote
+        );
+        create_research_page(
+            &db,
+            "Rust",
+            "rust",
+            "Rust is a systems programming language with memory safety guarantees",
+        )
+        .await;
+        create_research_page(
+            &db,
+            "Python",
+            "python",
+            "Python is a dynamically typed programming language emphasizing readability",
+        )
+        .await;
+        assert!(
+            !refresh_overview_page(&db, &llm, &prompts, "test", None)
+                .await
+                .unwrap()
+                .wrote
+        );
+        assert!(db
+            .find_active_page_id_by_title("Overview")
             .await
             .unwrap()
-            .expect("reserved overview page must exist");
-
-        let evidence = db.get_page_sources(&overview_id).await.unwrap();
-        assert_eq!(
-            evidence.len(),
-            OVERVIEW_TOP_PAGES as usize,
-            "overview evidence set must stay bounded to OVERVIEW_TOP_PAGES after {} cycling top pages, got {:?}",
-            mem_ids.len(),
-            evidence.iter().map(|s| &s.memory_source_id).collect::<Vec<_>>()
-        );
-
-        // The earliest cycling pages must have been pruned once they dropped
-        // out of the current top-N -- proves replace semantics, not
-        // additive-forever accumulation.
-        let linked_ids: Vec<&str> = evidence
-            .iter()
-            .map(|s| s.memory_source_id.as_str())
-            .collect();
+            .is_none());
         assert!(
-            !linked_ids.contains(&mem_ids[0].as_str()),
-            "earliest cycling page's source must be pruned once no longer top-ranked, evidence: {:?}",
-            linked_ids
-        );
-        assert!(
-            !linked_ids.contains(&mem_ids[1].as_str()),
-            "second-earliest cycling page's source must also be pruned, evidence: {:?}",
-            linked_ids
+            provider.captured_system_prompt().is_none(),
+            "do not spend inference on an invented starting page"
         );
     }
 
-    /// Fix wave (stage c review, Critical-1 leak site 2): a fresh
-    /// kind='entity' dual-write shadow (stamped `now`, so it would sort into
-    /// the top of a `last_modified DESC` window ahead of every real page)
-    /// must never consume one of the OVERVIEW_TOP_PAGES evidence slots or
-    /// contribute its (always-empty) source_memory_ids.
-    #[tokio::test]
-    async fn top_page_source_ids_excludes_entity_kind_shadow() {
-        let (db, _dir) = test_db().await;
+    async fn seed_overview(db: &MemoryDB, id: &str, body: &str, creation_kind: &str) {
+        db.insert_page_with_kind(
+            id,
+            "Overview",
+            None,
+            body,
+            None,
+            None,
+            &[],
+            &chrono::Utc::now().to_rfc3339(),
+            creation_kind,
+            "unconfirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
 
-        let mut mem_ids = Vec::new();
-        for i in 1..=OVERVIEW_TOP_PAGES {
-            let mem_id = format!("mem_overview_shadow_guard_{i}");
-            let content =
-                format!("Topic{i} is a specific programming concept with unique details.");
-            create_research_page(&db, &format!("Topic{i}"), &mem_id, &content).await;
-            mem_ids.push(mem_id);
-        }
-        // Seeded after the real pages, so store_entity's `now` timestamp
-        // sorts it first without the fence.
-        db.store_entity("Overview Shadow Marker", "person", None, None, None)
+    async fn seed_legacy(db: &MemoryDB, body: &str) {
+        seed_overview(db, "legacy-overview", body, "research").await;
+    }
+
+    #[tokio::test]
+    async fn legacy_placeholder_is_archived_without_replacement() {
+        let (db, _dir) = test_db().await;
+        seed_legacy(&db, OVERVIEW_PLACEHOLDER_CONTENT).await;
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::unavailable());
+        refresh_overview_page(&db, &llm, &PromptRegistry::default(), "test", None)
+            .await
+            .unwrap();
+        assert!(db
+            .find_active_page_id_by_title("Overview")
+            .await
+            .unwrap()
+            .is_none());
+        let saved = db.get_page("legacy-overview").await.unwrap().unwrap();
+        assert_eq!(saved.status, "archived");
+        assert_eq!(saved.content, OVERVIEW_PLACEHOLDER_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn authored_overview_namesake_does_not_hide_legacy_placeholder() {
+        let (db, _dir) = test_db().await;
+        seed_overview(
+            &db,
+            "authored-overview",
+            "My own overview stays active.",
+            "authored",
+        )
+        .await;
+        seed_legacy(&db, OVERVIEW_PLACEHOLDER_CONTENT).await;
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::unavailable());
+
+        refresh_overview_page(&db, &llm, &PromptRegistry::default(), "test", None)
             .await
             .unwrap();
 
-        let ids = top_page_source_ids(&db, None).await.unwrap();
-        for mem_id in &mem_ids {
-            assert!(
-                ids.contains(mem_id),
-                "real page source {mem_id} must not be displaced by the entity shadow, got: {ids:?}"
-            );
-        }
         assert_eq!(
-            ids.len(),
-            mem_ids.len(),
-            "the shadow must contribute zero source ids of its own, got: {ids:?}"
+            db.get_page("authored-overview")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "active",
+            "an authored namesake must remain active"
+        );
+        assert_eq!(
+            db.get_page("legacy-overview")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "archived",
+            "the eligible legacy placeholder must still be archived"
         );
     }
 
-    /// The Overview refresh must use its OWN dedicated summary prompt, not
-    /// the generic `distill_page` prompt every other page refresh uses, and
-    /// its synthesis input must span ALL of the wiki's current top pages at
-    /// once (not just the most recently touched one).
     #[tokio::test]
-    async fn refresh_overview_page_uses_dedicated_summary_prompt_and_spans_all_top_pages() {
+    async fn overview_evidence_uses_authoritative_fields_when_kind_is_stale() {
         let (db, _dir) = test_db().await;
-        let prompts = PromptRegistry::default();
-
-        let rust_content = "Rust is a systems programming language with memory safety guarantees";
-        create_research_page(&db, "Rust", "mem_overview_prompt_rust", rust_content).await;
-        let python_content =
-            "Python is a dynamically typed programming language emphasizing readability";
-        create_research_page(&db, "Python", "mem_overview_prompt_python", python_content).await;
-
-        // Both memories' own sentences, verbatim -- trivially grounded
-        // against the faithfulness gate regardless of which page cites which.
-        let response = format!("{rust_content}. [1] {python_content}. [2]");
-        let recorder = Arc::new(RecordingProvider::new(&response));
-        let llm: Arc<dyn LlmProvider> = recorder.clone();
-
-        let outcome = refresh_overview_page(&db, &llm, &prompts, "test", None)
-            .await
-            .unwrap();
-        assert!(outcome.wrote, "overview refresh should write in place");
-
-        assert_eq!(
-            recorder.captured_system_prompt(),
-            Some(prompts.overview_summary.clone()),
-            "the Overview refresh must use the dedicated overview_summary prompt"
-        );
-        assert_ne!(
-            recorder.captured_system_prompt(),
-            Some(prompts.distill_page.clone()),
-            "the Overview refresh must NOT use the generic distill_page prompt"
-        );
-
-        let overview_id = db
-            .find_active_page_id_by_title(OVERVIEW_PAGE_TITLE)
+        create_research_page(
+            &db,
+            "Research",
+            "research-memory",
+            "Research page body supplies evidence for the maintenance summary.",
+        )
+        .await;
+        let page_id = db
+            .find_active_page_id_by_title("Research")
             .await
             .unwrap()
-            .expect("reserved overview page must exist");
-        let page = db.get_page(&overview_id).await.unwrap().unwrap();
+            .expect("research page id");
+        let mut page = db
+            .get_page(&page_id)
+            .await
+            .unwrap()
+            .expect("research page seeded");
+        assert_eq!(page.creation_kind, "research");
+        page.kind = "source".to_string();
         assert!(
-            page.content.contains("Rust") && page.content.contains("Python"),
-            "with two current top pages, the overview must summarize BOTH, not just one: {}",
-            page.content
+            is_overview_evidence_page(&page),
+            "stored non-entity kind must not hide authoritative research evidence"
         );
+        page.kind = "entity".to_string();
+        assert!(
+            !is_overview_evidence_page(&page),
+            "the trusted entity fence must still exclude entity shadow pages"
+        );
+    }
 
-        // Both pages' member memories must be in the evidence set at once --
-        // proving the synthesis input spans every current top page, not just
-        // whichever was touched most recently.
-        let evidence = db.get_page_sources(&overview_id).await.unwrap();
-        let linked_ids: Vec<&str> = evidence
-            .iter()
-            .map(|s| s.memory_source_id.as_str())
-            .collect();
-        assert!(
-            linked_ids.contains(&"mem_overview_prompt_rust"),
-            "evidence must include the Rust page's source, got {:?}",
-            linked_ids
+    #[tokio::test]
+    async fn rejected_refresh_preserves_existing_body_sources_and_citations() {
+        let (db, _dir) = test_db().await;
+        create_research_page(
+            &db,
+            "Rust",
+            "rust",
+            "Rust is a systems programming language with memory safety guarantees",
+        )
+        .await;
+        create_research_page(
+            &db,
+            "Python",
+            "python",
+            "Python is a dynamically typed programming language emphasizing readability",
+        )
+        .await;
+        seed_legacy(
+            &db,
+            "Existing useful overview with its original evidence.[1]",
+        )
+        .await;
+        db.link_page_source("legacy-overview", "rust", "test")
+            .await
+            .unwrap();
+        let saved = db.get_page("legacy-overview").await.unwrap().unwrap();
+        let sources = db
+            .get_page_sources("legacy-overview")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.memory_source_id)
+            .collect::<Vec<_>>();
+        let llm: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::new("The moon is made of green cheese. [1]"));
+        let result = refresh_overview_page(&db, &llm, &PromptRegistry::default(), "test", None)
+            .await
+            .unwrap();
+        assert!(!result.wrote);
+        assert!(result.discard_reason.is_some());
+        let after = db.get_page("legacy-overview").await.unwrap().unwrap();
+        assert_eq!(after.content, saved.content);
+        assert_eq!(
+            serde_json::to_value(after.citations).unwrap(),
+            serde_json::to_value(saved.citations).unwrap()
         );
-        assert!(
-            linked_ids.contains(&"mem_overview_prompt_python"),
-            "evidence must include the Python page's source, got {:?}",
-            linked_ids
+        assert_eq!(after.stale_reason, saved.stale_reason);
+        assert_eq!(
+            db.get_page_sources("legacy-overview")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| s.memory_source_id)
+                .collect::<Vec<_>>(),
+            sources
+        );
+    }
+
+    #[tokio::test]
+    async fn user_edited_overview_is_untouched() {
+        let (db, _dir) = test_db().await;
+        seed_legacy(&db, OVERVIEW_PLACEHOLDER_CONTENT).await;
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute(
+                "UPDATE pages SET user_edited=1 WHERE id='legacy-overview'",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::unavailable());
+        refresh_overview_page(&db, &llm, &PromptRegistry::default(), "test", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_page("legacy-overview")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "active"
         );
     }
 }

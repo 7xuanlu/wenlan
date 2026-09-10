@@ -1779,6 +1779,11 @@ async fn maybe_refresh_overview_page(
         knowledge_path,
     )
     .await?;
+    if let Some(reason) = outcome.discard_reason {
+        return Err(WenlanError::Llm(format!(
+            "Overview was not updated: {reason}"
+        )));
+    }
     Ok(if outcome.wrote { 1 } else { 0 })
 }
 
@@ -3789,9 +3794,9 @@ mod tests {
         );
         // The eligible cluster must NOT have grown a page: check the cluster
         // page by title, not total active-page count. The ReDistill phase's
-        // reserved "Overview" page (`ensure_overview_page`) is always minted
-        // when an LLM is available, so a raw count is never 0 and would test
-        // the wrong thing. Mirrors the sibling default-routing test, which
+        // reserved "Overview" page may be minted once meaningful evidence
+        // exists, so a raw count can be nonzero and would test the wrong
+        // thing. Mirrors the sibling default-routing test, which
         // asserts the same "Test Topic" cluster page IS present.
         let cluster_page = db.find_active_page_id_by_title("Test Topic").await.unwrap();
         assert!(
@@ -3967,14 +3972,10 @@ mod tests {
         );
     }
 
-    /// Spec §5.3: the reserved Overview page is a "wiki is alive" signal that
-    /// must actually fire in production, not just in `synthesis::overview`'s
-    /// own unit tests. Drives the real maintenance entrypoint
-    /// (`run_periodic_steep_with_api`, the function the daemon scheduler
-    /// calls) with a trigger that runs `Phase::Overview` and an available
-    /// LLM, and asserts the reserved "Overview" page exists afterward.
+    /// The real scheduler path must not invent a starting page, even with
+    /// multiple sourced topic pages and a configured model.
     #[tokio::test]
-    async fn test_overview_phase_refreshes_reserved_overview_page() {
+    async fn test_overview_phase_never_invents_a_starting_page() {
         let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let data_dir = tempfile::tempdir().unwrap();
@@ -3982,8 +3983,9 @@ mod tests {
         let data_dir_var = data_dir.path().to_string_lossy().to_string();
         let knowledge_path = knowledge_dir.path().to_path_buf();
 
-        // A pre-existing page for the Overview to summarize — mirrors
-        // `synthesis::overview`'s own fixture helper.
+        // Two pre-existing pages for the Overview to summarize — first
+        // creation needs at least two sourced concept pages, never a
+        // placeholder. Mirrors `synthesis::overview`'s own fixture helper.
         let mem_content = "Rust is a systems programming language with memory safety guarantees";
         db.upsert_documents(vec![make_memory(
             "overview_wiring_rust",
@@ -4006,9 +4008,32 @@ mod tests {
         crate::post_write::create_page(&db, req, "test", None)
             .await
             .unwrap();
+        let mem_content2 =
+            "Python is a dynamically typed programming language emphasizing readability";
+        db.upsert_documents(vec![make_memory(
+            "overview_wiring_python",
+            mem_content2,
+            "fact",
+            "engineering",
+        )])
+        .await
+        .unwrap();
+        let req2 = wenlan_types::requests::CreateConceptRequest {
+            title: "Python".to_string(),
+            content: mem_content2.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None.into(),
+            source_memory_ids: vec!["overview_wiring_python".to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        crate::post_write::create_page(&db, req2, "test", None)
+            .await
+            .unwrap();
 
         let llm: Arc<dyn LlmProvider> = Arc::new(crate::llm_provider::MockProvider::new(&format!(
-            "{mem_content}.[1]"
+            "{mem_content}.[1] {mem_content2}.[2]"
         )));
 
         let result =
@@ -4049,17 +4074,17 @@ mod tests {
             overview.error
         );
 
-        let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
         assert!(
-            overview_id.is_some(),
-            "the overview phase must create/refresh the reserved Overview page \
-             (spec §5.3) — this is the 'wiki is alive' signal and must fire from the real \
-             steep cycle, not just from synthesis::overview's own unit tests"
+            db.find_active_page_id_by_title("Overview")
+                .await
+                .unwrap()
+                .is_none(),
+            "real sources do not authorize inventing an Overview"
         );
     }
 
     #[tokio::test]
-    async fn test_daily_maintenance_refreshes_reserved_overview_page() {
+    async fn test_daily_maintenance_never_invents_a_starting_page() {
         let _serial = COMPILE_ROUTING_ENV_LOCK.lock().await;
         let (db, _dir) = test_db().await;
         let data_dir = tempfile::tempdir().unwrap();
@@ -4067,6 +4092,7 @@ mod tests {
         let data_dir_var = data_dir.path().to_string_lossy().to_string();
         let knowledge_path = knowledge_dir.path().to_path_buf();
 
+        // Daily maintenance must not invent an Overview even with real pages.
         let mem_content = "Rust ownership lets the compiler enforce aliasing and mutation rules";
         db.upsert_documents(vec![make_memory(
             "overview_daily_rust",
@@ -4089,9 +4115,32 @@ mod tests {
         crate::post_write::create_page(&db, req, "test", None)
             .await
             .unwrap();
+        let mem_content2 =
+            "Python readability comes from significant whitespace and dynamic typing";
+        db.upsert_documents(vec![make_memory(
+            "overview_daily_python",
+            mem_content2,
+            "fact",
+            "engineering",
+        )])
+        .await
+        .unwrap();
+        let req2 = wenlan_types::requests::CreateConceptRequest {
+            title: "Python Readability".to_string(),
+            content: mem_content2.to_string(),
+            summary: None,
+            entity_id: None,
+            space: None.into(),
+            source_memory_ids: vec!["overview_daily_python".to_string()],
+            creation_kind: Some("research".to_string()),
+            workspace: None,
+        };
+        crate::post_write::create_page(&db, req2, "test", None)
+            .await
+            .unwrap();
 
         let llm: Arc<dyn LlmProvider> = Arc::new(crate::llm_provider::MockProvider::new(&format!(
-            "{mem_content}.[1]"
+            "{mem_content}.[1] {mem_content2}.[2]"
         )));
 
         let result =
@@ -4138,11 +4187,12 @@ mod tests {
             overview.error
         );
 
-        let overview_id = db.find_active_page_id_by_title("Overview").await.unwrap();
         assert!(
-            overview_id.is_some(),
-            "the Daily maintenance pass must create/refresh the reserved Overview page \
-             (spec §5.3) through the real steep cycle"
+            db.find_active_page_id_by_title("Overview")
+                .await
+                .unwrap()
+                .is_none(),
+            "daily maintenance must not invent an Overview"
         );
     }
 

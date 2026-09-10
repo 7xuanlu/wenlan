@@ -23385,6 +23385,87 @@ async fn test_get_app_metadata_missing_key_returns_none() {
 }
 
 #[tokio::test]
+async fn startup_overview_repair_archives_placeholder_behind_authored_namesake() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    {
+        let db = MemoryDB::new_with_shared_embedder(
+            &db_path,
+            Arc::new(crate::events::NoopEmitter),
+            shared_embedder(),
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "authored-overview",
+            "Overview",
+            None,
+            "My own overview stays active.",
+            None,
+            None,
+            &[],
+            "2026-09-10T00:00:00Z",
+            "authored",
+            "unconfirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "legacy-overview",
+            "Overview",
+            None,
+            crate::synthesis::overview::OVERVIEW_PLACEHOLDER_CONTENT,
+            None,
+            None,
+            &[],
+            "2026-09-10T00:00:00Z",
+            "research",
+            "unconfirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        // Simulate a legacy row whose cached discriminator survived a prior
+        // rename/archive path. Startup repair must use the exact ownership
+        // fields, not this stale non-authoritative kind value.
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET kind = 'concept' WHERE id = 'legacy-overview'",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+
+    let reopened = MemoryDB::new_with_shared_embedder(
+        &db_path,
+        Arc::new(crate::events::NoopEmitter),
+        shared_embedder(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reopened
+            .get_page("authored-overview")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "active",
+        "an authored namesake must survive startup repair"
+    );
+    let placeholder = reopened.get_page("legacy-overview").await.unwrap().unwrap();
+    assert_eq!(placeholder.status, "archived");
+    assert_eq!(
+        placeholder.content,
+        crate::synthesis::overview::OVERVIEW_PLACEHOLDER_CONTENT
+    );
+}
+
+#[tokio::test]
 async fn test_set_and_get_app_metadata() {
     let (db, _dir) = test_db().await;
     db.set_app_metadata("last_daily_steep_ts", "1712880000")
@@ -32723,6 +32804,104 @@ async fn find_matching_page_scoped_filters_by_workspace_column() {
     assert!(
         mismatched.is_none(),
         "workspace-scoped matching must not match pages from other workspaces"
+    );
+}
+
+#[tokio::test]
+async fn growable_matching_uses_authoritative_creation_kind_and_title() {
+    let (db, _dir) = test_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let source_body =
+        "Imported source content must never become a generated concept growth target.";
+    db.insert_page_with_kind(
+        "stale-source-kind",
+        "Imported source",
+        None,
+        source_body,
+        None,
+        None,
+        &[],
+        &now,
+        "source",
+        "confirmed",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    // A pre-kind-repair row may carry the concept cache even though its
+    // creation_kind is authoritative source metadata.
+    {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET kind = 'concept' WHERE id = 'stale-source-kind'",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    let source_embedding = db
+        .generate_embeddings(&[crate::pages::page_embedding_text(
+            "Imported source",
+            None,
+            source_body,
+        )])
+        .unwrap()
+        .remove(0);
+    assert!(
+        db.find_growable_page_scoped(None, &source_embedding, 0.99, None)
+            .await
+            .unwrap()
+            .is_none(),
+        "source pages stay out of generated growth even with a stale concept kind"
+    );
+
+    let generated_body = "Generated research prose can continue growing after a title rename.";
+    db.insert_page_with_kind(
+        "renamed-generated",
+        "Overview",
+        None,
+        generated_body,
+        None,
+        None,
+        &[],
+        &now,
+        "research",
+        "confirmed",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    // Renaming did not rewrite the old cached Overview kind. The authoritative
+    // title and creation_kind still describe a generated concept page.
+    {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages
+             SET title = 'Renamed generated', kind = 'overview'
+             WHERE id = 'renamed-generated'",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    let generated_embedding = db
+        .generate_embeddings(&[crate::pages::page_embedding_text(
+            "Renamed generated",
+            None,
+            generated_body,
+        )])
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        db.find_growable_page_scoped(None, &generated_embedding, 0.80, None)
+            .await
+            .unwrap()
+            .map(|page| page.id),
+        Some("renamed-generated".to_string()),
+        "a renamed generated page remains a growth target despite stale kind"
     );
 }
 

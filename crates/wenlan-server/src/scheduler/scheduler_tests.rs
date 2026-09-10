@@ -3993,7 +3993,7 @@ async fn maintenance_slices_detect_page_merge_cards_and_route_stale_pages() {
     );
 
     let overview = run_stage(wenlan_core::maintenance::MaintenanceStage::Overview).await;
-    assert_eq!(overview.overview_refreshed, 1);
+    assert_eq!(overview.overview_refreshed, 0);
 
     let proposals = db.get_pending_refinements().await.unwrap();
     let merge_card = proposals
@@ -4037,7 +4037,7 @@ async fn maintenance_slices_detect_page_merge_cards_and_route_stale_pages() {
         db.find_active_page_id_by_title("Overview")
             .await
             .unwrap()
-            .is_some(),
-        "overview refresh must create or update the reserved Overview page"
+            .is_none(),
+        "maintenance must not invent a reserved Overview"
     );
 }

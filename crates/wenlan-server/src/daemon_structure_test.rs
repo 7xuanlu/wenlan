@@ -1259,6 +1259,7 @@ fn structure_violations_with_children(
         phase.external_tests().then_some("scheduler_tests.rs"),
         phase.ambient_child().then_some("ambient.rs"),
         phase.ambient_child().then_some("ambient_admin.rs"),
+        phase.ambient_child().then_some("import_priority.rs"),
     ]
     .into_iter()
     .flatten()
@@ -1414,8 +1415,29 @@ fn structure_violations_with_children(
             "spawn_scheduler must remain the single public scheduler-root entry point".into(),
         );
     }
+    // Import priority is a bounded branch in this same task, before the
+    // existing poll stages. Each branch must retain exactly one call site.
+    let mut regular_poll = spawn.clone();
+    if let (Some(start), Some(end)) = (
+        spawn.find("let mut import_work_ran"),
+        spawn.find("let selected_automatic"),
+    ) {
+        if start < end {
+            let priority = &spawn[start..end];
+            violations.extend(unique_order_violations(
+                priority,
+                &[
+                    "ambient_run_lock.try_lock()",
+                    "fire_steep_phase_safe(",
+                    "run_ambient_job_safe(",
+                ],
+                "import priority",
+            ));
+            regular_poll.replace_range(start..end, "");
+        }
+    }
     violations.extend(unique_order_violations(
-        &spawn,
+        &regular_poll,
         SCHEDULER_POLL_ORDER,
         "spawn_scheduler",
     ));
@@ -1535,14 +1557,14 @@ fn structure_violations_with_children(
             };
             violations.extend(unique_order_violations(&body, order, function));
             if function == "register_optional_runtime_workers" {
-                // Four snapshots: the outbox drain worker's shutdown receiver,
+                // Five snapshots: the outbox drain worker's shutdown receiver,
                 // the model-load reservation, the load shutdown receiver, and
-                // the reconcile truth provider. Each takes the guard inside a
+                // the import signal, and the reconcile truth provider. Each takes the guard inside a
                 // block and drops it before awaiting.
                 violations.extend(exact_token_count_violations(
                     &body,
                     "shared.read().await",
-                    4,
+                    5,
                     "register_optional_runtime_workers",
                 ));
                 violations.extend(unique_order_violations(

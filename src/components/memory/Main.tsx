@@ -21,6 +21,7 @@ import EntityDetail from "./EntityDetail";
 import MemoryStream from "./MemoryStream";
 import type { SortMode } from "./MemoryStream";
 import HomePage from "./HomePage";
+import { FirstUseGuide } from "../onboarding/FirstUseGuide";
 import AtlasView from "./AtlasView";
 import MemorySearchResult from "./MemorySearchResult";
 import MemoryDetail from "./MemoryDetail";
@@ -840,7 +841,20 @@ export default function Main({
           ) : view.kind === "import" ? (
             <ImportView
               onBack={navigateBack}
-              onComplete={(_source, _result) => { setView({ kind: "stream" }); setViewHistory([]); }}
+              completeLabel={view.fromFirstUse ? t("firstUse.guide.seeKnowledge") : undefined}
+              onComplete={(_source, result) => {
+                if (view.fromFirstUse) {
+                  setView({
+                    kind: "first-use",
+                    showKnowledge: true,
+                    batchId: result.imported > 0 ? result.batch_id : undefined,
+                  });
+                  setViewHistory([{ kind: "home" }]);
+                } else {
+                  setView({ kind: "stream" });
+                  setViewHistory([]);
+                }
+              }}
             />
           ) : view.kind === "settings" ? (
             <SettingsPage
@@ -953,6 +967,24 @@ export default function Main({
               onPageClick={(id) => navigateTo({ kind: "page", pageId: id })}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
             />
+          ) : view.kind === "first-use" ? (
+            <FirstUseGuide
+              onBack={navigateBack}
+              initialView={view.showKnowledge ? "live" : "guide"}
+              batchId={view.batchId}
+              onImport={() => navigateTo({ kind: "import", fromFirstUse: true })}
+              onSources={() => navigateTo({ kind: "settings", section: "sources" })}
+              onConnect={() => navigateTo({ kind: "connect-agent" })}
+              onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
+              onOpenPage={(id) => {
+                setViewHistory((previous) => [...previous, {
+                  kind: "first-use",
+                  showKnowledge: true,
+                  batchId: view.batchId,
+                }]);
+                setView({ kind: "page", pageId: id });
+              }}
+            />
           ) : view.kind === "home" ? (
             <HomePage
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
@@ -960,6 +992,7 @@ export default function Main({
               onNavigateGraph={() => navigateTo({ kind: "graph" })}
               onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
               onOpenDistillReview={() => navigateTo({ kind: "distill-review" })}
+              onStartFirstUse={() => navigateTo({ kind: "first-use" })}
               onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
               onOpenIntelligenceSettings={() =>
                 navigateTo({ kind: "settings", section: "intelligence" })

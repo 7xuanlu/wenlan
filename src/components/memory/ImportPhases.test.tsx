@@ -63,7 +63,8 @@ describe("summarizeImportBatches", () => {
       makeBatch({ batch_id: "batch-2", memories_imported: 5, pages_distilled: 1 }),
     ]);
     expect(summary.memoriesImported).toBe(15);
-    expect(summary.pagesDistilled).toBe(4);
+    expect(summary.pagesDistilled).toBeNull();
+    expect(summary.hasRelatedPages).toBe(true);
     expect(summary.complete).toBe(false);
     expect(summary.runningPhases).toContain("detect");
   });
@@ -116,7 +117,7 @@ describe("ImportPhaseList", () => {
 
   it("renders distill as a count with no bar", () => {
     render(<ImportPhaseList phases={makeBatch().phases} />);
-    expect(screen.getByText("3 pages so far")).toBeInTheDocument();
+    expect(screen.getByText("3 related pages")).toBeInTheDocument();
     expect(
       within(screen.getByTestId("import-phase-distill")).queryByRole("progressbar"),
     ).not.toBeInTheDocument();
@@ -133,7 +134,7 @@ describe("ImportStatusPill", () => {
     const onOpen = vi.fn();
     render(<ImportStatusPill batches={[makeBatch()]} onOpen={onOpen} />);
     const pill = screen.getByTestId("import-status-pill");
-    expect(pill).toHaveTextContent("Importing memories…");
+    expect(pill).toHaveTextContent("Import progress");
     expect(pill).toHaveTextContent("Detecting entities");
     fireEvent.click(pill);
     expect(onOpen).toHaveBeenCalledTimes(1);
@@ -157,7 +158,7 @@ describe("ImportDetailPanel", () => {
     expect(screen.getByTestId("import-detail-panel")).toBeInTheDocument();
     expect(screen.getByText("Import progress")).toBeInTheDocument();
     expect(screen.getByText("5 of 12")).toBeInTheDocument();
-    expect(screen.getByText("3 pages so far")).toBeInTheDocument();
+    expect(screen.getByText("3 related pages")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("import-detail-back"));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
@@ -255,4 +256,37 @@ describe("useImportBatchStatus", () => {
     expect(getImportBatchStatus).not.toHaveBeenCalled();
     expect(screen.getByTestId("probe")).toHaveTextContent("none");
   });
+});
+
+
+it("does not add overlapping page counts across batches", () => {
+  const batches = [makeBatch({ pages_distilled: 2 }), makeBatch({ batch_id: "batch-2", pages_distilled: 2 })];
+  const summary = summarizeImportBatches(batches);
+  expect(summary.pagesDistilled).toBeNull();
+  render(<ImportDetailPanel batches={batches} onBack={vi.fn()} />);
+  expect(screen.queryByText("4 related pages")).not.toBeInTheDocument();
+  expect(screen.getByText("Related pages available")).toBeInTheDocument();
+});
+
+it("finishes the import without pretending that a thin batch produced a page", () => {
+  const batch = makeBatch({
+    complete: true,
+    pages_distilled: 0,
+    phases: [
+      entry("ingest", "complete", 2, 2),
+      entry("store", "complete", 2, 2),
+      entry("detect", "complete", 4, 4),
+      entry("enrich", "complete", 2, 2),
+      entry("link", "complete", 2, 2),
+      entry("distill", "pending", 0, 0),
+    ],
+  });
+  const summary = summarizeImportBatches([batch]);
+  expect(summary.complete).toBe(true);
+  expect(summary.runningPhases).toEqual([]);
+  expect(summary.hasRelatedPages).toBe(false);
+  expect(summary.phases.find((p) => p.phase === "distill")?.state).toBe("pending");
+  render(<ImportPhaseList phases={batch.phases} />);
+  expect(screen.getByText(/Your memories are ready to search and use with AI/)).toBeInTheDocument();
+  expect(screen.getByTestId("import-phase-distill")).toHaveAttribute("data-state", "pending");
 });

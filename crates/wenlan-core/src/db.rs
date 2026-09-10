@@ -5022,6 +5022,7 @@ impl MemoryDB {
 
         // Run schema migrations for existing databases
         instance.run_migrations(emitter.as_ref()).await?;
+        instance.retire_empty_overview().await?;
 
         // Ensure a default profile always exists
         instance.bootstrap_profile().await?;
@@ -5114,6 +5115,7 @@ impl MemoryDB {
         };
 
         instance.run_migrations(emitter.as_ref()).await?;
+        instance.retire_empty_overview().await?;
         instance.bootstrap_profile().await?;
 
         Ok(instance)
@@ -40720,6 +40722,22 @@ impl MemoryDB {
             });
         }
 
+        // A recent explicit import may still have its bounded page-formation
+        // turn queued after enrichment settles. Keep polling until that turn
+        // finishes or its durable deadline expires (also safe after a crash).
+        let priority_until = self
+            .get_app_metadata("import_priority_until_v1")
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(0);
+        let batch_priority_until = self
+            .get_app_metadata(&format!("import_batch_priority_v1:{batch_id}"))
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(0);
+        let now = chrono::Utc::now().timestamp();
+        let import_turn_pending = now < priority_until && now < batch_priority_until;
+
         // Distill writes no step row: progress is the live count of distilled
         // pages citing the batch, via the live page-sources relation (active
         // `cites` edges, the same store `get_page_sources` reads).
@@ -40728,9 +40746,10 @@ impl MemoryDB {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT DISTINCT src_id, dst_id FROM edges \
-                     WHERE edge_type = 'cites' AND valid_until IS NULL \
-                     AND dst_id >= ?1 AND dst_id < ?2",
+                    "SELECT DISTINCT e.src_id, e.dst_id FROM edges e \
+                     JOIN pages p ON p.id = e.src_id AND p.status = 'active' \
+                     WHERE e.edge_type = 'cites' AND e.valid_until IS NULL \
+                     AND e.dst_id >= ?1 AND e.dst_id < ?2",
                     libsql::params![key_lo.clone(), key_hi.clone()],
                 )
                 .await
@@ -40753,7 +40772,7 @@ impl MemoryDB {
             // `settled_background` alone drew a finished phase reading "0
             // pages" the moment the other lanes settled, which nothing
             // supports. With no page yet it stays Pending.
-            state: if !settled_background {
+            state: if !settled_background || import_turn_pending {
                 ImportPhaseState::Running
             } else if pages_distilled > 0 {
                 ImportPhaseState::Complete
@@ -40764,7 +40783,7 @@ impl MemoryDB {
             total: 0,
             failed: 0,
         });
-        let complete = settled_background;
+        let complete = settled_background && !import_turn_pending;
 
         // Entities the batch's memories link to, split by the #708 lifecycle:
         // detected is `kind='entity'` with `entity_confirmed=0` and a live
@@ -40877,12 +40896,13 @@ impl MemoryDB {
     /// The most recently updated import batches that are not `complete`,
     /// newest first, capped at `limit`.
     ///
-    /// Candidate batches come from the `import_` source-id prefix range, then
-    /// are narrowed to those written inside [`Self::ACTIVE_IMPORT_WINDOW_SECS`]
-    /// and to the [`Self::ACTIVE_IMPORT_CANDIDATES`] newest of those before any
-    /// per-batch read happens. Without that bound this walked every batch the
-    /// database had ever held on every call, and the home screen calls it every
-    /// ten seconds.
+    /// Candidate batches come from the `import_` source-id prefix range,
+    /// supplemented by request-deadline markers for historical-dated imports;
+    /// they are narrowed to the [`Self::ACTIVE_IMPORT_WINDOW_SECS`] recency
+    /// floor and the [`Self::ACTIVE_IMPORT_CANDIDATES`] newest of those before
+    /// any per-batch read happens. Without that bound this walked every batch
+    /// the database had ever held on every call, and the home screen calls it
+    /// every ten seconds.
     /// How far back `active_import_batches` looks for a batch that might still
     /// be settling. One day: longer than any import's background work.
     const ACTIVE_IMPORT_WINDOW_SECS: i64 = 24 * 60 * 60;
@@ -40890,6 +40910,12 @@ impl MemoryDB {
     /// The most batches `active_import_batches` will read per call, newest
     /// first. A ceiling on the work one home-screen poll can cost.
     const ACTIVE_IMPORT_CANDIDATES: usize = 32;
+
+    /// Prefix reserved for one import batch's recency marker. The marker
+    /// stores that request's bounded deadline and doubles as its discovery
+    /// timestamp for the 24-hour active-batch window.
+    const IMPORT_BATCH_PRIORITY_METADATA_PREFIX: &str = "import_batch_priority_v1:";
+    const IMPORT_BATCH_PRIORITY_METADATA_END: &str = "import_batch_priority_v1;";
 
     pub async fn active_import_batches(
         &self,
@@ -40926,9 +40952,44 @@ impl MemoryDB {
                     .or_insert(modified);
             }
         }
+        // Import dates describe the original facts, not when the user pasted
+        // them. A priority marker stores the request's deadline, which also
+        // serves as its discovery timestamp. Keep expired deadlines through
+        // the existing 24-hour recency floor so a stalled historical batch
+        // remains visible for up to 24 hours after that deadline. The status
+        // calculation below still gates its bounded page turn on a future
+        // deadline.
+        let floor = chrono::Utc::now().timestamp() - Self::ACTIVE_IMPORT_WINDOW_SECS;
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT key, CAST(value AS INTEGER) FROM app_metadata
+                 WHERE key >= ?1 AND key < ?2
+                   AND CAST(value AS INTEGER) >= ?3
+                 ORDER BY CAST(value AS INTEGER) DESC LIMIT ?4",
+                    libsql::params![
+                        Self::IMPORT_BATCH_PRIORITY_METADATA_PREFIX,
+                        Self::IMPORT_BATCH_PRIORITY_METADATA_END,
+                        floor,
+                        Self::ACTIVE_IMPORT_CANDIDATES as i64
+                    ],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("active import priority: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                let key: String = row.get(0).unwrap_or_default();
+                if let Some(batch_id) = key.strip_prefix("import_batch_priority_v1:") {
+                    newest.insert(batch_id.to_string(), row.get::<i64>(1).unwrap_or(0));
+                }
+            }
+        }
         // A batch nobody has written to in a day is not "settling" in any
         // sense a user cares about, and reading it costs four table walks.
-        let floor = chrono::Utc::now().timestamp() - Self::ACTIVE_IMPORT_WINDOW_SECS;
         let mut candidates: Vec<(i64, String)> = newest
             .into_iter()
             .filter(|(_, modified)| *modified >= floor)
@@ -40957,6 +41018,39 @@ impl MemoryDB {
         });
         active.truncate(limit);
         Ok(active)
+    }
+
+    /// Persist one import batch's bounded deadline as its discovery marker and
+    /// prune only old rows in the import-batch priority namespace. Both writes
+    /// share one connection guard so a new import cannot race a cleanup into
+    /// losing its own marker.
+    pub async fn persist_import_batch_priority(
+        &self,
+        batch_id: &str,
+        deadline_epoch: i64,
+    ) -> Result<(), WenlanError> {
+        let key = format!("{}{batch_id}", Self::IMPORT_BATCH_PRIORITY_METADATA_PREFIX);
+        let floor = chrono::Utc::now().timestamp() - Self::ACTIVE_IMPORT_WINDOW_SECS;
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM app_metadata
+             WHERE key >= ?1 AND key < ?2 AND CAST(value AS INTEGER) < ?3",
+            libsql::params![
+                Self::IMPORT_BATCH_PRIORITY_METADATA_PREFIX,
+                Self::IMPORT_BATCH_PRIORITY_METADATA_END,
+                floor
+            ],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("persist import batch priority prune: {e}")))?;
+        conn.execute(
+            "INSERT INTO app_metadata (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            libsql::params![key, deadline_epoch.to_string()],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("persist import batch priority: {e}")))?;
+        Ok(())
     }
 
     /// Return memories with at least one `failed` enrichment step that hasn't
@@ -47212,6 +47306,36 @@ impl MemoryDB {
         }
     }
 
+    /// One-time repair for no-match receipts written under legacy confirmation
+    /// eligibility. Never retry a source already attached to a live page, an
+    /// abandoned attempt, or a receipt belonging to an older memory version.
+    async fn repair_page_growth_eligibility_receipts(&self) -> Result<(), WenlanError> {
+        const KEY: &str = "page_growth_eligibility_generation_v1";
+        if self.get_app_metadata(KEY).await?.as_deref() == Some("2") {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        let result = conn.execute_batch("BEGIN IMMEDIATE;
+            UPDATE enrichment_steps SET status='needs_retry', error='page_growth_eligibility_v2', attempts=0, updated_at=unixepoch()
+            WHERE step_name='page_growth' AND status='ok' AND error IS NULL
+              AND NOT EXISTS (SELECT 1 FROM app_metadata WHERE key='page_growth_eligibility_generation_v1' AND value='2')
+              AND EXISTS (SELECT 1 FROM memories m WHERE m.source_id=enrichment_steps.source_id
+                  AND m.source='memory' AND m.chunk_index=0 AND enrichment_steps.input_version=m.version)
+              AND NOT EXISTS (SELECT 1 FROM edges e JOIN pages p ON p.id=e.src_id AND p.status='active'
+                  WHERE e.edge_type='cites' AND e.dst_kind='memory'
+                  AND e.dst_id=enrichment_steps.source_id AND e.valid_until IS NULL);
+            INSERT INTO app_metadata(key,value) VALUES('page_growth_eligibility_generation_v1','2')
+                ON CONFLICT(key) DO UPDATE SET value='2';
+            COMMIT;").await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(WenlanError::VectorDb(format!(
+                "page growth eligibility repair: {error}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Select one memory for Page growth after its entity stage has reached a
     /// terminal state for the same generation. Waiting on that dependency
     /// preserves the entity-first match opportunity without relying on the
@@ -47221,6 +47345,7 @@ impl MemoryDB {
         max_attempts: u32,
         require_entity_stage: bool,
     ) -> Result<Option<PageGrowthInput>, WenlanError> {
+        self.repair_page_growth_eligibility_receipts().await?;
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -51446,6 +51571,8 @@ impl MemoryDB {
                     "SELECT 1 FROM memories
                      WHERE source_id=?1 AND source='memory' AND chunk_index=0
                        AND version=?2 AND COALESCE(pending_revision, 0)=0
+                       AND EXISTS (SELECT 1 FROM pages p WHERE p.id=?3
+                           AND (memories.space IS NULL OR memories.space=p.space OR (memories.space=?4 AND p.space IS NULL)))
                        AND NOT EXISTS (
                            SELECT 1 FROM memories superseder
                            WHERE superseder.supersedes=memories.source_id
@@ -51453,7 +51580,7 @@ impl MemoryDB {
                              AND superseder.source='memory'
                        )
                      LIMIT 1",
-                    libsql::params![source_id, expected_memory_version],
+                    libsql::params![source_id, expected_memory_version, id, UNFILED_SPACE_ID],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("page growth memory guard: {e}")))?;
@@ -51540,6 +51667,13 @@ impl MemoryDB {
                 sql.push_str(
                     " AND COALESCE(user_edited, 0)=0
                       AND COALESCE(creation_kind, 'distilled') <> 'authored'",
+                );
+            }
+            if page_growth_guard.is_some() {
+                sql.push_str(
+                    " AND creation_kind IN ('distilled','research')
+                      AND LOWER(title) <> 'overview'
+                      AND COALESCE(kind, 'concept') <> 'entity'",
                 );
             }
             if expected_source_revision.is_some() {
@@ -52104,6 +52238,41 @@ impl MemoryDB {
         workspace: Option<&str>,
         allow_user_edited: bool,
     ) -> Result<Option<Page>, WenlanError> {
+        self.find_matching_page_with_policy(
+            entity_id,
+            embedding,
+            threshold,
+            workspace,
+            allow_user_edited,
+            false,
+        )
+        .await
+    }
+
+    /// Automatic growth owns generated concept prose. Its eligibility is not
+    /// the retired review-status column; truth visibility remains a veto.
+    pub(crate) async fn find_growable_page_scoped(
+        &self,
+        entity_id: Option<&str>,
+        embedding: &[f32],
+        threshold: f64,
+        workspace: Option<&str>,
+    ) -> Result<Option<Page>, WenlanError> {
+        // Matching must not collapse a temporary write veto into a terminal
+        // no-match. The growth caller checks the permit and defers the receipt.
+        self.find_matching_page_with_policy(entity_id, embedding, threshold, workspace, false, true)
+            .await
+    }
+
+    async fn find_matching_page_with_policy(
+        &self,
+        entity_id: Option<&str>,
+        embedding: &[f32],
+        threshold: f64,
+        workspace: Option<&str>,
+        allow_user_edited: bool,
+        growth: bool,
+    ) -> Result<Option<Page>, WenlanError> {
         // Entity-first, but scoped.
         if let Some(eid) = entity_id {
             let allow_human_owned = i64::from(allow_user_edited);
@@ -52113,11 +52282,11 @@ impl MemoryDB {
                     "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept'), refresh_blocked_reason
                      FROM pages
                      WHERE entity_id = ?1 AND status = 'active'
-                       AND COALESCE(review_status, 'confirmed') = 'confirmed'
+                       AND ((?5=0 AND COALESCE(review_status, 'confirmed')='confirmed') OR (?5=1 AND creation_kind IN ('distilled','research') AND LOWER(title) <> 'overview' AND COALESCE(kind, 'concept') <> 'entity'))
                        AND (?2 IS NULL OR (?2 = ?4 AND space IS NULL) OR space = ?2)
                        AND (?3 != 0 OR (COALESCE(user_edited, 0) = 0 AND COALESCE(creation_kind, 'distilled') <> 'authored'))
                      ORDER BY id ASC LIMIT 1",
-                    libsql::params![eid, workspace, allow_human_owned, UNFILED_SPACE_ID],
+                    libsql::params![eid, workspace, allow_human_owned, UNFILED_SPACE_ID, i64::from(growth)],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("scoped page entity match: {e}")))?;
@@ -52143,11 +52312,11 @@ impl MemoryDB {
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
-                   AND COALESCE(c.review_status, 'confirmed') = 'confirmed'
+                   AND ((?5=0 AND COALESCE(c.review_status, 'confirmed')='confirmed') OR (?5=1 AND c.creation_kind IN ('distilled','research') AND LOWER(c.title) <> 'overview' AND COALESCE(c.kind, 'concept') <> 'entity'))
                    AND (?2 IS NULL OR (?2 = ?4 AND c.space IS NULL) OR c.space = ?2)
                    AND (?3 != 0 OR (COALESCE(c.user_edited, 0) = 0 AND COALESCE(c.creation_kind, 'distilled') <> 'authored'))
                  ORDER BY dist ASC LIMIT 1",
-                libsql::params![emb_sql, workspace, allow_human_owned, UNFILED_SPACE_ID],
+                libsql::params![emb_sql, workspace, allow_human_owned, UNFILED_SPACE_ID, i64::from(growth)],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("scoped page similarity: {e}")))?;
@@ -52310,6 +52479,106 @@ impl MemoryDB {
         }
 
         Ok(results)
+    }
+
+    /// Startup repair is deterministic and does not wait for a model or idle
+    /// maintenance. Only untouched old generated placeholders can be archived.
+    async fn retire_empty_overview(&self) -> Result<(), WenlanError> {
+        let candidates = self
+            .legacy_overview_placeholder_candidates(
+                crate::synthesis::overview::OVERVIEW_PLACEHOLDER_CONTENT,
+            )
+            .await?;
+        for (id, version, source_revision) in candidates {
+            self.archive_legacy_overview_placeholder(
+                &id,
+                version,
+                source_revision,
+                crate::synthesis::overview::OVERVIEW_PLACEHOLDER_CONTENT,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Snapshot every active, untouched legacy Overview placeholder before
+    /// archiving. The full eligibility predicate keeps an authored namesake
+    /// from hiding a placeholder, and the stable id order makes startup
+    /// repair deterministic when old stores contain duplicates.
+    async fn legacy_overview_placeholder_candidates(
+        &self,
+        placeholder: &str,
+    ) -> Result<Vec<(String, i64, i64)>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, version, COALESCE(source_revision, 0) FROM pages
+                 WHERE status = 'active' AND LOWER(title) = LOWER(?1)
+                   AND content = ?2
+                   AND creation_kind = 'research' AND COALESCE(user_edited, 0) = 0
+                 ORDER BY id ASC",
+                libsql::params!["Overview", placeholder],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("overview placeholder scan: {e}")))?;
+        let mut candidates = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("overview placeholder scan row: {e}")))?
+        {
+            candidates.push((
+                row.get::<String>(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("overview placeholder id: {e}")))?,
+                row.get::<i64>(1).unwrap_or(0),
+                row.get::<i64>(2).unwrap_or(0),
+            ));
+        }
+        Ok(candidates)
+    }
+
+    /// Retire only an untouched Overview placeholder left by older versions.
+    /// Archive (never delete) with the ownership/content/version predicates in
+    /// the mutation itself, so a concurrent edit always survives.
+    pub(crate) async fn archive_legacy_overview_placeholder(
+        &self,
+        id: &str,
+        expected_version: i64,
+        expected_source_revision: i64,
+        placeholder: &str,
+    ) -> Result<bool, WenlanError> {
+        let now = chrono::Utc::now();
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN IMMEDIATE", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("overview archive begin: {e}")))?;
+        let result: Result<bool, WenlanError> = async {
+            let affected = conn.execute(
+                "UPDATE pages SET status = 'archived', version = version + 1, last_modified = ?1
+                 WHERE id = ?2 AND status = 'active' AND version = ?3
+                   AND source_revision = ?4 AND content = ?5
+                   AND lower(title) = 'overview'
+                   AND creation_kind = 'research' AND COALESCE(user_edited, 0) = 0",
+                libsql::params![now.to_rfc3339(), id, expected_version, expected_source_revision, placeholder],
+            ).await.map_err(|e| WenlanError::VectorDb(format!("overview archive: {e}")))?;
+            if affected == 1 {
+                Self::append_page_history(&conn, id, "archive", now.timestamp()).await
+                    .map_err(|e| WenlanError::VectorDb(format!("overview archive history: {e}")))?;
+            }
+            Ok(affected == 1)
+        }.await;
+        match result {
+            Ok(changed) => {
+                commit_or_rollback(&conn)
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("overview archive commit: {e}")))?;
+                Ok(changed)
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
     }
 
     /// Archive a page (set status to 'archived').
@@ -53166,6 +53435,36 @@ impl MemoryDB {
                 row.get::<String>(0)
                     .map_err(|e| WenlanError::VectorDb(e.to_string()))?,
             )),
+            None => Ok(None),
+        }
+    }
+
+    /// Find the deterministic active machine-owned Overview row used by the
+    /// legacy Overview maintenance pass. Authored/imported namesakes are
+    /// intentionally outside this narrow identity predicate.
+    pub(crate) async fn find_active_machine_overview_id(
+        &self,
+    ) -> Result<Option<String>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM pages
+                 WHERE status = 'active' AND LOWER(title) = LOWER(?1)
+                   AND creation_kind = 'research'
+                   AND COALESCE(user_edited, 0) = 0
+                 ORDER BY id ASC LIMIT 1",
+                libsql::params!["Overview"],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("find active machine Overview: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("find active machine Overview row: {e}")))?
+        {
+            Some(row) => Ok(Some(row.get::<String>(0).map_err(|e| {
+                WenlanError::VectorDb(format!("machine Overview id: {e}"))
+            })?)),
             None => Ok(None),
         }
     }

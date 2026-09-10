@@ -144,7 +144,7 @@ test("import flow shows real phases and an honest summary", async ({ page }) => 
   // The daemon's row counts — not an elapsed-time bar.
   await expect(page.getByText("Detecting entities")).toBeVisible();
   await expect(page.getByText("1 of 3")).toBeVisible();
-  await expect(page.getByText("0 pages so far")).toBeVisible();
+  await expect(page.getByText("0 related pages")).toBeVisible();
   await expect(page.getByText(/Processing your memories/)).not.toBeVisible();
 
   // Release the held chunk so the request phases finish.
@@ -166,7 +166,7 @@ test("import flow shows real phases and an honest summary", async ({ page }) => 
   // The summary reports measured figures and says background work continues.
   await expect(page.getByText(/3 memories imported/i)).toBeVisible();
   await expect(page.getByText("1 detected entities")).toBeVisible();
-  await expect(page.getByText(/Still working:/)).toBeVisible();
+  await expect(page.getByText("Saved and ready to use. Organization progress will update here.")).toBeVisible();
 
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);

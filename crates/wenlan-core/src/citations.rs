@@ -134,6 +134,11 @@ impl CitationStats {
 /// `faithfulness::overlap_fraction` scorer in both directions — the bench
 /// itself is untouched.
 fn bidirectional_support(span: &str, source: &str) -> f64 {
+    // A marker after a sentence can map to a punctuation-only span. Do not
+    // accept vacuous overlap; let the enclosing paragraph supply evidence.
+    if !span.chars().any(char::is_alphanumeric) || !source.chars().any(char::is_alphanumeric) {
+        return 0.0;
+    }
     crate::faithfulness::overlap_fraction(span, source)
         .max(crate::faithfulness::overlap_fraction(source, span))
 }
@@ -829,6 +834,17 @@ mod tests {
         assert_eq!(cites[1].status, "unverified");
         assert_eq!(stats.verified, 1);
         assert_eq!(stats.unverified, 1);
+    }
+
+    #[test]
+    fn marker_after_sentence_cannot_verify_an_empty_span() {
+        let (_, citations, stats) =
+            process_citation_output("The moon is made of green cheese. [1]", &srcs());
+        assert_eq!(stats.verified, 0);
+        assert_eq!(citations[0].status, "unverified");
+        let (_, _, supported) =
+            process_citation_output("The daemon binds to port 7878 by default. [1]", &srcs());
+        assert_eq!(supported.verified, 1);
     }
 
     #[test]

@@ -899,7 +899,14 @@ describe("host-process.sh: listener_pid_for_port, POSIX branch", () => {
   it("reports COULD NOT MEASURE when lsof is not installed", () => {
     // Git Bash has no lsof at all, which is why a `command -v lsof || fail`
     // gate stops the smokes dead on this platform.
-    const result = runDriver(["listener", "17931"], { posixBranch: true });
+    const result = runDriver(["listener", "17931"], {
+      posixBranch: true,
+      isolatePath: true,
+      // Source the library with an explicit test platform, then let the
+      // driver select POSIX. No host-installed lsof may enter this case.
+      env: { WENLAN_HOST_PROCESS_PLATFORM: "windows" },
+    });
+    expect(result.status).toBe(0);
     expect(result.stdout.trim(), result.stderr).toBe("rc=2 out=");
   });
 
