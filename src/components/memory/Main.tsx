@@ -844,7 +844,11 @@ export default function Main({
               completeLabel={view.fromFirstUse ? t("firstUse.guide.seeKnowledge") : undefined}
               onComplete={(_source, result) => {
                 if (view.fromFirstUse) {
-                  setView({ kind: "first-use", showKnowledge: true, batchId: result.batch_id });
+                  setView({
+                    kind: "first-use",
+                    showKnowledge: true,
+                    batchId: result.imported > 0 ? result.batch_id : undefined,
+                  });
                   setViewHistory([{ kind: "home" }]);
                 } else {
                   setView({ kind: "stream" });

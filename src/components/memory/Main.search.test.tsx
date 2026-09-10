@@ -13,6 +13,7 @@ import Main from "./Main";
 const eventListeners = vi.hoisted(
   () => new Map<string, (payload?: unknown) => void>(),
 );
+const importCompletion = vi.hoisted(() => ({ imported: 1 }));
 const listSpacesMock = vi.hoisted(() => vi.fn<() => Promise<readonly Space[]>>());
 const openFileMock = vi.hoisted(() => vi.fn<(url: string) => Promise<void>>());
 const openSearchResultMock = vi.hoisted(() => vi.fn<(url: string) => Promise<void>>());
@@ -288,13 +289,16 @@ vi.mock("./DecisionLog", () => ({ default: () => <div /> }));
 vi.mock("./MemoryCard", () => ({ default: () => <div /> }));
 vi.mock("./ImportView", () => ({
   ImportView: (props: {
-    onComplete: (source: string, result: { batch_id: string }) => void;
+    onComplete: (source: string, result: { batch_id: string; imported: number }) => void;
     onBack: () => void;
   }) => (
     <div data-testid="import-view">
       <button
         type="button"
-        onClick={() => props.onComplete("chatgpt", { batch_id: "import-batch-1" })}
+        onClick={() => props.onComplete("chatgpt", {
+          batch_id: "import-batch-1",
+          imported: importCompletion.imported,
+        })}
       >
         Finish import
       </button>
@@ -387,6 +391,7 @@ function deferred<T>() {
 describe("Main search", () => {
   beforeEach(async () => {
     eventListeners.clear();
+    importCompletion.imported = 1;
     listSpacesMock.mockReset();
     listSpacesMock.mockResolvedValue([]);
     openFileMock.mockReset();
@@ -427,6 +432,20 @@ describe("Main search", () => {
     await user.click(screen.getByRole("button", { name: "Bring memories" }));
     await user.click(screen.getByRole("button", { name: "Cancel import" }));
     expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "guide");
+  });
+
+  it("returns an all-skipped onboarding import to the generic live guide", async () => {
+    importCompletion.imported = 0;
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Start first use" }));
+    await user.click(screen.getByRole("button", { name: "Bring memories" }));
+    await user.click(screen.getByRole("button", { name: "Finish import" }));
+
+    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "live");
+    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-batch-id", "none");
+    await user.click(screen.getByRole("button", { name: "Leave first use" }));
+    expect(screen.getByTestId("home-page")).toBeVisible();
   });
 
   it("returns from a knowledge result to the onboarding library view", async () => {
