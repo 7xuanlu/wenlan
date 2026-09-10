@@ -31,18 +31,17 @@ pub(crate) const OVERVIEW_PLACEHOLDER_CONTENT: &str =
     "This page is refreshed automatically to summarize the wiki's current top pages.";
 
 /// Whether a page counts as Overview evidence: an active, non-empty,
-/// `kind == "concept"` page that is not the Overview itself nor a shell row.
+/// derived concept page that is not the Overview itself nor a shell row.
 fn is_overview_evidence_page(page: &crate::pages::Page) -> bool {
     if page.title.eq_ignore_ascii_case(OVERVIEW_PAGE_TITLE) {
         return false;
     }
-    if page.kind != "concept" {
+    // The entity kind is a trusted mutation/read fence. All other routing is
+    // derived from the authoritative title, creation kind, and status below.
+    if page.kind == "entity" {
         return false;
     }
-    if matches!(
-        page.creation_kind.as_str(),
-        "entity" | "source" | "imported"
-    ) {
+    if crate::pages::page_kind_for(&page.title, &page.creation_kind, &page.status) != "concept" {
         return false;
     }
     if page.content.trim().is_empty() {
@@ -441,6 +440,39 @@ mod tests {
                 .status,
             "archived",
             "the eligible legacy placeholder must still be archived"
+        );
+    }
+
+    #[tokio::test]
+    async fn overview_evidence_uses_authoritative_fields_when_kind_is_stale() {
+        let (db, _dir) = test_db().await;
+        create_research_page(
+            &db,
+            "Research",
+            "research-memory",
+            "Research page body supplies evidence for the maintenance summary.",
+        )
+        .await;
+        let page_id = db
+            .find_active_page_id_by_title("Research")
+            .await
+            .unwrap()
+            .expect("research page id");
+        let mut page = db
+            .get_page(&page_id)
+            .await
+            .unwrap()
+            .expect("research page seeded");
+        assert_eq!(page.creation_kind, "research");
+        page.kind = "source".to_string();
+        assert!(
+            is_overview_evidence_page(&page),
+            "stored non-entity kind must not hide authoritative research evidence"
+        );
+        page.kind = "entity".to_string();
+        assert!(
+            !is_overview_evidence_page(&page),
+            "the trusted entity fence must still exclude entity shadow pages"
         );
     }
 

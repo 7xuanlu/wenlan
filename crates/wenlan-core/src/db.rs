@@ -51670,7 +51670,11 @@ impl MemoryDB {
                 );
             }
             if page_growth_guard.is_some() {
-                sql.push_str(" AND creation_kind IN ('distilled','research') AND kind='concept'");
+                sql.push_str(
+                    " AND creation_kind IN ('distilled','research')
+                      AND LOWER(title) <> 'overview'
+                      AND COALESCE(kind, 'concept') <> 'entity'",
+                );
             }
             if expected_source_revision.is_some() {
                 if expected_version.is_some() {
@@ -52278,7 +52282,7 @@ impl MemoryDB {
                     "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept'), refresh_blocked_reason
                      FROM pages
                      WHERE entity_id = ?1 AND status = 'active'
-                       AND ((?5=0 AND COALESCE(review_status, 'confirmed')='confirmed') OR (?5=1 AND creation_kind IN ('distilled','research') AND kind='concept'))
+                       AND ((?5=0 AND COALESCE(review_status, 'confirmed')='confirmed') OR (?5=1 AND creation_kind IN ('distilled','research') AND LOWER(title) <> 'overview' AND COALESCE(kind, 'concept') <> 'entity'))
                        AND (?2 IS NULL OR (?2 = ?4 AND space IS NULL) OR space = ?2)
                        AND (?3 != 0 OR (COALESCE(user_edited, 0) = 0 AND COALESCE(creation_kind, 'distilled') <> 'authored'))
                      ORDER BY id ASC LIMIT 1",
@@ -52308,7 +52312,7 @@ impl MemoryDB {
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
-                   AND ((?5=0 AND COALESCE(c.review_status, 'confirmed')='confirmed') OR (?5=1 AND c.creation_kind IN ('distilled','research') AND c.kind='concept'))
+                   AND ((?5=0 AND COALESCE(c.review_status, 'confirmed')='confirmed') OR (?5=1 AND c.creation_kind IN ('distilled','research') AND LOWER(c.title) <> 'overview' AND COALESCE(c.kind, 'concept') <> 'entity'))
                    AND (?2 IS NULL OR (?2 = ?4 AND c.space IS NULL) OR c.space = ?2)
                    AND (?3 != 0 OR (COALESCE(c.user_edited, 0) = 0 AND COALESCE(c.creation_kind, 'distilled') <> 'authored'))
                  ORDER BY dist ASC LIMIT 1",
@@ -52510,7 +52514,7 @@ impl MemoryDB {
             .query(
                 "SELECT id, version, COALESCE(source_revision, 0) FROM pages
                  WHERE status = 'active' AND LOWER(title) = LOWER(?1)
-                   AND content = ?2 AND kind = 'overview'
+                   AND content = ?2
                    AND creation_kind = 'research' AND COALESCE(user_edited, 0) = 0
                  ORDER BY id ASC",
                 libsql::params!["Overview", placeholder],
@@ -52553,7 +52557,7 @@ impl MemoryDB {
                 "UPDATE pages SET status = 'archived', version = version + 1, last_modified = ?1
                  WHERE id = ?2 AND status = 'active' AND version = ?3
                    AND source_revision = ?4 AND content = ?5
-                   AND lower(title) = 'overview' AND kind = 'overview'
+                   AND lower(title) = 'overview'
                    AND creation_kind = 'research' AND COALESCE(user_edited, 0) = 0",
                 libsql::params![now.to_rfc3339(), id, expected_version, expected_source_revision, placeholder],
             ).await.map_err(|e| WenlanError::VectorDb(format!("overview archive: {e}")))?;
@@ -53446,7 +53450,7 @@ impl MemoryDB {
             .query(
                 "SELECT id FROM pages
                  WHERE status = 'active' AND LOWER(title) = LOWER(?1)
-                   AND kind = 'overview' AND creation_kind = 'research'
+                   AND creation_kind = 'research'
                    AND COALESCE(user_edited, 0) = 0
                  ORDER BY id ASC LIMIT 1",
                 libsql::params!["Overview"],
