@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { activeNavigationForView } from "./viewState";
 
 describe("activeNavigationForView", () => {
+  it("keeps the first-use guide in Home navigation", () => {
+    expect(activeNavigationForView({ kind: "first-use" })).toBe("home");
+  });
   it("keeps the Page library and Page detail first-class instead of nesting them under Spaces", () => {
     expect(activeNavigationForView({ kind: "pages" })).toBe("pages");
     expect(activeNavigationForView({ kind: "page", pageId: "page-1" })).toBe("pages");

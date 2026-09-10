@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { MemoryItem, PageCitation } from "../../../lib/tauri";
-import { citationDisplayLabel } from "../../../lib/pageCitations";
+import {
+  citationDisplayLabel,
+  type CitationKindLabels,
+} from "../../../lib/pageCitations";
 import CitationPopover, { openCitationTarget } from "./CitationPopover";
 
 interface CitationChipProps {
@@ -24,15 +28,58 @@ export default function CitationChip({
 }: CitationChipProps) {
   const [open, setOpen] = useState(false);
   const [openFailure, setOpenFailure] = useState<string | null>(null);
+  const { t } = useTranslation();
   const chipRef = useRef<HTMLButtonElement>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastPointerType = useRef("mouse");
   const popoverId = useId();
+  const kindLabels: CitationKindLabels = {
+    memory: t("citation.kind.memory"),
+    external_file: t("citation.kind.file"),
+    external_url: t("citation.kind.url"),
+    authored: t("citation.kind.authored"),
+  };
+  const displayLabel = citationDisplayLabel(citation, kindLabels);
+
+  const clearCloseTimer = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  };
+  const scheduleClose = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    clearCloseTimer();
+    closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_GRACE_MS);
+  };
+  const handleMouseEnter = () => {
+    clearCloseTimer();
+    openTimer.current = setTimeout(() => setOpen(true), HOVER_OPEN_DELAY_MS);
+  };
+  const handlePopoverMouseEnter = () => {
+    clearCloseTimer();
+  };
+  const isPopoverTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Node)) return false;
+    return document.getElementById(popoverId)?.contains(target) ?? false;
+  };
+  const focusFirstPopoverControl = () => {
+    const popover = document.getElementById(popoverId);
+    const firstControl = popover?.querySelector<HTMLElement>(
+      "button:not([disabled]), summary, a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    );
+    if (!firstControl) return false;
+    firstControl.focus();
+    return true;
+  };
 
   const clearTimers = () => {
     if (openTimer.current) clearTimeout(openTimer.current);
-    if (closeTimer.current) clearTimeout(closeTimer.current);
+    clearCloseTimer();
+  };
+  const closePopover = () => {
+    clearTimers();
+    // Restoring focus fires onFocus synchronously; close after that event.
+    chipRef.current?.focus();
+    setOpen(false);
   };
   useEffect(() => clearTimers, []);
   // A refusal is about the click that caused it, not the next hover.
@@ -77,23 +124,24 @@ export default function CitationChip({
   return (
     <span
       style={{ position: "relative", display: "inline-block" }}
-      onMouseEnter={() => {
-        if (closeTimer.current) clearTimeout(closeTimer.current);
-        openTimer.current = setTimeout(() => setOpen(true), HOVER_OPEN_DELAY_MS);
-      }}
-      onMouseLeave={() => {
-        if (openTimer.current) clearTimeout(openTimer.current);
-        closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_GRACE_MS);
-      }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={scheduleClose}
       onFocus={() => setOpen(true)}
       onBlur={(e) => {
         // Keep open while focus moves into the popover (its action button).
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+        if (
+          !e.currentTarget.contains(e.relatedTarget as Node | null) &&
+          !isPopoverTarget(e.relatedTarget)
+        ) {
+          setOpen(false);
+        }
       }}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
-          clearTimers();
-          setOpen(false);
+          closePopover();
+        }
+        if (e.key === "Tab" && !e.shiftKey && e.target === chipRef.current) {
+          if (focusFirstPopoverControl()) e.preventDefault();
         }
       }}
     >
@@ -121,21 +169,40 @@ export default function CitationChip({
           margin: "0 2px",
           verticalAlign: "baseline",
           cursor: "pointer",
+          maxWidth: "min(180px, 28vw)",
+          overflow: "hidden",
+          whiteSpace: "nowrap",
+          textOverflow: "ellipsis",
         }}
       >
-        {citationDisplayLabel(citation)}
+        <span
+          style={{
+            display: "inline-block",
+            maxWidth: "150px",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            verticalAlign: "bottom",
+          }}
+        >
+          {displayLabel}
+        </span>
         <sup style={{ marginLeft: "1px" }}>{occurrence}</sup>
       </button>
       {open && (
         <CitationPopover
           id={popoverId}
           citation={citation}
+          kindLabels={kindLabels}
           sourceMemory={sourceMemory}
           sourcesLoading={sourcesLoading}
           anchorRef={chipRef}
           onOpenMemory={onOpenMemory}
           openFailure={openFailure}
           onOpenTarget={() => void openTarget()}
+          onMouseEnter={handlePopoverMouseEnter}
+          onMouseLeave={scheduleClose}
+          onEscape={closePopover}
         />
       )}
     </span>

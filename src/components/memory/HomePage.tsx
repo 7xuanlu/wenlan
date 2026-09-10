@@ -29,6 +29,7 @@ interface HomePageProps {
   onNavigateGraph: () => void;
   onSelectPage?: (pageId: string) => void;
   onOpenDistillReview?: () => void;
+  onStartFirstUse?: () => void;
   /**
    * Starts the same new-page draft flow the Wiki overview's New page action
    * uses. Required: the empty state offers "Write a page" in every variant, so
@@ -51,6 +52,7 @@ export default function HomePage({
   onNavigateGraph: _onNavigateGraph,
   onSelectPage,
   onOpenDistillReview,
+  onStartFirstUse,
   onCreatePage,
   onOpenIntelligenceSettings,
 }: HomePageProps) {
@@ -140,6 +142,7 @@ export default function HomePage({
         stats={stats}
         onSelectPage={onSelectPage}
         onOpenDistillReview={onOpenDistillReview}
+        onStartFirstUse={onStartFirstUse}
         onOpenMemory={onNavigateMemory}
         onCreatePage={onCreatePage}
         onOpenIntelligenceSettings={onOpenIntelligenceSettings}
@@ -231,6 +234,7 @@ function WikiHome({
   stats,
   onSelectPage,
   onOpenDistillReview,
+  onStartFirstUse,
   onOpenMemory,
   onCreatePage,
   onOpenIntelligenceSettings,
@@ -243,11 +247,13 @@ function WikiHome({
   stats?: MemoryStats;
   onSelectPage?: (pageId: string) => void;
   onOpenDistillReview?: () => void;
+  onStartFirstUse?: () => void;
   onOpenMemory?: (sourceId: string) => void;
   onCreatePage: (space: string | null) => void;
   onOpenIntelligenceSettings: () => void;
 }) {
   const [containerRef, isWideLayout] = useElementMinWidth<HTMLDivElement>(820);
+  const { t } = useTranslation();
   const {
     items: reviewItems,
     isLoading: reviewLoading,
@@ -303,7 +309,15 @@ function WikiHome({
         <TodayHeader
           pages={allPages}
           statusPill={
-            <ImportStatusPill batches={importBatches} onOpen={() => setImportDetailOpen(true)} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <ImportStatusPill batches={importBatches} onOpen={() => setImportDetailOpen(true)} />
+              {knowledgePages.length > 0 && onStartFirstUse && (
+                <button type="button" className="home-empty-action" onClick={onStartFirstUse}
+                  style={{ ...EMPTY_ACTION_STYLE, background: "none", border: "none", color: "var(--mem-text-secondary)", fontSize: 12, padding: "4px 0" }}>
+                  {t("firstUse.entry")}
+                </button>
+              )}
+            </div>
           }
         />
 
@@ -332,6 +346,7 @@ function WikiHome({
       >
         {knowledgePages.length === 0 ? (
           <HomeEmptyState
+            onStartFirstUse={onStartFirstUse}
             onCreatePage={onCreatePage}
             onOpenIntelligenceSettings={onOpenIntelligenceSettings}
           />
@@ -473,9 +488,11 @@ const EMPTY_ACTION_STYLE: React.CSSProperties = {
  * on anything it does not list.
  */
 function HomeEmptyState({
+  onStartFirstUse,
   onCreatePage,
   onOpenIntelligenceSettings,
 }: {
+  onStartFirstUse?: () => void;
   onCreatePage: (space: string | null) => void;
   onOpenIntelligenceSettings: () => void;
 }) {
@@ -523,6 +540,21 @@ function HomeEmptyState({
           margin: providerResolved ? "0 0 24px" : "14px 0 24px",
         }}
       >
+        {onStartFirstUse && (
+          <button
+            type="button"
+            className="home-empty-action"
+            onClick={onStartFirstUse}
+            style={{
+              ...EMPTY_ACTION_STYLE,
+              border: "1px solid var(--mem-accent-indigo)",
+              background: "var(--mem-indigo-bg)",
+              color: "var(--mem-accent-indigo)",
+            }}
+          >
+            {t("firstUse.entry")}
+          </button>
+        )}
         {needsProvider && (
           <button
             type="button"

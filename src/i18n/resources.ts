@@ -1,5 +1,8 @@
 export const supportedAppLocales = ["en", "zh-Hans", "zh-Hant"] as const;
 
+import { enFirstUse, hansFirstUse, hantFirstUse } from "../components/onboarding/firstUseCopy";
+import { enImportView, hansImportView, hantImportView } from "../components/memory/importCopy";
+
 const en = {
   common: {
     close: "Close",
@@ -397,6 +400,13 @@ const en = {
     viewAllEntities: "View all {{count}}",
   },
   citation: {
+    authoredDescription: "Written by you in this page — kept unchanged when the page is re-distilled from its sources.",
+    missingMemory: "This source memory no longer exists — it was deleted or merged after distillation. Re-distill the page to refresh its citations.",
+    openMemory: "Open memory →",
+    openFile: "Open file →",
+    openLink: "Open in browser →",
+    unverified: "unverified",
+    kind: { memory: "Memory", file: "File", url: "Link", authored: "Written here" },
     openFileFailed: "Could not open this file.",
     openLinkFailed: "Could not open this link.",
   },
@@ -1619,7 +1629,7 @@ const en = {
   },
   importBatch: {
     title: "Import progress",
-    pillActive: "Importing memories…",
+    pillActive: "Import progress",
     pillFailed: "Import needs attention",
     openDetail: "Open import progress",
     phases: {
@@ -1638,15 +1648,19 @@ const en = {
     },
     countOf: "{{done}} of {{total}}",
     progressTitle: "{{count}} memories",
-    pagesSoFar: "{{count}} pages so far",
+    pagesSoFar: "{{count}} related pages",
+    relatedPagesAvailable: "Related pages available",
+    noRelatedPages: "No related pages yet",
+    readyWithoutPages: "Your memories are ready to search and use with AI. This import has no related knowledge page yet.",
+    otherSource: "Other",
     failedUnits: "{{count}} failed",
     chunkProgress: "Chunk {{done}} of {{total}}",
     summaryImported: "{{count}} memories imported from {{source}}",
     summarySkipped: "{{count}} skipped (duplicates or empty)",
     entitiesDetected: "{{count}} detected entities",
     entitiesEstablished: "{{count}} entities confirmed",
-    pagesDistilled: "{{count}} pages distilled",
-    backgroundRunning: "Still working: {{phases}}. These numbers keep climbing.",
+    pagesDistilled: "{{count}} related pages",
+    backgroundRunning: "Saved and ready to use. Organization progress will update here.",
     backgroundSettled: "Background work finished.",
   },
   intelligence: {
@@ -1837,6 +1851,8 @@ const en = {
     cancel: "Cancel",
     save: "Save",
   },
+  firstUse: enFirstUse,
+  importView: enImportView,
 };
 
 const zhHans = {
@@ -2220,6 +2236,13 @@ const zhHans = {
     viewAllEntities: "查看全部 {{count}} 个",
   },
   citation: {
+    authoredDescription: "你在本页撰写的内容。文澜重新整理来源时，会保留原文。",
+    missingMemory: "这条来源记忆已被删除或合并。重新整理页面后可更新引用。",
+    openMemory: "打开记忆 →",
+    openFile: "打开文件 →",
+    openLink: "在浏览器打开 →",
+    unverified: "未验证",
+    kind: { memory: "记忆", file: "文件", url: "链接", authored: "本页撰写" },
     openFileFailed: "无法打开此文件。",
     openLinkFailed: "无法打开此链接。",
   },
@@ -3413,7 +3436,7 @@ const zhHans = {
   },
   importBatch: {
     title: "导入进度",
-    pillActive: "正在导入记忆…",
+    pillActive: "导入进度",
     pillFailed: "导入需要注意",
     openDetail: "打开导入进度",
     phases: {
@@ -3432,15 +3455,19 @@ const zhHans = {
     },
     countOf: "{{done}} / {{total}}",
     progressTitle: "{{count}} 条记忆",
-    pagesSoFar: "已产出 {{count}} 个页面",
+    pagesSoFar: "{{count}} 个相关页面",
+    relatedPagesAvailable: "已有相关页面",
+    noRelatedPages: "尚无相关页面",
+    readyWithoutPages: "记忆已可搜索，也能让 AI 使用。这批资料目前还没有对应的知识页面。",
+    otherSource: "其他来源",
     failedUnits: "{{count}} 个失败",
     chunkProgress: "分块 {{done}} / {{total}}",
     summaryImported: "已从 {{source}} 导入 {{count}} 条记忆",
     summarySkipped: "{{count}} 条已跳过（重复或为空）",
     entitiesDetected: "{{count}} 个已检测实体",
     entitiesEstablished: "{{count}} 个实体已确认",
-    pagesDistilled: "已蒸馏 {{count}} 个页面",
-    backgroundRunning: "仍在继续：{{phases}}。这些数字还会增长。",
+    pagesDistilled: "{{count}} 个相关页面",
+    backgroundRunning: "已保存，可先使用这些记忆。整理进度会在这里更新。",
     backgroundSettled: "后台工作已完成。",
   },
   intelligence: {
@@ -3626,6 +3653,8 @@ const zhHans = {
     cancel: "取消",
     save: "保存",
   },
+  firstUse: hansFirstUse,
+  importView: hansImportView,
 };
 
 const zhHant = {
@@ -4009,6 +4038,13 @@ const zhHant = {
     viewAllEntities: "檢視全部 {{count}} 個",
   },
   citation: {
+    authoredDescription: "你在本頁撰寫的內容。文瀾重新整理來源時，會保留原文。",
+    missingMemory: "這條來源記憶已被刪除或合併。重新整理頁面後可更新引用。",
+    openMemory: "開啟記憶 →",
+    openFile: "開啟檔案 →",
+    openLink: "在瀏覽器開啟 →",
+    unverified: "未驗證",
+    kind: { memory: "記憶", file: "檔案", url: "連結", authored: "本頁撰寫" },
     openFileFailed: "無法開啟此檔案。",
     openLinkFailed: "無法開啟此連結。",
   },
@@ -5202,7 +5238,7 @@ const zhHant = {
   },
   importBatch: {
     title: "匯入進度",
-    pillActive: "正在匯入記憶…",
+    pillActive: "匯入進度",
     pillFailed: "匯入需要注意",
     openDetail: "開啟匯入進度",
     phases: {
@@ -5221,15 +5257,19 @@ const zhHant = {
     },
     countOf: "{{done}} / {{total}}",
     progressTitle: "{{count}} 則記憶",
-    pagesSoFar: "已產出 {{count}} 個頁面",
+    pagesSoFar: "{{count}} 個相關頁面",
+    relatedPagesAvailable: "已有相關頁面",
+    noRelatedPages: "尚無相關頁面",
+    readyWithoutPages: "記憶已可搜尋，也能讓 AI 使用。這批資料目前還沒有對應的知識頁面。",
+    otherSource: "其他來源",
     failedUnits: "{{count}} 個失敗",
     chunkProgress: "分塊 {{done}} / {{total}}",
     summaryImported: "已從 {{source}} 匯入 {{count}} 則記憶",
     summarySkipped: "{{count}} 則已略過（重複或為空）",
     entitiesDetected: "{{count}} 個已偵測實體",
     entitiesEstablished: "{{count}} 個實體已確認",
-    pagesDistilled: "已蒸餾 {{count}} 個頁面",
-    backgroundRunning: "仍在繼續：{{phases}}。這些數字還會增長。",
+    pagesDistilled: "{{count}} 個相關頁面",
+    backgroundRunning: "已保存，可先使用這些記憶。整理進度會在這裡更新。",
     backgroundSettled: "背景工作已完成。",
   },
   intelligence: {
@@ -5415,6 +5455,8 @@ const zhHant = {
     cancel: "取消",
     save: "儲存",
   },
+  firstUse: hantFirstUse,
+  importView: hantImportView,
 };
 
 export const resources = {

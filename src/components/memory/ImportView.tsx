@@ -8,12 +8,15 @@ import {
   type ImportResult,
 } from "../../lib/tauri";
 import { IMPORT_SOURCE_LABELS, ImportPhaseList, useImportBatchStatus } from "./ImportPhases";
+import { formatImportErrorDetail } from "./importCopy";
 
 type Source = "chatgpt" | "claude" | "other";
 
 interface ImportViewProps {
   onBack: () => void;
   onComplete: (source: string, result: ImportResult) => void;
+  /** Name the destination when the importing flow returns to a guided view. */
+  completeLabel?: string;
   /** When true, show "Continue" instead of "View memories" / "Import more" in summary. */
   wizardMode?: boolean;
   /** Called when internal phase changes. */
@@ -39,36 +42,6 @@ export function chunkImportText(text: string, chunkSize: number = IMPORT_CHUNK_S
   return chunks;
 }
 
-const EXPORT_PROMPT = `Export all of my stored memories and any context you've learned about me. Preserve my words verbatim where possible.
-
-EVERY line MUST follow this exact format — no exceptions:
-[TYPE] - content
-
-TYPE must be exactly one of: identity, preference, decision, lesson, gotcha, fact
-
-Where:
-- identity = who I am (name, location, education, family, languages)
-- preference = how I like things (opinions, tastes, working style, rules like "always do X" or "never do Y")
-- decision = choices I made with rationale (tech, career, project directions)
-- lesson = reusable learnings from experience
-- gotcha = pitfalls, traps, or things to avoid
-- fact = things about my work, projects, skills, situation
-
-Example output:
-[identity] - Lives in San Francisco, originally from Taiwan
-[preference] - Prefers concise responses without trailing summaries
-[decision] - Chose Rust + Tauri for the desktop app over Electron
-[preference] - Never use emojis unless explicitly asked
-[lesson] - TDD caught the config regression before launch
-[gotcha] - Tauri rolling::daily suffixes file names with the date
-[fact] - Building a local-first AI memory layer called Wenlan
-
-Rules:
-- NO section headers, category labels, or grouping text
-- NO explanations before or after — ONLY the tagged lines
-- One memory per line
-- Wrap entire output in a single code block`;
-
 const SOURCE_LABELS: Record<Source, string> = IMPORT_SOURCE_LABELS;
 
 // Aligned with Wenlan's --mem-accent-* palette (see FACET_COLORS in tauri.ts)
@@ -82,7 +55,7 @@ const TYPE_BADGE_STYLES: Record<string, { bg: string; text: string }> = {
   goal: { bg: "color-mix(in srgb, var(--mem-accent-sage) 15%, transparent)", text: "var(--mem-accent-sage)" },
 };
 
-export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSkip, wizardHint }: ImportViewProps) {
+export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPhaseChange, onSkip, wizardHint }: ImportViewProps) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
   const [phase, setPhaseRaw] = useState<Phase>("input");
@@ -99,19 +72,61 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
   const [uploading, setUploading] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Monotonic id for file reads: a completion (or error) only lands while
+  // its id is still current, so selecting a second file — or typing/pasting
+  // while a read is pending — can never overwrite newer text.
+  const readSeq = useRef(0);
   const batchStatus = useImportBatchStatus(batchId, uploading);
+  const typeLabels = t("importView.typeLabels", {
+    returnObjects: true,
+  }) as unknown as Record<string, string>;
+  // Shown and copied from the same localized string: the full export
+  // instructions are localized per locale, with only the [TYPE] machine
+  // tags staying literal.
+  const exportPromptBody = t("importView.exportPromptBody");
+
+  // Brand names stay literal in every locale; only "Other" is localized.
+  // IMPORT_SOURCE_LABELS itself is owned by ImportPhases and stays as-is.
+  const sourceLabel = (s: Source) =>
+    s === "other" ? t("importView.sourceOther") : (SOURCE_LABELS[s] ?? s);
+
+  const handleCopyPrompt = async () => {
+    setError(null);
+    setPromptCopied(false);
+    try {
+      await clipboardWrite(exportPromptBody);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2000);
+    } catch {
+      setError(t("importView.copyError"));
+    }
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setError(null);
+    const id = ++readSeq.current;
     const reader = new FileReader();
+    const readFailed = () => {
+      if (id === readSeq.current) setError(t("importView.fileReadError"));
+    };
     reader.onload = (ev) => {
+      if (id !== readSeq.current) return;
       const content = ev.target?.result;
       if (typeof content === "string") {
         setText(content);
+      } else {
+        setError(t("importView.fileReadError"));
       }
     };
-    reader.readAsText(file);
+    reader.onerror = readFailed;
+    reader.onabort = readFailed;
+    try {
+      reader.readAsText(file);
+    } catch {
+      readFailed();
+    }
     // Reset so the same file can be re-selected
     e.target.value = "";
   };
@@ -161,7 +176,10 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
       queryClient.invalidateQueries();
     } catch (err) {
       setUploading(false);
-      setError(String(err));
+      // A friendly localized heading, never swallowing the backend detail.
+      const detail = formatImportErrorDetail(err);
+      const heading = t("importView.importFailedTitle");
+      setError(detail ? `${heading}: ${detail}` : heading);
       setBatchId(null);
       setChunkProgress(null);
       setPhase("input");
@@ -169,6 +187,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
   };
 
   const handleReset = () => {
+    readSeq.current++;
     setUploading(false);
     setPhase("input");
     setText("");
@@ -186,6 +205,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
         <div className="flex items-center gap-4 mb-4 shrink-0">
           <button
             onClick={onBack}
+            aria-label={t("importView.back")}
             className="flex items-center gap-1 shrink-0 transition-colors duration-150"
             style={{
               fontFamily: "var(--mem-font-body)",
@@ -206,7 +226,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
               color: "var(--mem-text)",
             }}
           >
-            Import Memories
+            {t("importView.title")}
           </h1>
           <div className="flex gap-1 ml-auto shrink-0">
             {(["chatgpt", "claude", "other"] as Source[]).map((s) => (
@@ -220,7 +240,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                   color: source === s ? "white" : "var(--mem-text-tertiary)",
                 }}
               >
-                {SOURCE_LABELS[s]}
+                {sourceLabel(s)}
               </button>
             ))}
           </div>
@@ -248,15 +268,11 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
           <div className="flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between mb-1.5 shrink-0">
               <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", fontWeight: 500, color: "var(--mem-text-secondary)" }}>
-                {source !== "other" ? "Export prompt" : "Instructions"}
+                {source !== "other" ? t("importView.exportPrompt") : t("importView.instructions")}
               </span>
               {source !== "other" && (
                 <button
-                  onClick={() => {
-                    clipboardWrite(EXPORT_PROMPT);
-                    setPromptCopied(true);
-                    setTimeout(() => setPromptCopied(false), 2000);
-                  }}
+                  onClick={handleCopyPrompt}
                   className="px-2.5 py-0.5 rounded-md text-xs font-medium transition-colors"
                   style={{
                     fontFamily: "var(--mem-font-body)",
@@ -264,7 +280,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                     backgroundColor: promptCopied ? "rgba(251, 191, 36, 0.15)" : "rgba(123, 123, 232, 0.1)",
                   }}
                 >
-                  {promptCopied ? "Copied!" : "Copy prompt"}
+                  {promptCopied ? t("importView.copied") : t("importView.copyPrompt")}
                 </button>
               )}
             </div>
@@ -280,8 +296,8 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
               }}
             >
               {source !== "other"
-                ? `Copy this prompt, paste into ${SOURCE_LABELS[source]}, then paste the output below.\n\n${EXPORT_PROMPT}`
-                : "Paste any list of facts or memories, one per line.\n\nEach line becomes a separate memory in Wenlan.\nEmpty lines and separators (---, ===) are skipped.\n\nOptionally prefix lines with a type tag:\n[identity] - Lives in San Francisco\n[preference] - Prefers concise responses\n[lesson] - TDD caught a config regression before launch\n[gotcha] - Tauri rolling::daily suffixes file names with the date\n[fact] - Building Wenlan, a local-first AI memory app\n\nLines without a tag are stored as facts."}
+                ? `${t("importView.exportIntro", { source: sourceLabel(source) })}\n\n${exportPromptBody}`
+                : t("importView.otherInstructions")}
             </pre>
           </div>
 
@@ -289,18 +305,23 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
           <div className="flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between mb-1.5 shrink-0">
               <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", fontWeight: 500, color: "var(--mem-text-secondary)" }}>
-                Paste output
+                {t("importView.pasteOutput")}
               </span>
               {text && (
                 <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "11px", color: "var(--mem-text-tertiary)" }}>
-                  {text.split("\n").filter((l) => l.trim()).length} lines
+                  {t("importView.lines", { count: text.split("\n").filter((l) => l.trim()).length })}
                 </span>
               )}
             </div>
             <textarea
               value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Paste your memories here, one per line..."
+              onChange={(e) => {
+                // Typing or pasting invalidates any pending file read.
+                readSeq.current++;
+                setText(e.target.value);
+              }}
+              placeholder={t("importView.placeholder")}
+              aria-label={t("importView.pasteOutput")}
               className="w-full rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--mem-accent-indigo)]/40 flex-1 min-h-0"
               style={{
                 fontFamily: "var(--mem-font-body)",
@@ -326,9 +347,9 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
               color: "var(--mem-accent-indigo)",
             }}
           >
-            Upload file
+            {t("importView.uploadFile")}
           </button>
-          <input ref={fileRef} type="file" accept=".txt,.csv,.json" className="hidden" onChange={handleFileUpload} />
+          <input ref={fileRef} type="file" accept=".txt,.csv,.json" className="hidden" aria-label={t("importView.uploadFile")} onChange={handleFileUpload} />
           {error && (
             <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px", color: "#ef4444" }}>
               {error}
@@ -348,7 +369,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                   cursor: "pointer",
                 }}
               >
-                Skip
+                {t("importView.skip")}
               </button>
             )}
             <button
@@ -361,7 +382,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                 color: "white",
               }}
             >
-              Import
+              {t("importView.import")}
             </button>
           </div>
         </div>
@@ -457,7 +478,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                   color: "var(--mem-text)",
                 }}
               >
-                {t("importBatch.summaryImported", { count: imported, source: SOURCE_LABELS[source] })}
+                {t("importBatch.summaryImported", { count: imported, source: sourceLabel(source) })}
               </p>
               {skipped > 0 && (
                 <p
@@ -492,7 +513,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                       fontFamily: "var(--mem-font-body)",
                     }}
                   >
-                    {type}
+                    {typeLabels[type] ?? type}
                     <span style={{ opacity: 0.7 }}>{count}</span>
                   </span>
                 );
@@ -529,7 +550,11 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
             >
               {!batchStatus.complete && runningNames.length > 0
                 ? t("importBatch.backgroundRunning", { phases: runningNames.join(", ") })
-                : t("importBatch.backgroundSettled")}
+                : t(batchStatus.phases.some((p) => p.state === "failed")
+                  ? "importBatch.pillFailed"
+                  : batchStatus.pages_distilled === 0
+                    ? "importBatch.readyWithoutPages"
+                    : "importBatch.backgroundSettled")}
             </p>
           )}
         </div>
@@ -545,7 +570,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
               color: "white",
             }}
           >
-            {wizardMode ? "Continue" : "View memories"}
+            {completeLabel ?? (wizardMode ? t("importView.continue") : t("importView.viewMemories"))}
           </button>
           {!wizardMode && (
             <button
@@ -558,7 +583,7 @@ export function ImportView({ onBack, onComplete, wizardMode, onPhaseChange, onSk
                 border: "1px solid var(--mem-border)",
               }}
             >
-              Import more
+              {t("importView.importMore")}
             </button>
           )}
         </div>

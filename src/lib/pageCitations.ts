@@ -106,18 +106,39 @@ export function processCitations(
   return { content: out, state: "cited", byOccurrence };
 }
 
-/** Short chip label: memory ids as-is, URLs to hostname, paths to basename. */
-export function citationDisplayLabel(c: PageCitation): string {
+export type CitationKindLabels = Readonly<
+  Record<PageCitation["source_kind"], string>
+>;
+
+/** Keep only short, human-readable external context beside the source kind. */
+export function citationExternalDetail(c: PageCitation): string | null {
   if (c.source_kind === "external_url") {
     try {
-      return new URL(c.locator).hostname;
+      const hostname = new URL(c.locator).hostname;
+      return hostname || null;
     } catch {
-      return c.locator.slice(0, 24);
+      // A malformed URL still gets its localized kind label. The exact
+      // locator remains available in the popover for an honest refusal.
+      return null;
     }
   }
   if (c.source_kind === "external_file") {
-    return c.locator.split("/").filter(Boolean).pop() ?? c.locator;
+    // Document locators may carry a registered source id before the path.
+    const sep = c.locator.lastIndexOf("::");
+    const path = sep === -1 ? c.locator : c.locator.slice(sep + 2);
+    return path.split(/[\\/]/).filter(Boolean).pop() ?? null;
   }
-  if (c.source_kind === "authored") return "authored";
-  return c.locator;
+  return null;
+}
+
+/** Short chip label: localized kind, with a brief external basename/domain. */
+export function citationDisplayLabel(
+  c: PageCitation,
+  kindLabels: CitationKindLabels,
+): string {
+  const kind = kindLabels[c.source_kind];
+  const detail = citationExternalDetail(c);
+  // Long paths and domains turn a prose citation into a layout interruption;
+  // the popover still carries the exact locator when the reader needs it.
+  return detail && detail.length <= 32 ? `${kind} · ${detail}` : kind;
 }

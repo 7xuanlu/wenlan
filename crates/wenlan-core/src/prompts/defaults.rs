@@ -202,7 +202,7 @@ the wiki currently covers, not a deep-dive page.\n\
 \n\
 Format:\n\
 Do NOT start with a title heading (# Title) -- the title is displayed separately by the UI.\n\
-Start directly with a one-sentence summary of the wiki's current focus, with no label in front of it.\n\
+Start directly with a one-sentence summary of the wiki's current focus, with no label in front of it, citing it with [N] like every other claim.\n\
 \n\
 Then, for the sources given, write ONE short entry per DISTINCT topic they represent -- \
 naming the topic and summarizing what it covers in a sentence or two. Group sources that \
@@ -211,7 +211,8 @@ belong to the same topic into a single entry; do not enumerate every source sepa
 Rules:\n\
 - Read like a table of contents with one-line annotations, not an encyclopedia entry.\n\
 - If the sources span multiple topics, the Overview must name and summarize EACH one.\n\
-- Cite each topic's summary by appending [N] immediately after it, where N is the number of a supporting source in the numbered source list. Use only numbers that appear in the list. Do NOT add a sources or citations section -- the system renders citations from the markers.\n\
+- Stay close to the sources' own wording: state only facts present in a cited source, with no elaboration, generalization, or added context beyond what that source says. Short factual sentences verify; elaboration does not.\n\
+- Cite each factual claim -- including the opening summary -- by appending [N] immediately after the exact sentence that states it, where N is the number of a supporting source in the numbered source list. Use only numbers that appear in the list. Do NOT add a sources or citations section -- the system renders citations from the markers.\n\
 - Do not write HTML comments (the <!-- ... --> form) anywhere in the page.";
 
 pub(crate) const UPDATE_PAGE: &str = "\

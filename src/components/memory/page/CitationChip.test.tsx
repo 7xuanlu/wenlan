@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
@@ -61,17 +61,35 @@ afterEach(() => {
 });
 
 describe("CitationChip", () => {
-  it("renders a focusable button with locator label and occurrence superscript", () => {
+  it("renders a focusable button with localized source kind and occurrence superscript", () => {
     renderChip();
-    const chip = screen.getByRole("button", { name: /mem-1/ });
+    const chip = screen.getByRole("button", { name: /Memory/ });
     expect(chip).toBeInTheDocument();
     expect(chip.querySelector("sup")?.textContent).toBe("1");
     expect(chip).toHaveAttribute("data-status", "verified");
   });
 
+  it("does not expose an imported memory locator in the chip", () => {
+    const locator = "import_20260908T150227Z_0_0";
+    renderChip({
+      citation: cite({ locator }),
+      sourceMemory: memory({
+        source_id: locator,
+        title: "Imported project context",
+      }),
+    });
+    const chip = screen.getByRole("button", { name: /Memory/ });
+    expect(chip).not.toHaveTextContent(locator);
+    fireEvent.focus(chip);
+    const popover = screen.getByRole("tooltip");
+    expect(popover).toHaveTextContent("Imported project context");
+    expect(popover).toHaveTextContent(locator);
+    expect(popover).toHaveTextContent("Technical details");
+  });
+
   it("marks unverified citations", () => {
     renderChip({ citation: cite({ status: "unverified" }) });
-    expect(screen.getByRole("button", { name: /mem-1/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /Memory/ })).toHaveAttribute(
       "data-status",
       "unverified",
     );
@@ -79,16 +97,65 @@ describe("CitationChip", () => {
 
   it("opens the popover on focus and links it via aria-describedby", () => {
     renderChip();
-    const chip = screen.getByRole("button", { name: /mem-1/ });
+    const chip = screen.getByRole("button", { name: /Memory/ });
     fireEvent.focus(chip);
     const tip = screen.getByRole("tooltip");
     expect(tip).toBeInTheDocument();
     expect(chip.getAttribute("aria-describedby")).toBe(tip.getAttribute("id"));
   });
 
+  it("portals the popover out of article prose and keeps keyboard focus open", async () => {
+    const user = userEvent.setup();
+    const onOpenMemory = vi.fn();
+    render(
+      <p data-testid="article-prose">
+        A cited sentence
+        <CitationChip
+          occurrence={1}
+          citation={cite()}
+          sourceMemory={memory()}
+          sourcesLoading={false}
+          onOpenMemory={onOpenMemory}
+        />
+        .
+        <button>Next article action</button>
+      </p>,
+    );
+
+    const article = screen.getByTestId("article-prose");
+    const chip = screen.getByRole("button", { name: /Memory/ });
+    await act(async () => chip.focus());
+    expect(document.activeElement).toBe(chip);
+    const popover = await screen.findByRole("tooltip");
+    expect(popover.parentElement).toBe(document.body);
+    expect(article).not.toContainElement(popover);
+
+    const openMemory = within(popover).getByRole("button", { name: /Open memory/ });
+    await user.tab();
+    expect(document.activeElement).toBe(within(popover).getByText("Technical details"));
+    await user.tab();
+    expect(document.activeElement).toBe(openMemory);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    await user.tab({ shift: true });
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(chip);
+    await user.tab();
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(chip);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Next article action" }));
+    await user.tab({ shift: true });
+    await user.tab();
+    await user.tab();
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Next article action" }));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("closes the popover on Escape", () => {
     renderChip();
-    const chip = screen.getByRole("button", { name: /mem-1/ });
+    const chip = screen.getByRole("button", { name: /Memory/ });
     fireEvent.focus(chip);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
     fireEvent.keyDown(chip, { key: "Escape" });
@@ -98,7 +165,7 @@ describe("CitationChip", () => {
   it("opens on hover after a delay and closes on mouse-out", () => {
     vi.useFakeTimers();
     renderChip();
-    const wrapper = screen.getByRole("button", { name: /mem-1/ }).parentElement!;
+    const wrapper = screen.getByRole("button", { name: /Memory/ }).parentElement!;
     fireEvent.mouseEnter(wrapper);
     expect(screen.queryByRole("tooltip")).toBeNull();
     act(() => vi.advanceTimersByTime(200));
@@ -111,41 +178,49 @@ describe("CitationChip", () => {
   it("shows memory details and opens the memory from the popover action", async () => {
     const user = userEvent.setup();
     const { onOpenMemory } = renderChip();
-    fireEvent.focus(screen.getByRole("button", { name: /mem-1/ }));
-    expect(screen.getByText("Design decision")).toBeInTheDocument();
-    expect(screen.getByText("Source memory")).toBeInTheDocument();
-    expect(screen.getByText(/We decided to keep the daemon/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Open memory/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /Memory/ }));
+    const popover = screen.getByRole("tooltip");
+    expect(within(popover).getByText("Design decision")).toBeInTheDocument();
+    expect(within(popover).getByText("Memory")).toBeInTheDocument();
+    expect(
+      within(popover).getByText(/We decided to keep the daemon/),
+    ).toBeInTheDocument();
+    await user.click(within(popover).getByRole("button", { name: /Open memory/ }));
     expect(onOpenMemory).toHaveBeenCalledWith("mem-1");
   });
 
   it("clicking a memory chip opens the memory directly", async () => {
     const user = userEvent.setup();
     const { onOpenMemory } = renderChip();
-    await user.click(screen.getByRole("button", { name: /mem-1/ }));
+    await user.click(screen.getByRole("button", { name: /Memory/ }));
     expect(onOpenMemory).toHaveBeenCalledWith("mem-1");
   });
 
   it("explains a missing source and does not navigate on click", async () => {
     const user = userEvent.setup();
-    const { onOpenMemory } = renderChip({ sourceMemory: null, sourcesLoading: false });
-    const chip = screen.getByRole("button", { name: /mem-1/ });
+    const { onOpenMemory } = renderChip({
+      sourceMemory: null,
+      sourcesLoading: false,
+    });
+    const chip = screen.getByRole("button", { name: /Memory/ });
     fireEvent.focus(chip);
+    expect(chip).not.toHaveTextContent("mem-1");
     expect(screen.getByText(/no longer exists/i)).toBeInTheDocument();
     expect(screen.getByText(/re-distill/i)).toBeInTheDocument();
+    expect(screen.getByText("mem-1")).toBeInTheDocument();
     await user.click(chip);
     expect(onOpenMemory).not.toHaveBeenCalled();
   });
 
   it("shows a skeleton while sources are loading", () => {
     renderChip({ sourceMemory: null, sourcesLoading: true });
-    fireEvent.focus(screen.getByRole("button", { name: /mem-1/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /Memory/ }));
     expect(screen.getByTestId("citation-popover-skeleton")).toBeInTheDocument();
   });
 
   it("notes unverified status in the popover", () => {
     renderChip({ citation: cite({ status: "unverified" }) });
-    fireEvent.focus(screen.getByRole("button", { name: /mem-1/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /Memory/ }));
     expect(screen.getByText(/unverified/i)).toBeInTheDocument();
   });
 
@@ -165,7 +240,7 @@ describe("CitationChip", () => {
       citation: cite({ source_kind: "external_file", locator: "/notes/design.md" }),
       sourceMemory: null,
     });
-    fireEvent.focus(screen.getByRole("button", { name: /design\.md/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /File.*design\.md/ }));
     expect(screen.getByText("/notes/design.md")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Open file/ }));
     // A bare path must not go to the shell plugin: its `open` validator only
@@ -184,7 +259,7 @@ describe("CitationChip", () => {
       citation: cite({ source_kind: "external_file", locator: "/notes/run.command" }),
       sourceMemory: null,
     });
-    fireEvent.focus(screen.getByRole("button", { name: /run\.command/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /File.*run\.command/ }));
     await user.click(screen.getByRole("button", { name: /Open file/ }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Could not open this file.");
@@ -198,7 +273,7 @@ describe("CitationChip", () => {
       citation: cite({ source_kind: "external_url", locator: "https://docs.rs/serde" }),
       sourceMemory: null,
     });
-    fireEvent.focus(screen.getByRole("button", { name: /docs\.rs/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /Link.*docs\.rs/ }));
     await user.click(screen.getByRole("button", { name: /Open in browser/ }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Could not open this link.");
@@ -212,7 +287,7 @@ describe("CitationChip", () => {
       citation: cite({ source_kind: "external_url", locator: "https://docs.rs/serde" }),
       sourceMemory: null,
     });
-    await user.click(screen.getByRole("button", { name: /docs\.rs/ }));
+    await user.click(screen.getByRole("button", { name: /Link.*docs\.rs/ }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Could not open this link.");
     expect(screen.getByRole("tooltip")).toContainElement(alert);
@@ -227,7 +302,7 @@ describe("CitationChip", () => {
       }),
       sourceMemory: null,
     });
-    fireEvent.focus(screen.getByRole("button", { name: /architecture-notes\.md/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /File.*architecture-notes\.md/ }));
     expect(screen.getByText("/Users/me/Tally/notes/architecture-notes.md")).toBeInTheDocument();
     expect(screen.queryByText(/directory-notes::/)).toBeNull();
     await user.click(screen.getByRole("button", { name: /Open file/ }));
@@ -238,7 +313,7 @@ describe("CitationChip", () => {
 
   it("explains that authored content survives re-distillation", () => {
     renderChip({ citation: cite({ source_kind: "authored" }), sourceMemory: null });
-    fireEvent.focus(screen.getByRole("button", { name: /authored/ }));
+    fireEvent.focus(screen.getByRole("button", { name: /Written here/ }));
     expect(screen.getByText(/kept unchanged when the page is re-distilled/i)).toBeInTheDocument();
   });
 });

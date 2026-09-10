@@ -120,10 +120,12 @@ pub(super) async fn register_optional_runtime_workers(
                     state.shutdown.subscribe()
                 };
                 let working_set_bytes = on_device_model_working_set_bytes(model);
+                let import_signal = shared.read().await.write_signal.clone();
                 tokio::spawn(async move {
                     let _reservation = StartupModelLoadReservation(reservation);
                     if !scheduler::wait_for_startup_model_admission(
                         working_set_bytes,
+                        &import_signal,
                         &mut load_shutdown,
                     )
                     .await

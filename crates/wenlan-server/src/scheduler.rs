@@ -9,6 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 
 use crate::host_activity::{sample_host_activity, HostActivitySnapshot};
 use crate::state::SharedState;
@@ -20,6 +21,8 @@ pub(crate) use ambient_admin::{
     ambient_status, force_ambient_sweep, AmbientGateSnapshot, AmbientStatusReport,
     AmbientSweepReport,
 };
+mod import_priority;
+use import_priority::*;
 
 /// 30-minute ceiling for adaptive gap — matches ACTIVITY_GAP_SECS in wenlan-core.
 const BURST_GAP_CEILING: Duration = Duration::from_secs(1800);
@@ -369,24 +372,47 @@ fn observe_deferred_resource_reason(
 
 /// Wait until a selected on-device model can be loaded without consuming the
 /// scheduler's foreground reserve. The model working set is additive to the
-/// normal 2 GiB / 15% floor, and the same two consecutive 30-second CPU samples
-/// are required before `spawn_blocking` may touch the model.
+/// normal 2 GiB / 15% floor. Passive startup requires two quiet CPU samples;
+/// an explicit import uses the bounded resource policy without waiting for
+/// foreground inactivity or CPU quiet.
 pub async fn wait_for_startup_model_admission(
     model_working_set_bytes: u64,
+    write_signal: &WriteSignal,
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
 ) -> bool {
     let policy =
         ResourcePolicy::conservative().with_additional_memory_headroom(model_working_set_bytes);
     let mut probe = SystemResourceProbe::new(Instant::now());
     loop {
-        if crate::lifecycle::sleep_or_shutdown(shutdown, POLL_INTERVAL).await {
+        let wait_interval = if write_signal.import_priority_active() {
+            IMPORT_PRIORITY_TICK
+        } else {
+            POLL_INTERVAL
+        };
+        let import_wake = write_signal.import_wake();
+        if sleep_or_import_or_shutdown(shutdown, import_wake.as_ref(), wait_interval).await {
             return false;
         }
-        let status =
-            apply_host_activity(probe.sample(Instant::now(), policy), sample_host_activity());
+        let now = Instant::now();
+        let host_activity = sample_host_activity();
+        let sampled = probe.sample(now, policy);
+        let status = if write_signal.import_priority_active() {
+            ResourceStatus {
+                admitted: import_priority_block_reason_with_headroom(
+                    sampled,
+                    host_activity,
+                    false,
+                    model_working_set_bytes,
+                )
+                .is_none(),
+                ..sampled
+            }
+        } else {
+            apply_host_activity(sampled, host_activity)
+        };
         if status.admitted {
             tracing::info!(
-                "[on-device] startup load admitted after two quiet samples; reserved_working_set_mb={}",
+                "[on-device] startup load admitted by resource policy; reserved_working_set_mb={}",
                 model_working_set_bytes / (1024 * 1024)
             );
             return true;
@@ -612,9 +638,23 @@ where
 ///
 /// `handle_store_memory` calls `record()` after each successful store.
 /// The scheduler reads snapshots and drains completed bursts via `drain_up_to()`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct WriteSignal {
     inner: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
+    import_priority: Arc<Mutex<ImportPriority>>,
+    pub(super) import_wake: Arc<Notify>,
+    pub(super) import_persist_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Default for WriteSignal {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            import_priority: Arc::new(Mutex::new(ImportPriority::default())),
+            import_wake: Arc::new(Notify::new()),
+            import_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
 }
 
 impl WriteSignal {
@@ -1129,6 +1169,7 @@ pub fn spawn_scheduler(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let import_wake = write_signal.import_wake();
         let resource_policy = ResourcePolicy::conservative();
         let thermal_policy = ThermalPolicy::conservative();
         // Initialize before the built-in startup delay so the first explicit
@@ -1136,7 +1177,7 @@ pub fn spawn_scheduler(
         // scheduler poll.
         let mut resource_probe = SystemResourceProbe::new(Instant::now());
         let mut filesystem_resource_probe = SystemResourceProbe::new(Instant::now());
-        if crate::lifecycle::sleep_or_shutdown(&mut shutdown, INITIAL_DELAY).await {
+        if sleep_or_import_or_shutdown(&mut shutdown, &import_wake, INITIAL_DELAY).await {
             tracing::info!("[scheduler] shutdown before initial delay completed");
             return;
         }
@@ -1177,13 +1218,26 @@ pub fn spawn_scheduler(
                 .unwrap_or_else(Instant::now)
         };
 
+        let import_priority_until = load_import_priority_until(&shared).await;
+        if import_priority_until > 0 && write_signal.restore_import_priority(import_priority_until)
+        {
+            tracing::info!(
+                "[scheduler] restored import priority deadline_epoch={import_priority_until}"
+            );
+        }
+
         tracing::info!(
             "[scheduler] started — poll every {}s",
             POLL_INTERVAL.as_secs()
         );
 
         loop {
-            if crate::lifecycle::sleep_or_shutdown(&mut shutdown, POLL_INTERVAL).await {
+            let wait_interval = if write_signal.import_priority_active() {
+                IMPORT_PRIORITY_TICK
+            } else {
+                POLL_INTERVAL
+            };
+            if sleep_or_import_or_shutdown(&mut shutdown, &import_wake, wait_interval).await {
                 break;
             }
 
@@ -1310,10 +1364,9 @@ pub fn spawn_scheduler(
             // Filesystem sync can take long enough for fresh writes to arrive;
             // all time comparisons below must use a post-sync clock sample.
             let now = Instant::now();
-            let resource_status = apply_host_activity(
-                resource_probe.sample(now, resource_policy),
-                sample_host_activity(),
-            );
+            let host_activity = sample_host_activity();
+            let resource_status =
+                apply_host_activity(resource_probe.sample(now, resource_policy), host_activity);
 
             // Publish the gate state this tick actually observed so
             // `/api/ambient/status` can report it without re-sampling
@@ -1362,20 +1415,236 @@ pub fn spawn_scheduler(
             drain_expired_unactionable_bursts(&write_signal, now);
             let snap = write_signal.snapshot();
 
-            let selected_automatic = automatic_heavy_turn_allowed(
-                background_heavy_resource_admitted(
+            // A fresh import gets a short, event-driven head start. This lane
+            // is deliberately before ordinary automatic work: it uses the
+            // same existing ambient slices, but ignores foreground-idle and
+            // CPU threshold/cooldown gates while retaining memory, thermal,
+            // provider-consent, startup-reservation, and shutdown guards.
+            let mut import_work_ran = false;
+            if let Some(import_snapshot) = write_signal.import_priority_snapshot() {
+                let import_generation = import_snapshot.generation;
+                if write_signal.import_priority_mark_started() {
+                    tracing::info!(
+                        "[scheduler] import priority started deadline_epoch={} max_slices={}",
+                        import_snapshot.deadline_epoch,
+                        IMPORT_PRIORITY_MAX_AMBIENT_SLICES,
+                    );
+                }
+                if now >= import_snapshot.deadline
+                    || write_signal.import_priority_should_finish(now)
+                {
+                    if finish_import_priority(&write_signal, &db, import_generation).await {
+                        tracing::info!("[scheduler] import priority finished reason=deadline");
+                    }
+                } else if let Some(reason) = import_priority_block_reason(
                     resource_status,
+                    host_activity,
                     startup_model_load_reserved,
                     matches!(
+                        everyday_pin,
+                        Some(wenlan_core::refinery::EverydaySource::OnDevice)
+                    ) || matches!(
                         synthesis_pin,
                         Some(wenlan_core::refinery::SynthesisSource::OnDevice)
                     ),
-                ),
-                ambient_turn_owed,
-                now,
-                ambient_schedule.next_allowed_at,
-            )
-            .then(|| {
+                ) {
+                    tracing::debug!("[scheduler] import priority deferred reason={reason:?}");
+                } else {
+                    let everyday_provider = resolve_ambient_provider(
+                        everyday_pin,
+                        api_llm.as_ref(),
+                        external_llm.as_ref(),
+                        llm.as_ref(),
+                    );
+                    if everyday_provider.is_none() {
+                        if everyday_pin.is_none()
+                            && finish_import_priority(&write_signal, &db, import_generation).await
+                        {
+                            tracing::info!(
+                                "[scheduler] import priority finished reason=no_authorized_provider"
+                            );
+                        } else {
+                            tracing::debug!(
+                                "[scheduler] import priority deferred reason=pinned_provider_loading"
+                            );
+                        }
+                    } else {
+                        let ambient_run_lock = {
+                            let state = shared.read().await;
+                            state.ambient_run_lock.clone()
+                        };
+                        match ambient_run_lock.try_lock() {
+                            Err(_) => {
+                                tracing::debug!(
+                                    "[scheduler] import priority deferred reason=ambient_run_lock"
+                                );
+                            }
+                            Ok(_ambient_run_guard) => {
+                                let Some(current) = write_signal.import_priority_snapshot() else {
+                                    continue;
+                                };
+                                let processing_generation = current.generation;
+                                if let Some(phase) = current.synthesis_phase {
+                                    let shared_calls =
+                                        Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                                    let budgeted_llm = with_shared_automatic_budget(
+                                        llm.as_ref(),
+                                        shared_calls.clone(),
+                                    );
+                                    let budgeted_api_llm = with_shared_automatic_budget(
+                                        api_llm.as_ref(),
+                                        shared_calls.clone(),
+                                    );
+                                    let budgeted_synthesis_llm = with_shared_automatic_budget(
+                                        synthesis_llm.as_ref(),
+                                        shared_calls.clone(),
+                                    );
+                                    let budgeted_external_llm = with_shared_automatic_budget(
+                                        external_llm.as_ref(),
+                                        shared_calls,
+                                    );
+                                    let synthesis_available =
+                                        wenlan_core::refinery::resolve_synthesis(
+                                            synthesis_pin,
+                                            budgeted_synthesis_llm.as_ref(),
+                                            budgeted_api_llm.as_ref(),
+                                            budgeted_external_llm.as_ref(),
+                                            budgeted_llm.as_ref(),
+                                        )
+                                        .llm
+                                        .is_some();
+                                    if !synthesis_available {
+                                        if synthesis_pin.is_none()
+                                            && finish_import_priority(
+                                                &write_signal,
+                                                &db,
+                                                import_generation,
+                                            )
+                                            .await
+                                        {
+                                            tracing::info!(
+                                                "[scheduler] import priority finished reason=no_authorized_synthesis_provider"
+                                            );
+                                        } else {
+                                            tracing::debug!(
+                                                "[scheduler] import priority deferred reason=pinned_synthesis_provider_loading"
+                                            );
+                                        }
+                                    } else {
+                                        tracing::info!(
+                                            "[scheduler] import priority phase={} started",
+                                            match phase {
+                                                ImportSynthesisPhase::Detect => "detect",
+                                                ImportSynthesisPhase::Emergence => "emergence",
+                                            }
+                                        );
+                                        let phase_kind = match phase {
+                                            ImportSynthesisPhase::Detect => {
+                                                wenlan_core::refinery::Phase::Detect
+                                            }
+                                            ImportSynthesisPhase::Emergence => {
+                                                wenlan_core::refinery::Phase::Emergence
+                                            }
+                                        };
+                                        let outcome = fire_steep_phase_safe(
+                                            &db,
+                                            budgeted_llm.as_ref(),
+                                            budgeted_api_llm.as_ref(),
+                                            budgeted_synthesis_llm.as_ref(),
+                                            budgeted_external_llm.as_ref(),
+                                            &prompts,
+                                            &refinery_cfg,
+                                            &confidence_cfg,
+                                            &distillation_cfg,
+                                            wenlan_core::refinery::TriggerKind::Idle,
+                                            phase_kind,
+                                            "ImportPriority",
+                                        )
+                                        .await;
+                                        write_signal.import_priority_note_phase(
+                                            processing_generation,
+                                            phase,
+                                        );
+                                        import_work_ran = true;
+                                        tracing::info!(
+                                            "[scheduler] import priority phase={} done selected={} progressed={} more={} retryable={} panicked={}",
+                                            phase_kind,
+                                            outcome.selected,
+                                            outcome.progressed,
+                                            outcome.more,
+                                            outcome.retryable,
+                                            outcome.panicked,
+                                        );
+                                    }
+                                } else if current.ambient_slices
+                                    < IMPORT_PRIORITY_MAX_AMBIENT_SLICES
+                                {
+                                    let job = current.next_job;
+                                    tracing::info!(
+                                        "[scheduler] import priority job={job:?} started slice={}",
+                                        current.ambient_slices.saturating_add(1),
+                                    );
+                                    let report = run_ambient_job_safe(
+                                        job,
+                                        &db,
+                                        llm.as_ref(),
+                                        api_llm.as_ref(),
+                                        external_llm.as_ref(),
+                                        everyday_pin,
+                                        &prompts,
+                                        &refinery_cfg,
+                                        &distillation_cfg,
+                                        Some(knowledge_path.as_path()),
+                                    )
+                                    .await;
+                                    write_signal.import_priority_note_ambient(
+                                        processing_generation,
+                                        report.selected,
+                                    );
+                                    import_work_ran = true;
+                                    tracing::info!(
+                                        "[scheduler] import priority job={:?} done selected={} llm_calls={} panicked={} elapsed_ms={}",
+                                        report.job,
+                                        report.selected,
+                                        report.llm_calls,
+                                        report.panicked,
+                                        report.elapsed.as_millis(),
+                                    );
+                                }
+                                let finished =
+                                    write_signal.import_priority_should_finish(Instant::now());
+                                if finished
+                                    && finish_import_priority(
+                                        &write_signal,
+                                        &db,
+                                        processing_generation,
+                                    )
+                                    .await
+                                {
+                                    tracing::info!(
+                                        "[scheduler] import priority finished reason=bounded_work"
+                                    );
+                                }
+                            }
+                        };
+                    }
+                }
+            }
+
+            let selected_automatic = if !import_work_ran
+                && automatic_heavy_turn_allowed(
+                    background_heavy_resource_admitted(
+                        resource_status,
+                        startup_model_load_reserved,
+                        matches!(
+                            synthesis_pin,
+                            Some(wenlan_core::refinery::SynthesisSource::OnDevice)
+                        ),
+                    ),
+                    ambient_turn_owed,
+                    now,
+                    ambient_schedule.next_allowed_at,
+                ) {
                 steep_batch
                     .as_ref()
                     .map(|batch| batch.trigger.clone())
@@ -1393,8 +1662,9 @@ pub fn spawn_scheduler(
                             last_backstop,
                         )
                     })
-            })
-            .flatten();
+            } else {
+                None
+            };
             let mut automatic_work_ran = false;
 
             if let Some(trigger) = selected_automatic {
@@ -1913,6 +2183,39 @@ async fn load_last_daily(shared: &SharedState) -> i64 {
         }
     } else {
         0
+    }
+}
+
+/// Load the short-lived import priority deadline.  The marker is intentionally
+/// a wall-clock value so a daemon restart can resume only the remaining part of
+/// the same ten-minute window; expired or malformed values are ignored.
+async fn load_import_priority_until(shared: &SharedState) -> i64 {
+    let db = {
+        let s = shared.read().await;
+        s.db.clone()
+    };
+    let Some(db) = db else {
+        return 0;
+    };
+    db.get_app_metadata(IMPORT_PRIORITY_METADATA_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
+async fn finish_import_priority(
+    write_signal: &WriteSignal,
+    db: &wenlan_core::db::MemoryDB,
+    generation: u64,
+) -> bool {
+    match write_signal.finish_import_priority(db, generation).await {
+        Ok(finished) => finished,
+        Err(error) => {
+            tracing::warn!("[scheduler] failed to clear import priority metadata: {error}");
+            false
+        }
     }
 }
 

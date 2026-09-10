@@ -92,7 +92,9 @@ export interface ImportBatchSummary {
   memoriesSkipped: number;
   entitiesDetected: number;
   entitiesEstablished: number;
-  pagesDistilled: number;
+  /** Unknown across batches: one page can cite several imports. */
+  pagesDistilled: number | null;
+  hasRelatedPages: boolean;
   /** Every batch reports every background phase settled. */
   complete: boolean;
   /** Phases still doing work, in display order. */
@@ -139,8 +141,10 @@ export function summarizeImportBatches(batches: ImportBatchStatus[]): ImportBatc
   // no batch finished stays out of `complete`, so the pill cannot claim work
   // is done that a batch has not even started.
   const phases = IMPORT_PHASE_ORDER.map((phase) => byPhase.get(phase) ?? emptyPhase(phase));
+  const batchesSettled = batches.length > 0 && batches.every((batch) => batch.complete);
   const runningPhases = phases
-    .filter((p) => p.state === "running" || p.state === "pending")
+    .filter((p) => (p.state === "running" || p.state === "pending")
+      && !(p.phase === "distill" && p.state === "pending" && batchesSettled))
     .map((p) => p.phase);
   const failedPhases = phases.filter((p) => p.state === "failed").map((p) => p.phase);
   const complete =
@@ -155,7 +159,8 @@ export function summarizeImportBatches(batches: ImportBatchStatus[]): ImportBatc
     memoriesSkipped,
     entitiesDetected,
     entitiesEstablished,
-    pagesDistilled,
+    pagesDistilled: batches.length > 1 ? null : pagesDistilled,
+    hasRelatedPages: pagesDistilled > 0,
     complete,
     runningPhases,
     failedPhases,
@@ -167,17 +172,6 @@ function combineState(a: ImportPhaseState, b: ImportPhaseState): ImportPhaseStat
   if (a === "running" || b === "running") return "running";
   if (a === "pending" || b === "pending") return "pending";
   return "complete";
-}
-
-function PulseStyle() {
-  return (
-    <style>{`
-      @keyframes pulse-subtle {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
-      }
-    `}</style>
-  );
 }
 
 function PhaseDot({ state }: { state: ImportPhaseState }) {
@@ -207,9 +201,7 @@ function PhaseDot({ state }: { state: ImportPhaseState }) {
         borderRadius: "50%",
         backgroundColor: color,
         flexShrink: 0,
-        ...(state === "running"
-          ? { animation: "pulse-subtle 2s ease-in-out infinite" }
-          : { opacity: state === "pending" ? 0.5 : 1 }),
+        opacity: state === "pending" ? 0.5 : 1,
       }}
     />
   );
@@ -222,14 +214,17 @@ function PhaseDot({ state }: { state: ImportPhaseState }) {
  * A phase with no known total reads as waiting, never as 0%. `distill` never
  * reports a usable total, so it always renders as a live count with no bar.
  */
-export function ImportPhaseList({ phases }: { phases: ImportPhaseStatus[] }) {
+export function ImportPhaseList({ phases, pageCount }: { phases: ImportPhaseStatus[]; pageCount?: number | null }) {
   const { t } = useTranslation();
   const byPhase = new Map<ImportPhase, ImportPhaseStatus>();
   for (const p of phases) byPhase.set(p.phase, p);
 
+  const organizationSettled = IMPORT_PHASE_ORDER.filter((phase) => phase !== "distill")
+    .every((phase) => byPhase.get(phase)?.state === "complete");
+  const awaitingContext = organizationSettled && byPhase.get("distill")?.state === "pending";
+
   return (
     <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: "4px" }}>
-      <PulseStyle />
       {IMPORT_PHASE_ORDER.map((phase) => {
         const entry = byPhase.get(phase) ?? emptyPhase(phase);
         const isDistill = phase === "distill";
@@ -288,7 +283,9 @@ export function ImportPhaseList({ phases }: { phases: ImportPhaseStatus[] }) {
                 <span style={{ color: "#ef4444" }}>{t("importBatch.states.failed")}</span>
               )}
               {isDistill ? (
-                <span>{t("importBatch.pagesSoFar", { count: entry.done })}</span>
+                <span>{pageCount === null
+                  ? t(entry.done > 0 ? "importBatch.relatedPagesAvailable" : "importBatch.noRelatedPages")
+                  : t("importBatch.pagesSoFar", { count: pageCount ?? entry.done })}</span>
               ) : hasTotal ? (
                 <span>{t("importBatch.countOf", { done: entry.done, total: entry.total })}</span>
               ) : (
@@ -329,6 +326,11 @@ export function ImportPhaseList({ phases }: { phases: ImportPhaseStatus[] }) {
           </div>
         );
       })}
+      {awaitingContext && (
+        <p style={{ margin: "8px 14px", fontSize: "12px", lineHeight: 1.6, color: "var(--mem-text-secondary)" }}>
+          {t("importBatch.readyWithoutPages")}
+        </p>
+      )}
     </div>
   );
 }
@@ -351,8 +353,6 @@ export function ImportStatusPill({
   const nextPhase = summary.runningPhases[0] ?? summary.failedPhases[0];
 
   return (
-    <>
-    <PulseStyle />
     <button
       type="button"
       data-testid="import-status-pill"
@@ -384,7 +384,6 @@ export function ImportStatusPill({
           height: "6px",
           borderRadius: "50%",
           backgroundColor: "currentColor",
-          animation: "pulse-subtle 2s ease-in-out infinite",
         }}
       />
       {failed ? t("importBatch.pillFailed") : t("importBatch.pillActive")}
@@ -392,7 +391,6 @@ export function ImportStatusPill({
         <span style={{ opacity: 0.75 }}>{t(`importBatch.phases.${nextPhase}`)}</span>
       )}
     </button>
-    </>
   );
 }
 
@@ -446,7 +444,7 @@ export function ImportDetailPanel({
         </h2>
       </div>
 
-      <ImportPhaseList phases={summary.phases} />
+      <ImportPhaseList phases={summary.phases} pageCount={summary.pagesDistilled} />
 
       <p style={{
         fontFamily: "var(--mem-font-mono)",
@@ -456,10 +454,15 @@ export function ImportDetailPanel({
       }}>
         {t("importBatch.summaryImported", {
           count: summary.memoriesImported,
-          source: importSourceLabel(batches[0]?.source ?? ""),
+          source: [...new Set(batches.map((batch) => batch.source === "other" ? t("importBatch.otherSource") : importSourceLabel(batch.source)))].join(" · "),
         })}
         {summary.memoriesSkipped > 0 && ` · ${t("importBatch.summarySkipped", { count: summary.memoriesSkipped })}`}
       </p>
+      {!summary.complete && summary.failedPhases.length === 0 ? (
+        <p style={{ fontSize: "12px", color: "var(--mem-text-secondary)", margin: 0 }}>
+          {t("importBatch.backgroundRunning")}
+        </p>
+      ) : null}
     </div>
   );
 }

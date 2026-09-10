@@ -120,8 +120,8 @@ describe("PageDetail citations", () => {
   it("renders one chip per citation and no raw markers in the body", async () => {
     renderPage();
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
-    const chip1 = await screen.findByRole("button", { name: /mem-1/ });
-    const chip2 = screen.getByRole("button", { name: /mem-2/ });
+    const chip1 = await screen.findByRole("button", { name: /Memory 1/ });
+    const chip2 = screen.getByRole("button", { name: /Memory 2/ });
     expect(chip1).toHaveAttribute("data-status", "verified");
     expect(chip2).toHaveAttribute("data-status", "unverified");
     expect(screen.queryByText(/\[1\]/)).toBeNull();
@@ -129,7 +129,7 @@ describe("PageDetail citations", () => {
 
   it("resolves the popover from page-sources and opens the memory", async () => {
     const { props, user } = renderPage();
-    const chip = await screen.findByRole("button", { name: /mem-1/ });
+    const chip = await screen.findByRole("button", { name: /Memory 1/ });
     fireEvent.focus(chip);
     // Scoped to the popover: PageInfo's (closed, but DOM-present) Sources row
     // for the same memory carries the identical title text, and plain
@@ -143,7 +143,7 @@ describe("PageDetail citations", () => {
 
   it("explains a locator missing from page-sources", async () => {
     renderPage();
-    const chip = await screen.findByRole("button", { name: /mem-2/ });
+    const chip = await screen.findByRole("button", { name: /Memory 2/ });
     fireEvent.focus(chip);
     expect(await screen.findByText(/no longer exists/i)).toBeInTheDocument();
   });
@@ -154,7 +154,7 @@ describe("PageDetail citations", () => {
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     expect(screen.getByText(/It uses libSQL\./)).toBeInTheDocument();
     expect(screen.queryByText(/\[2\]/)).toBeNull();
-    expect(screen.queryByRole("button", { name: /mem-1/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
     await user.click(screen.getByText(/Page info/i));
     expect(
       screen.getByText("Citations cleared by edit — re-distill to restore"),
@@ -165,7 +165,7 @@ describe("PageDetail citations", () => {
     tauriMocks.getPage.mockResolvedValue({ ...BASE_PAGE, citations: [cite(1, 1)] });
     const { user } = renderPage();
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /mem-1/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
     expect(screen.queryByText(/\[1\]/)).toBeNull();
     await user.click(screen.getByText(/Page info/i));
     expect(
@@ -189,8 +189,8 @@ describe("PageDetail citations", () => {
     // The first-sentence citation renders as a chip inside the pull quote;
     // the second citation still renders in the body.
     const lede = document.querySelector(".page-detail-lede") as HTMLElement;
-    expect(within(lede).getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /mem-2/ })).toBeInTheDocument();
+    expect(within(lede).getByRole("button", { name: /Memory 1/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Memory 2/ })).toBeInTheDocument();
   });
 
   it("keeps the first sentence and its chip in the body when the summary is the lede", async () => {
@@ -204,8 +204,8 @@ describe("PageDetail citations", () => {
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     expect(screen.getByText("One-line summary of the page.")).toBeInTheDocument();
     expect(screen.getByText(/The daemon is local-first\./)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /mem-2/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Memory 1/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Memory 2/ })).toBeInTheDocument();
   });
 
   it("does not repeat the first sentence when the summary is that sentence", async () => {
@@ -220,9 +220,9 @@ describe("PageDetail citations", () => {
     expect(screen.getAllByText(/It stays fast under load\./)).toHaveLength(1);
     // The sentence moved up into the lede and took its chip with it.
     const lede = document.querySelector(".page-detail-lede") as HTMLElement;
-    expect(within(lede).getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /mem-1/ })).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /mem-2/ })).toBeInTheDocument();
+    expect(within(lede).getByRole("button", { name: /Memory 1/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Memory 1/ })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /Memory 2/ })).toBeInTheDocument();
   });
 
   it("keeps the chips in the lede when the distiller put the markers before the period", async () => {
@@ -239,12 +239,12 @@ describe("PageDetail citations", () => {
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     const lede = document.querySelector(".page-detail-lede") as HTMLElement;
     expect(within(lede).getByText(/Tally stores all data in one SQLite file/)).toBeInTheDocument();
-    expect(within(lede).getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
-    expect(within(lede).getByRole("button", { name: /mem-2/ })).toBeInTheDocument();
+    expect(within(lede).getByRole("button", { name: /Memory 1/ })).toBeInTheDocument();
+    expect(within(lede).getByRole("button", { name: /Memory 2/ })).toBeInTheDocument();
     expect(screen.getAllByText(/Tally stores all data in one SQLite file/)).toHaveLength(1);
     expect(screen.getByText(/The app process is the only writer\./)).toBeInTheDocument();
     // The pull quote is italic; the popover that opens from its chip is not.
-    fireEvent.focus(within(lede).getByRole("button", { name: /mem-1/ }));
+    fireEvent.focus(within(lede).getByRole("button", { name: /Memory 1/ }));
     const popover = await screen.findByRole("tooltip");
     expect(popover.style.fontStyle).toBe("normal");
   });
@@ -266,8 +266,8 @@ describe("PageDetail citations", () => {
     renderPage();
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     const lede = document.querySelector(".page-detail-lede") as HTMLElement;
-    expect(within(lede).getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
-    expect(within(lede).getByRole("button", { name: /mem-2/ })).toBeInTheDocument();
+    expect(within(lede).getByRole("button", { name: /Memory 1/ })).toBeInTheDocument();
+    expect(within(lede).getByRole("button", { name: /Memory 2/ })).toBeInTheDocument();
     expect(screen.getAllByText(/deliberately minimal/)).toHaveLength(1);
   });
 
@@ -284,7 +284,7 @@ describe("PageDetail citations", () => {
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     const lede = document.querySelector(".page-detail-lede") as HTMLElement;
     expect(lede.textContent).not.toContain("TLDR");
-    expect(within(lede).getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
+    expect(within(lede).getByRole("button", { name: /Memory 1/ })).toBeInTheDocument();
     // The sentence moved up into the quote instead of being repeated below it.
     expect(screen.getAllByText(/Tally stores all data in one SQLite file/)).toHaveLength(1);
   });
@@ -301,7 +301,7 @@ describe("PageDetail citations", () => {
     const lede = document.querySelector(".page-detail-lede") as HTMLElement;
     expect(within(lede).getByText("A claim an agent chose.")).toBeInTheDocument();
     expect(within(lede).queryByRole("button")).toBeNull();
-    expect(screen.getByRole("button", { name: /mem-1/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Memory 1/ })).toBeInTheDocument();
   });
 });
 

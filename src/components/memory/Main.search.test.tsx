@@ -59,11 +59,12 @@ vi.mock("./ActivityFeed", () => ({ default: () => <div data-testid="activity-fee
 vi.mock("./IdentityDetail", () => ({ default: () => <div /> }));
 vi.mock("./MemoryStream", () => ({ default: () => <div /> }));
 vi.mock("./HomePage", () => ({
-  default: (props: { onNavigateGraph?: () => void }) => (
+  default: (props: { onNavigateGraph?: () => void; onStartFirstUse?: () => void }) => (
     <div data-testid="home-page">
       <button type="button" onClick={() => props.onNavigateGraph?.()}>
         Open graph view
       </button>
+      <button type="button" onClick={props.onStartFirstUse}>Start first use</button>
     </div>
   ),
 }));
@@ -285,7 +286,23 @@ vi.mock("./spaces", () => ({
 }));
 vi.mock("./DecisionLog", () => ({ default: () => <div /> }));
 vi.mock("./MemoryCard", () => ({ default: () => <div /> }));
-vi.mock("./ImportView", () => ({ ImportView: () => <div data-testid="import-view" /> }));
+vi.mock("./ImportView", () => ({
+  ImportView: (props: { onComplete: () => void; onBack: () => void }) => (
+    <div data-testid="import-view">
+      <button type="button" onClick={props.onComplete}>Finish import</button>
+      <button type="button" onClick={props.onBack}>Cancel import</button>
+    </div>
+  ),
+}));
+vi.mock("../onboarding/FirstUseGuide", () => ({
+  FirstUseGuide: (props: { initialView?: string; onImport: () => void; onBack: () => void; onOpenPage: (id: string) => void }) => (
+    <section data-testid="first-use-guide" data-view={props.initialView}>
+      <button type="button" onClick={props.onImport}>Bring memories</button>
+      <button type="button" onClick={props.onBack}>Leave first use</button>
+      <button type="button" onClick={() => props.onOpenPage("library-page")}>Open knowledge result</button>
+    </section>
+  ),
+}));
 
 function space(id: string, name: string): Space {
   return {
@@ -370,6 +387,37 @@ describe("Main search", () => {
     localStorage.clear();
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
+  });
+
+  it("returns an onboarding import to real knowledge, then back to Home", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Start first use" }));
+    await user.click(screen.getByRole("button", { name: "Bring memories" }));
+    expect(screen.getByTestId("import-view")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Finish import" }));
+    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "live");
+    await user.click(screen.getByRole("button", { name: "Leave first use" }));
+    expect(screen.getByTestId("home-page")).toBeVisible();
+  });
+
+  it("cancelling an onboarding import returns without claiming knowledge was formed", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Start first use" }));
+    await user.click(screen.getByRole("button", { name: "Bring memories" }));
+    await user.click(screen.getByRole("button", { name: "Cancel import" }));
+    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "guide");
+  });
+
+  it("returns from a knowledge result to the onboarding library view", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Start first use" }));
+    await user.click(screen.getByRole("button", { name: "Open knowledge result" }));
+    expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", "library-page");
+    await user.click(screen.getByRole("button", { name: "Page back" }));
+    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "live");
   });
 
   it("keeps recaps reachable from the Memories screen", async () => {

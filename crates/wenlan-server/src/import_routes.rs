@@ -17,6 +17,23 @@ use wenlan_types::WriteSpaceSource;
 /// Default cap for `GET /api/import/batches/active`.
 const DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT: usize = 20;
 
+async fn request_import_priority(
+    state: &Arc<RwLock<ServerState>>,
+    db: &Arc<wenlan_core::db::MemoryDB>,
+    batch_id: Option<&str>,
+) {
+    let write_signal = {
+        let guard = state.read().await;
+        guard.write_signal.clone()
+    };
+    if let Err(error) = write_signal.persist_and_request_import(db, batch_id).await {
+        // The import is already durable and searchable. Keep the successful
+        // response, but make a failed wake/deadline write visible; the normal
+        // scheduler poll can still pick up the same backlog.
+        tracing::warn!("[import] failed to persist priority wake: {error}");
+    }
+}
+
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
     router
         .route("/api/import/memories", post(handle_import_memories))
@@ -74,6 +91,10 @@ pub async fn handle_import_memories(
     } else {
         WriteSpaceSource::Uncategorized
     };
+    drop(_space_write_guard);
+    if result.imported > 0 {
+        request_import_priority(&state, &db, Some(&result.batch_id)).await;
+    }
 
     Ok(Json(ImportMemoriesResponse {
         imported: result.imported,
@@ -190,6 +211,10 @@ pub async fn handle_chat_export_import(
     )
     .await
     .map_err(|e| ServerError::ChatImport(format!("update_import_state_stage: {e}")))?;
+
+    if result.memories_stored > 0 {
+        request_import_priority(&state, &db, None).await;
+    }
 
     let vendor_str = batch.vendor.as_str().to_string();
     Ok(Json(ImportChatExportResponse {
@@ -614,6 +639,17 @@ mod import_batch_status_route_tests {
             }
         }
 
+        assert!(
+            !db.import_batch_status("settled-batch")
+                .await
+                .unwrap()
+                .unwrap()
+                .complete,
+            "enrichment alone must not finish a pending page turn"
+        );
+        db.set_app_metadata("import_priority_until_v1", "0")
+            .await
+            .unwrap();
         let done = db
             .import_batch_status("settled-batch")
             .await

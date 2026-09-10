@@ -448,6 +448,7 @@ pub(super) async fn run_ambient_job(
                 }
             }
         }
+        AmbientJob::Entity if !wenlan_core::db::entity_sweep_enabled() => false,
         AmbientJob::Entity => {
             let Some(provider) = provider.clone() else {
                 return AmbientTurnReport {
