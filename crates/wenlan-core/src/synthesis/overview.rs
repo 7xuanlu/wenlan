@@ -175,7 +175,7 @@ pub async fn refresh_overview_page(
     _agent: &str,
     knowledge_path: Option<&Path>,
 ) -> Result<RefreshOutcome, WenlanError> {
-    if let Some(page_id) = db.find_active_page_id_by_title(OVERVIEW_PAGE_TITLE).await? {
+    if let Some(page_id) = db.find_active_machine_overview_id().await? {
         let source_revision = db.get_page_source_revision(&page_id).await?;
         let page = db.get_page(&page_id).await?;
         if let Some(page) = page {
@@ -366,9 +366,9 @@ mod tests {
         );
     }
 
-    async fn seed_legacy(db: &MemoryDB, body: &str) {
+    async fn seed_overview(db: &MemoryDB, id: &str, body: &str, creation_kind: &str) {
         db.insert_page_with_kind(
-            "legacy-overview",
+            id,
             "Overview",
             None,
             body,
@@ -376,13 +376,17 @@ mod tests {
             None,
             &[],
             &chrono::Utc::now().to_rfc3339(),
-            "research",
+            creation_kind,
             "unconfirmed",
             None,
             None,
         )
         .await
         .unwrap();
+    }
+
+    async fn seed_legacy(db: &MemoryDB, body: &str) {
+        seed_overview(db, "legacy-overview", body, "research").await;
     }
 
     #[tokio::test]
@@ -401,6 +405,43 @@ mod tests {
         let saved = db.get_page("legacy-overview").await.unwrap().unwrap();
         assert_eq!(saved.status, "archived");
         assert_eq!(saved.content, OVERVIEW_PLACEHOLDER_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn authored_overview_namesake_does_not_hide_legacy_placeholder() {
+        let (db, _dir) = test_db().await;
+        seed_overview(
+            &db,
+            "authored-overview",
+            "My own overview stays active.",
+            "authored",
+        )
+        .await;
+        seed_legacy(&db, OVERVIEW_PLACEHOLDER_CONTENT).await;
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockProvider::unavailable());
+
+        refresh_overview_page(&db, &llm, &PromptRegistry::default(), "test", None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.get_page("authored-overview")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "active",
+            "an authored namesake must remain active"
+        );
+        assert_eq!(
+            db.get_page("legacy-overview")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "archived",
+            "the eligible legacy placeholder must still be archived"
+        );
     }
 
     #[tokio::test]

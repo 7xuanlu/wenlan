@@ -23385,6 +23385,77 @@ async fn test_get_app_metadata_missing_key_returns_none() {
 }
 
 #[tokio::test]
+async fn startup_overview_repair_archives_placeholder_behind_authored_namesake() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    {
+        let db = MemoryDB::new_with_shared_embedder(
+            &db_path,
+            Arc::new(crate::events::NoopEmitter),
+            shared_embedder(),
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "authored-overview",
+            "Overview",
+            None,
+            "My own overview stays active.",
+            None,
+            None,
+            &[],
+            "2026-09-10T00:00:00Z",
+            "authored",
+            "unconfirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_page_with_kind(
+            "legacy-overview",
+            "Overview",
+            None,
+            crate::synthesis::overview::OVERVIEW_PLACEHOLDER_CONTENT,
+            None,
+            None,
+            &[],
+            "2026-09-10T00:00:00Z",
+            "research",
+            "unconfirmed",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let reopened = MemoryDB::new_with_shared_embedder(
+        &db_path,
+        Arc::new(crate::events::NoopEmitter),
+        shared_embedder(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reopened
+            .get_page("authored-overview")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "active",
+        "an authored namesake must survive startup repair"
+    );
+    let placeholder = reopened.get_page("legacy-overview").await.unwrap().unwrap();
+    assert_eq!(placeholder.status, "archived");
+    assert_eq!(
+        placeholder.content,
+        crate::synthesis::overview::OVERVIEW_PLACEHOLDER_CONTENT
+    );
+}
+
+#[tokio::test]
 async fn test_set_and_get_app_metadata() {
     let (db, _dir) = test_db().await;
     db.set_app_metadata("last_daily_steep_ts", "1712880000")

@@ -263,11 +263,8 @@ impl WriteSignal {
         )
         .await?;
         if let Some(batch_id) = batch_id {
-            db.set_app_metadata(
-                &format!("import_batch_priority_v1:{batch_id}"),
-                &request.deadline_epoch.to_string(),
-            )
-            .await?;
+            db.persist_import_batch_priority(batch_id, request.deadline_epoch)
+                .await?;
         }
         self.signal_import_request(request);
         Ok(())
@@ -573,7 +570,7 @@ mod tests {
         );
         assert_eq!(
             import_priority_block_reason(
-                admitted(1.0, 1 * super::super::GIB),
+                admitted(1.0, super::super::GIB),
                 active_host,
                 false,
                 false

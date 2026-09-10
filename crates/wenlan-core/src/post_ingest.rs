@@ -286,7 +286,13 @@ pub async fn run_page_growth_slice(
         .await?
         .is_none()
     {
-        return terminal_no_match(db, &input.source_id, input.version).await;
+        // A temporary truth/write fence is not evidence of no matching page.
+        // Keep this input available after the fence clears.
+        return Ok(PageGrowthSliceReport {
+            selected: true,
+            matched: true,
+            ..Default::default()
+        });
     }
     let clean_current = crate::citations::strip_markers(&page.content);
     let evidence = db.get_page_evidence(&page.id).await.unwrap_or_default();
@@ -2000,9 +2006,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn page_growth_write_fence_defers_without_consuming_source() {
+        let (db, _dir) = test_db().await;
+        let db = Arc::new(db);
+        let entity_id = db
+            .create_entity("Deferred Growth", "Topic", Some("work"))
+            .await
+            .unwrap();
+        insert_growth_page(
+            &db,
+            "deferred-page",
+            &entity_id,
+            "work",
+            "existing machine-owned page body",
+        )
+        .await;
+        seed_page_growth_memory(
+            &db,
+            "deferred-memory",
+            "new evidence for the ambient page",
+            Some(&entity_id),
+            Some("work"),
+        )
+        .await;
+        let provider = Arc::new(MutatingGrowthProvider {
+            db: db.clone(),
+            response: "existing machine-owned page body. New evidence.[1]".to_string(),
+            mutation: GrowthMutation::None,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+        let lease = db.begin_cutover().await.unwrap();
+        let deferred = run_page_growth_slice(&db, &llm, &PromptRegistry::default(), 2.0, None)
+            .await
+            .unwrap();
+        assert!(deferred.selected && deferred.matched);
+        assert!(!deferred.committed && !deferred.terminal_no_match);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(db
+            .get_enrichment_steps("deferred-memory")
+            .await
+            .unwrap()
+            .iter()
+            .all(|step| step.step != "page_growth"));
+        db.abort_cutover(lease).await.unwrap();
+        let retried = run_page_growth_slice(&db, &llm, &PromptRegistry::default(), 2.0, None)
+            .await
+            .unwrap();
+        assert!(retried.committed);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert!(db
+            .get_page("deferred-page")
+            .await
+            .unwrap()
+            .unwrap()
+            .source_memory_ids
+            .contains(&"deferred-memory".to_string()));
+    }
+
+    #[tokio::test]
     async fn page_growth_legacy_no_match_repair_runs_once_and_preserves_linked_receipts() {
         let (db, _dir) = test_db().await;
-        for id in ["repair-orphan", "repair-linked"] {
+        for id in ["repair-orphan", "repair-linked", "repair-archived"] {
             seed_page_growth_memory(
                 &db,
                 id,
@@ -2030,13 +2095,35 @@ mod tests {
         db.link_page_source("repair-page", "repair-linked", "page_growth")
             .await
             .unwrap();
+        insert_growth_page(
+            &db,
+            "archived-repair-page",
+            &entity,
+            "work",
+            "archived research content",
+        )
+        .await;
+        db.link_page_source("archived-repair-page", "repair-archived", "page_growth")
+            .await
+            .unwrap();
+        db.archive_page("archived-repair-page").await.unwrap();
         let candidate = db
             .get_page_growth_candidate(3, true)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(candidate.source_id, "repair-orphan");
-        db.record_enrichment_step_at_version("repair-orphan", "page_growth", "ok", None, 1)
+        assert!(["repair-orphan", "repair-archived"].contains(&candidate.source_id.as_str()));
+        db.record_enrichment_step_at_version(&candidate.source_id, "page_growth", "ok", None, 1)
+            .await
+            .unwrap();
+        let second = db
+            .get_page_growth_candidate(3, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(["repair-orphan", "repair-archived"].contains(&second.source_id.as_str()));
+        assert_ne!(candidate.source_id, second.source_id);
+        db.record_enrichment_step_at_version(&second.source_id, "page_growth", "ok", None, 1)
             .await
             .unwrap();
         assert!(

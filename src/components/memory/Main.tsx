@@ -842,9 +842,9 @@ export default function Main({
             <ImportView
               onBack={navigateBack}
               completeLabel={view.fromFirstUse ? t("firstUse.guide.seeKnowledge") : undefined}
-              onComplete={(_source, _result) => {
+              onComplete={(_source, result) => {
                 if (view.fromFirstUse) {
-                  setView({ kind: "first-use", showKnowledge: true });
+                  setView({ kind: "first-use", showKnowledge: true, batchId: result.batch_id });
                   setViewHistory([{ kind: "home" }]);
                 } else {
                   setView({ kind: "stream" });
@@ -967,12 +967,17 @@ export default function Main({
             <FirstUseGuide
               onBack={navigateBack}
               initialView={view.showKnowledge ? "live" : "guide"}
+              batchId={view.batchId}
               onImport={() => navigateTo({ kind: "import", fromFirstUse: true })}
               onSources={() => navigateTo({ kind: "settings", section: "sources" })}
               onConnect={() => navigateTo({ kind: "connect-agent" })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               onOpenPage={(id) => {
-                setViewHistory((previous) => [...previous, { kind: "first-use", showKnowledge: true }]);
+                setViewHistory((previous) => [...previous, {
+                  kind: "first-use",
+                  showKnowledge: true,
+                  batchId: view.batchId,
+                }]);
                 setView({ kind: "page", pageId: id });
               }}
             />

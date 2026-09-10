@@ -862,6 +862,74 @@ mod tests {
                 .state,
             ImportPhaseState::Pending
         );
+        db.persist_import_batch_priority("prioritytest", now - 1)
+            .await
+            .unwrap();
+        let complete_status = db
+            .import_batch_status("prioritytest")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(complete_status.complete);
+        assert!(
+            !db.active_import_batches(20)
+                .await
+                .unwrap()
+                .iter()
+                .any(|batch| batch.batch_id == "prioritytest"),
+            "completed batches remain filtered even while their marker is recent"
+        );
+    }
+
+    #[tokio::test]
+    async fn active_import_batches_keeps_historical_stalled_batch_after_deadline() {
+        let (db, _dir) = crate::db::tests::test_db().await;
+        seed_import_memory(&db, "import_historical_stalled_0", "other", None).await;
+        let now = chrono::Utc::now().timestamp();
+        db.persist_import_batch_priority("historical_stalled", now - 1)
+            .await
+            .unwrap();
+        seed_import_memory(&db, "import_too_old_0", "other", None).await;
+        db.set_app_metadata(
+            "import_batch_priority_v1:expired_marker",
+            &(now - 24 * 60 * 60 - 1).to_string(),
+        )
+        .await
+        .unwrap();
+        db.set_app_metadata(
+            "import_batch_priority_v1:too_old",
+            &(now - 24 * 60 * 60 - 1).to_string(),
+        )
+        .await
+        .unwrap();
+        let before_prune = db.active_import_batches(20).await.unwrap();
+        assert!(
+            !before_prune.iter().any(|batch| batch.batch_id == "too_old"),
+            "batches older than the 24-hour recency floor stay excluded"
+        );
+        db.persist_import_batch_priority("historical_stalled", now - 1)
+            .await
+            .unwrap();
+
+        let active = db.active_import_batches(20).await.unwrap();
+        let stalled = active
+            .iter()
+            .find(|batch| batch.batch_id == "historical_stalled")
+            .expect("a stalled historical batch remains discoverable for 24 hours");
+        assert!(!stalled.complete);
+        assert_eq!(
+            db.get_app_metadata("import_batch_priority_v1:expired_marker")
+                .await
+                .unwrap(),
+            None,
+            "the next import prunes only stale batch priority markers"
+        );
+        assert_eq!(
+            db.get_app_metadata("import_batch_priority_v1:too_old")
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]

@@ -21,7 +21,11 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
   if (scenario === "error" && (command === "list_pages" || command === "active_import_batches_cmd")) throw new Error("Verification: daemon unavailable");
   let value: unknown;
   switch (command) {
-    case "active_import_batches_cmd": value = { batches: submittedBatch ? [submittedBatch] : ["processing", "failed"].includes(scenario) ? [batch] : [] }; break;
+    case "active_import_batches_cmd": {
+      const active = submittedBatch ?? batch;
+      value = { batches: !active.complete && (submittedBatch !== null || ["processing", "failed"].includes(scenario)) ? [active] : [] };
+      break;
+    }
     case "import_memories_cmd": {
       // Exercise the real import UI without writing a library or retaining text.
       const count = String(args?.content ?? "").split("\n").filter((line) => line.trim()).length;

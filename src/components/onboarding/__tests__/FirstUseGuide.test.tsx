@@ -15,11 +15,13 @@ vi.mock("../../../lib/tauri", () => ({
 
 import {
   getActiveImportBatches,
+  getImportBatchStatus,
   getResolvedRouting,
   listPages,
 } from "../../../lib/tauri";
 
 const mockedBatches = vi.mocked(getActiveImportBatches);
+const mockedBatchStatus = vi.mocked(getImportBatchStatus);
 const mockedListPages = vi.mocked(listPages);
 
 function entry(
@@ -104,6 +106,7 @@ function enterLive() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedBatchStatus.mockReset();
   vi.mocked(getResolvedRouting).mockResolvedValue({ everyday: { source: "on_device", model: "qwen3-4b", mode: "pinned", pin: "on_device" }, synthesis: { source: "on_device", model: "qwen3-4b", mode: "pinned", pin: "on_device" }, pool: { anthropic: { configured: false, everyday_model: null, synthesis_model: null }, external: null, on_device: { selected: "qwen3-4b", loaded: true } } });
   mockedBatches.mockResolvedValue({ batches: [] });
   mockedListPages.mockResolvedValue([]);
@@ -176,6 +179,63 @@ describe("FirstUseGuide live view", () => {
     expect(screen.queryByText("Import progress")).not.toBeInTheDocument();
   });
 
+  it("shows a completed import returned by its status endpoint after active polling drops it", async () => {
+    mockedBatchStatus.mockResolvedValue(makeBatch({
+      complete: true,
+      phases: [
+        entry("ingest", "complete", 4, 4),
+        entry("store", "complete", 4, 4),
+        entry("detect", "complete", 4, 4),
+        entry("enrich", "complete", 4, 4),
+        entry("link", "complete", 4, 4),
+        entry("distill", "complete", 0, 0),
+      ],
+    }));
+    mockedBatches.mockResolvedValue({ batches: [] });
+    renderGuide({ initialView: "live", batchId: "batch-1" });
+    expect(await screen.findByText("Import progress")).toBeInTheDocument();
+    expect(screen.getByText("Background work finished.")).toBeInTheDocument();
+    expect(screen.getByText(/No knowledge page was created in this batch/)).toBeInTheDocument();
+    expect(mockedBatchStatus).toHaveBeenCalledWith("batch-1");
+  });
+
+  it("keeps the targeted batch through completion, then stops its terminal poll", async () => {
+    vi.useFakeTimers();
+    mockedBatches.mockResolvedValue({ batches: [] });
+    mockedBatchStatus
+      .mockResolvedValueOnce(makeBatch())
+      .mockResolvedValue(makeBatch({
+        complete: true,
+        phases: [
+          entry("ingest", "complete", 4, 4),
+          entry("store", "complete", 4, 4),
+          entry("detect", "complete", 4, 4),
+          entry("enrich", "complete", 4, 4),
+          entry("link", "complete", 4, 4),
+          entry("distill", "complete", 0, 0),
+        ],
+      }));
+    renderGuide({ initialView: "live", batchId: "batch-1" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId("import-phase-detect")).toHaveAttribute("data-state", "running");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await act(async () => {});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByText("Background work finished.")).toBeInTheDocument();
+    const settledCalls = mockedBatchStatus.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedBatchStatus).toHaveBeenCalledTimes(settledCalls);
+  });
+
   it("renders observed running phases without inventing a finished result", async () => {
     mockedBatches.mockResolvedValue({ batches: [makeBatch()] });
     renderGuide();
@@ -202,23 +262,19 @@ describe("FirstUseGuide live view", () => {
 
   it("shows failed status on a settled batch with failures and zero pages", async () => {
     const onOpenIntelligence = vi.fn();
-    mockedBatches.mockResolvedValue({
-      batches: [
-        makeBatch({
-          complete: true,
-          phases: [
-            entry("ingest", "complete", 4, 4),
-            entry("store", "complete", 4, 4),
-            entry("detect", "failed", 2, 4, 2),
-            entry("enrich", "complete", 4, 4),
-            entry("link", "complete", 4, 4),
-            entry("distill", "complete", 0, 0),
-          ],
-        }),
+    mockedBatches.mockResolvedValue({ batches: [] });
+    mockedBatchStatus.mockResolvedValue(makeBatch({
+      complete: true,
+      phases: [
+        entry("ingest", "complete", 4, 4),
+        entry("store", "complete", 4, 4),
+        entry("detect", "failed", 2, 4, 2),
+        entry("enrich", "complete", 4, 4),
+        entry("link", "complete", 4, 4),
+        entry("distill", "complete", 0, 0),
       ],
-    });
-    renderGuide({ onOpenIntelligence });
-    enterLive();
+    }));
+    renderGuide({ onOpenIntelligence, initialView: "live", batchId: "batch-1" });
     expect(await screen.findByText("Import progress")).toBeInTheDocument();
     expect(
       await screen.findByText(/Some items could not be processed/),
@@ -232,6 +288,16 @@ describe("FirstUseGuide live view", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Set up intelligence" }));
     expect(onOpenIntelligence).toHaveBeenCalledOnce();
+  });
+
+  it("does not double-count a targeted batch that is also in the active list", async () => {
+    const batch = makeBatch();
+    mockedBatches.mockResolvedValue({ batches: [batch] });
+    mockedBatchStatus.mockResolvedValue(batch);
+    renderGuide({ initialView: "live", batchId: "batch-1" });
+    expect(await screen.findByText("Import progress")).toBeInTheDocument();
+    expect(screen.getByText(/4 memories imported from ChatGPT/)).toBeInTheDocument();
+    expect(screen.queryByText(/8 memories imported from ChatGPT/)).not.toBeInTheDocument();
   });
 
   it("offers real knowledge pages and hides entity shadow pages", async () => {
@@ -258,6 +324,13 @@ describe("FirstUseGuide live view", () => {
     renderGuide({ initialView: "live" });
     expect(screen.getByTestId("first-use-live")).toBeInTheDocument();
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+  });
+
+  it("uses the active endpoint for a direct live view without a targeted batch", async () => {
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+    expect(mockedBatchStatus).not.toHaveBeenCalled();
+    expect(mockedBatches).toHaveBeenCalled();
   });
 
   it("keeps polling pages and batches while the live view is mounted", async () => {

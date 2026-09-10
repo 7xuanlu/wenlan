@@ -1049,3 +1049,11 @@ crates/wenlan-core/src/importer.rs|crate::importer::tests::seed_import_memory|te
 crates/wenlan-core/src/importer.rs|crate::importer::tests::batch_status_counts_distilled_pages_citing_members|TestDbSession::execute|1
 crates/wenlan-core/src/importer.rs|crate::importer::tests::batch_status_counts_distilled_pages_citing_members|TestDbSession::execute|2
 crates/wenlan-core/src/importer.rs|crate::importer::tests::batch_status_counts_distilled_pages_citing_members|test_primary_session|1
+crates/wenlan-core/src/importer.rs|crate::importer::tests::legacy_overview_archive_preserves_edits_and_original_content|TestDbSession::execute|1
+crates/wenlan-core/src/importer.rs|crate::importer::tests::legacy_overview_archive_preserves_edits_and_original_content|TestDbSession::execute|2
+crates/wenlan-core/src/importer.rs|crate::importer::tests::legacy_overview_archive_preserves_edits_and_original_content|TestDbSession::execute|3
+crates/wenlan-core/src/importer.rs|crate::importer::tests::legacy_overview_archive_preserves_edits_and_original_content|test_primary_session|1
+crates/wenlan-core/src/importer.rs|crate::importer::tests::legacy_overview_archive_preserves_edits_and_original_content|test_primary_session|2
+crates/wenlan-core/src/importer.rs|crate::importer::tests::legacy_overview_archive_preserves_edits_and_original_content|test_primary_session|3
+crates/wenlan-core/src/synthesis/overview.rs|crate::synthesis::overview::tests::user_edited_overview_is_untouched|TestDbSession::execute|1
+crates/wenlan-core/src/synthesis/overview.rs|crate::synthesis::overview::tests::user_edited_overview_is_untouched|test_primary_session|1

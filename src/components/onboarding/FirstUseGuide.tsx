@@ -11,7 +11,12 @@ import {
   Sparkle,
   Tray,
 } from "@phosphor-icons/react";
-import { getActiveImportBatches, getResolvedRouting } from "../../lib/tauri";
+import {
+  getActiveImportBatches,
+  getImportBatchStatus,
+  getResolvedRouting,
+  type ImportBatchStatus,
+} from "../../lib/tauri";
 import { isKnowledgePage, listAllActivePages } from "../memory/pages/listAllPages";
 import {
   ImportPhaseList,
@@ -32,6 +37,8 @@ export interface FirstUseGuideProps {
   onOpenPage: (id: string) => void;
   /** Entry view. The parent passes "live" when returning from a real import. */
   initialView?: FirstUseGuideView;
+  /** The import just completed, if this guide was opened from that import. */
+  batchId?: string;
 }
 
 type GuideView = "guide" | "choose" | "sample" | "live";
@@ -54,6 +61,7 @@ export function FirstUseGuide({
   onOpenIntelligence,
   onOpenPage,
   initialView = "guide",
+  batchId,
 }: FirstUseGuideProps) {
   const { t } = useTranslation();
   const [view, setView] = useState<GuideView>(initialView);
@@ -78,6 +86,7 @@ export function FirstUseGuide({
           onImport={onImport}
           onOpenIntelligence={onOpenIntelligence}
           onOpenPage={onOpenPage}
+          batchId={batchId}
         />
       ) : null}
 
@@ -219,11 +228,13 @@ function FirstUseLive({
   onImport,
   onOpenIntelligence,
   onOpenPage,
+  batchId,
 }: {
   onBackToGuide: () => void;
   onImport: () => void;
   onOpenIntelligence: () => void;
   onOpenPage: (id: string) => void;
+  batchId?: string;
 }) {
   const { t } = useTranslation();
   const pagesQuery = useQuery({
@@ -231,10 +242,17 @@ function FirstUseLive({
     queryFn: listAllActivePages,
     refetchInterval: LIVE_PAGE_POLL_MS,
   });
-  const batchesQuery = useQuery({
+  const activeBatchesQuery = useQuery({
     queryKey: ["first-use-batches"],
     queryFn: getActiveImportBatches,
     refetchInterval: LIVE_BATCH_POLL_MS,
+  });
+  const batchStatusQuery = useQuery({
+    queryKey: ["first-use-batch", batchId],
+    queryFn: () => getImportBatchStatus(batchId!),
+    enabled: Boolean(batchId),
+    refetchInterval: (query) =>
+      query.state.data?.complete ? false : LIVE_BATCH_POLL_MS,
   });
 
   const routingQuery = useQuery({
@@ -246,15 +264,27 @@ function FirstUseLive({
   const retry = () => {
     void routingQuery.refetch();
     void pagesQuery.refetch();
-    void batchesQuery.refetch();
+    void activeBatchesQuery.refetch();
+    if (batchId) void batchStatusQuery.refetch();
   };
 
-  const pending = pagesQuery.isPending || batchesQuery.isPending;
+  const pending = pagesQuery.isPending
+    || activeBatchesQuery.isPending
+    || (Boolean(batchId) && batchStatusQuery.isPending);
   // A failed query is a failure, never an empty success: it gets its own
   // state with an explicit retry, not the empty-state copy.
-  const failed = pagesQuery.isError || batchesQuery.isError;
+  const failed = pagesQuery.isError
+    || activeBatchesQuery.isError
+    || (Boolean(batchId) && batchStatusQuery.isError);
 
-  const batches = batchesQuery.data?.batches ?? [];
+  const activeBatches = activeBatchesQuery.data?.batches ?? [];
+  const targetedBatch = batchStatusQuery.data as ImportBatchStatus | undefined;
+  const batches = targetedBatch
+    ? [
+        targetedBatch,
+        ...activeBatches.filter((batch) => batch.batch_id !== targetedBatch.batch_id),
+      ]
+    : activeBatches;
   const summary = summarizeImportBatches(batches);
   const knowledgePages = (pagesQuery.data ?? [])
     .filter(isKnowledgePage)

@@ -4,6 +4,11 @@ import { activeNavigationForView } from "./viewState";
 describe("activeNavigationForView", () => {
   it("keeps the first-use guide in Home navigation", () => {
     expect(activeNavigationForView({ kind: "first-use" })).toBe("home");
+    expect(activeNavigationForView({
+      kind: "first-use",
+      showKnowledge: true,
+      batchId: "batch-1",
+    })).toBe("home");
   });
   it("keeps the Page library and Page detail first-class instead of nesting them under Spaces", () => {
     expect(activeNavigationForView({ kind: "pages" })).toBe("pages");

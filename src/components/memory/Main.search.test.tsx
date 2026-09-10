@@ -287,16 +287,34 @@ vi.mock("./spaces", () => ({
 vi.mock("./DecisionLog", () => ({ default: () => <div /> }));
 vi.mock("./MemoryCard", () => ({ default: () => <div /> }));
 vi.mock("./ImportView", () => ({
-  ImportView: (props: { onComplete: () => void; onBack: () => void }) => (
+  ImportView: (props: {
+    onComplete: (source: string, result: { batch_id: string }) => void;
+    onBack: () => void;
+  }) => (
     <div data-testid="import-view">
-      <button type="button" onClick={props.onComplete}>Finish import</button>
+      <button
+        type="button"
+        onClick={() => props.onComplete("chatgpt", { batch_id: "import-batch-1" })}
+      >
+        Finish import
+      </button>
       <button type="button" onClick={props.onBack}>Cancel import</button>
     </div>
   ),
 }));
 vi.mock("../onboarding/FirstUseGuide", () => ({
-  FirstUseGuide: (props: { initialView?: string; onImport: () => void; onBack: () => void; onOpenPage: (id: string) => void }) => (
-    <section data-testid="first-use-guide" data-view={props.initialView}>
+  FirstUseGuide: (props: {
+    initialView?: string;
+    batchId?: string;
+    onImport: () => void;
+    onBack: () => void;
+    onOpenPage: (id: string) => void;
+  }) => (
+    <section
+      data-testid="first-use-guide"
+      data-view={props.initialView}
+      data-batch-id={props.batchId ?? "none"}
+    >
       <button type="button" onClick={props.onImport}>Bring memories</button>
       <button type="button" onClick={props.onBack}>Leave first use</button>
       <button type="button" onClick={() => props.onOpenPage("library-page")}>Open knowledge result</button>
@@ -397,6 +415,7 @@ describe("Main search", () => {
     expect(screen.getByTestId("import-view")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Finish import" }));
     expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "live");
+    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-batch-id", "import-batch-1");
     await user.click(screen.getByRole("button", { name: "Leave first use" }));
     expect(screen.getByTestId("home-page")).toBeVisible();
   });
