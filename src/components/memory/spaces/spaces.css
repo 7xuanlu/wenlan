@@ -88,7 +88,6 @@
 .spaces-primary-action,
 .spaces-quiet-action,
 .spaces-suggestion-action,
-.spaces-new-action,
 .spaces-menu-trigger,
 .spaces-danger,
 .spaces-drag-handle,
@@ -114,11 +113,6 @@
   font-size: 12px;
 }
 
-.spaces-new-action {
-  border-color: var(--mem-control-border);
-  padding: 0 13px;
-}
-
 .spaces-primary-action {
   border-color: var(--mem-accent-indigo);
   background: var(--mem-accent-indigo);
@@ -128,12 +122,6 @@
 .spaces-primary-action:hover {
   border-color: var(--mem-accent-indigo-hover);
   background: var(--mem-accent-indigo-hover);
-}
-
-.spaces-new-action:hover {
-  border-color: var(--mem-accent-indigo);
-  background: var(--mem-indigo-bg);
-  color: var(--mem-accent-indigo);
 }
 
 .spaces-quiet-action,

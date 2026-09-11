@@ -233,6 +233,16 @@
   color: var(--mem-text);
 }
 
+@media (forced-colors: active) {
+  .wiki-filters select {
+    appearance: auto;
+  }
+
+  .wiki-filters label::after {
+    display: none;
+  }
+}
+
 .wiki-filters select:focus-visible,
 .wiki-candidate-link:focus-visible,
 .wiki-candidate-hide:focus-visible,
