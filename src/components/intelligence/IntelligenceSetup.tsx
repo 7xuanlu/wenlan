@@ -71,6 +71,7 @@ export function AnthropicFields({
     queryClient.invalidateQueries({ queryKey: ["apiKey"] });
     queryClient.invalidateQueries({ queryKey: ["external-llm"] });
     queryClient.invalidateQueries({ queryKey: ["external-llm-key-configured"] });
+    queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] });
   };
 
   const handleSave = async () => {

@@ -640,14 +640,16 @@ export default function PageDetail({
       }
       setRedistillNotice({
         kind: "success",
-        message: result.updated ? "Page re-distilled." : "Page already up to date.",
+        message: result.updated ? t("pageDetail.redistilled") : t("pageDetail.redistillUpToDate"),
       });
     },
     onError: (error, id) => {
       if (activePageIdRef.current !== id) return;
       setRedistillNotice({
         kind: "error",
-        message: error instanceof Error ? error.message : "Page re-distill failed.",
+        message: t("pageDetail.redistillFailed", {
+          message: error instanceof Error ? error.message : String(error),
+        }),
       });
     },
   });
@@ -1495,6 +1497,7 @@ export default function PageDetail({
                 <button
                   onClick={handleRedistillClick}
                   disabled={redistillMutation.isPending}
+                  aria-busy={redistillMutation.isPending}
                   className="mem-icon-action"
                   aria-label={
                     redistillMutation.isPending
@@ -1516,6 +1519,7 @@ export default function PageDetail({
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2"
+                    className={redistillMutation.isPending ? "animate-spin motion-reduce:animate-none" : undefined}
                   >
                     <path d="M21 12a9 9 0 11-2.64-6.36" />
                     <path d="M21 3v6h-6" />

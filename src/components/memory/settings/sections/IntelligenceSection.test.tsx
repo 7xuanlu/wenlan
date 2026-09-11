@@ -244,11 +244,11 @@ describe("IntelligenceSection", () => {
     expect(mocks.setSourcePin).toHaveBeenCalledWith("external", null);
   });
 
-  // ── Headline (c): PINNED_DEGRADED — the pinned source is unavailable, so the
+  // ── Headline (c): PINNED_UNAVAILABLE — the pinned source is unavailable, so the
   // amber hint names it: "Pinned to X — using Y for now". Mutation proof:
   // removing the `isPinned && degraded` branch drops the hint and fails this
   // assertion.
-  it("pinned_degraded mode: renders the amber hint naming the pinned source", async () => {
+  it("pinned_unavailable mode: renders the amber hint naming the pinned source", async () => {
     mocks.getResolvedRouting.mockResolvedValue(
       pinnedRouting({
         everyday: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned" },
@@ -256,7 +256,7 @@ describe("IntelligenceSection", () => {
         // route fell back to the connected external provider (OpenAI). The
         // component trusts the wire values as-is — see the next test for the
         // no-pin (pre-#357 daemon) fallback case.
-        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_degraded", pin: "anthropic" },
+        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: "anthropic" },
       })
     );
     renderSection();
@@ -267,16 +267,16 @@ describe("IntelligenceSection", () => {
     expect(await screen.findByText("Pinned to Anthropic — currently unavailable, using OpenAI for now.")).toBeInTheDocument();
   });
 
-  // ── Headline (d): PINNED_DEGRADED with no pin on the wire (a daemon that
+  // ── Headline (d): PINNED_UNAVAILABLE with no pin on the wire (a daemon that
   // predates #357's pin field) — falls back to the generic, unnamed hint
   // rather than rendering "Pinned to null". Mutation proof: forcing
   // `pinnedDisplay` to always resolve from `pin` (dropping the `pin ?` guard)
   // renders the named hint here and fails the generic-hint assertion.
-  it("pinned_degraded mode with no pin on the wire: falls back to the generic hint", async () => {
+  it("pinned_unavailable mode with no pin on the wire: falls back to the generic hint", async () => {
     mocks.getResolvedRouting.mockResolvedValue(
       pinnedRouting({
         everyday: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned" },
-        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_degraded", pin: null },
+        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: null },
       })
     );
     renderSection();

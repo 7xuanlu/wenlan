@@ -202,6 +202,23 @@ describe("ImportFlow", () => {
     expect(chooseFile).toBeEnabled();
   });
 
+  it("renders a rejected importChatExport message without the Error: prefix", async () => {
+    const mockOpen = open as ReturnType<typeof vi.fn>;
+    mockOpen.mockResolvedValue("/tmp/export.zip");
+    mockImportChatExport.mockRejectedValue(new Error("boom"));
+
+    const { getByRole, queryByText } = render(<ImportFlow />);
+    const chooseFile = getByRole("button", { name: /choose file/i });
+    await act(async () => {
+      chooseFile.click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(getByRole("button", { name: /choose file/i })).toBeEnabled();
+    expect(queryByText("Error: boom")).toBeNull();
+    expect(queryByText("boom")).toBeInTheDocument();
+  });
+
   it("surfaces File.arrayBuffer failures so the user can retry", async () => {
     const file = new File(["zip bytes"], "export.zip", { type: "application/zip" });
     Object.defineProperty(file, "arrayBuffer", {

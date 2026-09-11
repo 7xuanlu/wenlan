@@ -48,6 +48,7 @@ export async function invoke(
     case "record_page_editor_diagnostic":
       return null;
     case "get_page":
+    case "get_page_explicit_browse":
       return PAGES[args?.id as string] ?? null;
     case "get_page_sources": {
       const pageId = args?.pageId as string;
@@ -279,7 +280,7 @@ export async function invoke(
     case "get_resolved_routing":
       return {
         everyday: { source: "on_device", model: "qwen3-4b", mode: "pinned", pin: "on_device" },
-        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_degraded", pin: "anthropic" },
+        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: "anthropic" },
         pool: {
           anthropic: { configured: false, everyday_model: null, synthesis_model: null },
           external: { endpoint: "https://api.openai.com/v1", model: "gpt-5.2" },

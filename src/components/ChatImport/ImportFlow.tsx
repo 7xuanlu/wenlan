@@ -111,7 +111,7 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
     try {
       await operation();
     } catch (e: unknown) {
-      setLocalAction({ kind: "error", message: String(e) });
+      setLocalAction({ kind: "error", message: e instanceof Error ? e.message : String(e) });
     } finally {
       busyRef.current = false;
       setBusy(false);

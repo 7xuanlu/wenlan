@@ -389,11 +389,11 @@ export async function setModelChoice(
 // predates the endpoint (the live 0.13.2 daemon) — callers render LEGACY mode.
 // Never contains key material.
 
-/** How one job resolves. `mode`: "pinned" | "pinned_degraded" | "auto".
+/** How one job resolves. `mode`: "pinned" | "pinned_unavailable" | "auto".
  *  `source` (everyday): "anthropic"|"external"|"on_device"|"basic";
  *  (synthesis): "anthropic"|"external"|"on_device"|"none". `pin`: the raw
  *  configured source pin, or `null` when unpinned — distinct from `source`
- *  (the RESOLVED source): on a `pinned_degraded` result the two differ,
+ *  (the RESOLVED source): on a `pinned_unavailable` result the two differ,
  *  letting the app say "Pinned to X — using Y". */
 export interface JobRoute {
   source: string;

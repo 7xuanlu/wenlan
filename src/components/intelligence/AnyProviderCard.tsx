@@ -317,6 +317,7 @@ export default function AnyProviderCard({
       // own prefill query — otherwise the rows keep showing stale state.
       queryClient.invalidateQueries({ queryKey: ["external-llm"] });
       queryClient.invalidateQueries({ queryKey: ["external-llm-key-configured"] });
+      queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] });
     } catch (err) {
       setSaveState(`error:${err instanceof Error ? err.message : String(err)}`);
     }

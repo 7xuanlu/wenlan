@@ -502,7 +502,7 @@ export default function IntelligenceSection({ delay }: { delay: number }) {
       sourceDisplay: sourceLabel(source),
       meta: routeMeta(job, source, model),
       connected: source !== "basic" && source !== "none",
-      degraded: mode === "pinned_degraded",
+      degraded: mode === "pinned_unavailable",
       pinnedDisplay: pin ? sourceLabel(pin) : null,
       sourceOptions: buildOptions(job),
       external: routedExternal,

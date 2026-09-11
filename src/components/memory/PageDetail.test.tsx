@@ -553,6 +553,9 @@ describe("PageDetail", () => {
     await user.click(screen.getByTitle("Re-distill page"));
     await waitFor(() => expect(redistillPage).toHaveBeenCalledWith("concept_abc"));
 
+    // While the re-distill promise is still unresolved the button is busy.
+    expect(screen.getByRole("button", { name: "Re-distilling page" })).toHaveAttribute("aria-busy", "true");
+
     rerender(
       <QueryClientProvider client={queryClient}>
         <PageDetail {...defaultProps} pageId="concept_next" />

@@ -878,7 +878,7 @@ export const GRAPH_MEMORIES: MemoryItem[] = [
   {
     source_id: "gm-5",
     title: "Anthropic model routing prefers pinned sources over auto fallback",
-    content: "A pinned_degraded result means the pin isn't configured yet and the chain fell back.",
+    content: "A pinned_unavailable result means the pin isn't configured yet and the chain fell back.",
     summary: null,
     memory_type: "fact",
     domain: "engineering",

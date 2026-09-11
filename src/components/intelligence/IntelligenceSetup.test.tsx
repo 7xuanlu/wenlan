@@ -59,6 +59,7 @@ describe("AnthropicFields", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["apiKey"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["external-llm"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["external-llm-key-configured"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
   });
 
   it("invalidates the same keys after clearing a configured key", async () => {
@@ -73,6 +74,7 @@ describe("AnthropicFields", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["apiKey"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["external-llm"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["external-llm-key-configured"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
   });
 
   it("offers a Get-a-key link to the Anthropic console when no key is set", async () => {

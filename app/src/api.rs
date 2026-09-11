@@ -117,11 +117,11 @@ pub struct MoveSpaceResponse {
 // material.
 
 /// Resolved route for one job class: which source serves it, the model, and how
-/// it was chosen. `mode`: "pinned" | "pinned_degraded" | "auto". `source`
+/// it was chosen. `mode`: "pinned" | "pinned_unavailable" | "auto". `source`
 /// (everyday): "anthropic"|"external"|"on_device"|"basic"; (synthesis):
 /// "anthropic"|"external"|"on_device"|"none". `pin`: the raw configured source
 /// pin, or `None` when unpinned — distinct from `source` (the RESOLVED
-/// source): on a `pinned_degraded` result the two differ, letting the app say
+/// source): on a `pinned_unavailable` result the two differ, letting the app say
 /// "Pinned to X — using Y". `#[serde(default)]` so a daemon that predates the
 /// field (pre-#357) still deserializes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
