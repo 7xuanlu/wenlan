@@ -227,9 +227,16 @@ export function PagesOverview({
 
   return (
     <section aria-labelledby="pages-overview-title" className="wiki-overview mx-auto w-full max-w-[1130px] pb-16">
-      <header className="wiki-overview-header border-b" style={{ borderColor: "var(--mem-border)" }}>
+      <header className="wiki-overview-header">
         <div className="wiki-overview-heading">
-          <h1 id="pages-overview-title">{t("pages.overview.title")}</h1>
+          <div className="wiki-overview-title-row">
+            <h1 id="pages-overview-title">{t("pages.overview.title")}</h1>
+            {!isPending && !isError && pages.length > 0 && (
+              <span className="wiki-overview-count">
+                {t("pages.overview.pageCount", { count: pages.length })}
+              </span>
+            )}
+          </div>
           <p>{t("pages.overview.description")}</p>
         </div>
         <button
@@ -321,11 +328,6 @@ export function PagesOverview({
             <option value="title">{t("pages.overview.sortTitle")}</option>
           </select>
         </label>
-        {!isPending && !isError && (
-          <span className="wiki-inventory-count">
-            {t("pages.overview.pageCount", { count: pages.length })}
-          </span>
-        )}
       </div>
 
       {isPending ? (

@@ -91,7 +91,7 @@ describe("PagesOverview", () => {
     expect(screen.queryByRole("dialog", { name: "New page" })).not.toBeInTheDocument();
   });
 
-  it("combines active and draft inventories without treating a draft as Unchecked", async () => {
+  it("combines active and draft inventories without treating a draft as needing review", async () => {
     vi.mocked(listPagesExplicitBrowse).mockImplementation(async (status) => status === "draft"
       ? [
           page({
@@ -126,7 +126,7 @@ describe("PagesOverview", () => {
     const draftRow = draftAction.closest("tr");
     expect(draftRow).not.toBeNull();
     expect(within(draftRow!).getByText("Draft")).toBeInTheDocument();
-    expect(within(draftRow!).queryByText("Unchecked")).not.toBeInTheDocument();
+    expect(within(draftRow!).queryByText("Needs review")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Untitled draft · Draft" })).toBeInTheDocument();
 
     fireEvent.click(within(draftRow!).getAllByText("Page")[0]!);
@@ -135,7 +135,7 @@ describe("PagesOverview", () => {
 
     await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
     expect(screen.getByRole("button", {
-      name: "Open Needs verification · Unchecked",
+      name: "Open Needs verification · Needs review",
     })).toBeInTheDocument();
     expect(screen.queryByRole("button", {
       name: "Open Working theory · Draft",
@@ -185,11 +185,11 @@ describe("PagesOverview", () => {
     renderOverview();
 
     expect(await screen.findByRole("button", { name: "Open Nash Su" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Nash Su · Unchecked" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Nash Su · Needs review" })).not.toBeInTheDocument();
 
     await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
-    expect(await screen.findByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Nash Su" })).not.toBeInTheDocument();
   });
 
@@ -202,11 +202,11 @@ describe("PagesOverview", () => {
     renderOverview();
 
     const statusFilter = await screen.findByRole("combobox", { name: "State" });
-    expect(screen.getByText("Unchecked")).toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "New page candidates" })).not.toBeInTheDocument();
 
     await user.selectOptions(statusFilter, "unconfirmed");
-    expect(screen.getByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Confirmed note" })).not.toBeInTheDocument();
   });
 
@@ -266,11 +266,11 @@ describe("PagesOverview", () => {
     renderOverview({ onSelectPage });
 
     const pageAction = await screen.findByRole("button", {
-      name: "Open Review boundary · Unchecked · Cleanup suggested",
+      name: "Open Review boundary · Needs review · Cleanup suggested",
     });
     const row = pageAction.closest("tr");
     expect(row).not.toBeNull();
-    expect(within(row!).getByText("Unchecked")).toBeInTheDocument();
+    expect(within(row!).getByText("Needs review")).toBeInTheDocument();
     expect(within(row!).getByText("Cleanup suggested")).toBeInTheDocument();
 
     fireEvent.click(row!);
