@@ -871,7 +871,6 @@ export default function Main({
                 draftId,
                 space,
               })}
-              onSelectEntity={handleEntityClick}
               onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
               onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
             />

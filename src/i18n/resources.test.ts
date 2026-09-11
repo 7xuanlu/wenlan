@@ -105,27 +105,23 @@ describe("translation resources", () => {
     ]).toEqual(["Wiki", "Wiki", "Wiki"]);
   });
 
-  it("names the honest Wiki Page kinds without inferring schemas from prose", () => {
+  it("lists pages only in the Wiki: no Kind filter, column, or type labels", () => {
     const overviews = [
       resources.en.translation.pages.overview,
       resources["zh-Hans"].translation.pages.overview,
       resources["zh-Hant"].translation.pages.overview,
-    ];
+    ] as Array<Record<string, unknown> & { columns: Record<string, unknown> }>;
 
-    expect(overviews.map((overview) => overview.typeLabel)).toEqual([
-      "Kind",
-      "类别",
-      "類別",
-    ]);
-    expect(overviews.map((overview) => overview.columns.type)).toEqual([
-      "Kind",
-      "类别",
-      "類別",
-    ]);
-    expect(overviews.map((overview) => overview.types)).toEqual([
-      { page: "Page", entity: "Entity" },
-      { page: "页面", entity: "实体" },
-      { page: "頁面", entity: "實體" },
+    for (const overview of overviews) {
+      expect(overview).not.toHaveProperty("typeLabel");
+      expect(overview).not.toHaveProperty("typeAll");
+      expect(overview).not.toHaveProperty("types");
+      expect(overview.columns).not.toHaveProperty("type");
+    }
+    expect(overviews.map((overview) => Object.keys(overview.columns))).toEqual([
+      ["page", "space", "updated"],
+      ["page", "space", "updated"],
+      ["page", "space", "updated"],
     ]);
   });
 
