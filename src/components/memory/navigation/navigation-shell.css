@@ -293,7 +293,7 @@
   color: var(--mem-text);
 }
 
-.wiki-table td:first-child { padding-left: 4px; }
+.wiki-table td:first-child { padding-left: 4px; padding-right: 40px; }
 .wiki-table td:last-child { padding-right: 2px; text-align: right; }
 
 .wiki-page-cell {
