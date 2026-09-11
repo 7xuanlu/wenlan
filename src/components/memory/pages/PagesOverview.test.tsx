@@ -43,7 +43,6 @@ function page(overrides: Partial<Page>): Page {
 function renderOverview({
   onCreatePage = vi.fn(),
   onSelectDraft = vi.fn(),
-  onSelectEntity = vi.fn(),
   onSelectPage = vi.fn(),
   onSelectSpace = vi.fn(),
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
@@ -52,7 +51,6 @@ function renderOverview({
     queryClient,
     onCreatePage,
     onSelectDraft,
-    onSelectEntity,
     onSelectPage,
     onSelectSpace,
     ...render(
@@ -60,7 +58,6 @@ function renderOverview({
         <PagesOverview
           onCreatePage={onCreatePage}
           onSelectDraft={onSelectDraft}
-          onSelectEntity={onSelectEntity}
           onSelectPage={onSelectPage}
           onSelectSpace={onSelectSpace}
         />
@@ -91,7 +88,7 @@ describe("PagesOverview", () => {
     expect(screen.queryByRole("dialog", { name: "New page" })).not.toBeInTheDocument();
   });
 
-  it("combines active and draft inventories without treating a draft as Unchecked", async () => {
+  it("combines active and draft inventories without treating a draft as needing review", async () => {
     vi.mocked(listPagesExplicitBrowse).mockImplementation(async (status) => status === "draft"
       ? [
           page({
@@ -126,16 +123,16 @@ describe("PagesOverview", () => {
     const draftRow = draftAction.closest("tr");
     expect(draftRow).not.toBeNull();
     expect(within(draftRow!).getByText("Draft")).toBeInTheDocument();
-    expect(within(draftRow!).queryByText("Unchecked")).not.toBeInTheDocument();
+    expect(within(draftRow!).queryByText("Needs review")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Untitled draft · Draft" })).toBeInTheDocument();
 
-    fireEvent.click(within(draftRow!).getAllByText("Page")[0]!);
+    fireEvent.click(draftRow!);
     expect(onSelectDraft).toHaveBeenCalledWith("draft-titled", "Research");
     expect(onSelectPage).not.toHaveBeenCalled();
 
     await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
     expect(screen.getByRole("button", {
-      name: "Open Needs verification · Unchecked",
+      name: "Open Needs verification · Needs review",
     })).toBeInTheDocument();
     expect(screen.queryByRole("button", {
       name: "Open Working theory · Draft",
@@ -150,16 +147,16 @@ describe("PagesOverview", () => {
       page({ id: "recap", title: "July research recap", space: "Research" }),
     ]);
     const user = userEvent.setup();
-    const { onSelectEntity, onSelectPage } = renderOverview();
+    const { onSelectPage } = renderOverview();
 
     expect(await screen.findByRole("heading", { name: "Wiki" })).toBeInTheDocument();
     expect(screen.getByText("A living ledger of ideas, people, decisions, and recaps.")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "All pages" })).not.toBeInTheDocument();
-    expect(await screen.findByText("4 pages")).toBeInTheDocument();
-    for (const heading of ["Page", "Kind", "Space", "Updated"]) {
+    expect(await screen.findByText("3 pages")).toBeInTheDocument();
+    for (const heading of ["Page", "Space", "Updated"]) {
       expect(screen.getByRole("columnheader", { name: heading })).toBeInTheDocument();
     }
-    expect(screen.getByRole("combobox", { name: "Kind" })).toHaveValue("all");
+    expect(screen.queryByRole("columnheader", { name: "Kind" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Space" })).toHaveValue("all");
     expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("recent");
     expect(screen.getByTestId("page-space-independent")).toBeEmptyDOMElement();
@@ -171,12 +168,10 @@ describe("PagesOverview", () => {
     await user.click(screen.getByRole("button", { name: "Open Independent research note" }));
     expect(onSelectPage).toHaveBeenCalledWith("independent");
 
-    await user.click(screen.getByRole("button", { name: "Open Nash Su" }));
-    expect(onSelectEntity).toHaveBeenCalledWith("entity-1");
-    expect(onSelectPage).not.toHaveBeenCalledWith("entity");
+    expect(screen.queryByRole("button", { name: /Open Nash Su/ })).toBeNull();
   });
 
-  it("never badges an established entity row as unconfirmed (#708)", async () => {
+  it("never lists an established entity row in the Wiki (#708)", async () => {
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({ id: "entity", title: "Nash Su", entity_id: "entity-1", review_status: "unconfirmed" }),
       page({ id: "prose", title: "Needs verification", review_status: "unconfirmed" }),
@@ -184,13 +179,12 @@ describe("PagesOverview", () => {
     const user = userEvent.setup();
     renderOverview();
 
-    expect(await screen.findByRole("button", { name: "Open Nash Su" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Nash Su · Unchecked" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open Nash Su/ })).toBeNull();
 
     await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
-    expect(await screen.findByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Nash Su" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open Nash Su/ })).toBeNull();
   });
 
   it("treats persisted unconfirmed Pages as an inventory status, not a new-page candidate", async () => {
@@ -202,11 +196,11 @@ describe("PagesOverview", () => {
     renderOverview();
 
     const statusFilter = await screen.findByRole("combobox", { name: "State" });
-    expect(screen.getByText("Unchecked")).toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "New page candidates" })).not.toBeInTheDocument();
 
     await user.selectOptions(statusFilter, "unconfirmed");
-    expect(screen.getByRole("button", { name: "Open Needs verification · Unchecked" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Confirmed note" })).not.toBeInTheDocument();
   });
 
@@ -266,11 +260,11 @@ describe("PagesOverview", () => {
     renderOverview({ onSelectPage });
 
     const pageAction = await screen.findByRole("button", {
-      name: "Open Review boundary · Unchecked · Cleanup suggested",
+      name: "Open Review boundary · Needs review · Cleanup suggested",
     });
     const row = pageAction.closest("tr");
     expect(row).not.toBeNull();
-    expect(within(row!).getByText("Unchecked")).toBeInTheDocument();
+    expect(within(row!).getByText("Needs review")).toBeInTheDocument();
     expect(within(row!).getByText("Cleanup suggested")).toBeInTheDocument();
 
     fireEvent.click(row!);
@@ -404,86 +398,23 @@ describe("PagesOverview", () => {
     expect(distillReview).not.toHaveBeenCalled();
   });
 
-  it("opens the entity dossier from any non-Space cell while keeping Space as its own destination", async () => {
-    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
-      page({ id: "entity", title: "Nash Su", entity_id: "entity-1", space: "Research" }),
-    ]);
-    const user = userEvent.setup();
-    const onSelectEntity = vi.fn();
-    const onSelectPage = vi.fn();
-    const onSelectSpace = vi.fn();
-    renderOverview({ onSelectEntity, onSelectPage, onSelectSpace });
-
-    const pageLink = await screen.findByRole("button", { name: "Open Nash Su" });
-    const row = pageLink.closest("tr");
-    expect(row).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Open Entity dossier: Nash Su" })).not.toBeInTheDocument();
-
-    fireEvent.click(within(row!).getAllByText("Entity")[0]!);
-    fireEvent.click(row!.querySelector("td:last-child")!);
-    expect(onSelectEntity).toHaveBeenNthCalledWith(1, "entity-1");
-    expect(onSelectEntity).toHaveBeenNthCalledWith(2, "entity-1");
-    expect(onSelectPage).not.toHaveBeenCalled();
-    const spaceLinks = within(row!).getAllByRole("button", { name: "Open Space: Research" });
-    expect(spaceLinks).toHaveLength(2);
-    await user.click(spaceLinks[0]!);
-    expect(onSelectSpace).toHaveBeenCalledWith("Research");
-    expect(onSelectEntity).toHaveBeenCalledTimes(2);
-  });
-
-  it("renders Page and Entity kinds with one restrained 16px glyph system", async () => {
-    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
-      page({ id: "topic", title: "Research methods" }),
-      page({ id: "entity", title: "Nash Su", entity_id: "entity-1" }),
-      page({ id: "decision", title: "Keep citations", content: "Decision: keep citations." }),
-      page({ id: "recap", title: "July recap" }),
-    ]);
-    const { container } = renderOverview();
-
-    await screen.findByRole("button", { name: "Open Research methods" });
-    for (const type of ["page", "entity"]) {
-      const glyphs = container.querySelectorAll(`[data-page-type-glyph="${type}"]`);
-      expect(glyphs.length).toBeGreaterThan(0);
-      for (const glyph of glyphs) {
-        expect(glyph).toHaveAttribute("width", "16");
-        expect(glyph).toHaveAttribute("height", "16");
-        expect(glyph).toHaveAttribute("stroke-width", "1.5");
-      }
-    }
-    expect(container.querySelector('[data-page-type-glyph="topic"]')).not.toBeInTheDocument();
-    expect(container.querySelector('[data-page-type-glyph="decision"]')).not.toBeInTheDocument();
-    expect(container.querySelector('[data-page-type-glyph="recap"]')).not.toBeInTheDocument();
-  });
-
-  it("filters by Page kind and Space, sorts by title, and paginates seven rows at a time", async () => {
+  it("filters by Space, sorts by title, and paginates twelve rows at a time", async () => {
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({ id: "topic-z", title: "Zulu topic", space: null }),
-      page({ id: "entity", title: "Nash Su", entity_id: "entity-1", space: "Research" }),
       page({ id: "decision", title: "Why citations stay visible", content: "Decision: keep citations visible.", space: "Wenlan" }),
       page({ id: "recap", title: "July research recap", space: "Research" }),
-      ...Array.from({ length: 5 }, (_, index) => page({ id: `topic-${index}`, title: `Topic ${index}`, last_modified: `2026-07-0${index + 1}T00:00:00Z` })),
+      ...Array.from({ length: 10 }, (_, index) => page({ id: `topic-${index}`, title: `Topic ${index}`, last_modified: `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00Z` })),
     ]);
     const user = userEvent.setup();
     renderOverview();
 
-    expect(await screen.findByText("1–7 of 9")).toBeInTheDocument();
+    expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
+    expect(screen.queryByText("A page can stand on its own.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Topic 0" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(await screen.findByText("8–9 of 9")).toBeInTheDocument();
+    expect(await screen.findByText("13–13 of 13")).toBeInTheDocument();
 
-    const kindFilter = screen.getByRole("combobox", { name: "Kind" });
-    expect(within(kindFilter).getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "All pages",
-      "Page",
-      "Entity",
-    ]);
-    await user.selectOptions(kindFilter, "entity");
-    expect(screen.getByRole("button", { name: "Open Nash Su" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Zulu topic" })).not.toBeInTheDocument();
-
-    await user.selectOptions(kindFilter, "all");
     await user.selectOptions(screen.getByRole("combobox", { name: "Space" }), "Research");
-    expect(screen.getByRole("button", { name: "Open Nash Su" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open July research recap" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Why citations stay visible" })).not.toBeInTheDocument();
 

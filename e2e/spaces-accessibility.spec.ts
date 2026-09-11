@@ -276,8 +276,7 @@ test("meets computed browser contrast on redesigned surfaces in both themes", as
       { label: `${theme} spaces metadata`, selector: ".spaces-row-updated", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} spaces filter boundary`, selector: ".spaces-filter input", foregroundProperty: "border-top-color", minimum: 3 },
       { label: `${theme} spaces menu boundary`, selector: ".spaces-menu", foregroundProperty: "border-top-color", minimum: 3 },
-      { label: `${theme} outlined New Space boundary`, selector: ".spaces-new-action", foregroundProperty: "border-top-color", minimum: 3 },
-      { label: `${theme} outlined New Space text`, selector: ".spaces-new-action", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} filled New Space text`, selector: ".spaces-new-action", foregroundProperty: "color", minimum: 4.5 },
     ]));
     await page.keyboard.press("Escape");
 

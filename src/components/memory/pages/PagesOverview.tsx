@@ -19,33 +19,27 @@ import {
   pageCandidateItems,
   pageCleanupSuggestionIds,
 } from "./pageReviewSignals";
-import { classifyPage, pageSpaceContext, type PagePresentationType } from "./pagePresentation";
+import { classifyPage, pageSpaceContext } from "./pagePresentation";
 import "./pageActions.css";
 
 interface PagesOverviewProps {
   readonly onCreatePage: (space: string | null) => void;
   readonly onSelectDraft: (draftId: string, space: string | null) => void;
-  /** Established entity rows are their entity's dossier, not a Page; routes
-   * there by `entity_id` instead of `onSelectPage`. */
-  readonly onSelectEntity: (entityId: string) => void;
   readonly onSelectPage: (pageId: string) => void;
   readonly onSelectSpace: (spaceName: string) => void;
 }
 
 type PageSort = "recent" | "title";
-type TypeFilter = "all" | PagePresentationType;
 type StatusFilter = "all" | "unconfirmed";
 
-// The review badge belongs to distilled prose awaiting a human look. An
-// entity row only reaches the Wiki once it is established (#708), so its
-// shadow page's `review_status` says nothing the reader should see.
+// The review badge belongs to distilled prose awaiting a human look. Entity
+// rows are excluded from the Wiki because the Entities view is their home.
 function isUnconfirmedPage(page: Page): boolean {
   return page.status !== "draft"
-    && page.review_status === "unconfirmed"
-    && classifyPage(page) !== "entity";
+    && page.review_status === "unconfirmed";
 }
 
-const PAGE_SIZE = 7;
+const PAGE_SIZE = 12;
 
 function modifiedAt(page: Page): number {
   const value = Date.parse(page.last_modified || page.last_compiled || page.created_at);
@@ -55,56 +49,6 @@ function modifiedAt(page: Page): number {
 function comparePages(left: Page, right: Page, sort: PageSort): number {
   if (sort === "title") return left.title.localeCompare(right.title);
   return modifiedAt(right) - modifiedAt(left) || left.title.localeCompare(right.title);
-}
-
-function PageTypeGlyph({ type }: { readonly type: PagePresentationType }) {
-  const paths: Record<PagePresentationType, React.ReactNode> = {
-    page: (
-      <>
-        <path d="M12 2 2 7l10 5 10-5-10-5Z" />
-        <path d="m2 12 10 5 10-5M2 17l10 5 10-5" />
-      </>
-    ),
-    entity: (
-      <>
-        <path d="M12 3 20 7.5v9L12 21l-8-4.5v-9L12 3Z" />
-        <path d="m4 7.5 8 4.5 8-4.5M12 12v9" />
-      </>
-    ),
-  };
-
-  return (
-    <span aria-hidden="true" className={`wiki-page-glyph wiki-page-glyph--${type}`}>
-      <svg
-        data-page-type-glyph={type}
-        fill="none"
-        height="16"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.5"
-        viewBox="0 0 24 24"
-        width="16"
-      >
-        {paths[type]}
-      </svg>
-    </span>
-  );
-}
-
-function PageTypeMetadata({
-  label,
-  type,
-}: {
-  readonly label: string;
-  readonly type: PagePresentationType;
-}) {
-  return (
-    <span className="wiki-page-type">
-      <PageTypeGlyph type={type} />
-      <span>{label}</span>
-    </span>
-  );
 }
 
 function SpaceChip({
@@ -134,12 +78,10 @@ function SpaceChip({
 export function PagesOverview({
   onCreatePage,
   onSelectDraft,
-  onSelectEntity,
   onSelectPage,
   onSelectSpace,
 }: PagesOverviewProps) {
   const { i18n, t } = useTranslation();
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [spaceFilter, setSpaceFilter] = useState("all");
   const [sort, setSort] = useState<PageSort>("recent");
@@ -161,7 +103,7 @@ export function PagesOverview({
     () => Array.from(new Map([
       ...(draftPagesQuery.data ?? []).map((page) => [page.id, page] as const),
       ...(activePagesQuery.data ?? []).map((page) => [page.id, page] as const),
-    ]).values()),
+    ]).values()).filter((page) => classifyPage(page) !== "entity"),
     [activePagesQuery.data, draftPagesQuery.data],
   );
   const isPending = activePagesQuery.isPending || draftPagesQuery.isPending;
@@ -199,11 +141,10 @@ export function PagesOverview({
   );
   const filteredPages = useMemo(
     () => pages
-      .filter((page) => typeFilter === "all" || classifyPage(page) === typeFilter)
       .filter((page) => statusFilter === "all" || isUnconfirmedPage(page))
       .filter((page) => spaceFilter === "all" || pageSpaceContext(page) === spaceFilter)
       .sort((left, right) => comparePages(left, right, sort)),
-    [pages, sort, spaceFilter, statusFilter, typeFilter],
+    [pages, sort, spaceFilter, statusFilter],
   );
   const pageCount = Math.max(1, Math.ceil(filteredPages.length / PAGE_SIZE));
   const safePageIndex = Math.min(pageIndex, pageCount - 1);
@@ -213,7 +154,7 @@ export function PagesOverview({
 
   useEffect(() => {
     setPageIndex(0);
-  }, [sort, spaceFilter, statusFilter, typeFilter]);
+  }, [sort, spaceFilter, statusFilter]);
 
   const resolveCandidate = async ({
     item,
@@ -227,9 +168,16 @@ export function PagesOverview({
 
   return (
     <section aria-labelledby="pages-overview-title" className="wiki-overview mx-auto w-full max-w-[1130px] pb-16">
-      <header className="wiki-overview-header border-b" style={{ borderColor: "var(--mem-border)" }}>
+      <header className="wiki-overview-header">
         <div className="wiki-overview-heading">
-          <h1 id="pages-overview-title">{t("pages.overview.title")}</h1>
+          <div className="wiki-overview-title-row">
+            <h1 id="pages-overview-title">{t("pages.overview.title")}</h1>
+            {!isPending && !isError && pages.length > 0 && (
+              <span className="wiki-overview-count">
+                {t("pages.overview.pageCount", { count: pages.length })}
+              </span>
+            )}
+          </div>
           <p>{t("pages.overview.description")}</p>
         </div>
         <button
@@ -289,14 +237,6 @@ export function PagesOverview({
 
       <div className="wiki-filters" aria-label={t("pages.overview.filtersLabel")}>
         <label>
-          <span>{t("pages.overview.typeLabel")}</span>
-          <select aria-label={t("pages.overview.typeLabel")} onChange={(event) => setTypeFilter(event.target.value as TypeFilter)} value={typeFilter}>
-            <option value="all">{t("pages.overview.typeAll")}</option>
-            <option value="page">{t("pages.overview.types.page")}</option>
-            <option value="entity">{t("pages.overview.types.entity")}</option>
-          </select>
-        </label>
-        <label>
           <span>{t("pages.overview.reviewStatusLabel")}</span>
           <select
             aria-label={t("pages.overview.reviewStatusLabel")}
@@ -321,11 +261,6 @@ export function PagesOverview({
             <option value="title">{t("pages.overview.sortTitle")}</option>
           </select>
         </label>
-        {!isPending && !isError && (
-          <span className="wiki-inventory-count">
-            {t("pages.overview.pageCount", { count: pages.length })}
-          </span>
-        )}
       </div>
 
       {isPending ? (
@@ -345,7 +280,6 @@ export function PagesOverview({
             <thead>
               <tr>
                 <th scope="col">{t("pages.overview.columns.page")}</th>
-                <th scope="col">{t("pages.overview.columns.type")}</th>
                 <th scope="col">{t("pages.overview.columns.space")}</th>
                 <th scope="col">{t("pages.overview.columns.updated")}</th>
               </tr>
@@ -356,7 +290,6 @@ export function PagesOverview({
                 const displayTitle = isDraft && page.title.trim().length === 0
                   ? t("pages.overview.untitledDraft")
                   : page.title;
-                const type = classifyPage(page);
                 const assignedSpace = pageSpaceContext(page);
                 const timestamp = modifiedAt(page);
                 const updated = timestamp > 0
@@ -378,7 +311,6 @@ export function PagesOverview({
                 ].join(" · ");
                 const openPage = () => {
                   if (isDraft) onSelectDraft(page.id, assignedSpace ?? null);
-                  else if (type === "entity" && page.entity_id) onSelectEntity(page.entity_id);
                   else onSelectPage(page.id);
                 };
                 return (
@@ -414,15 +346,12 @@ export function PagesOverview({
                             <PageTruthBadges cutoverLive={cutoverLive} truth={page.truth} />
                           </span>
                         </button>
-                        {page.summary && <p>{page.summary}</p>}
                         <div className="wiki-page-mobile-meta">
-                          <PageTypeMetadata label={t(`pages.overview.types.${type}`)} type={type} />
                           {assignedSpace && <SpaceChip ariaLabel={spaceDestination} label={assignedSpace} onSelectSpace={onSelectSpace} />}
                           {updated && <time dateTime={updated.dateTime}>{updated.label}</time>}
                         </div>
                       </div>
                     </td>
-                    <td><PageTypeMetadata label={t(`pages.overview.types.${type}`)} type={type} /></td>
                     <td data-testid={`page-space-${page.id}`}>{assignedSpace && <SpaceChip ariaLabel={spaceDestination} label={assignedSpace} onSelectSpace={onSelectSpace} />}</td>
                     <td>{updated && <time dateTime={updated.dateTime}>{updated.label}</time>}</td>
                   </tr>

@@ -29,7 +29,8 @@ describe("Wiki, Space, and Page microcontrol contract", () => {
     expect(root).toMatch(/--mem-font-body:\s*'Instrument Sans'/);
     expect(root).toMatch(/--mem-destination-title-size:\s*34px;/);
     expect(navigation).toMatch(/\.memory-main-content\s*\{[^}]*padding:\s*56px 72px 28px;/s);
-    expect(navigation).toMatch(/\.wiki-table td\s*\{[^}]*height:\s*72px;/s);
+    expect(navigation).not.toMatch(/\.wiki-table td\s*\{[^}]*height:\s*\d+px;/s);
+    expect(navigation).toMatch(/\.wiki-table td\s*\{[^}]*vertical-align:\s*middle;/s);
     expect(spaces).toMatch(/\.spaces-row\s*\{[^}]*min-height:\s*64px;/s);
     expect(root).toMatch(/\.page-detail-prose\s*\{[^}]*max-width:\s*730px;/s);
     expect(root).toMatch(

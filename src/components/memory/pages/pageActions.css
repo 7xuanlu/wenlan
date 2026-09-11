@@ -1,22 +1,35 @@
 .page-create-action {
   align-items: center;
-  background: transparent;
-  border: 1px solid var(--mem-control-border);
+  background: var(--mem-indigo-bg);
+  border: 1px solid transparent;
   border-radius: var(--mem-control-radius);
-  color: var(--mem-text-secondary);
+  color: var(--mem-accent-indigo);
   cursor: pointer;
   display: inline-flex;
   font: 500 var(--mem-control-font-size)/1 var(--mem-font-body);
+  gap: 6px;
+  letter-spacing: 0.01em;
   min-height: var(--mem-control-height);
-  padding: 0 13px;
+  padding: 0 14px;
   transition: background-color 150ms, border-color 150ms, color 150ms;
   white-space: nowrap;
 }
 
+.page-create-action::before {
+  content: "+" / "";
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1;
+  margin-top: -1px;
+}
+
 .page-create-action:hover {
-  background: var(--mem-indigo-bg);
-  border-color: var(--mem-accent-indigo);
-  color: var(--mem-accent-indigo);
+  background: color-mix(in srgb, var(--mem-accent-indigo) 22%, transparent);
+  color: var(--mem-text);
+}
+
+.page-create-action:active {
+  background: color-mix(in srgb, var(--mem-accent-indigo) 28%, transparent);
 }
 
 .page-create-action:focus-visible {
