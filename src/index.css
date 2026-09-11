@@ -352,6 +352,8 @@ html[data-theme="dark"] {
   --mem-danger: #F0A0A0;
   --mem-accent-glow: #CEB95F;
   --mem-border: #2B3140;
+  --mem-card-surface: #181A1F;
+  --mem-card-hover: #1D1F25;
   --mem-control-border: #687084;
   --mem-hover: rgba(143, 179, 234, 0.09);
   --mem-hover-strong: rgba(143, 179, 234, 0.15);
@@ -474,6 +476,8 @@ html[data-theme="light"] {
   --mem-danger: #B42318;
   --mem-accent-glow: #B5842E;
   --mem-border: #E3E7EE;
+  --mem-card-surface: #F8F8F7;
+  --mem-card-hover: #F3F3F2;
   --mem-control-border: #858D9C;
   --mem-hover: rgba(101, 116, 139, 0.08);
   --mem-hover-strong: rgba(101, 116, 139, 0.14);

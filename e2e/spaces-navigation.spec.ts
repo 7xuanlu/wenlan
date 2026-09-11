@@ -6,7 +6,9 @@ import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 test("Home -> Spaces -> Space -> Page -> back and Space -> Entity -> back", async ({ page }) => {
   // Given a clean fixture and browser error capture.
   const browserErrors = collectBrowserErrors(page);
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  // Rows lens: this journey asserts the Wiki page scrolls and resets on
+  // navigation, and the default Cards grid fits the fixture inside the viewport.
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-wiki-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
 
   // When the two primary hierarchy journeys are driven through the rendered shell.

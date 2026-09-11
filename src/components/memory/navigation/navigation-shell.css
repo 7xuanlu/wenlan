@@ -233,6 +233,13 @@
   color: var(--mem-text);
 }
 
+.wiki-filters-side {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  margin-left: auto;
+}
+
 @media (forced-colors: active) {
   .wiki-filters select {
     appearance: auto;
@@ -504,6 +511,11 @@
   .wiki-filters select {
     min-width: 0;
     width: 100%;
+  }
+
+  .wiki-filters-side {
+    justify-content: flex-end;
+    margin-left: 0;
   }
 
   .wiki-candidate-link {
