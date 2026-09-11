@@ -122,12 +122,19 @@
   color: var(--mem-accent-indigo);
 }
 
+.entities-filters-side {
+  margin-left: auto;
+  min-width: 0;
+}
+
 .entities-matchline {
   align-items: center;
   color: var(--mem-text-secondary);
   display: flex;
+  flex-wrap: wrap;
   font-family: var(--mem-font-body);
   font-size: var(--mem-text-sm);
+  gap: 8px;
   justify-content: space-between;
   padding: var(--mem-space-3) 0;
 }
@@ -263,6 +270,65 @@
 
 .entities-name-link:hover {
   text-decoration: underline;
+}
+
+.entity-card-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.entity-initials {
+  align-items: center;
+  background: var(--mem-surface);
+  border: 1px solid var(--mem-border);
+  border-radius: 50%;
+  box-shadow: none;
+  color: var(--mem-text-secondary);
+  display: inline-flex;
+  flex: none;
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  font-weight: 600;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.entity-card-type {
+  color: var(--mem-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-card-count {
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: nowrap;
+}
+
+.entities-cards-toolbar {
+  align-items: center;
+  color: var(--mem-text-secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.entity-card-actions {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .entities-scrim {

@@ -4,7 +4,9 @@ import type { TFunction } from "i18next";
 import type { Entity } from "../../../lib/tauri";
 import {
   DEFAULT_FILTERS,
+  describeEntityCard,
   ENTITIES_PAGE_SIZE,
+  entityInitials,
   entityListRequest,
   establishedByLabel,
   filterReadback,
@@ -198,5 +200,56 @@ describe("selection model", () => {
     expect(selectAllState(new Set(["a"]), ["a", "b"])).toEqual({ checked: false, indeterminate: true });
     expect(selectAllState(new Set(["a", "b"]), ["a", "b"])).toEqual({ checked: true, indeterminate: false });
     expect(selectAllState(new Set(), [])).toEqual({ checked: false, indeterminate: false });
+  });
+});
+
+describe("entityInitials", () => {
+  it("takes the first letters of the first two words, uppercased for Latin", () => {
+    expect(entityInitials(" ada lovelace ")).toBe("AL");
+    expect(entityInitials("LM Studio")).toBe("LS");
+    expect(entityInitials("x")).toBe("X");
+  });
+
+  it("takes the first character only for a CJK name", () => {
+    expect(entityInitials("台北")).toBe("台");
+    expect(entityInitials("東京タワー")).toBe("東");
+    expect(entityInitials("서울")).toBe("서");
+  });
+
+  it("falls back to ? for an empty or blank name", () => {
+    expect(entityInitials("")).toBe("?");
+    expect(entityInitials("   ")).toBe("?");
+  });
+});
+
+describe("describeEntityCard", () => {
+  it("describes the detected context with no open label", () => {
+    const card = describeEntityCard(
+      makeEntity({ name: "Ada Lovelace", memory_count: 0 }),
+      "detected",
+      t,
+      "",
+    );
+    expect(card.initials).toBe("AL");
+    expect(card.context).toBe('entities.card.detectedContext:{"count":0}');
+    expect(card.countLabel).toBe('entities.card.memories:{"count":0}');
+    expect(card.openLabel).toBeNull();
+  });
+
+  it("prefixes the established context with the column label and names the open action", () => {
+    const card = describeEntityCard(
+      makeEntity({ name: "Analytical Engine", established_by: "manual" }),
+      "established",
+      t,
+      "",
+    );
+    expect(card.context).toBe("entities.card.establishedManual");
+    expect(card.openLabel).toBe('entities.actions.openNamed:{"name":"Analytical Engine"}');
+  });
+
+  it("renders the archived context with the preformatted time", () => {
+    const card = describeEntityCard(makeEntity(), "archived", t, "3 days ago");
+    expect(card.context).toBe('entities.card.archivedContext:{"when":"3 days ago"}');
+    expect(card.openLabel).toBeNull();
   });
 });

@@ -74,6 +74,9 @@ function seedFixture(): Entity[] {
 
 beforeEach(async () => {
   fixture = seedFixture();
+  // Pin the pre-existing row tests to the rows lens; the cards tests below
+  // manage the key themselves (clear it for the cards default).
+  window.localStorage.setItem("wenlan-entities-view-mode", "rows");
   const tauri = await import("../../../lib/tauri");
 
   vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
@@ -668,4 +671,97 @@ describe("EntitiesView", () => {
     // Renders a full 100-row page twice; ~1.5s locally, timed out at the 5s
     // default on the shared CI runner.
   }, 20_000);
+
+  it("renders cards by default on Detected with initials, context, type, count, and the dashed variant", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    renderView();
+
+    expect(await screen.findByTestId("entities-cards")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+
+    const adaCard = screen.getByTestId("entity-card-ada");
+    expect(adaCard).toHaveClass("asset-card--detected");
+    expect(within(adaCard).getByText("AL")).toBeInTheDocument();
+    expect(within(adaCard).getByText("Detected in 0 memories. Confirm to keep it.")).toBeInTheDocument();
+    expect(within(adaCard).getByText("Person")).toBeInTheDocument();
+    expect(within(adaCard).getByText("0 memories")).toBeInTheDocument();
+    // No dossier on Detected: the title is plain text, not a button.
+    expect(adaCard.querySelector(".asset-card-open")).toBeNull();
+    expect(adaCard.querySelector("span.asset-card-title")).not.toBeNull();
+  });
+
+  it("drives the selection bar from a card checkbox", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const { user } = renderView();
+    await screen.findByTestId("entities-cards");
+
+    await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
+    expect(screen.getByRole("button", { name: "Confirm selected" })).toBeInTheDocument();
+  });
+
+  it("confirms a detected entity from its card", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const tauri = await import("../../../lib/tauri");
+    const { user } = renderView();
+    await screen.findByTestId("entities-cards");
+
+    const adaCard = screen.getByTestId("entity-card-ada");
+    await user.click(within(adaCard).getByRole("button", { name: "Confirm" }));
+
+    expect(tauri.confirmEntity).toHaveBeenCalledWith("ada", true);
+  });
+
+  it("opens the dossier from a Confirmed card", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const { user, onEntityClick } = renderView();
+    await screen.findByTestId("entities-cards");
+    await openTab(user, /Confirmed/);
+
+    const engineCard = await screen.findByTestId("entity-card-engine");
+    await user.click(within(engineCard).getByRole("button", { name: "Open Analytical Engine" }));
+    expect(onEntityClick).toHaveBeenCalledWith("engine");
+  });
+
+  it("switches to rows from the toggle and persists the preference", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const { user } = renderView();
+    await screen.findByTestId("entities-cards");
+
+    await user.click(screen.getByRole("button", { name: "Rows" }));
+
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByTestId("entities-cards")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("wenlan-entities-view-mode")).toBe("rows");
+    expect(screen.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows Restore and Delete permanently on an archived card", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const { user } = renderView();
+    await screen.findByTestId("entities-cards");
+    await openTab(user, /Archived/);
+
+    const card = await screen.findByTestId("entity-card-countess");
+    expect(within(card).getByRole("button", { name: "Restore" })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /^Delete .* permanently$/ })).toBeInTheDocument();
+    expect(within(card).getByText(/^Archived /)).toBeInTheDocument();
+    // No dossier on Archived either: the title is plain text.
+    expect(card.querySelector(".asset-card-open")).toBeNull();
+  });
+
+  it("selects and clears every visible card from the cards toolbar select-all", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const { user } = renderView();
+    await screen.findByTestId("entities-cards");
+
+    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select Ada Lovelace" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Select Charles Babbage" })).toBeChecked();
+
+    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
+    expect(screen.queryByText("2 selected")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select Ada Lovelace" })).not.toBeChecked();
+  });
 });

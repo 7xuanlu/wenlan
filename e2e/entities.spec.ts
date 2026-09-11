@@ -4,14 +4,23 @@ import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 async function openEntities(page: Page): Promise<void> {
   await page.goto("/");
+  // Narrow viewports collapse the navigation behind the sidebar toggle.
+  if ((page.viewportSize()?.width ?? 0) < 900) {
+    await page.getByTitle("Show sidebar").click();
+  }
   const navigation = page.getByRole("navigation", { name: "Primary navigation" });
   await navigation.getByRole("button", { name: "Entities", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Entities" })).toBeVisible();
+  if ((page.viewportSize()?.width ?? 0) < 900) await page.waitForTimeout(250);
 }
 
 test("archives every detected entity matching the current filter, then restores it back to Detected", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, {
+    locale: "en",
+    rawActions: [],
+    localStorage: { "wenlan-entities-view-mode": "rows" },
+  });
   await openEntities(page);
 
   // The fixture ships exactly one detected entity (Ada Lovelace, never
@@ -53,7 +62,11 @@ test("archives every detected entity matching the current filter, then restores 
 
 test("archives every confirmed entity matching the current filter, then restores them all back to Confirmed", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, {
+    locale: "en",
+    rawActions: [],
+    localStorage: { "wenlan-entities-view-mode": "rows" },
+  });
   await openEntities(page);
 
   // The fixture ships six confirmed entities (Babbage plus five),
@@ -92,4 +105,47 @@ test("archives every confirmed entity matching the current filter, then restores
 
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
+});
+
+test("Entities cards lens stays inside the viewport", async ({ context }) => {
+  const sizes = [
+    [1487, 1058],
+    [1280, 900],
+    [768, 900],
+    [375, 812],
+  ] as const;
+  for (const [width, height] of sizes) {
+    // A fresh page per width: the Tauri mock binding can only be registered once per page.
+    const page = await context.newPage();
+    await page.setViewportSize({ width, height });
+    const browserErrors = collectBrowserErrors(page);
+    // No view-mode seed: entities open in the cards lens by default.
+    await installTauriMock(page, { locale: "en", rawActions: [] });
+    await openEntities(page);
+
+    await expect(page.getByTestId("entities-cards")).toBeVisible();
+    // The fixture ships exactly one detected entity (Ada Lovelace).
+    await expect(page.locator(".asset-card")).toHaveCount(1);
+    await expect(page.locator(".asset-card.asset-card--detected")).toHaveCount(1);
+
+    const fitsViewport = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+    expect(fitsViewport).toBe(true);
+    const cardBoxes = await Promise.all((await page.locator(".asset-card").all()).map((card) => card.boundingBox()));
+    expect(cardBoxes).toHaveLength(1);
+    for (const box of cardBoxes) {
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    }
+
+    await page.getByRole("tab", { name: "Confirmed" }).click();
+    await page.getByRole("button", { name: "Open Charles Babbage" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Charles Babbage" })).toBeVisible();
+
+    await page.screenshot({ path: `.omo/evidence/entities-cards/entities-cards-light-${width}x${height}.png`, fullPage: true });
+
+    expect(browserErrors.pageErrors).toEqual([]);
+    expect(browserErrors.consoleErrors).toEqual([]);
+    await page.close();
+  }
 });

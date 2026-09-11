@@ -11,9 +11,14 @@ import {
   type Entity,
   type ListEntitiesRequest,
 } from "../../../lib/tauri";
+import { readAssetLens, writeAssetLens, type AssetLens } from "../../../lib/assetLens";
 import { formatRelativeEntityTime } from "../entity-detail/formatEntityMetadata";
+import { AssetCard, type OpenProps } from "../assets/AssetCard";
+import { AssetLensToggle } from "../assets/AssetLensToggle";
+import "../assets/assetCards.css";
 import {
   DEFAULT_FILTERS,
+  describeEntityCard,
   entityListRequest,
   establishedByLabel,
   filterReadback,
@@ -66,6 +71,7 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   const locale = i18n.resolvedLanguage ?? i18n.language;
 
   const [tab, setTab] = useState<EntityTab>("detected");
+  const [lens, setLens] = useState<AssetLens>(() => readAssetLens("entities"));
   const [filters, setFilters] = useState<EntityFilters>(DEFAULT_FILTERS);
   const [queryInput, setQueryInput] = useState("");
   const [counts, setCounts] = useState<Counts>({ established: 0, detected: 0, archived: 0 });
@@ -185,6 +191,11 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [dialog, dialogPending]);
+
+  const handleLensChange = (next: AssetLens) => {
+    setLens(next);
+    writeAssetLens("entities", next);
+  };
 
   const handleTabListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const index = TAB_ORDER.indexOf(tab);
@@ -377,6 +388,9 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
               </button>
             ))}
           </div>
+          <span className="entities-filters-side">
+            <AssetLensToggle onChange={handleLensChange} value={lens} />
+          </span>
         </div>
 
       {(tab === "established" || tab === "detected") && (
@@ -437,6 +451,96 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
           <b>{t(`entities.empty.${tab}Title`)}</b>
           <p>{t(`entities.empty.${tab}Body`)}</p>
         </div>
+      ) : lens === "cards" ? (
+        <>
+          <div className="entities-cards-toolbar">
+            <input
+              aria-label={t("entities.actions.selectAll")}
+              checked={selectAll.checked}
+              onChange={(event) => setSelected((current) => toggleSelectAll(current, ids, event.target.checked))}
+              ref={(element) => {
+                if (element) element.indeterminate = selectAll.indeterminate;
+              }}
+              type="checkbox"
+            />
+            <span>{t("entities.actions.selectAll")}</span>
+          </div>
+          <div className="asset-cards" data-testid="entities-cards">
+            {entities.map((entity) => {
+              const card = describeEntityCard(
+                entity,
+                tab,
+                t,
+                tab === "archived" ? (formatRelativeEntityTime(entity.updated_at, locale) ?? "") : "",
+              );
+              const openProps: OpenProps = tab === "established"
+                ? { onOpen: () => onEntityClick(entity.id), openLabel: card.openLabel ?? entity.name }
+                : {};
+              const head = (
+                <div className="entity-card-head">
+                  <input
+                    aria-label={t("entities.actions.selectEntity", { name: entity.name })}
+                    checked={selected.has(entity.id)}
+                    onChange={() => setSelected((current) => toggleSelected(current, entity.id))}
+                    type="checkbox"
+                  />
+                  <span aria-hidden="true" className="entity-initials">{card.initials}</span>
+                </div>
+              );
+              const footer = (
+                <>
+                  <span className="entity-card-type">{card.typeLabel}</span>
+                  <span className="entity-card-count">{card.countLabel}</span>
+                  <div className="entity-card-actions">
+                    {tab === "detected" && (
+                      <>
+                        <button className="entities-ghost-btn" onClick={() => void handleEstablish([entity.id])} type="button">
+                          {t("entities.actions.establish")}
+                        </button>
+                        <button className="entities-ghost-btn" onClick={() => void handleArchive([entity.id])} type="button">
+                          {t("entities.actions.archive")}
+                        </button>
+                      </>
+                    )}
+                    {tab === "established" && (
+                      <button className="entities-ghost-btn" onClick={() => void handleArchive([entity.id])} type="button">
+                        {t("entities.actions.archive")}
+                      </button>
+                    )}
+                    {tab === "archived" && (
+                      <>
+                        <button className="entities-ghost-btn" onClick={() => void handleRestore([entity.id])} type="button">
+                          {t("entities.actions.restore")}
+                        </button>
+                        <button
+                          aria-label={t("entities.actions.deletePermanentlyNamed", { name: entity.name })}
+                          className="entities-ghost-btn entities-danger-btn"
+                          onClick={() => openDeletePermanentlyDialog(entity)}
+                          type="button"
+                        >
+                          {t("entities.actions.deletePermanently")}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              );
+              return (
+                <AssetCard
+                  context={card.context}
+                  footer={footer}
+                  key={entity.id}
+                  testId={`entity-card-${entity.id}`}
+                  title={entity.name}
+                  variant={tab === "detected" ? "detected" : undefined}
+                  {...openProps}
+                >
+                  {head}
+                </AssetCard>
+              );
+            })}
+          </div>
+        </>
       ) : (
         <table className="entities-table">
           <thead>
