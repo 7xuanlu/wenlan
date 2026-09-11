@@ -81,7 +81,12 @@
   width: 100%;
 }
 
+.spaces-overview .spaces-rows {
+  border-top: 0;
+}
+
 .spaces-table-head {
+  border-bottom: 1px solid var(--mem-border);
   min-height: 38px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
@@ -131,6 +136,10 @@
 
   .spaces-table-head {
     display: none;
+  }
+
+  .spaces-overview .spaces-rows {
+    border-top: 1px solid var(--mem-border);
   }
 
   .spaces-overview .spaces-row:not(.spaces-row-suggested):not(.spaces-row-edit) {
