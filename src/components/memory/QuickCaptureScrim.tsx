@@ -15,9 +15,18 @@ export default function QuickCaptureScrim() {
   }, []);
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") void invoke("dismiss_quick_capture"); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture phase so this runs before Main's bubble-phase Escape branch
+    // regardless of subscription order; preventDefault marks the event as
+    // handled so Main skips its own Escape handling (clearing search, back
+    // navigation) for the same keypress.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void invoke("dismiss_quick_capture");
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
   if (!open) return null;
   return <div className="quick-capture-scrim" data-testid="quick-capture-scrim" onClick={() => void invoke("dismiss_quick_capture")} />;

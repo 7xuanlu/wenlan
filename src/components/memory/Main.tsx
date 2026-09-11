@@ -485,6 +485,7 @@ export default function Main({
         searchInputRef.current?.focus();
       }
       if (e.key === "Escape") {
+        if (e.defaultPrevented) return;
         if (responsiveSidebar.presentation === "overlay" && responsiveSidebar.open) return;
         if (query) {
           setQuery("");

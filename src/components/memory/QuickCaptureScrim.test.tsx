@@ -82,18 +82,26 @@ describe("QuickCaptureScrim", () => {
     expect(invokeMock).toHaveBeenCalledWith("dismiss_quick_capture");
   });
 
-  it("dismisses the capture window on Escape while open", () => {
+  it("dismisses the capture window on Escape while open and marks it handled", () => {
     render(<QuickCaptureScrim />);
     fireOpened("centered-over-main");
-    fireEvent.keyDown(window, { key: "Escape" });
+    const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    act(() => {
+      window.dispatchEvent(event);
+    });
     expect(invokeMock).toHaveBeenCalledWith("dismiss_quick_capture");
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("ignores non-Escape keys while open", () => {
     render(<QuickCaptureScrim />);
     fireOpened("centered-over-main");
-    fireEvent.keyDown(window, { key: "Enter" });
+    const event = new KeyboardEvent("keydown", { key: "Enter", cancelable: true });
+    act(() => {
+      window.dispatchEvent(event);
+    });
     expect(invokeMock).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("unlistens both events on unmount", async () => {

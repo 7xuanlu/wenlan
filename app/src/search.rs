@@ -125,7 +125,7 @@ pub async fn dismiss_quick_capture(app: tauri::AppHandle) -> Result<(), String> 
     use tauri::Manager;
 
     if let Some(qc) = app.get_webview_window("quick-capture") {
-        crate::quick_capture::hide_quietly(&qc)?;
+        let _ = crate::quick_capture::hide_quietly(&qc);
     }
     crate::quick_capture::notify_closed(&app);
 

@@ -2,7 +2,7 @@
 //! Placement and show/hide plumbing for the quick-capture window.
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 pub const QC_WIDTH: f64 = 400.0;
 pub const QC_HEIGHT: f64 = 160.0;
@@ -52,21 +52,32 @@ pub fn apply_placement(app: &AppHandle) -> Result<(), String> {
             if !main_visible || main_minimized {
                 return position_bottom_right(&win);
             }
+            // Physical pixels end to end: `outer_position`/`outer_size` are
+            // physical, and `set_position(LogicalPosition)` would reconvert
+            // with the capture window's scale, which differs on mixed-scale
+            // monitors.
+            let pos = main.outer_position().map_err(|e| e.to_string())?;
+            let size = main.outer_size().map_err(|e| e.to_string())?;
             let scale = main.scale_factor().map_err(|e| e.to_string())?;
-            let pos = main
-                .outer_position()
-                .map_err(|e| e.to_string())?
-                .to_logical::<f64>(scale);
-            let size = main
-                .outer_size()
-                .map_err(|e| e.to_string())?
-                .to_logical::<f64>(scale);
-            let (x, y) =
-                centered_origin(pos.x, pos.y, size.width, size.height, QC_WIDTH, QC_HEIGHT);
-            win.set_size(LogicalSize::new(QC_WIDTH, QC_HEIGHT))
-                .map_err(|e| e.to_string())?;
-            win.set_position(LogicalPosition::new(x, y))
-                .map_err(|e| e.to_string())?;
+            let (qw, qh) = (QC_WIDTH * scale, QC_HEIGHT * scale);
+            let (x, y) = centered_origin(
+                pos.x as f64,
+                pos.y as f64,
+                size.width as f64,
+                size.height as f64,
+                qw,
+                qh,
+            );
+            win.set_size(tauri::PhysicalSize::new(
+                qw.round() as u32,
+                qh.round() as u32,
+            ))
+            .map_err(|e| e.to_string())?;
+            win.set_position(tauri::PhysicalPosition::new(
+                x.round() as i32,
+                y.round() as i32,
+            ))
+            .map_err(|e| e.to_string())?;
             Ok(())
         }
         QuickCapturePlacement::BottomRight => {
@@ -80,7 +91,32 @@ pub fn apply_placement(app: &AppHandle) -> Result<(), String> {
 
 fn position_bottom_right(win: &WebviewWindow) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
-    let _ = &win;
+    {
+        let monitor = win
+            .current_monitor()
+            .map_err(|e| e.to_string())?
+            .or_else(|| win.primary_monitor().ok().flatten())
+            .ok_or("no monitor available")?;
+        let scale = monitor.scale_factor();
+        let (qw, qh, pad) = (
+            QC_WIDTH * scale,
+            QC_HEIGHT * scale,
+            QC_CORNER_PADDING * scale,
+        );
+        let area = monitor.work_area();
+        let x = area.position.x as f64 + area.size.width as f64 - qw - pad;
+        let y = area.position.y as f64 + area.size.height as f64 - qh - pad;
+        win.set_size(tauri::PhysicalSize::new(
+            qw.round() as u32,
+            qh.round() as u32,
+        ))
+        .map_err(|e| e.to_string())?;
+        win.set_position(tauri::PhysicalPosition::new(
+            x.round() as i32,
+            y.round() as i32,
+        ))
+        .map_err(|e| e.to_string())?;
+    }
 
     #[cfg(target_os = "macos")]
     #[allow(deprecated)]
@@ -201,7 +237,10 @@ pub async fn open_quick_capture(
         .get_webview_window("quick-capture")
         .ok_or("quick-capture window not found")?;
     set_placement(&app, placement);
-    apply_placement(&app)?;
+    if let Err(e) = apply_placement(&app) {
+        set_placement(&app, QuickCapturePlacement::BottomRight);
+        return Err(e);
+    }
     show_floating(&window);
     app.emit_to("main", QC_OPENED_EVENT, placement)
         .map_err(|e| e.to_string())
