@@ -196,20 +196,41 @@
   font-family: var(--mem-font-body);
   font-size: 12px;
   gap: 11px;
+  position: relative;
+}
+
+.wiki-filters label::after {
+  border-bottom: 1.5px solid var(--mem-text-tertiary);
+  border-right: 1.5px solid var(--mem-text-tertiary);
+  content: "";
+  height: 6px;
+  pointer-events: none;
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  transform: translateY(-70%) rotate(45deg);
+  width: 6px;
 }
 
 .wiki-filters select {
-  appearance: auto;
-  background: var(--mem-bg);
+  appearance: none;
+  background: var(--mem-surface);
   border: 1px solid var(--mem-control-border);
   border-radius: var(--mem-control-radius);
   color: var(--mem-text-secondary);
+  cursor: pointer;
   font-family: var(--mem-font-body);
   font-size: var(--mem-control-font-size);
   font-weight: 400;
   min-height: var(--mem-control-height);
   min-width: 142px;
-  padding: 0 30px 0 11px;
+  padding: 0 32px 0 11px;
+  transition: border-color 150ms ease, color 150ms ease;
+}
+
+.wiki-filters select:hover {
+  border-color: var(--mem-text-tertiary);
+  color: var(--mem-text);
 }
 
 .wiki-filters select:focus-visible,
