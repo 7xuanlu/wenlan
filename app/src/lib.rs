@@ -30,6 +30,7 @@ pub mod plugin_install;
 // outside tests. See the module doc comment.
 #[allow(dead_code)]
 mod presence;
+mod quick_capture;
 pub mod remote_access;
 mod search;
 pub mod sources;
@@ -767,6 +768,9 @@ pub fn run() {
         .manage(Arc::new(tokio::sync::Mutex::new(
             None::<indexer::FileWatcher>,
         )))
+        .manage(quick_capture::QuickCapturePlacementState(
+            std::sync::Mutex::new(Default::default()),
+        ))
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -1129,45 +1133,26 @@ pub fn run() {
                                         if let Some(window) =
                                             handle_for_shortcuts.get_webview_window("quick-capture")
                                         {
-                                            #[cfg(target_os = "macos")]
-                                            #[allow(deprecated)]
-                                            {
-                                                use cocoa::base::id;
-                                                use raw_window_handle::HasWindowHandle;
-                                                if let Ok(raw_handle) = window.window_handle() {
-                                                    if let raw_window_handle::RawWindowHandle::AppKit(appkit) = raw_handle.as_raw() {
-                                                        let ns_view = appkit.ns_view.as_ptr() as id;
-                                                        unsafe {
-                                                            let ns_win: id = objc::msg_send![ns_view, window];
-                                                            let visible: bool = objc::msg_send![ns_win, isVisible];
-                                                            if visible {
-                                                                // orderOut removes the window without
-                                                                // triggering macOS window promotion
-                                                                let _: () = objc::msg_send![ns_win, orderOut: ns_win];
-                                                            } else {
-                                                                // makeKeyAndOrderFront shows + focuses
-                                                                // without activating the app (main stays put)
-                                                                let _: () = objc::msg_send![ns_win, setLevel: 3_i64]; // NSFloatingWindowLevel
-                                                                let _: () = objc::msg_send![ns_win, makeKeyAndOrderFront: ns_win];
-                                                                tauri::async_runtime::spawn({
-                                                                    let h = handle_for_shortcuts.clone();
-                                                                    async move {
-                                                                        let _ = crate::search::position_quick_capture(h).await;
-                                                                    }
-                                                                });
-                                                            }
-                                                        }
+                                            if window.is_visible().unwrap_or(false) {
+                                                // Safe on the main thread: `run_on_main_thread`
+                                                // executes synchronously when already there
+                                                // (see `schedule_main_window_traffic_lights_alignment`).
+                                                let _ = crate::quick_capture::hide_quietly(&window);
+                                                crate::quick_capture::notify_closed(
+                                                    &handle_for_shortcuts,
+                                                );
+                                            } else {
+                                                crate::quick_capture::set_placement(
+                                                    &handle_for_shortcuts,
+                                                    crate::quick_capture::QuickCapturePlacement::BottomRight,
+                                                );
+                                                crate::quick_capture::show_floating(&window);
+                                                tauri::async_runtime::spawn({
+                                                    let h = handle_for_shortcuts.clone();
+                                                    async move {
+                                                        let _ = crate::search::position_quick_capture(h).await;
                                                     }
-                                                }
-                                            }
-                                            #[cfg(not(target_os = "macos"))]
-                                            {
-                                                if window.is_visible().unwrap_or(false) {
-                                                    let _ = window.hide();
-                                                } else {
-                                                    let _ = window.show();
-                                                    let _ = window.set_focus();
-                                                }
+                                                });
                                             }
                                         }
                                     }
@@ -1559,6 +1544,7 @@ pub fn run() {
             search::suggest_tags,
             search::dismiss_quick_capture,
             search::position_quick_capture,
+            quick_capture::open_quick_capture,
             search::get_session_snapshots,
             search::get_snapshot_captures,
             search::get_snapshot_captures_with_content,
