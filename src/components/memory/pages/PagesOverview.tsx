@@ -39,7 +39,7 @@ function isUnconfirmedPage(page: Page): boolean {
     && page.review_status === "unconfirmed";
 }
 
-const PAGE_SIZE = 7;
+const PAGE_SIZE = 12;
 
 function modifiedAt(page: Page): number {
   const value = Date.parse(page.last_modified || page.last_compiled || page.created_at);
@@ -346,7 +346,6 @@ export function PagesOverview({
                             <PageTruthBadges cutoverLive={cutoverLive} truth={page.truth} />
                           </span>
                         </button>
-                        {page.summary && <p>{page.summary}</p>}
                         <div className="wiki-page-mobile-meta">
                           {assignedSpace && <SpaceChip ariaLabel={spaceDestination} label={assignedSpace} onSelectSpace={onSelectSpace} />}
                           {updated && <time dateTime={updated.dateTime}>{updated.label}</time>}

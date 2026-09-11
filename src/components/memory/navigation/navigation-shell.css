@@ -250,18 +250,9 @@
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
   font-size: 12px;
-  height: 72px;
   padding: 12px 0;
   transition: background-color 150ms ease;
-  vertical-align: top;
-}
-
-.wiki-table td:not(:first-child) {
-  padding-top: 13px;
-}
-
-.wiki-table td:not(:first-child) .wiki-page-space {
-  margin-top: -4px;
+  vertical-align: middle;
 }
 
 .wiki-table tbody tr {
@@ -380,17 +371,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   transition: color 150ms ease;
-  white-space: nowrap;
-}
-
-.wiki-page-cell p {
-  color: var(--mem-text-secondary);
-  font-family: var(--mem-font-body);
-  font-size: 12px;
-  line-height: 1.45;
-  margin: 6px 0 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

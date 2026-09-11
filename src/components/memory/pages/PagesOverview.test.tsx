@@ -398,20 +398,20 @@ describe("PagesOverview", () => {
     expect(distillReview).not.toHaveBeenCalled();
   });
 
-  it("filters by Space, sorts by title, and paginates seven rows at a time", async () => {
+  it("filters by Space, sorts by title, and paginates twelve rows at a time", async () => {
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({ id: "topic-z", title: "Zulu topic", space: null }),
       page({ id: "decision", title: "Why citations stay visible", content: "Decision: keep citations visible.", space: "Wenlan" }),
       page({ id: "recap", title: "July research recap", space: "Research" }),
-      ...Array.from({ length: 5 }, (_, index) => page({ id: `topic-${index}`, title: `Topic ${index}`, last_modified: `2026-07-0${index + 1}T00:00:00Z` })),
+      ...Array.from({ length: 10 }, (_, index) => page({ id: `topic-${index}`, title: `Topic ${index}`, last_modified: `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00Z` })),
     ]);
     const user = userEvent.setup();
     renderOverview();
 
-    expect(await screen.findByText("1–7 of 8")).toBeInTheDocument();
+    expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Topic 0" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(await screen.findByText("8–8 of 8")).toBeInTheDocument();
+    expect(await screen.findByText("13–13 of 13")).toBeInTheDocument();
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Space" }), "Research");
     expect(screen.getByRole("button", { name: "Open July research recap" })).toBeInTheDocument();
