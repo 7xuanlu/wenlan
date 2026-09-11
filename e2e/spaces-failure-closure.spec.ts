@@ -23,7 +23,7 @@ test("closes the 899px drawer before history and moves focus safely at the 900px
   await installTauriMock(page, {
     locale: "en",
     rawActions: [],
-    localStorage: { "wenlan-sidebar-collapsed": "true" },
+    localStorage: { "wenlan-sidebar-collapsed": "true", "wenlan-spaces-view-mode": "rows" },
   });
   await page.goto("/");
   await page.getByTitle("Show sidebar").click();
@@ -56,7 +56,7 @@ test("closes the 899px drawer before history and moves focus safely at the 900px
 
 test("turns a non-Error Spaces rejection into a recoverable inline failure", async ({ page }) => {
   const errors = collectBrowserErrors(page);
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpaces(page);
   await page.evaluate(() => {
@@ -88,7 +88,7 @@ test("turns a non-Error Spaces rejection into a recoverable inline failure", asy
 
 test("retries Entity load, retains a failed observation draft, and retries two-step deletion", async ({ page }) => {
   const errors = collectBrowserErrors(page);
-  const controller = await installTauriMock(page, { locale: "en", rawActions: [] });
+  const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openWenlan(page);
 

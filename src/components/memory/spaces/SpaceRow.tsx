@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Space } from "../../../lib/tauri";
 import { formatLocaleDate } from "../../../lib/dateFormat";
+import { SpaceActionsMenu } from "./SpaceActionsMenu";
 import { SpaceEditor } from "./SpaceEditor";
 import type { SpacesOverviewLabels, SpaceEditorValue } from "./spacesTypes";
 
@@ -25,20 +25,11 @@ type SpaceRowProps = {
 
 export function SpaceRow(props: SpaceRowProps) {
   const { i18n } = useTranslation();
-  const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const updated = props.space.updated_at > 0
     ? formatLocaleDate(new Date(props.space.updated_at * 1000), i18n.language)
     : { label: "—" };
-
-  const closeMenuOnEscape = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    setMenuOpen(false);
-    triggerRef.current?.focus();
-  };
 
   if (renaming) {
     return (
@@ -110,37 +101,18 @@ export function SpaceRow(props: SpaceRowProps) {
         </div>
       </dl>
       <div className="spaces-menu-anchor" data-space-column="menu">
-        <button
-          ref={triggerRef}
-          type="button"
-          className="mem-icon-action spaces-menu-trigger"
-          aria-label={props.labels.actionsFor(props.space.name)}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          disabled={props.pending}
-          onClick={() => setMenuOpen((open) => !open)}
-        >
-          <svg aria-hidden="true" width="16" height="4" viewBox="0 0 16 4" fill="currentColor">
-            <circle cx="2" cy="2" r="1.5" /><circle cx="8" cy="2" r="1.5" /><circle cx="14" cy="2" r="1.5" />
-          </svg>
-        </button>
-        {menuOpen ? (
-          <div className="mem-popover-surface spaces-menu" role="menu" onKeyDown={closeMenuOnEscape}>
-            <button role="menuitem" onClick={() => { props.onStar(props.space); setMenuOpen(false); }}>
-              {props.space.starred ? props.labels.unstar : props.labels.star}
-            </button>
-            <button role="menuitem" onClick={() => { setRenaming(true); setMenuOpen(false); }}>{props.labels.rename}</button>
-            <button role="menuitem" disabled={!props.canMoveUp} onClick={() => { props.onMoveUp(props.space); setMenuOpen(false); }}>
-              {props.labels.moveUp}
-            </button>
-            <button role="menuitem" disabled={!props.canMoveDown} onClick={() => { props.onMoveDown(props.space); setMenuOpen(false); }}>
-              {props.labels.moveDown}
-            </button>
-            <button role="menuitem" className="spaces-danger" onClick={() => { setConfirmingDelete(true); setMenuOpen(false); }}>
-              {props.labels.delete}
-            </button>
-          </div>
-        ) : null}
+        <SpaceActionsMenu
+          space={props.space}
+          labels={props.labels}
+          pending={props.pending}
+          canMoveUp={props.canMoveUp}
+          canMoveDown={props.canMoveDown}
+          onStar={props.onStar}
+          onRename={() => setRenaming(true)}
+          onMoveUp={props.onMoveUp}
+          onMoveDown={props.onMoveDown}
+          onDelete={() => setConfirmingDelete(true)}
+        />
       </div>
       {confirmingDelete ? (
         <div className="spaces-delete-confirmation">

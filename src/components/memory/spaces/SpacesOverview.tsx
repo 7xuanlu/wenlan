@@ -10,12 +10,14 @@ import {
   updateSpace,
   type Space,
 } from "../../../lib/tauri";
+import { readAssetLens, writeAssetLens, type AssetLens } from "../../../lib/assetLens";
 import { listAllActivePages } from "../pages/listAllPages";
 import { ConfirmedSpaces } from "./ConfirmedSpaces";
 import { SpaceEditor } from "./SpaceEditor";
 import { SuggestedSpaces } from "./SuggestedSpaces";
 import { filterSpaces, sortConfirmedSpaces, sortSuggestedSpaces } from "./spaceHelpers";
 import type { SpaceRowAction, SpacesOverviewProps } from "./spacesTypes";
+import "../assets/assetCards.css";
 import "../pages/pageActions.css";
 import "./spaces.css";
 import "./spacesInventory.css";
@@ -68,6 +70,7 @@ function actionKey(action: SpaceRowAction): string {
 export function SpacesOverview(props: SpacesOverviewProps) {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
+  const [lens, setLens] = useState<AssetLens>(() => readAssetLens("spaces"));
   const [creating, setCreating] = useState(false);
   const [lastGood, setLastGood] = useState<readonly Space[] | null>(null);
   const [pendingIds, setPendingIds] = useState<readonly string[]>([]);
@@ -139,6 +142,11 @@ export function SpacesOverview(props: SpacesOverviewProps) {
     return execute(action, key);
   };
 
+  const handleLensChange = (next: AssetLens): void => {
+    setLens(next);
+    writeAssetLens("spaces", next);
+  };
+
   const allSpaces = query.data ?? lastGood ?? [];
   const suggested = filterSpaces(sortSuggestedSpaces(allSpaces), filter);
   const confirmed = filterSpaces(sortConfirmedSpaces(allSpaces), filter);
@@ -194,6 +202,8 @@ export function SpacesOverview(props: SpacesOverviewProps) {
             noResults={noResults}
             pageCounts={pageCounts}
             pendingIds={pendingIds}
+            lens={lens}
+            onLensChange={handleLensChange}
             onSelect={props.onSelectSpace}
             onStar={(space) => submit({ kind: "star", space })}
             onRename={(space, value) => submit({ kind: "rename", space, value })}

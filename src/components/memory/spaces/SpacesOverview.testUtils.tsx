@@ -71,7 +71,11 @@ export function createQueryClient(): QueryClient {
 export function renderOverview(
   overrides: Partial<SpacesOverviewProps> = {},
   queryClient = createQueryClient(),
+  options?: { readonly lens?: "rows" | "cards" },
 ): ReturnType<typeof render> & { readonly queryClient: QueryClient } {
+  // Existing suites test the Rows lens; pin it unconditionally so a stale
+  // value from an earlier render in the same file cannot leak in.
+  window.localStorage.setItem("wenlan-spaces-view-mode", options?.lens ?? "rows");
   const props: SpacesOverviewProps = {
     labels,
     onSelectSpace: () => undefined,

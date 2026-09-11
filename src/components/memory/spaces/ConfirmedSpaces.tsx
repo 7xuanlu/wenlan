@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { Space } from "../../../lib/tauri";
+import type { AssetLens } from "../../../lib/assetLens";
+import { AssetLensToggle } from "../assets/AssetLensToggle";
 import { canReorderTogether, findReorderTarget } from "./spaceHelpers";
+import { SpaceCard } from "./SpaceCard";
 import { SpaceRow } from "./SpaceRow";
 import type { SpacesOverviewLabels, SpaceEditorValue } from "./spacesTypes";
 
@@ -14,6 +17,8 @@ type ConfirmedSpacesProps = {
   readonly noResults: boolean;
   readonly pageCounts: ReadonlyMap<string, number>;
   readonly pendingIds: readonly string[];
+  readonly lens: AssetLens;
+  readonly onLensChange: (lens: AssetLens) => void;
   readonly onSelect: (name: string) => void;
   readonly onStar: (space: Space) => void;
   readonly onRename: (space: Space, value: SpaceEditorValue) => Promise<boolean>;
@@ -69,11 +74,33 @@ export function ConfirmedSpaces(props: ConfirmedSpacesProps) {
             onChange={(event) => props.onFilterChange(event.currentTarget.value)}
           />
         </label>
+        <AssetLensToggle value={props.lens} onChange={props.onLensChange} />
       </div>
       {props.noResults ? (
         <p className="spaces-empty">{props.labels.noResults}</p>
       ) : props.spaces.length === 0 ? (
         props.filter.trim() ? null : <p className="spaces-empty">{props.labels.noConfirmed}</p>
+      ) : props.lens === "cards" ? (
+        <div className="asset-cards" data-testid="spaces-cards">
+          {props.spaces.map((space) => (
+            <SpaceCard
+              key={space.id}
+              space={space}
+              spaces={props.allSpaces}
+              labels={props.labels}
+              pageCount={props.pageCounts.get(space.name.toLocaleLowerCase()) ?? 0}
+              pending={props.pendingIds.includes(space.id)}
+              canMoveUp={findReorderTarget(props.spaces, space.id, "up") !== null}
+              canMoveDown={findReorderTarget(props.spaces, space.id, "down") !== null}
+              onSelect={props.onSelect}
+              onStar={props.onStar}
+              onRename={props.onRename}
+              onMoveUp={(source) => requestMove(source, "up")}
+              onMoveDown={(source) => requestMove(source, "down")}
+              onDelete={props.onDelete}
+            />
+          ))}
+        </div>
       ) : (
         <div
           className="spaces-rows"

@@ -179,7 +179,7 @@ async function tabTo(page: Page, target: Locator, maximumSteps = 120): Promise<v
 
 test("has no page-level horizontal overflow across all responsive surfaces", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
 
   for (const viewport of [
@@ -207,7 +207,7 @@ test("has no page-level horizontal overflow across all responsive surfaces", asy
 
 test("switches exactly at the management and dossier breakpoints", async ({ page }) => {
   await page.setViewportSize({ width: 700, height: 900 });
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpaces(page);
   // Suggestions rest collapsed in the header disclosure while confirmed rows stay visible.
@@ -264,7 +264,7 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
 
 test("meets computed browser contrast on redesigned surfaces in both themes", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   const results: ContrastResult[] = [];
 
@@ -306,7 +306,7 @@ test("meets computed browser contrast on redesigned surfaces in both themes", as
 
 test("supports keyboard-only drawer and dossier navigation with visible focus", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await expect(page.locator('[data-primary-navigation-active-marker="true"]')).toHaveCount(1);
   await expect(page.locator('[aria-current="page"] [data-primary-navigation-active-marker="true"]')).toHaveCount(1);
@@ -343,7 +343,7 @@ test("supports keyboard-only drawer and dossier navigation with visible focus", 
 
 test("reaches management, dossier, graph, ledger, observation, and linked-memory controls by Tab", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpaces(page);
 
@@ -403,7 +403,7 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
 test("records the durable keyboard focus sequence and representative captures", async ({ page }) => {
   await mkdir(screenshotEvidenceDir, { recursive: true });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   const sequence = [];
 
@@ -458,7 +458,7 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
   const browserErrors = collectBrowserErrors(page);
   await mkdir(evidenceDir, { recursive: true });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await installTauriMock(page, { locale: "zh-Hant", rawActions: [] });
+  await installTauriMock(page, { locale: "zh-Hant", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpaces(page, { navigation: "主要導覽", spaces: "空間", show: "顯示側邊欄" });
   await spaceOverviewButton(page).click();
@@ -482,7 +482,7 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
   });
   const zoomPage = await zoomContext.newPage();
   const zoomBrowserErrors = collectBrowserErrors(zoomPage);
-  await installTauriMock(zoomPage, { locale: "zh-Hant", rawActions: [] });
+  await installTauriMock(zoomPage, { locale: "zh-Hant", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await zoomPage.goto("/");
   await openSidebar(zoomPage, "顯示側邊欄");
   await zoomPage.getByRole("navigation", { name: "主要導覽" }).getByRole("button", { name: "Wiki", exact: true }).click();
@@ -578,7 +578,7 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
 test("removes non-essential transitions under reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 768, height: 900 });
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await page.getByTitle("Show sidebar").click();
   await expect(page.locator("aside")).toHaveCSS("transition-duration", "0s");

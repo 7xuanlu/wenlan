@@ -49,7 +49,7 @@ test("captures direct Page authoring from Wiki and Space with one control gramma
   await mkdir(evidenceDir, { recursive: true });
   await installTauriMock(page, {
     locale: "en",
-    localStorage: { "wenlan-theme": "dark" },
+    localStorage: { "wenlan-theme": "dark", "wenlan-spaces-view-mode": "rows" },
     rawActions: [],
   });
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -111,7 +111,7 @@ test("keeps the editor axis stable on wide screens and title conflicts readable 
   await mkdir(evidenceDir, { recursive: true });
   await installTauriMock(page, {
     locale: "en",
-    localStorage: { "wenlan-theme": "dark" },
+    localStorage: { "wenlan-theme": "dark", "wenlan-spaces-view-mode": "rows" },
     rawActions: [],
   });
   await page.setViewportSize({ width: 1920, height: 900 });

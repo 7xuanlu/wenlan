@@ -160,7 +160,7 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
   const browserErrors = collectBrowserErrors(page);
   await mkdir(evidenceDir, { recursive: true });
   await page.clock.setFixedTime(fixtureNow);
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1);
 
@@ -193,8 +193,8 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
     await expect(metadata.locator("dd")).toHaveText(field.value);
   }
   await page.getByLabel("Filter spaces").focus();
-  await page.keyboard.press("Tab");
-  await page.keyboard.press("Tab");
+  // Filter -> Rows/Cards lens toggle (two buttons) -> drag handle -> first Space.
+  for (let step = 0; step < 4; step++) await page.keyboard.press("Tab");
   const wenlanControl = wenlanRow.getByRole("button", { name: "Wenlan", exact: true });
   await expect(wenlanControl).toBeFocused();
   const focusOutline = await wenlanControl.evaluate((node) => {
