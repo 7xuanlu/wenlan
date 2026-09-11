@@ -529,6 +529,9 @@ const en = {
     redistillingPage: "Re-distilling page",
     redistillPage: "Re-distill page",
     redistillBlocked: "Page not updated: {{reason}}",
+    redistilled: "Page re-distilled.",
+    redistillUpToDate: "Page already up to date.",
+    redistillFailed: "Page re-distill failed: {{message}}",
   },
   pageCanvas: {
     newSectionPlaceholder: "Name this section",
@@ -2356,6 +2359,9 @@ const zhHans = {
     redistillingPage: "正在重新精炼页面",
     redistillPage: "重新精炼页面",
     redistillBlocked: "页面未更新：{{reason}}",
+    redistilled: "页面已重新提炼。",
+    redistillUpToDate: "页面已是最新。",
+    redistillFailed: "页面重新提炼失败：{{message}}",
   },
   pageCanvas: {
     newSectionPlaceholder: "为这个章节命名",
@@ -4158,6 +4164,9 @@ const zhHant = {
     redistillingPage: "正在重新精煉頁面",
     redistillPage: "重新精煉頁面",
     redistillBlocked: "頁面未更新：{{reason}}",
+    redistilled: "頁面已重新提煉。",
+    redistillUpToDate: "頁面已是最新。",
+    redistillFailed: "頁面重新提煉失敗：{{message}}",
   },
   pageCanvas: {
     newSectionPlaceholder: "為這個章節命名",

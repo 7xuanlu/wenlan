@@ -148,6 +148,7 @@ describe("AnyProviderCard — the Local-server card (spec §5.2)", () => {
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["external-llm"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["external-llm-key-configured"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
   });
 
   it("shows the Anthropic precedence warning when an Anthropic key is configured", async () => {

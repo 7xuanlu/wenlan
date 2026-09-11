@@ -549,6 +549,24 @@ pub struct DistillRequest {
     pub sweep: bool,
 }
 
+/// Provider for an explicit, user-triggered page rebuild (re-distill,
+/// force distill, and the "nothing can synthesize" hint). A foreground
+/// call is the user's own consent, so unlike background routing
+/// (`resolve_synthesis`, which needs a pin) it crosses sources in the
+/// legacy foreground order: Anthropic routine slot → external
+/// OpenAI-compatible server (Ollama, LM Studio) → on-device model.
+/// Only a provider that reports `is_available()` counts.
+fn foreground_rebuild_llm<'a>(
+    api_llm: Option<&'a Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+    external_llm: Option<&'a Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+    on_device: Option<&'a Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+) -> Option<&'a Arc<dyn wenlan_core::llm_provider::LlmProvider>> {
+    [api_llm, external_llm, on_device]
+        .into_iter()
+        .flatten()
+        .find(|slot| slot.is_available())
+}
+
 /// POST /api/distill
 /// The write half of this route is gated downstream, but the RESPONSE is a page
 /// reader three times over: stale pages carry title/summary/stale_reason and
@@ -622,7 +640,7 @@ async fn handle_distill_inner(
     // background refinery calls `distill_pages_scoped` directly with the
     // daemon LLM; that path is the one that synthesizes inline. Two
     // triggers, one shared function, no behavior drift inside the function.
-    let (db, prompts, tuning, llm, api_llm) = {
+    let (db, prompts, tuning, llm, api_llm, external_llm) = {
         let s = state.read().await;
         (
             s.db.clone(),
@@ -630,6 +648,7 @@ async fn handle_distill_inner(
             s.tuning.distillation.clone(),
             s.llm.clone(),
             s.api_llm.clone(),
+            s.external_llm.clone(),
         )
     };
     let db = db.ok_or(ServerError::Internal("DB not initialized".into()))?;
@@ -663,7 +682,8 @@ async fn handle_distill_inner(
     if req.force {
         match &target {
             Some(wenlan_core::synthesis::distill::DistillTarget::Page(page_id)) => {
-                let prefer_llm = api_llm.as_ref().or(llm.as_ref());
+                let prefer_llm =
+                    foreground_rebuild_llm(api_llm.as_ref(), external_llm.as_ref(), llm.as_ref());
                 if !prefer_llm
                     .as_ref()
                     .map(|provider| provider.is_available())
@@ -674,7 +694,7 @@ async fn handle_distill_inner(
                         "force": true,
                         "page_id": page_id,
                         "updated": false,
-                        "hint": "force rebuild needs an LLM in the daemon — install an on-device model or set an Anthropic key via `wenlan setup` / `/wenlan:setup`",
+                        "hint": "force rebuild needs an LLM in the daemon — install an on-device model, connect a local server (Ollama, LM Studio), or set an Anthropic key via `wenlan setup` / `/wenlan:setup`",
                     })));
                 }
                 db.clear_user_edited(page_id)
@@ -931,7 +951,8 @@ async fn handle_distill_inner(
             // synthesize" -- on a fresh install with no on-device model or
             // API key configured, telling the user to capture more memories
             // sends them the wrong way.
-            let prefer_llm = api_llm.as_ref().or(llm.as_ref());
+            let prefer_llm =
+                foreground_rebuild_llm(api_llm.as_ref(), external_llm.as_ref(), llm.as_ref());
             let model_available = prefer_llm
                 .as_ref()
                 .map(|provider| provider.is_available())
@@ -939,7 +960,7 @@ async fn handle_distill_inner(
             let hint = if model_available {
                 "No page-sized cluster formed in this scope: nothing grouped into 3 or more related memories that fit one page. Capture more related memories, or check the daemon log for dropped clusters."
             } else {
-                "No synthesis model is configured or reachable: install an on-device model or set an Anthropic key via `wenlan setup` / `/wenlan:setup` before distilling."
+                "No synthesis model is configured or reachable: install an on-device model, connect a local server (Ollama, LM Studio), or set an Anthropic key via `wenlan setup` / `/wenlan:setup` before distilling."
             };
             map.insert("hint".into(), serde_json::json!(hint));
         }
@@ -950,7 +971,7 @@ async fn handle_distill_inner(
 /// POST /api/distill/{page_id}
 ///
 /// Re-distill a single page. Requires the daemon to have an LLM available
-/// (on-device or Anthropic key). When no model/key is configured (local memory
+/// (on-device, external server, or Anthropic key). When no model/key is configured (local memory
 /// mode) the route returns a 200 with a hint payload instead of a 500 —
 /// the caller's intent (refresh this page) can't be honored, but the
 /// failure mode is documented in the response so the skill can surface
@@ -975,12 +996,13 @@ async fn handle_redistill_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(page_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let (db, llm, api_llm, prompts) = {
+    let (db, llm, api_llm, external_llm, prompts) = {
         let s = state.read().await;
         (
             s.db.clone(),
             s.llm.clone(),
             s.api_llm.clone(),
+            s.external_llm.clone(),
             s.prompts.clone(),
         )
     };
@@ -991,7 +1013,7 @@ async fn handle_redistill_inner(
         Some(config.knowledge_path_or_default())
     };
 
-    let prefer_llm = api_llm.as_ref().or(llm.as_ref());
+    let prefer_llm = foreground_rebuild_llm(api_llm.as_ref(), external_llm.as_ref(), llm.as_ref());
     if prefer_llm
         .as_ref()
         .map(|provider| provider.is_available())
@@ -1026,7 +1048,7 @@ async fn handle_redistill_inner(
         Ok(Json(serde_json::json!({
             "status": "skipped",
             "updated": false,
-            "hint": "page re-distill needs an LLM in the daemon — install an on-device model or set an Anthropic key via `wenlan setup` / `/wenlan:setup`",
+            "hint": "page re-distill needs an LLM in the daemon — install an on-device model, connect a local server (Ollama, LM Studio), or set an Anthropic key via `wenlan setup` / `/wenlan:setup`",
         })))
     }
 }
@@ -1186,7 +1208,10 @@ pub async fn handle_test_llm(
         user_prompt: req
             .prompt
             .unwrap_or_else(|| "Say 'hello' and nothing else.".into()),
-        max_tokens: 10,
+        // Thinking models (e.g. qwen3 on LM Studio) spend a tiny budget
+        // inside <think>, leaving the card empty; 256 buys room for the
+        // reasoning plus the visible reply below.
+        max_tokens: 256,
         temperature: 0.0,
         label: None,
         timeout_secs: None,
@@ -1201,6 +1226,15 @@ pub async fn handle_test_llm(
         }
         other => ServerError::Internal(format!("test_llm: {other}")),
     })?;
+    // Show the answer, not the reasoning: strip <think> blocks so the card
+    // never renders a model's private planning as its reply.
+    let text = wenlan_core::llm_provider::strip_think_tags(&response);
+    let text = text.trim().to_string();
+    let response = if text.is_empty() && !response.trim().is_empty() {
+        "(connected; the model used its whole reply on reasoning)".to_string()
+    } else {
+        text
+    };
     Ok(Json(wenlan_types::requests::TestLlmResponse { response }))
 }
 
@@ -1762,8 +1796,37 @@ mod distill_sweep_route_tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
 
     use crate::state::ServerState;
+
+    /// Stands in for an external OpenAI-compatible server (Ollama, LM Studio).
+    /// `generate` is never reached on the no-cluster path; availability is
+    /// what the hint branch reads.
+    struct RebuildMockProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RebuildMockProvider {
+        async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+            Ok("rebuilt body".into())
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "rebuild-mock"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
 
     async fn seeded_sweep_app() -> (
         crate::router::AppRouter,
@@ -1921,6 +1984,54 @@ mod distill_sweep_route_tests {
     }
 
     #[tokio::test]
+    async fn distill_with_only_external_llm_and_no_clusters_hints_at_more_memories() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+                .await
+                .expect("MemoryDB::new"),
+        );
+        // Fresh DB with no memories, but an external server (Ollama / LM
+        // Studio) IS configured — the hint must diagnose "nothing grouped",
+        // not "no model configured".
+        let mock: Arc<dyn LlmProvider> = Arc::new(RebuildMockProvider);
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            external_llm: Some(mock),
+            ..Default::default()
+        }));
+        let app = crate::router::build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/distill")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        let hint = payload["hint"].as_str().expect("hint present");
+        assert!(
+            hint.contains("Capture more related memories"),
+            "with an external model reachable, the hint should point at more memories: {hint}"
+        );
+        assert!(
+            !hint.contains("wenlan setup"),
+            "with an external model reachable, the hint must not point at setup: {hint}"
+        );
+    }
+
+    #[tokio::test]
     async fn distill_sweep_with_target_or_force_returns_hint_payload() {
         let (app, _db, _tmp) = seeded_sweep_app().await;
 
@@ -1962,12 +2073,44 @@ mod redistill_contract_tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
+    use wenlan_core::llm_provider::{LlmBackend, LlmError, LlmProvider, LlmRequest};
     use wenlan_types::requests::CreateConceptRequest;
 
     use crate::state::ServerState;
 
+    /// Mock foreground-rebuild provider: stands in for an external
+    /// OpenAI-compatible server (Ollama, LM Studio), so `backend()` reports
+    /// `Api` exactly like the real external slot does.
+    struct RebuildMockProvider {
+        available: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RebuildMockProvider {
+        async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+            Ok("rebuilt body".into())
+        }
+
+        fn is_available(&self) -> bool {
+            self.available
+        }
+
+        fn name(&self) -> &str {
+            "rebuild-mock"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
     async fn seeded_user_edited_page() -> (
         crate::router::AppRouter,
+        Arc<RwLock<ServerState>>,
         Arc<wenlan_core::db::MemoryDB>,
         String,
         tempfile::TempDir,
@@ -2012,12 +2155,13 @@ mod redistill_contract_tests {
             db: Some(db.clone()),
             ..Default::default()
         }));
-        (crate::router::build_router(state), db, page_id, tmp)
+        let app = crate::router::build_router(state.clone());
+        (app, state, db, page_id, tmp)
     }
 
     #[tokio::test]
     async fn page_redistill_without_llm_does_not_clear_user_edited() {
-        let (app, db, page_id, _tmp) = seeded_user_edited_page().await;
+        let (app, _state, db, page_id, _tmp) = seeded_user_edited_page().await;
 
         let response = app
             .oneshot(
@@ -2035,6 +2179,12 @@ mod redistill_contract_tests {
             .unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(payload["status"], "skipped");
+        assert!(
+            payload["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("Ollama")),
+            "skip hint must name the local-server option, not just keys/models: {payload}"
+        );
 
         let page = db
             .get_page(&page_id)
@@ -2054,7 +2204,7 @@ mod redistill_contract_tests {
 
     #[tokio::test]
     async fn force_target_redistill_without_llm_does_not_clear_user_edited() {
-        let (app, db, page_id, _tmp) = seeded_user_edited_page().await;
+        let (app, _state, db, page_id, _tmp) = seeded_user_edited_page().await;
 
         let response = app
             .oneshot(
@@ -2076,6 +2226,12 @@ mod redistill_contract_tests {
         let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(payload["status"], "skipped");
         assert_eq!(payload["force"], true);
+        assert!(
+            payload["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("Ollama")),
+            "skip hint must name the local-server option, not just keys/models: {payload}"
+        );
 
         let page = db
             .get_page(&page_id)
@@ -2090,6 +2246,142 @@ mod redistill_contract_tests {
             page.stale_reason.as_deref(),
             Some("manual_force"),
             "skipped no-LLM force re-distill must not mark a manual force rewrite"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_redistill_with_only_external_llm_runs_the_rebuild() {
+        let (app, state, db, page_id, _tmp) = seeded_user_edited_page().await;
+        // Only the external slot (Ollama / LM Studio) is populated; the
+        // on-device (`llm`) and Anthropic routine (`api_llm`) slots stay None.
+        let mock: Arc<dyn LlmProvider> = Arc::new(RebuildMockProvider { available: true });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(mock);
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/distill/{page_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            payload["status"], "ok",
+            "external-only server must run the rebuild, not skip: {payload}"
+        );
+        assert!(
+            payload.get("hint").is_none(),
+            "a completed rebuild carries no skip hint: {payload}"
+        );
+
+        let page = db
+            .get_page(&page_id)
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert!(
+            !page.user_edited,
+            "completed external rebuild must clear user_edited"
+        );
+        // NOTE: `updated` may be false with a `reason` (the citation gate can
+        // discard the mock body), so this test asserts only on `status` and
+        // the `user_edited` flip.
+    }
+
+    #[tokio::test]
+    async fn force_target_redistill_with_only_external_llm_runs_the_rebuild() {
+        let (app, state, db, page_id, _tmp) = seeded_user_edited_page().await;
+        let mock: Arc<dyn LlmProvider> = Arc::new(RebuildMockProvider { available: true });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(mock);
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/distill")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"target":"{page_id}","force":true}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            payload["status"], "ok",
+            "external-only server must run the force rebuild, not skip: {payload}"
+        );
+        assert_eq!(payload["force"], true);
+
+        let page = db
+            .get_page(&page_id)
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert!(
+            !page.user_edited,
+            "completed external force rebuild must clear user_edited"
+        );
+        // NOTE: `updated` may be false with a `reason` (the citation gate can
+        // discard the mock body), so this test asserts only on `status`,
+        // `force`, and the `user_edited` flip.
+    }
+
+    #[tokio::test]
+    async fn page_redistill_with_unavailable_external_llm_stays_skipped() {
+        let (app, state, db, page_id, _tmp) = seeded_user_edited_page().await;
+        // An external server that reports `is_available() == false` must not
+        // count as a rebuild provider.
+        let mock: Arc<dyn LlmProvider> = Arc::new(RebuildMockProvider { available: false });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(mock);
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/distill/{page_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["status"], "skipped");
+        assert_eq!(payload["updated"], false);
+
+        let page = db
+            .get_page(&page_id)
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert!(
+            page.user_edited,
+            "skipped unavailable-external re-distill must not unlock user-edited prose"
         );
     }
 }
@@ -2408,6 +2700,35 @@ mod test_llm_bearer_tests {
 
     /// Mock server that refuses every request the way LM Studio does with
     /// "Require Authentication" on and no bearer token supplied.
+    /// Mock OpenAI-compatible server returning a fixed `content` and
+    /// recording every request body it receives.
+    async fn spawn_content_mock(
+        content: &str,
+    ) -> (std::net::SocketAddr, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let bodies: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let cap = bodies.clone();
+        let content = content.to_string();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |body: axum::body::Bytes| {
+                let cap = cap.clone();
+                let content = content.clone();
+                async move {
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
+                        cap.lock().unwrap().push(json);
+                    }
+                    axum::Json(serde_json::json!({
+                        "choices": [{"message": {"content": content}}]
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (addr, bodies)
+    }
+
     async fn spawn_unauthorized_mock() -> std::net::SocketAddr {
         let app = axum::Router::new().route(
             "/chat/completions",
@@ -2518,6 +2839,50 @@ mod test_llm_bearer_tests {
             captured.lock().unwrap().as_slice(),
             &[Some("Bearer sk-x".to_string())],
             "trailing whitespace/newline in a pasted key must not reach the wire"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_strips_think_tags_from_probe_response() {
+        let content = r#"<think>
+planning
+</think>
+
+Hello."#;
+        let (addr, _bodies) = spawn_content_mock(content).await;
+        let (status, body) = probe_response(addr, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["response"], "Hello.", "{body}");
+    }
+
+    #[tokio::test]
+    async fn test_llm_reasoning_only_probe_reports_connected() {
+        // Truncated thinking-model reply: no close tag, so stripping leaves
+        // nothing. The connection works, so the card must say so instead of
+        // showing an empty answer.
+        let content = r#"<think>
+still thinking"#;
+        let (addr, _bodies) = spawn_content_mock(content).await;
+        let (status, body) = probe_response(addr, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            json["response"], "(connected; the model used its whole reply on reasoning)",
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_probe_requests_enough_tokens_for_thinking_models() {
+        let (addr, bodies) = spawn_content_mock("hello").await;
+        let (status, body) = probe_response(addr, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1, "probe must send exactly one request");
+        assert_eq!(
+            bodies[0]["max_tokens"], 256,
+            "a 10-token cap strands thinking models inside <think>"
         );
     }
 }
