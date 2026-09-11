@@ -241,7 +241,14 @@ pub async fn open_quick_capture(
         set_placement(&app, QuickCapturePlacement::BottomRight);
         return Err(e);
     }
-    show_floating(&window);
+    // This command runs on a tokio thread; AppKit traps when a window's level
+    // or ordering changes off the main thread, so hop over before showing.
+    let to_show = window.clone();
+    window
+        .run_on_main_thread(move || {
+            show_floating(&to_show);
+        })
+        .map_err(|e| e.to_string())?;
     app.emit_to("main", QC_OPENED_EVENT, placement)
         .map_err(|e| e.to_string())
 }
