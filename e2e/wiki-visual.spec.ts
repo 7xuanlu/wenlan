@@ -57,6 +57,7 @@ test("Wiki desktop light matches the approved inventory and its controls work", 
   await expect(page.getByText("1–7 of 7", { exact: true })).toBeVisible();
 
   await expect(page.getByRole("button", { name: /Open Nash Su/ })).not.toBeVisible();
+  await expect(page.getByRole("button", { name: /Open Grace Hopper/ })).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Open Wenlan product principles" })).toBeVisible();
   await page.getByLabel("Space", { exact: true }).selectOption("Research");
   await expect(page.getByRole("button", { name: "Open July research recap" })).toBeVisible();

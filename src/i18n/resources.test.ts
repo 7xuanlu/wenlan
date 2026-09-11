@@ -149,16 +149,7 @@ describe("translation resources", () => {
     ]);
   });
 
-  it("names Wiki context-link destinations in every locale", () => {
-    expect([
-      resources.en.translation.pages.overview.openEntity,
-      resources["zh-Hans"].translation.pages.overview.openEntity,
-      resources["zh-Hant"].translation.pages.overview.openEntity,
-    ]).toEqual([
-      "Open Entity dossier: {{title}}",
-      "打开实体档案：{{title}}",
-      "開啟實體檔案：{{title}}",
-    ]);
+  it("names the Wiki Space context-link destination in every locale", () => {
     expect([
       resources.en.translation.pages.overview.openSpace,
       resources["zh-Hans"].translation.pages.overview.openSpace,
