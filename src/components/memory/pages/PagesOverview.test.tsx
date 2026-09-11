@@ -409,6 +409,7 @@ describe("PagesOverview", () => {
     renderOverview();
 
     expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
+    expect(screen.queryByText("A page can stand on its own.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Topic 0" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(await screen.findByText("13–13 of 13")).toBeInTheDocument();
