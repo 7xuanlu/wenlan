@@ -125,94 +125,16 @@ pub async fn dismiss_quick_capture(app: tauri::AppHandle) -> Result<(), String> 
     use tauri::Manager;
 
     if let Some(qc) = app.get_webview_window("quick-capture") {
-        // Use orderOut instead of hide() to remove the window without
-        // triggering macOS window promotion (which would show main).
-        #[cfg(target_os = "macos")]
-        #[allow(deprecated)]
-        {
-            let qc_for_main_thread = qc.clone();
-            qc.run_on_main_thread(move || {
-                use cocoa::base::id;
-                use raw_window_handle::HasWindowHandle;
-
-                if let Ok(raw_handle) = qc_for_main_thread.window_handle() {
-                    if let raw_window_handle::RawWindowHandle::AppKit(appkit) = raw_handle.as_raw()
-                    {
-                        let ns_view = appkit.ns_view.as_ptr() as id;
-                        unsafe {
-                            let ns_win: id = objc::msg_send![ns_view, window];
-                            let _: () = objc::msg_send![ns_win, orderOut: ns_win];
-                        }
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())?;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = qc.hide();
-        }
+        crate::quick_capture::hide_quietly(&qc)?;
     }
+    crate::quick_capture::notify_closed(&app);
 
     Ok(())
 }
 
 #[tauri::command]
 pub async fn position_quick_capture(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-
-    let win = app
-        .get_webview_window("quick-capture")
-        .ok_or("quick-capture window not found")?;
-    #[cfg(not(target_os = "macos"))]
-    let _ = &win;
-
-    #[cfg(target_os = "macos")]
-    #[allow(deprecated)]
-    {
-        use cocoa::base::id;
-        use cocoa::foundation::NSRect;
-        use raw_window_handle::HasWindowHandle;
-        use tauri::{LogicalPosition, LogicalSize};
-
-        let raw_handle = win.window_handle().map_err(|e| e.to_string())?;
-        if let raw_window_handle::RawWindowHandle::AppKit(appkit) = raw_handle.as_raw() {
-            let ns_view = appkit.ns_view.as_ptr() as id;
-
-            let (visible, screen_h) = unsafe {
-                let ns_win: id = objc::msg_send![ns_view, window];
-                if ns_win.is_null() {
-                    return Err("NSWindow not attached".into());
-                }
-                let screen: id = objc::msg_send![ns_win, screen];
-                if screen.is_null() {
-                    return Err("NSScreen not available".into());
-                }
-                let visible: NSRect = objc::msg_send![screen, visibleFrame];
-                let frame: NSRect = objc::msg_send![screen, frame];
-                (visible, frame.size.height)
-            };
-
-            let width = 400.0;
-            let height = 160.0;
-            let padding = 16.0;
-
-            win.set_size(LogicalSize::new(width, height))
-                .map_err(|e| e.to_string())?;
-
-            let x = visible.origin.x + visible.size.width - width - padding;
-            let y = screen_h - visible.origin.y - padding - height;
-
-            log::debug!("[qc-pos] visible=({:.0},{:.0} {:.0}x{:.0}) screen_h={:.0} → size=({:.0},{:.0}) pos=({:.0},{:.0})",
-                visible.origin.x, visible.origin.y, visible.size.width, visible.size.height,
-                screen_h, width, height, x, y);
-
-            win.set_position(LogicalPosition::new(x, y))
-                .map_err(|e| e.to_string())?;
-        }
-    }
-
-    Ok(())
+    crate::quick_capture::apply_placement(&app)
 }
 
 #[tauri::command]

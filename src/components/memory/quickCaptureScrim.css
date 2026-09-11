@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.quick-capture-scrim {
+  animation: quick-capture-scrim-in 150ms ease-out both;
+  background: rgb(0 0 0 / 45%);
+  cursor: default;
+  inset: 0;
+  position: fixed;
+  z-index: 70;
+}
+
+@keyframes quick-capture-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-capture-scrim { animation: none; }
+}

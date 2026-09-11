@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -50,6 +51,7 @@ import { deleteRecentSpace, recordRecentSpaceVisit, renameRecentSpace } from "..
 import { createSpaceDetailCopy, createSpacesOverviewLabels } from "./navigation/copy";
 import { activeNavigationForView, type View } from "./navigation/viewState";
 import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
+import QuickCaptureScrim from "./QuickCaptureScrim";
 import { useResponsiveSidebar } from "./navigation/useResponsiveSidebar";
 import "./navigation/navigation-shell.css";
 
@@ -592,13 +594,7 @@ export default function Main({
             </button>
             {/* Quick Capture */}
             <button
-              onClick={async () => {
-                const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-                const win = await WebviewWindow.getByLabel("quick-capture");
-                if (!win) return;
-                await win.show();
-                await win.setFocus();
-              }}
+              onClick={() => void invoke("open_quick_capture", { placement: "centered-over-main" })}
               className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
               style={{ color: "var(--mem-text-secondary)" }}
               title={t("main.quickCaptureTitle")}
@@ -1063,6 +1059,7 @@ export default function Main({
       </div>
 
       <AboutWenlanDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <QuickCaptureScrim />
     </div>
   );
 }
