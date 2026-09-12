@@ -20,7 +20,8 @@ import SettingsSidebar, {
   SETTINGS_GROUPS,
   type SettingsSection,
 } from "../src/components/memory/settings/SettingsSidebar";
-import { initializeI18n } from "../src/i18n";
+import { i18n, initializeI18n } from "../src/i18n";
+import { isStoredLocale } from "../src/i18n/locales";
 import { resetReviewFixtures, REVIEW_FAIL } from "./fixtures";
 import "../src/index.css";
 
@@ -346,7 +347,22 @@ function Harness() {
   );
 }
 
-void initializeI18n().then(() => {
+// ?lang=zh-Hant renders every surface in one locale, so a screenshot pass can
+// address a locale from the URL the same way ?mode= addresses a surface.
+// Injected as a read-only storage shim rather than written to localStorage:
+// a capture run must not leave a preference behind that silently re-languages
+// the next run, or a human opening the preview afterwards.
+const LOCALE_OVERRIDE = (() => {
+  const value = params.get("lang");
+  return isStoredLocale(value) ? value : null;
+})();
+
+void initializeI18n(
+  i18n,
+  LOCALE_OVERRIDE
+    ? { storage: { getItem: () => LOCALE_OVERRIDE, setItem: () => {} } }
+    : {},
+).then(() => {
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <QueryClientProvider client={client}>
