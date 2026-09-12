@@ -621,7 +621,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn stale_pages_with_synthesis_lane_are_organizing() {
         let (everyday, _) = pinned_local();
         let synthesis = job_route("anthropic", Some("claude-sonnet-4-6"), "pinned");
