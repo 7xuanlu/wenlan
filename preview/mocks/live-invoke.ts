@@ -832,8 +832,10 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   // TagData shape: the UI reads both r.tags and r.document_tags — no unwrap.
   list_all_tags: () => get("/api/tags"),
   list_agents: () => get("/api/agents"),
-  list_agent_activity: (a) => get(`/api/activities${qs({ limit: a?.limit ?? 50 })}`),
-  list_activities: (a) => get(`/api/activities${qs({ limit: a?.limit ?? 50 })}`),
+  list_agent_activity: (a) =>
+    get(`/api/activities${qs({ limit: a?.limit ?? 50 })}`).then((r) => r.activities ?? r),
+  list_activities: (a) =>
+    get(`/api/activities${qs({ limit: a?.limit ?? 50 })}`).then((r) => r.activities ?? r),
   list_recent_retrievals: (a) => get(`/api/retrievals/recent${qs({ limit: a?.limit ?? 20 })}`),
   list_pending_revisions: (a) =>
     get(`/api/memory/pending-revisions${qs({ limit: a?.limit })}`).then((r) => r.revisions ?? r),
