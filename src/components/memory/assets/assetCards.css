@@ -40,6 +40,7 @@
 }
 
 .asset-card:hover,
+.asset-card:focus-within,
 .asset-card:has(.asset-card-open:focus-visible) {
   background: var(--mem-card-hover);
 }
@@ -69,7 +70,6 @@
   line-clamp: 2;
   overflow: hidden;
   overflow-wrap: anywhere;
-  text-wrap: balance;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -95,6 +95,14 @@
   font-size: 12px;
   gap: 6px 10px;
   margin-top: auto;
+}
+
+.asset-card-footer .wiki-page-space {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .asset-card-footer time {
@@ -133,6 +141,13 @@
 .asset-lens-button[aria-pressed="true"] {
   background: var(--mem-surface);
   color: var(--mem-text);
+}
+
+@media (forced-colors: active) {
+  .asset-lens-button[aria-pressed="true"] {
+    outline: 1px solid ButtonText;
+    outline-offset: -1px;
+  }
 }
 
 .asset-lens-button:focus-visible {

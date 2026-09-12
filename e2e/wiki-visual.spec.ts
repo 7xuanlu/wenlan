@@ -141,11 +141,18 @@ test("Cmd+K event opens the responsive global search instead of focusing a hidde
 });
 
 test("Wiki cards lens stays inside the viewport at every width", async ({ context }) => {
-  for (const [width, height] of [[1487, 1058], [1280, 900], [768, 900], [375, 812]] as const) {
+  const passes = [
+    [1487, 1058, "light"],
+    [1280, 900, "light"],
+    [768, 900, "light"],
+    [375, 812, "light"],
+    [375, 812, "dark"],
+  ] as const;
+  for (const [width, height, theme] of passes) {
     // A fresh page per width: the Tauri mock binding can only be registered once per page.
     const page = await context.newPage();
     await page.setViewportSize({ width, height });
-    const browserErrors = await openWiki(page, "en", "light", "cards");
+    const browserErrors = await openWiki(page, "en", theme, "cards");
 
     await expect(page.getByTestId("wiki-cards")).toBeVisible();
     await expect(page.getByText("1–7 of 7", { exact: true })).toBeVisible();
@@ -165,7 +172,7 @@ test("Wiki cards lens stays inside the viewport at every width", async ({ contex
       expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     }
 
-    await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-light-${width}x${height}.png`, fullPage: true });
+    await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-${theme}-${width}x${height}.png`, fullPage: true });
 
     await expect(page.getByRole("button", { name: "Open Wenlan product principles" })).toBeVisible();
     await page.getByRole("button", { name: "Open Wenlan product principles" }).click();
