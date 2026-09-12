@@ -3833,3 +3833,61 @@ p.entity-error {
 }
 .mem-activity-popover-action:hover { background: var(--mem-hover); color: var(--mem-text); }
 .mem-activity-popover-action:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
+
+/* ── Activity page, Now section ──────────────────────────────────────────── */
+.mem-activity-now-title {
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+/* The rail and card share a surface; the timeline deliberately has none, so it
+   reads as the newest group in the feed rather than a widget parked in it. */
+.mem-activity-now-surface {
+  background: var(--mem-surface);
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  padding: 14px;
+}
+.mem-activity-rail-shell { display: flex; gap: 24px; }
+.mem-activity-rail {
+  align-self: flex-start;
+  flex: 0 0 300px;
+  position: sticky;
+  top: 0;
+  width: 300px;
+}
+.mem-activity-steps-toggle {
+  background: transparent;
+  border: none;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: 10px;
+  margin-left: auto;
+  padding: 0;
+}
+.mem-activity-steps-toggle:hover { color: var(--mem-text); }
+.mem-activity-steps-toggle:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
+.mem-activity-lane-chip {
+  border: 1px solid var(--mem-border);
+  border-radius: 4px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-body);
+  font-size: 9px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.mem-activity-inline-link {
+  background: transparent;
+  border: none;
+  color: var(--mem-accent-indigo);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+.mem-activity-inline-link:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }

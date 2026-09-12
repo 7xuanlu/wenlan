@@ -1004,6 +1004,9 @@ export default function Main({
           ) : view.kind === "activity" ? (
             <ActivityFeed
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
+              onOpenIntelligence={() =>
+                navigateTo({ kind: "settings", section: "intelligence" })
+              }
             />
           ) : view.kind === "recaps" ? (
             <RecapsList

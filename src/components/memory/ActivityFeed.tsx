@@ -10,10 +10,13 @@ import {
 } from "../../lib/tauri";
 import { resolveAgentDisplayName } from "../../lib/agents";
 import { relativeTime } from "../../lib/relativeTime";
+import ActivityNow, { useActivityNowPlacement } from "./activity/ActivityNow";
 import { Select } from "./settings/primitives";
 
 interface ActivityFeedProps {
   onNavigateMemory: (sourceId: string) => void;
+  /** Navigates to Settings, Intelligence from the Now section's models line. */
+  onOpenIntelligence?: () => void;
 }
 
 type TimeGroup = "today" | "yesterday" | "thisWeek" | "older";
@@ -359,7 +362,11 @@ function FilterSelect({
   );
 }
 
-export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
+export default function ActivityFeed({
+  onNavigateMemory,
+  onOpenIntelligence,
+}: ActivityFeedProps) {
+  const nowPlacement = useActivityNowPlacement();
   const { t, i18n } = useTranslation();
   const { data: activities = [] } = useQuery({
     queryKey: ["agentActivity"],
@@ -491,8 +498,13 @@ export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
   const hasAgentFilter = agents.length > 1;
   const showToolbar = hasActionFilter || hasAgentFilter;
 
-  return (
+  const now = <ActivityNow onOpenIntelligence={onOpenIntelligence} />;
+
+  const feed = (
     <div className="flex flex-col">
+      {/* The Now section above the toolbar in the card layout. The rail keeps
+          it out of this column entirely; the timeline puts it in the groups. */}
+      {nowPlacement === "card" && <div style={{ marginBottom: 20 }}>{now}</div>}
       {/* Toolbar — right-aligned dropdowns, same pattern as MemoryStream. */}
       {showToolbar && (
         <div
@@ -557,6 +569,7 @@ export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
         </div>
       ) : null}
       <div className="flex flex-col gap-8">
+      {nowPlacement === "timeline" && now}
       {grouped.map(([group, items]) => (
         <section key={group}>
           <h3
@@ -587,6 +600,17 @@ export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
         </section>
       ))}
       </div>
+    </div>
+  );
+
+  if (nowPlacement !== "rail") return feed;
+
+  // The rail is a sticky second column. `min-w-0` on the feed column keeps a
+  // long event sentence from pushing the rail off the right edge.
+  return (
+    <div className="mem-activity-rail-shell">
+      <div className="min-w-0 flex-1">{feed}</div>
+      <div className="mem-activity-rail">{now}</div>
     </div>
   );
 }
