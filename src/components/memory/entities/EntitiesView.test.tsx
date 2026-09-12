@@ -749,4 +749,19 @@ describe("EntitiesView", () => {
     // No dossier on Archived either: the title is plain text.
     expect(card.querySelector(".asset-card-open")).toBeNull();
   });
+
+  it("selects and clears every visible card from the cards toolbar select-all", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const { user } = renderView();
+    await screen.findByTestId("entities-cards");
+
+    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select Ada Lovelace" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Select Charles Babbage" })).toBeChecked();
+
+    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
+    expect(screen.queryByText("2 selected")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select Ada Lovelace" })).not.toBeChecked();
+  });
 });

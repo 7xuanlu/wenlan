@@ -112,9 +112,9 @@ export function selectionSummary(count: number, t: TFunction): string {
   return t("entities.selection", { count });
 }
 
-// CJK leading-character detection: Han Extension A, Han Unified,
-// CJK Compatibility Ideographs, Hiragana/Katakana, Hangul Syllables.
-const CJK_PATTERN = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/u;
+// First-character CJK detection via Unicode script properties: Han,
+// Hiragana, Katakana, Hangul.
+const CJK_PATTERN = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u;
 
 /** True for a CJK leading character (Han, Hiragana, Katakana, Hangul). */
 function isCjkCharacter(character: string): boolean {
@@ -138,9 +138,9 @@ export function entityInitials(name: string): string {
 
 export interface EntityCardDescription {
   readonly initials: string;
+  readonly typeLabel: string;
   readonly context: string;
   readonly countLabel: string;
-  readonly typeLabel: string;
   /** Accessible open label for the established tab; null where there is no
    * dossier to open (detected/archived). */
   readonly openLabel: string | null;
@@ -149,32 +149,31 @@ export interface EntityCardDescription {
 /** One source of truth for the per-entity card display the cards lens
  * shares: initials, the one-line context sentence, the memory count, and the
  * open label. `archivedWhen` is the preformatted relative time for the
- * archived tab (via `formatRelativeEntityTime`); pass null elsewhere or when
- * unavailable. Kept pure for tests: the caller formats the time. */
+ * archived tab (via `formatRelativeEntityTime` at the call site, which
+ * already has the locale); pass an empty string on other tabs, where it is
+ * unused. Kept pure for tests: the caller formats the time. */
 export function describeEntityCard(
   entity: Entity,
   tab: EntityTab,
   t: TFunction,
-  archivedWhen: string | null,
+  archivedWhen: string,
 ): EntityCardDescription {
   let context: string;
   if (tab === "detected") {
     context = t("entities.card.detectedContext", { count: entity.memory_count });
   } else if (tab === "established") {
-    // Manual and citation read as sentences on their own; only the memory
-    // count needs the "Confirmed by" prefix.
     if (entity.established_by === "manual") context = t("entities.card.establishedManual");
     else if (entity.established_by === "auto:citation") context = t("entities.card.establishedCitation");
     else context = t("entities.card.establishedContext", { by: establishedByLabel(entity, t) });
   } else {
-    context = t("entities.card.archivedContext", { when: archivedWhen ?? "" });
+    context = t("entities.card.archivedContext", { when: archivedWhen });
   }
   return {
     initials: entityInitials(entity.name),
-    context,
-    countLabel: t("entities.card.memories", { count: entity.memory_count }),
     // Same label the Type chips use; unknown types fall back to the raw slug.
     typeLabel: t(`entities.filters.type_${entity.entity_type}`, { defaultValue: entity.entity_type }),
+    context,
+    countLabel: t("entities.card.memories", { count: entity.memory_count }),
     openLabel: tab === "established" ? t("entities.actions.openNamed", { name: entity.name }) : null,
   };
 }

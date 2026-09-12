@@ -131,8 +131,10 @@
   align-items: center;
   color: var(--mem-text-secondary);
   display: flex;
+  flex-wrap: wrap;
   font-family: var(--mem-font-body);
   font-size: var(--mem-text-sm);
+  gap: 8px;
   justify-content: space-between;
   padding: var(--mem-space-3) 0;
 }
@@ -312,9 +314,19 @@
   white-space: nowrap;
 }
 
+.entities-cards-toolbar {
+  align-items: center;
+  color: var(--mem-text-secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .entity-card-actions {
   display: flex;
   flex-basis: 100%;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
 }

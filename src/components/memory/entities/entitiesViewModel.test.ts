@@ -212,6 +212,8 @@ describe("entityInitials", () => {
 
   it("takes the first character only for a CJK name", () => {
     expect(entityInitials("台北")).toBe("台");
+    expect(entityInitials("東京タワー")).toBe("東");
+    expect(entityInitials("서울")).toBe("서");
   });
 
   it("falls back to ? for an empty or blank name", () => {
@@ -226,7 +228,7 @@ describe("describeEntityCard", () => {
       makeEntity({ name: "Ada Lovelace", memory_count: 0 }),
       "detected",
       t,
-      null,
+      "",
     );
     expect(card.initials).toBe("AL");
     expect(card.context).toBe('entities.card.detectedContext:{"count":0}');
@@ -239,7 +241,7 @@ describe("describeEntityCard", () => {
       makeEntity({ name: "Analytical Engine", established_by: "manual" }),
       "established",
       t,
-      null,
+      "",
     );
     expect(card.context).toBe("entities.card.establishedManual");
     expect(card.openLabel).toBe('entities.actions.openNamed:{"name":"Analytical Engine"}');

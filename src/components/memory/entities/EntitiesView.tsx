@@ -13,7 +13,7 @@ import {
 } from "../../../lib/tauri";
 import { readAssetLens, writeAssetLens, type AssetLens } from "../../../lib/assetLens";
 import { formatRelativeEntityTime } from "../entity-detail/formatEntityMetadata";
-import { AssetCard } from "../assets/AssetCard";
+import { AssetCard, type OpenProps } from "../assets/AssetCard";
 import { AssetLensToggle } from "../assets/AssetLensToggle";
 import "../assets/assetCards.css";
 import {
@@ -452,67 +452,31 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
           <p>{t(`entities.empty.${tab}Body`)}</p>
         </div>
       ) : lens === "cards" ? (
-        <div className="asset-cards" data-testid="entities-cards">
-          {entities.map((entity) => {
-            const card = describeEntityCard(
-              entity,
-              tab,
-              t,
-              tab === "archived" ? formatRelativeEntityTime(entity.updated_at, locale) : null,
-            );
-            return (
-              <AssetCard
-                context={card.context}
-                footer={(
-                  <>
-                    <span className="entity-card-type">{card.typeLabel}</span>
-                    <span className="entity-card-count">{card.countLabel}</span>
-                    <div className="entity-card-actions">
-                      {tab === "detected" && (
-                        <>
-                          <button className="entities-ghost-btn" onClick={() => void handleEstablish([entity.id])} type="button">
-                            {t("entities.actions.establish")}
-                          </button>
-                          <button className="entities-ghost-btn" onClick={() => void handleArchive([entity.id])} type="button">
-                            {t("entities.actions.archive")}
-                          </button>
-                        </>
-                      )}
-                      {tab === "established" && (
-                        <>
-                          <button className="entities-ghost-btn" onClick={() => onEntityClick(entity.id)} type="button">
-                            {t("entities.actions.open")}
-                          </button>
-                          <button className="entities-ghost-btn" onClick={() => void handleArchive([entity.id])} type="button">
-                            {t("entities.actions.archive")}
-                          </button>
-                        </>
-                      )}
-                      {tab === "archived" && (
-                        <>
-                          <button className="entities-ghost-btn" onClick={() => void handleRestore([entity.id])} type="button">
-                            {t("entities.actions.restore")}
-                          </button>
-                          <button
-                            aria-label={t("entities.actions.deletePermanentlyNamed", { name: entity.name })}
-                            className="entities-ghost-btn entities-danger-btn"
-                            onClick={() => openDeletePermanentlyDialog(entity)}
-                            type="button"
-                          >
-                            {t("entities.actions.deletePermanently")}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </>
-                )}
-                key={entity.id}
-                onOpen={tab === "established" ? () => onEntityClick(entity.id) : undefined}
-                openLabel={card.openLabel ?? undefined}
-                testId={`entity-card-${entity.id}`}
-                title={entity.name}
-                variant={tab === "detected" ? "detected" : undefined}
-              >
+        <>
+          <div className="entities-cards-toolbar">
+            <input
+              aria-label={t("entities.actions.selectAll")}
+              checked={selectAll.checked}
+              onChange={(event) => setSelected((current) => toggleSelectAll(current, ids, event.target.checked))}
+              ref={(element) => {
+                if (element) element.indeterminate = selectAll.indeterminate;
+              }}
+              type="checkbox"
+            />
+            <span>{t("entities.actions.selectAll")}</span>
+          </div>
+          <div className="asset-cards" data-testid="entities-cards">
+            {entities.map((entity) => {
+              const card = describeEntityCard(
+                entity,
+                tab,
+                t,
+                tab === "archived" ? (formatRelativeEntityTime(entity.updated_at, locale) ?? "") : "",
+              );
+              const openProps: OpenProps = tab === "established"
+                ? { onOpen: () => onEntityClick(entity.id), openLabel: card.openLabel ?? entity.name }
+                : {};
+              const head = (
                 <div className="entity-card-head">
                   <input
                     aria-label={t("entities.actions.selectEntity", { name: entity.name })}
@@ -522,10 +486,61 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
                   />
                   <span aria-hidden="true" className="entity-initials">{card.initials}</span>
                 </div>
-              </AssetCard>
-            );
-          })}
-        </div>
+              );
+              const footer = (
+                <>
+                  <span className="entity-card-type">{card.typeLabel}</span>
+                  <span className="entity-card-count">{card.countLabel}</span>
+                  <div className="entity-card-actions">
+                    {tab === "detected" && (
+                      <>
+                        <button className="entities-ghost-btn" onClick={() => void handleEstablish([entity.id])} type="button">
+                          {t("entities.actions.establish")}
+                        </button>
+                        <button className="entities-ghost-btn" onClick={() => void handleArchive([entity.id])} type="button">
+                          {t("entities.actions.archive")}
+                        </button>
+                      </>
+                    )}
+                    {tab === "established" && (
+                      <button className="entities-ghost-btn" onClick={() => void handleArchive([entity.id])} type="button">
+                        {t("entities.actions.archive")}
+                      </button>
+                    )}
+                    {tab === "archived" && (
+                      <>
+                        <button className="entities-ghost-btn" onClick={() => void handleRestore([entity.id])} type="button">
+                          {t("entities.actions.restore")}
+                        </button>
+                        <button
+                          aria-label={t("entities.actions.deletePermanentlyNamed", { name: entity.name })}
+                          className="entities-ghost-btn entities-danger-btn"
+                          onClick={() => openDeletePermanentlyDialog(entity)}
+                          type="button"
+                        >
+                          {t("entities.actions.deletePermanently")}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              );
+              return (
+                <AssetCard
+                  context={card.context}
+                  footer={footer}
+                  key={entity.id}
+                  testId={`entity-card-${entity.id}`}
+                  title={entity.name}
+                  variant={tab === "detected" ? "detected" : undefined}
+                  {...openProps}
+                >
+                  {head}
+                </AssetCard>
+              );
+            })}
+          </div>
+        </>
       ) : (
         <table className="entities-table">
           <thead>
