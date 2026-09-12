@@ -124,32 +124,16 @@ fn headline(steps: &[ActivityStep], resting: ActivityStepName) -> (u64, u64) {
         .unwrap_or((0, 0))
 }
 
-/// One step's share of its asset's blocked count: failed work, plus waiting
-/// work when this step's lane cannot serve it. Steps with no lane (Store,
-/// Confirm) contribute failed work only — their backlog is someone else's
-/// turn (the import request, the user), never a missing model.
-fn blocked_contribution(step: &ActivityStep, lane_available: bool) -> u64 {
-    let pending = step.total.saturating_sub(step.done + step.failed);
-    step.failed
-        + if step.job.is_some() && !lane_available {
-            pending
-        } else {
-            0
-        }
-}
-
-/// An asset's blocked count is the maximum across its steps, not the sum:
-/// the number is shown as a count of items ("12 pages blocked"), and one
-/// memory pending in two steps is still one item. A floor, stated honestly:
-/// distinct memories may be blocked in different steps, so the true item
-/// count is at least the max and at most the sum — the max is the claim we
-/// can prove.
-fn blocked_max(steps: &[ActivityStep], lane_available: bool) -> u64 {
-    steps
-        .iter()
-        .map(|step| blocked_contribution(step, lane_available))
-        .max()
-        .unwrap_or(0)
+/// An asset's blocked count is an exact distinct-item count from the reader:
+/// failed items when the lane can serve them (only failures are stuck),
+/// unfinished items when it cannot (waiting work is stuck too). A memory
+/// failed in one step and waiting in another counts once.
+fn asset_blocked(backlog: &wenlan_core::db::AssetBacklog, lane_available: bool) -> u64 {
+    if lane_available {
+        backlog.failed
+    } else {
+        backlog.unfinished
+    }
 }
 
 /// Map a `JobRoute.source` string onto its lane. Unknown sources fall to
@@ -235,29 +219,28 @@ pub(crate) fn compose_activity(
         ]),
         done: memories_done,
         total: memories_total,
-        blocked: blocked_max(&memory_steps, everyday_route.available),
+        blocked: asset_blocked(&counts.memories_backlog, everyday_route.available),
         steps: memory_steps,
     };
 
     // ── Entities ────────────────────────────────────────────────────
-    // Detect is `entity_extract` + `entity_link`: a memory is done only when
-    // both are done. The reader returns counts, not pairs, so `done` is the
-    // overlap lower bound (`min`) and `failed` the union upper bound (`max`);
-    // pending is the rest of the memory population. That total already covers
-    // every memory, so memories with no row for either step are pending here
-    // without a backlog term (adding one would double-count).
-    let extract = tally(&counts, &["entity_extract"]);
-    let entity_link = tally(&counts, &["entity_link"]);
-    let detect_done = extract.done.min(entity_link.done);
-    let detect_failed = extract.failed.max(entity_link.failed);
-    let detect_total = counts.memories_total.max(detect_done + detect_failed);
-    let detect_pending = detect_total.saturating_sub(detect_done + detect_failed);
+    // Detect's done/failed are exact distinct-memory counts from the reader:
+    // done has BOTH `entity_extract` and `entity_link` done, failed has
+    // EITHER failed without being done. Total is the memory population;
+    // pending is the remainder.
+    let detect_pending = counts
+        .memories_total
+        .saturating_sub(counts.detect.done + counts.detect.failed);
     let detect = ActivityStep {
         name: ActivityStepName::Detect,
-        state: step_state(detect_pending, detect_failed, everyday_route.available),
-        done: detect_done,
-        total: detect_total,
-        failed: detect_failed,
+        state: step_state(
+            detect_pending,
+            counts.detect.failed,
+            everyday_route.available,
+        ),
+        done: counts.detect.done,
+        total: counts.memories_total,
+        failed: counts.detect.failed,
         job: ActivityStepName::Detect.job(),
     };
     // Confirm is user-driven in the Wiki: no lane, always Idle.
@@ -276,38 +259,44 @@ pub(crate) fn compose_activity(
         state: rollup(&[entity_steps[0].state, entity_steps[1].state]),
         done: entities_done,
         total: entities_total,
-        // Detect's share is already a memory count (min/max over the memory
-        // population), so the max keeps it exact.
-        blocked: blocked_max(&entity_steps, everyday_route.available),
+        blocked: asset_blocked(&counts.entities_backlog, everyday_route.available),
         steps: entity_steps,
     };
 
     // ── Pages ───────────────────────────────────────────────────────
-    // Write (Distill) is served by the synthesis lane. Stale pages are the
-    // backlog; refresh-blocked ones are failed.
-    let write_total = counts.pages_active + counts.pages_stale;
-    let write_pending =
-        write_total.saturating_sub(counts.pages_active + counts.pages_refresh_blocked);
+    // Write (Distill) is served by the synthesis lane. The three page counts
+    // are NESTED — stale and refresh-blocked are subsets of the total — so
+    // current pages are derived by subtraction, never by addition.
+    // (Debug-asserted: the reader guarantees the nesting.)
+    debug_assert!(counts.pages_stale + counts.pages_refresh_blocked <= counts.pages_total);
+    let write_done = counts
+        .pages_total
+        .saturating_sub(counts.pages_stale + counts.pages_refresh_blocked);
     let write = ActivityStep {
         name: ActivityStepName::Write,
         state: step_state(
-            write_pending,
+            counts.pages_stale,
             counts.pages_refresh_blocked,
             synthesis_route.available,
         ),
-        done: counts.pages_active,
-        total: write_total,
+        done: write_done,
+        total: counts.pages_total,
         failed: counts.pages_refresh_blocked,
         job: ActivityStepName::Write.job(),
     };
     let page_steps = vec![write];
-    let (pages_done, pages_total) = headline(&page_steps, ActivityStepName::Write);
+    let (pages_done, pages_asset_total) = headline(&page_steps, ActivityStepName::Write);
     let pages = ActivityAssetStatus {
         kind: ActivityAssetKind::Pages,
         state: page_steps[0].state,
         done: pages_done,
-        total: pages_total,
-        blocked: blocked_max(&page_steps, synthesis_route.available),
+        total: pages_asset_total,
+        // One row per page: exact in both lane states.
+        blocked: if synthesis_route.available {
+            counts.pages_refresh_blocked
+        } else {
+            counts.pages_refresh_blocked + counts.pages_stale
+        },
         steps: page_steps,
     };
 
@@ -347,7 +336,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
-    use wenlan_core::db::{StepBacklog, StepCount};
+    use wenlan_core::db::{AssetBacklog, StepBacklog, StepCount};
 
     fn job_route(source: &str, model: Option<&str>, mode: &str) -> JobRoute {
         JobRoute {
@@ -370,9 +359,18 @@ mod tests {
             memories_total: 0,
             step_counts: vec![],
             memories_without_step: vec![],
+            detect: wenlan_core::db::DetectTally { done: 0, failed: 0 },
+            memories_backlog: AssetBacklog {
+                failed: 0,
+                unfinished: 0,
+            },
+            entities_backlog: AssetBacklog {
+                failed: 0,
+                unfinished: 0,
+            },
             entities_detected: 0,
             entities_confirmed: 0,
-            pages_active: 0,
+            pages_total: 0,
             pages_stale: 0,
             pages_refresh_blocked: 0,
             last_step_updated_at: None,
@@ -427,12 +425,100 @@ mod tests {
             memories_total: 8,
             step_counts: vec![],
             memories_without_step: unstarted_backlog(),
+            detect: wenlan_core::db::DetectTally { done: 0, failed: 0 },
+            memories_backlog: AssetBacklog {
+                failed: 0,
+                unfinished: 8,
+            },
+            entities_backlog: AssetBacklog {
+                failed: 0,
+                unfinished: 8,
+            },
             ..empty_counts()
         }
     }
 
     fn pages_asset(response: &ActivityResponse) -> &ActivityAssetStatus {
         &response.assets[2]
+    }
+
+    /// A fresh install: no memories, no pages, and no model configured. The
+    /// spec's headline edge case — nothing is waiting, so nothing is blocked.
+    #[test]
+    fn empty_db_with_unconfigured_lanes_is_up_to_date() {
+        let everyday = job_route("basic", None, "unconfigured");
+        let synthesis = job_route("none", None, "unconfigured");
+        let response = compose_activity(empty_counts(), &[], &everyday, &synthesis);
+        assert_eq!(response.state, ActivityState::UpToDate);
+        for asset in &response.assets {
+            assert_eq!(asset.state, ActivityStepState::Idle, "{:?}", asset.kind);
+            assert_eq!(asset.blocked, 0, "{:?}", asset.kind);
+            assert_eq!((asset.done, asset.total), (0, 0), "{:?}", asset.kind);
+        }
+    }
+
+    /// `available` is a conjunction: a pinned route with no model cannot run,
+    /// and a model on an unavailable pin cannot either. The other fixtures
+    /// always vary both together, so only this test pins the conjunction.
+    #[test]
+    fn available_requires_both_pinned_and_a_model() {
+        let pinned_without_model = job_route("on_device", None, "pinned");
+        let model_without_pin = job_route("on_device", Some("qwen3-4b"), "pinned_unavailable");
+        for broken in [pinned_without_model, model_without_pin] {
+            let counts = ActivityCounts {
+                memories_total: 8,
+                memories_without_step: unstarted_backlog(),
+                memories_backlog: AssetBacklog {
+                    failed: 0,
+                    unfinished: 8,
+                },
+                entities_backlog: AssetBacklog {
+                    failed: 0,
+                    unfinished: 8,
+                },
+                ..empty_counts()
+            };
+            let synthesis = job_route("on_device", Some("qwen3-4b"), "pinned");
+            let response = compose_activity(counts, &[], &broken, &synthesis);
+            assert!(!response.everyday.available, "{:?}", broken.mode);
+            // Work is waiting on a lane that cannot run it.
+            assert_eq!(response.state, ActivityState::Blocked, "{:?}", broken.mode);
+            assert_eq!(memories_asset(&response).blocked, 8, "{:?}", broken.mode);
+        }
+    }
+
+    /// The roll-up counts items, not step instances, and a memory stuck in
+    /// two different steps still counts once. Five memories failed in
+    /// Summarize and five DIFFERENT ones failed in Link is ten items, which
+    /// only the reader's distinct-memory tally can see: a max across steps
+    /// would say five and a sum would say ten only by accident.
+    #[test]
+    fn blocked_counts_distinct_memories_across_steps() {
+        let (everyday, synthesis) = pinned_local();
+        let counts = ActivityCounts {
+            memories_total: 10,
+            step_counts: vec![
+                StepCount {
+                    step_name: "title_enrich".to_string(),
+                    status: "failed".to_string(),
+                    count: 5,
+                },
+                StepCount {
+                    step_name: "page_growth".to_string(),
+                    status: "failed".to_string(),
+                    count: 5,
+                },
+            ],
+            memories_backlog: AssetBacklog {
+                failed: 10,
+                unfinished: 10,
+            },
+            ..empty_counts()
+        };
+        let response = compose_activity(counts, &[], &everyday, &synthesis);
+        let memories = memories_asset(&response);
+        assert_eq!(memories.state, ActivityStepState::Blocked);
+        assert_eq!(memories.blocked, 10);
     }
 
     #[test]
@@ -473,6 +559,10 @@ mod tests {
                 status: "pending".to_string(),
                 count: 10,
             }],
+            memories_backlog: AssetBacklog {
+                failed: 0,
+                unfinished: 10,
+            },
             ..empty_counts()
         };
         let response = compose_activity(counts, &[], &everyday, &synthesis);
@@ -494,6 +584,10 @@ mod tests {
                 status: "pending".to_string(),
                 count: 10,
             }],
+            memories_backlog: AssetBacklog {
+                failed: 0,
+                unfinished: 10,
+            },
             ..empty_counts()
         };
         let response = compose_activity(counts, &[], &everyday, &synthesis);
@@ -513,6 +607,10 @@ mod tests {
                 status: "failed".to_string(),
                 count: 2,
             }],
+            memories_backlog: AssetBacklog {
+                failed: 2,
+                unfinished: 10,
+            },
             ..empty_counts()
         };
         let response = compose_activity(counts, &[], &everyday, &synthesis);
@@ -523,11 +621,14 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn stale_pages_with_synthesis_lane_are_organizing() {
         let (everyday, _) = pinned_local();
         let synthesis = job_route("anthropic", Some("claude-sonnet-4-6"), "pinned");
+        // 12 live pages, of which 3 stale: stale is a subset of the total,
+        // not a second population.
         let counts = ActivityCounts {
-            pages_active: 12,
+            pages_total: 12,
             pages_stale: 3,
             ..empty_counts()
         };
@@ -535,8 +636,9 @@ mod tests {
         assert_eq!(response.state, ActivityState::Organizing);
         let pages = pages_asset(&response);
         assert_eq!(pages.state, ActivityStepState::Running);
-        assert_eq!(pages.done, 12);
-        assert_eq!(pages.total, 15);
+        assert_eq!(pages.done, 9);
+        assert_eq!(pages.total, 12);
+        assert_eq!(pages.blocked, 0);
     }
 
     #[test]
@@ -544,7 +646,7 @@ mod tests {
         let (everyday, _) = pinned_local();
         let synthesis = job_route("none", None, "unconfigured");
         let counts = ActivityCounts {
-            pages_active: 12,
+            pages_total: 12,
             pages_stale: 3,
             ..empty_counts()
         };
@@ -552,7 +654,29 @@ mod tests {
         assert_eq!(response.state, ActivityState::Blocked);
         let pages = pages_asset(&response);
         assert_eq!(pages.state, ActivityStepState::Blocked);
+        assert_eq!((pages.done, pages.total), (9, 12));
         assert_eq!(pages.blocked, 3);
+    }
+
+    #[test]
+    fn pages_total_does_not_double_count_stale() {
+        let (everyday, _) = pinned_local();
+        let synthesis = job_route("anthropic", Some("claude-sonnet-4-6"), "pinned");
+        // 10 live pages: 6 current, 3 waiting, 1 refresh-blocked.
+        let counts = ActivityCounts {
+            pages_total: 10,
+            pages_stale: 3,
+            pages_refresh_blocked: 1,
+            ..empty_counts()
+        };
+        let response = compose_activity(counts, &[], &everyday, &synthesis);
+        let pages = pages_asset(&response);
+        // One refresh-blocked page is a failed step, so Write is Blocked even
+        // though the synthesis lane is available. The point of this test is
+        // the arithmetic: 10 pages, not 13, and 6 current, not 10.
+        assert_eq!(pages.state, ActivityStepState::Blocked);
+        assert_eq!((pages.done, pages.total), (6, 10));
+        assert_eq!(pages.blocked, 1);
     }
 
     #[test]
@@ -622,6 +746,9 @@ mod tests {
                 count: 8,
             })
             .collect(),
+            // Every step row is ok, so the exact tallies agree: all 8
+            // memories are finished in both lanes, nothing unfinished.
+            detect: wenlan_core::db::DetectTally { done: 8, failed: 0 },
             entities_confirmed: 5,
             ..empty_counts()
         };

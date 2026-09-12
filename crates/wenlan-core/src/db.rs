@@ -69,7 +69,7 @@ mod repair_receipt;
 pub(crate) mod repair_stale_projection;
 pub(crate) mod repair_target_receipt;
 pub(crate) mod repair_verification;
-pub use activity_counts::{ActivityCounts, StepBacklog, StepCount};
+pub use activity_counts::{ActivityCounts, AssetBacklog, DetectTally, StepBacklog, StepCount};
 mod scoped_entities;
 mod scoped_pages;
 mod source_sync;

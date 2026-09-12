@@ -70,6 +70,7 @@ fn route_catalog_freezes_exact_global_and_scoped_keys() {
         (Method::Get, "/api/memory/rejections"),
         (Method::Get, "/api/refinery/queue"),
         (Method::Get, "/api/capture-stats"),
+        (Method::Get, "/api/activity"),
         (Method::Get, "/api/decisions/domains"),
         (Method::Get, "/api/snapshots"),
     ];

@@ -114,7 +114,10 @@ pub struct ActivityAssetStatus {
     pub state: ActivityStepState,
     pub done: u64,
     pub total: u64,
-    /// Items that cannot proceed: failed steps, or pending steps with no lane.
+    /// Exact count of items that cannot proceed: items with a failed step
+    /// when the asset's lane is available, plus items still waiting when it
+    /// is not. Each item counts once no matter how many of its steps are
+    /// stuck.
     pub blocked: u64,
     pub steps: Vec<ActivityStep>,
 }
