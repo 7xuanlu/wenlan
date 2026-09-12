@@ -98,15 +98,20 @@ describe("summarizeImportBatches", () => {
 });
 
 describe("ImportPhaseList", () => {
-  it("renders all six phases with real counts", () => {
+  it("renders only the two phases that end in something the user can use", () => {
     render(<ImportPhaseList phases={makeBatch().phases} />);
     expect(screen.getByText("Receiving memories")).toBeInTheDocument();
     expect(screen.getByText("Storing memories")).toBeInTheDocument();
-    expect(screen.getByText("Detecting entities")).toBeInTheDocument();
-    expect(screen.getByText("Enriching memories")).toBeInTheDocument();
-    expect(screen.getByText("Linking memories")).toBeInTheDocument();
-    expect(screen.getByText("Distilling pages")).toBeInTheDocument();
-    expect(screen.getByText("5 of 12")).toBeInTheDocument();
+    expect(screen.getAllByText("10 of 10")).toHaveLength(2);
+    // The four background phases report from the sidebar status line and the
+    // Activity page now. In the foreground they read as cost before proof:
+    // minutes of grinding with nothing usable in sight.
+    expect(screen.queryByText("Detecting entities")).not.toBeInTheDocument();
+    expect(screen.queryByText("Enriching memories")).not.toBeInTheDocument();
+    expect(screen.queryByText("Linking memories")).not.toBeInTheDocument();
+    expect(screen.queryByText("Distilling pages")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("import-phase-detect")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("import-phase-distill")).not.toBeInTheDocument();
   });
 
   it("reads a phase with no rows as waiting, never 0%", () => {
@@ -115,12 +120,24 @@ describe("ImportPhaseList", () => {
     expect(screen.queryByText(/0%/)).not.toBeInTheDocument();
   });
 
-  it("renders distill as a count with no bar", () => {
+  it("hands the rest off to the background once storing completes", () => {
     render(<ImportPhaseList phases={makeBatch().phases} />);
-    expect(screen.getByText("3 related pages")).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("import-phase-distill")).queryByRole("progressbar"),
-    ).not.toBeInTheDocument();
+    const handoff = screen.getByTestId("import-handoff");
+    expect(handoff).toHaveTextContent("10 memories stored and searchable now");
+    expect(handoff).toHaveTextContent(
+      "status line at the bottom of the sidebar",
+    );
+  });
+
+  it("says nothing about the handoff while storing is still running", () => {
+    render(
+      <ImportPhaseList
+        phases={[entry("ingest", "complete", 10, 10), entry("store", "running", 4, 10)]}
+      />,
+    );
+    expect(screen.queryByTestId("import-handoff")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("import-phase-store")).getByRole("progressbar"))
+      .toHaveAttribute("aria-valuenow", "4");
   });
 });
 
@@ -157,8 +174,8 @@ describe("ImportDetailPanel", () => {
     render(<ImportDetailPanel batches={[makeBatch()]} onBack={onBack} />);
     expect(screen.getByTestId("import-detail-panel")).toBeInTheDocument();
     expect(screen.getByText("Import progress")).toBeInTheDocument();
-    expect(screen.getByText("5 of 12")).toBeInTheDocument();
-    expect(screen.getByText("3 related pages")).toBeInTheDocument();
+    expect(screen.getAllByText("10 of 10")).toHaveLength(2);
+    expect(screen.getByTestId("import-handoff")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("import-detail-back"));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
@@ -264,8 +281,10 @@ it("does not add overlapping page counts across batches", () => {
   const summary = summarizeImportBatches(batches);
   expect(summary.pagesDistilled).toBeNull();
   render(<ImportDetailPanel batches={batches} onBack={vi.fn()} />);
+  // The panel never prints a page count, summed or otherwise: page work is no
+  // longer part of the import surface at all.
   expect(screen.queryByText("4 related pages")).not.toBeInTheDocument();
-  expect(screen.getByText("Related pages available")).toBeInTheDocument();
+  expect(screen.queryByText(/related pages/)).not.toBeInTheDocument();
 });
 
 it("finishes the import without pretending that a thin batch produced a page", () => {
@@ -287,6 +306,11 @@ it("finishes the import without pretending that a thin batch produced a page", (
   expect(summary.hasRelatedPages).toBe(false);
   expect(summary.phases.find((p) => p.phase === "distill")?.state).toBe("pending");
   render(<ImportPhaseList phases={batch.phases} />);
-  expect(screen.getByText(/Your memories are ready to search and use with AI/)).toBeInTheDocument();
-  expect(screen.getByTestId("import-phase-distill")).toHaveAttribute("data-state", "pending");
+  // A thin batch produced no page, and the import surface no longer says
+  // anything about pages either way. What it does say is what is true: the
+  // memories are stored and the rest continues in the background.
+  expect(screen.getByTestId("import-handoff")).toHaveTextContent(
+    "2 memories stored and searchable now",
+  );
+  expect(screen.queryByTestId("import-phase-distill")).not.toBeInTheDocument();
 });

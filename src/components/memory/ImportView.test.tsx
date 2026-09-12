@@ -173,7 +173,16 @@ describe("ImportView", () => {
     (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
       () => new Promise((resolve) => { resolveImport = resolve; }),
     );
-    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch());
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch({
+      phases: [
+        { phase: "ingest", state: "running", done: 5, total: 12, failed: 0 },
+        { phase: "store", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "detect", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "enrich", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "link", state: "pending", done: 0, total: 0, failed: 0 },
+        { phase: "distill", state: "pending", done: 0, total: 0, failed: 0 },
+      ] as PhaseEntry[],
+    }));
 
     renderImport();
     startImport("Memory 1");
@@ -216,11 +225,14 @@ describe("ImportView", () => {
     (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
       () => new Promise((resolve) => { resolveImport = resolve; }),
     );
+    // The failure is on Store, not on a background phase: Store is one of the
+    // two phases this surface still owns, and a row that cannot be written is
+    // the one failure the import itself has to report.
     const failed = makeBatch({
       phases: [
         { phase: "ingest", state: "complete", done: 3, total: 3, failed: 0 },
-        { phase: "store", state: "complete", done: 3, total: 3, failed: 0 },
-        { phase: "detect", state: "failed", done: 2, total: 3, failed: 1 },
+        { phase: "store", state: "failed", done: 2, total: 3, failed: 1 },
+        { phase: "detect", state: "pending", done: 0, total: 0, failed: 0 },
         { phase: "enrich", state: "pending", done: 0, total: 0, failed: 0 },
         { phase: "link", state: "pending", done: 0, total: 0, failed: 0 },
         { phase: "distill", state: "pending", done: 0, total: 0, failed: 0 },
@@ -232,16 +244,16 @@ describe("ImportView", () => {
     startImport("Memory 1");
 
     await waitFor(() => {
-      expect(screen.getByTestId("import-phase-detect")).toHaveAttribute("data-state", "failed");
+      expect(screen.getByTestId("import-phase-store")).toHaveAttribute("data-state", "failed");
     });
-    const row = screen.getByTestId("import-phase-detect");
+    const row = screen.getByTestId("import-phase-store");
     expect(within(row).getByText("Failed")).toBeInTheDocument();
     expect(within(row).getByText("1 failed")).toBeInTheDocument();
 
     resolveImport(chunkResult());
   });
 
-  it("renders distill as a live count with no bar", async () => {
+  it("shows Ingest and Store only, then hands the rest off", async () => {
     let resolveImport!: (value: unknown) => void;
     (importMemories as ReturnType<typeof vi.fn>).mockImplementation(
       () => new Promise((resolve) => { resolveImport = resolve; }),
@@ -252,20 +264,22 @@ describe("ImportView", () => {
     startImport("Memory 1");
 
     await waitFor(() => {
-      expect(screen.getByText("3 related pages")).toBeInTheDocument();
+      expect(screen.getByTestId("import-handoff")).toHaveTextContent(
+        "3 memories stored and searchable now",
+      );
     });
+    expect(screen.getByTestId("import-phase-ingest")).toBeInTheDocument();
     expect(
-      within(screen.getByTestId("import-phase-distill")).queryByRole("progressbar"),
-    ).not.toBeInTheDocument();
-    // …while a phase with a known total does draw a bar.
-    expect(
-      within(screen.getByTestId("import-phase-detect")).getByRole("progressbar"),
+      within(screen.getByTestId("import-phase-store")).getByRole("progressbar"),
     ).toBeInTheDocument();
+    for (const phase of ["detect", "enrich", "link", "distill"]) {
+      expect(screen.queryByTestId(`import-phase-${phase}`)).not.toBeInTheDocument();
+    }
 
     resolveImport(chunkResult());
   });
 
-  it("shows summary figures and names the phases still running", async () => {
+  it("shows what the import produced, not what the background still owes", async () => {
     (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
     (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(makeBatch());
 
@@ -276,28 +290,42 @@ describe("ImportView", () => {
       expect(screen.getByText(/3 memories imported/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/1 skipped/i)).toBeInTheDocument();
-    expect(screen.getByText("4 detected entities")).toBeInTheDocument();
-    expect(screen.getByText("2 entities confirmed")).toBeInTheDocument();
-    expect(screen.getByText("7 related pages")).toBeInTheDocument();
-    // Honest that background work continues — no final total that is not final.
-    expect(screen.getByText(/Saved and ready to use. Organization progress/)).toBeInTheDocument();
+    // Entity, link and page figures are the background's to report now.
+    expect(screen.queryByText("4 detected entities")).not.toBeInTheDocument();
+    expect(screen.queryByText("2 entities confirmed")).not.toBeInTheDocument();
+    expect(screen.queryByText("7 related pages")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/3 memories stored and searchable now/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/status line at the bottom of the sidebar/),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/idle and has enough resources/)).not.toBeInTheDocument();
     expect(screen.queryByText(/keep climbing/)).not.toBeInTheDocument();
   });
 
-  it("says background work finished once every phase settles", async () => {
+  it("waits for Store before claiming anything is searchable", async () => {
     (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(chunkResult());
     (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
-      makeBatch({ complete: true }),
+      makeBatch({
+        phases: [
+          { phase: "ingest", state: "complete", done: 3, total: 3, failed: 0 },
+          { phase: "store", state: "running", done: 1, total: 3, failed: 0 },
+          { phase: "detect", state: "pending", done: 0, total: 0, failed: 0 },
+          { phase: "enrich", state: "pending", done: 0, total: 0, failed: 0 },
+          { phase: "link", state: "pending", done: 0, total: 0, failed: 0 },
+          { phase: "distill", state: "pending", done: 0, total: 0, failed: 0 },
+        ] as PhaseEntry[],
+      }),
     );
 
     renderImport();
     startImport("Memory 1");
 
     await waitFor(() => {
-      expect(screen.getByText("Background work finished.")).toBeInTheDocument();
+      expect(screen.getByText(/Saved and ready to use/)).toBeInTheDocument();
     });
-    expect(screen.queryByText(/Saved and ready to use. Organization progress/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/stored and searchable now/)).not.toBeInTheDocument();
   });
 
   it("shows type breakdown badges in summary", async () => {

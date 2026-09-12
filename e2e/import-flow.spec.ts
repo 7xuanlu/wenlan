@@ -141,10 +141,13 @@ test("import flow shows real phases and an honest summary", async ({ page }) => 
     .fill("Memory one\nMemory two\nMemory three");
   await page.getByRole("button", { name: "Import", exact: true }).click();
 
-  // The daemon's row counts — not an elapsed-time bar.
-  await expect(page.getByText("Detecting entities")).toBeVisible();
-  await expect(page.getByText("1 of 3")).toBeVisible();
-  await expect(page.getByText("0 related pages")).toBeVisible();
+  // The daemon's row counts — not an elapsed-time bar. Only the two phases
+  // that end in something the user can use; the rest report from the sidebar.
+  await expect(page.getByText("Receiving memories")).toBeVisible();
+  await expect(page.getByText("Storing memories")).toBeVisible();
+  await expect(page.getByText("Detecting entities")).toHaveCount(0);
+  await expect(page.getByText("Distilling pages")).toHaveCount(0);
+  await expect(page.getByText("3 of 3").first()).toBeVisible();
   await expect(page.getByText(/Processing your memories/)).not.toBeVisible();
 
   // Release the held chunk so the request phases finish.
@@ -163,10 +166,15 @@ test("import flow shows real phases and an honest summary", async ({ page }) => 
   expect(calls[0]?.chunkIndex).toBe(0);
   expect(calls[0]?.chunkTotal).toBe(1);
 
-  // The summary reports measured figures and says background work continues.
+  // The summary reports what the import produced and hands the rest off.
   await expect(page.getByText(/3 memories imported/i)).toBeVisible();
-  await expect(page.getByText("1 detected entities")).toBeVisible();
-  await expect(page.getByText("Saved and ready to use. Organization progress will update here.")).toBeVisible();
+  await expect(page.getByText("1 detected entities")).toHaveCount(0);
+  await expect(
+    page.getByText(/3 memories stored and searchable now/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/status line at the bottom of the sidebar/),
+  ).toBeVisible();
 
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);
