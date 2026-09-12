@@ -665,6 +665,13 @@ export default function Main({
             active={view.section ?? "general"}
             onSelect={(section) => setView({ kind: "settings", section })}
             onNavigateHome={navigateHome}
+            onOpenActivity={() => {
+              afterNavigationGuards(() => {
+                setActiveTab("activity");
+                setView({ kind: "activity" });
+                setViewHistory([]);
+              });
+            }}
           />
         ) : view.kind === "connect-agent" ? null : (
           <Sidebar

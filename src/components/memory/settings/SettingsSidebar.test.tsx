@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SettingsSidebar from "./SettingsSidebar";
@@ -8,15 +9,28 @@ vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(() => new Promise(() => {})),
 }));
 
+// The sidebar carries the activity status line, which reads through
+// react-query. Left unresolved the line renders nothing, which is the right
+// behaviour for a read that has not landed and keeps these cases about the
+// navigation they were written for.
+vi.mock("../../../lib/tauri", () => ({
+  getActivity: vi.fn(() => new Promise(() => {})),
+}));
+
 function renderSettingsSidebar(extraProps: Partial<React.ComponentProps<typeof SettingsSidebar>> = {}) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
-    <SettingsSidebar
-      collapsed={false}
-      active="general"
-      onSelect={() => {}}
-      onNavigateHome={() => {}}
-      {...extraProps}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <SettingsSidebar
+        collapsed={false}
+        active="general"
+        onSelect={() => {}}
+        onNavigateHome={() => {}}
+        {...extraProps}
+      />
+    </QueryClientProvider>,
   );
 }
 

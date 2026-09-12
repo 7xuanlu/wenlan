@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -454,25 +454,46 @@ export default function ActivityFeed({
     return true;
   });
 
-  if (activities.length === 0) {
-    return (
-      <div
-        className="flex flex-col items-center justify-center h-full"
-        style={{ minHeight: 300 }}
-      >
-        <p
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "14px",
-            color: "var(--mem-text-tertiary)",
-            textAlign: "center",
-            maxWidth: 320,
-            lineHeight: 1.6,
-          }}
-        >
-          {t("activity.empty.noActivity")}
-        </p>
+  const now = <ActivityNow onOpenIntelligence={onOpenIntelligence} />;
+
+  // The rail is a sticky second column. `min-w-0` on the feed column keeps a
+  // long event sentence from pushing the rail off the right edge.
+  const withNow = (body: ReactNode) =>
+    nowPlacement === "rail" ? (
+      <div className="mem-activity-rail-shell">
+        <div className="min-w-0 flex-1">{body}</div>
+        <div className="mem-activity-rail">{now}</div>
       </div>
+    ) : (
+      body
+    );
+
+  // No agent has read from the library yet — but background work still has
+  // something to say, and this is the page a new user lands on to find out
+  // what Wenlan is doing. Returning the bare empty state here hid the Now
+  // section exactly when it was the only thing worth reading.
+  if (activities.length === 0) {
+    return withNow(
+      <div className="flex flex-col">
+        {nowPlacement !== "rail" && <div style={{ marginBottom: 20 }}>{now}</div>}
+        <div
+          className="flex flex-col items-center justify-center h-full"
+          style={{ minHeight: 300 }}
+        >
+          <p
+            style={{
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "14px",
+              color: "var(--mem-text-tertiary)",
+              textAlign: "center",
+              maxWidth: 320,
+              lineHeight: 1.6,
+            }}
+          >
+            {t("activity.empty.noActivity")}
+          </p>
+        </div>
+      </div>,
     );
   }
 
@@ -497,8 +518,6 @@ export default function ActivityFeed({
   const hasActionFilter = actions.length > 1;
   const hasAgentFilter = agents.length > 1;
   const showToolbar = hasActionFilter || hasAgentFilter;
-
-  const now = <ActivityNow onOpenIntelligence={onOpenIntelligence} />;
 
   const feed = (
     <div className="flex flex-col">
@@ -603,16 +622,7 @@ export default function ActivityFeed({
     </div>
   );
 
-  if (nowPlacement !== "rail") return feed;
-
-  // The rail is a sticky second column. `min-w-0` on the feed column keeps a
-  // long event sentence from pushing the rail off the right edge.
-  return (
-    <div className="mem-activity-rail-shell">
-      <div className="min-w-0 flex-1">{feed}</div>
-      <div className="mem-activity-rail">{now}</div>
-    </div>
-  );
+  return withNow(feed);
 }
 
 function ActivityEntry({

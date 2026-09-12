@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useTranslation } from "react-i18next";
+import ActivityStatus from "../activity/ActivityStatus";
 
 export type SettingsSection =
   | "sources"
@@ -112,6 +113,8 @@ interface SettingsSidebarProps {
   active: SettingsSection;
   onSelect: (section: SettingsSection) => void;
   onNavigateHome: () => void;
+  /** Navigates to the Activity view. Absent when the shell has no route. */
+  onOpenActivity?: () => void;
 }
 
 export default function SettingsSidebar({
@@ -119,9 +122,14 @@ export default function SettingsSidebar({
   active,
   onSelect,
   onNavigateHome,
+  onOpenActivity,
 }: SettingsSidebarProps) {
   const { t } = useTranslation();
   const [appVersion, setAppVersion] = useState<string>("");
+  // Settings swaps the whole sidebar out, so the status line has to be here
+  // too or it vanishes on the one page where a user is most likely to be
+  // fixing the thing that blocked it.
+  const [activityOpen, setActivityOpen] = useState(false);
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
@@ -288,6 +296,12 @@ export default function SettingsSidebar({
             )}
           </div>
         </div>
+
+        <ActivityStatus
+          expanded={activityOpen}
+          onToggle={() => setActivityOpen((open) => !open)}
+          onOpenActivity={onOpenActivity}
+        />
       </div>
     </aside>
   );
