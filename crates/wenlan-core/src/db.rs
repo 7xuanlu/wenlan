@@ -42,6 +42,7 @@ mod genesis_schema;
 /// real substrate. Text, not a `libsql` handle — see the constant's own note.
 #[cfg(test)]
 pub(crate) use genesis_schema::GENESIS_SUBSTRATE_DDL;
+mod activity_counts;
 mod kg_quality_diagnostics;
 mod kg_quality_duplicate_candidates;
 mod kg_quality_embedding_refresh;
@@ -68,6 +69,7 @@ mod repair_receipt;
 pub(crate) mod repair_stale_projection;
 pub(crate) mod repair_target_receipt;
 pub(crate) mod repair_verification;
+pub use activity_counts::{ActivityCounts, AssetBacklog, DetectTally, StepBacklog, StepCount};
 mod scoped_entities;
 mod scoped_pages;
 mod source_sync;

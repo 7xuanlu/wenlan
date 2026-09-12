@@ -211,10 +211,11 @@ fn manifest_counts_match_the_spec() {
     // Then 173 after #708 added POST `/api/memory/entities/query`, `/archive`
     // and `/restore` (detected-entities index). Then 175 after the import
     // batch-status lane added GET `/api/import/batches/active` and GET
-    // `/api/import/batches/{batch_id}/status`.
+    // `/api/import/batches/{batch_id}/status`. Then 178 after the activity
+    // status lane added GET `/api/activity` (counts-only, not page-bearing).
     assert_eq!(
         HTTP_READERS.len(),
-        177,
+        178,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -225,7 +226,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        181,
+        182,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -233,7 +234,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        175,
+        176,
         "main builder entries"
     );
     assert_eq!(
@@ -409,7 +410,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        171 // includes the GET/PUT telemetry consent routes, which carry no page markers
+        172 // includes the GET/PUT telemetry consent routes and GET /api/activity, which carry no page markers
     );
 }
 

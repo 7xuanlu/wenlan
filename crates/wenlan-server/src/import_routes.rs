@@ -15,7 +15,7 @@ use wenlan_types::responses::ImportMemoriesResponse;
 use wenlan_types::WriteSpaceSource;
 
 /// Default cap for `GET /api/import/batches/active`.
-const DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT: usize = 20;
+pub(crate) const DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT: usize = 20;
 
 async fn request_import_priority(
     state: &Arc<RwLock<ServerState>>,

@@ -541,6 +541,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
+| `GET` | `/api/activity` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/activities` | main | yes | automatic | `none` | `handle_list_activities` | AgentActivityRow.detail = title={page.title} |
 | `GET` | `/api/agents` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `DELETE` | `/api/agents/{name}` | main | yes | automatic | `none` | `handle_delete_agent` | opaque response type — fail-closed |

@@ -566,6 +566,65 @@ export async function getPipelineStatus(): Promise<PipelineStatusResponse> {
   return invoke("get_pipeline_status");
 }
 
+// ── Activity status (daemon ≥ activity route; GET /api/activity) ───────────
+// Field names and enum string values mirror wenlan_types::activity exactly.
+
+export type ActivityState = "up_to_date" | "organizing" | "blocked";
+export type ActivityAssetKind = "memories" | "entities" | "pages";
+export type ActivityStepName =
+  | "store"
+  | "summarize"
+  | "link"
+  | "detect"
+  | "confirm"
+  | "write";
+export type ActivityStepState = "idle" | "running" | "blocked";
+export type ActivityJob = "everyday" | "synthesis";
+export type ActivityLane =
+  | "on_device"
+  | "external"
+  | "anthropic"
+  | "basic"
+  | "none";
+
+export interface ActivityRoute {
+  job: ActivityJob;
+  lane: ActivityLane;
+  model: string | null;
+  mode: string;
+  available: boolean;
+}
+
+export interface ActivityStep {
+  name: ActivityStepName;
+  state: ActivityStepState;
+  done: number;
+  total: number;
+  failed: number;
+  job: ActivityJob | null;
+}
+
+export interface ActivityAssetStatus {
+  kind: ActivityAssetKind;
+  state: ActivityStepState;
+  done: number;
+  total: number;
+  blocked: number;
+  steps: ActivityStep[];
+}
+
+export interface ActivityResponse {
+  state: ActivityState;
+  last_activity_at: number | null;
+  assets: ActivityAssetStatus[];
+  everyday: ActivityRoute;
+  synthesis: ActivityRoute;
+}
+
+export async function getActivity(): Promise<ActivityResponse> {
+  return invoke("get_activity");
+}
+
 // ── Tags ────────────────────────────────────────────────────────────────
 
 export interface TagData {

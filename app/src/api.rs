@@ -766,6 +766,10 @@ impl WenlanClient {
         self.get_json("/api/debug/pipeline").await
     }
 
+    pub async fn activity(&self) -> Result<wenlan_types::activity::ActivityResponse, String> {
+        self.get_json("/api/activity").await
+    }
+
     pub async fn list_tags(&self) -> Result<Vec<String>, String> {
         Ok(self.list_tag_inventory().await?.tags)
     }
@@ -2303,6 +2307,39 @@ mod tests {
         assert_eq!(
             request.lines().next().unwrap_or_default(),
             "GET /api/debug/pipeline HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_uses_daemon_activity_endpoint() {
+        let body = r#"{"state":"organizing","last_activity_at":1700000100,"assets":[{"kind":"memories","state":"running","done":7,"total":10,"blocked":0,"steps":[]}],"everyday":{"job":"everyday","lane":"on_device","model":"qwen3-4b","mode":"pinned","available":true},"synthesis":{"job":"synthesis","lane":"none","model":null,"mode":"unconfigured","available":false}}"#;
+        let (base_url, request) = serve_json_once(body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let activity = client.activity().await.unwrap();
+
+        assert_eq!(
+            activity.state,
+            wenlan_types::activity::ActivityState::Organizing
+        );
+        assert_eq!(activity.last_activity_at, Some(1_700_000_100));
+        assert_eq!(activity.assets.len(), 1);
+        assert_eq!(
+            activity.assets[0].kind,
+            wenlan_types::activity::ActivityAssetKind::Memories
+        );
+        assert_eq!(
+            activity.everyday.lane,
+            wenlan_types::activity::ActivityLane::OnDevice
+        );
+        assert!(!activity.synthesis.available);
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "GET /api/activity HTTP/1.1"
         );
     }
 

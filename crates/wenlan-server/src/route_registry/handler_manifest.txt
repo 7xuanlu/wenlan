@@ -1,4 +1,5 @@
 # Exact route-to-handler bindings, captured from the production builders.
+main|get|/api/activity|wenlan_server::activity_routes::handle_activity
 main|get|/api/activities|wenlan_server::activity_tag_routes::handle_list_activities
 main|get|/api/agents|wenlan_server::profile_agents_routes::handle_list_agents
 main|get|/api/agents/{name}|wenlan_server::profile_agents_routes::handle_get_agent
