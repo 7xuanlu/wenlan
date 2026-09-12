@@ -1,0 +1,149 @@
+/* Flat asset cards lens (Wiki default). Quiet surfaces: fills and borders
+   come from theme tokens only — no shadows, no tinted washes. */
+
+.wiki-cards-wrap {
+  min-width: 0;
+}
+
+.asset-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--mem-space-3, 12px);
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .asset-cards {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .asset-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.asset-card {
+  background: var(--mem-card-surface);
+  border: 1px solid var(--mem-border);
+  border-radius: var(--mem-radius-lg);
+  box-shadow: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 132px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 16px 16px 14px;
+}
+
+.asset-card:hover,
+.asset-card:has(.asset-card-open:focus-visible) {
+  background: var(--mem-card-hover);
+}
+
+.asset-card-open {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: block;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.asset-card-open:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+.asset-card-title {
+  color: var(--mem-text);
+  display: -webkit-box;
+  font-family: var(--mem-font-heading);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.asset-card-context {
+  color: var(--mem-text-secondary);
+  display: -webkit-box;
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  line-height: 1.45;
+  line-clamp: 2;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.asset-card-footer {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 6px 10px;
+  margin-top: auto;
+}
+
+.asset-card-footer time {
+  color: var(--mem-text-meta-aa);
+  font-family: var(--mem-font-mono);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+/* Icon-only lens toggle: two buttons in one bordered group. */
+.asset-lens-toggle {
+  border: 1px solid var(--mem-border);
+  border-radius: var(--mem-radius-md);
+  display: inline-flex;
+  overflow: hidden;
+}
+
+.asset-lens-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  padding: 0;
+  width: 34px;
+}
+
+.asset-lens-button svg {
+  height: var(--mem-icon-glyph-size);
+  width: var(--mem-icon-glyph-size);
+}
+
+.asset-lens-button[aria-pressed="true"] {
+  background: var(--mem-surface);
+  color: var(--mem-text);
+}
+
+.asset-lens-button:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asset-lens-button,
+  .asset-card,
+  .asset-card-open {
+    transition: none;
+  }
+}

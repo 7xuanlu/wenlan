@@ -68,6 +68,7 @@ function renderOverview({
 
 describe("PagesOverview", () => {
   beforeEach(() => {
+    window.localStorage.removeItem("wenlan-wiki-view-mode");
     vi.mocked(listPagesExplicitBrowse).mockReset();
     vi.mocked(listRefinements).mockReset();
     vi.mocked(listRefinements).mockResolvedValue({ proposals: [] });
@@ -89,6 +90,7 @@ describe("PagesOverview", () => {
   });
 
   it("combines active and draft inventories without treating a draft as needing review", async () => {
+    window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
     vi.mocked(listPagesExplicitBrowse).mockImplementation(async (status) => status === "draft"
       ? [
           page({
@@ -140,6 +142,7 @@ describe("PagesOverview", () => {
   });
 
   it("renders the approved full-width Wiki inventory without inventing a label for empty Space", async () => {
+    window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({ id: "independent", space: null }),
       page({ id: "entity", title: "Nash Su", entity_id: "entity-1", space: "Research" }),
@@ -205,6 +208,7 @@ describe("PagesOverview", () => {
   });
 
   it("marks a persisted Page when Review has a page cleanup suggestion", async () => {
+    window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({ id: "thin-page", title: "Thin research note" }),
     ]);
@@ -233,6 +237,7 @@ describe("PagesOverview", () => {
   });
 
   it("includes every visible persisted state in the Page action name without changing row navigation", async () => {
+    window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({
         id: "review-page",
@@ -272,6 +277,7 @@ describe("PagesOverview", () => {
   });
 
   it("does not treat cleanup evidence memory ids as Page ids", async () => {
+    window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({ id: "memory-evidence", title: "Ordinary page" }),
     ]);
@@ -399,6 +405,7 @@ describe("PagesOverview", () => {
   });
 
   it("filters by Space, sorts by title, and paginates twelve rows at a time", async () => {
+    window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
     vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
       page({ id: "topic-z", title: "Zulu topic", space: null }),
       page({ id: "decision", title: "Why citations stay visible", content: "Decision: keep citations visible.", space: "Wenlan" }),
@@ -430,5 +437,118 @@ describe("PagesOverview", () => {
 
     expect(await screen.findByText("No pages yet")).toBeInTheDocument();
     expect(screen.queryByText("Create a space")).not.toBeInTheDocument();
+    // The lens preference stays changeable even with zero pages.
+    expect(screen.getByRole("group", { name: "View" })).toBeInTheDocument();
+  });
+
+  it("renders cards by default with title, summary, space chip, and time", async () => {
+    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
+      page({ id: "independent", space: null }),
+      page({ id: "recap", title: "July research recap", space: "Research" }),
+    ]);
+    const user = userEvent.setup();
+    const { onSelectSpace } = renderOverview();
+
+    const cards = await screen.findByTestId("wiki-cards");
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(within(cards).getAllByTestId(/^wiki-card-/)).toHaveLength(2);
+
+    const recap = screen.getByTestId("wiki-card-recap");
+    expect(within(recap).getByText("July research recap")).toBeInTheDocument();
+    expect(within(recap).getByText("A page can stand on its own.")).toBeInTheDocument();
+    const time = recap.querySelector("time");
+    expect(time).not.toBeNull();
+    expect(time?.getAttribute("dateTime")).toBeTruthy();
+
+    await user.click(within(recap).getByRole("button", { name: "Open Space: Research" }));
+    expect(onSelectSpace).toHaveBeenCalledWith("Research");
+  });
+
+  it("switching to rows shows the table and persists the preference", async () => {
+    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
+      page({ id: "independent", space: null }),
+    ]);
+    const user = userEvent.setup();
+    renderOverview();
+
+    expect(await screen.findByTestId("wiki-cards")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Rows" }));
+
+    expect(await screen.findByRole("columnheader", { name: "Page" })).toBeInTheDocument();
+    expect(screen.queryByTestId("wiki-cards")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("wenlan-wiki-view-mode")).toBe("rows");
+    expect(screen.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("restores the stored rows lens on mount", async () => {
+    window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
+    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
+      page({ id: "independent", space: null }),
+    ]);
+    renderOverview();
+
+    expect(await screen.findByRole("columnheader", { name: "Page" })).toBeInTheDocument();
+    expect(screen.queryByTestId("wiki-cards")).not.toBeInTheDocument();
+  });
+
+  it("opens pages and drafts from cards exactly like the rows do", async () => {
+    vi.mocked(listPagesExplicitBrowse).mockImplementation(async (status) => status === "draft"
+      ? [
+          page({
+            id: "draft-titled",
+            title: "Working theory",
+            status: "draft",
+            review_status: "unconfirmed",
+            space: "Research",
+          }),
+        ]
+      : [page({ id: "active", title: "Published note" })]);
+    const user = userEvent.setup();
+    const onSelectDraft = vi.fn();
+    const onSelectPage = vi.fn();
+    renderOverview({ onSelectDraft, onSelectPage });
+
+    await user.click(await screen.findByRole("button", { name: "Open Published note" }));
+    expect(onSelectPage).toHaveBeenCalledWith("active");
+
+    await user.click(screen.getByRole("button", { name: "Open Working theory · Draft" }));
+    expect(onSelectDraft).toHaveBeenCalledWith("draft-titled", "Research");
+  });
+
+  it("renders no context node when a page has no summary", async () => {
+    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
+      page({ id: "bare", title: "Bare note", summary: null }),
+    ]);
+    renderOverview();
+
+    const card = await screen.findByTestId("wiki-card-bare");
+    expect(within(card).getByText("Bare note")).toBeInTheDocument();
+    expect(card.querySelector(".asset-card-context")).toBeNull();
+  });
+
+  it("keeps identical pagination numbers across lenses", async () => {
+    vi.mocked(listPagesExplicitBrowse).mockResolvedValue(
+      Array.from({ length: 13 }, (_, index) => page({
+        id: `topic-${index}`,
+        title: `Topic ${index}`,
+        last_modified: `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      })),
+    );
+    const user = userEvent.setup();
+    renderOverview();
+
+    expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^wiki-card-/)).toHaveLength(12);
+
+    await user.click(screen.getByRole("button", { name: "Rows" }));
+    expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Open / })).toHaveLength(12);
+
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("13–13 of 13")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cards" }));
+    expect(await screen.findByText("13–13 of 13")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^wiki-card-/)).toHaveLength(1);
   });
 });

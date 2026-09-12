@@ -22,12 +22,12 @@ function wikiPages() {
   ];
 }
 
-async function openWiki(page: BrowserPage, locale: "en" | "zh-Hant", theme: "dark" | "light") {
+async function openWiki(page: BrowserPage, locale: "en" | "zh-Hant", theme: "dark" | "light", lens: "rows" | "cards") {
   const browserErrors = collectBrowserErrors(page);
   await installTauriMock(page, {
     fixture: { ...createSpacesNavigationFixture(), pages: wikiPages() },
     locale,
-    localStorage: { "wenlan-theme": theme },
+    localStorage: { "wenlan-theme": theme, "wenlan-wiki-view-mode": lens },
     rawActions: [],
   });
   await page.goto("/");
@@ -44,7 +44,7 @@ async function openWiki(page: BrowserPage, locale: "en" | "zh-Hant", theme: "dar
 
 test("Wiki desktop light matches the approved inventory and its controls work", async ({ page }) => {
   await page.setViewportSize({ width: 1487, height: 1058 });
-  const browserErrors = await openWiki(page, "en", "light");
+  const browserErrors = await openWiki(page, "en", "light", "rows");
 
   await expect(page.getByRole("columnheader", { name: "Page" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Space" })).toBeVisible();
@@ -80,7 +80,7 @@ test("Wiki desktop light matches the approved inventory and its controls work", 
 
 test("Wiki renders in dark mode", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1024 });
-  const browserErrors = await openWiki(page, "en", "dark");
+  const browserErrors = await openWiki(page, "en", "dark", "rows");
   await page.screenshot({ path: `${evidenceDirectory}/wiki-dark-1440x1024.png`, fullPage: true });
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
@@ -88,7 +88,7 @@ test("Wiki renders in dark mode", async ({ page }) => {
 
 test("Wiki keeps Traditional Chinese controls precise at tablet and mobile widths", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 900 });
-  const tabletErrors = await openWiki(page, "zh-Hant", "light");
+  const tabletErrors = await openWiki(page, "zh-Hant", "light", "rows");
   await expect(page.getByLabel("空間", { exact: true })).toBeVisible();
   await expect(page.getByLabel("排序", { exact: true })).toBeVisible();
   await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-768x900.png`, fullPage: true });
@@ -136,6 +136,76 @@ test("Cmd+K event opens the responsive global search instead of focusing a hidde
   await expect(searchShell).toHaveCSS("outline-offset", "2px");
   await expect(page.getByRole("button", { name: "搜尋", exact: true })).toHaveAttribute("aria-expanded", "true");
   await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-shortcut-search-375x812.png`, fullPage: true });
+  expect(browserErrors.pageErrors).toEqual([]);
+  expect(browserErrors.consoleErrors).toEqual([]);
+});
+
+test("Wiki cards lens stays inside the viewport at every width", async ({ context }) => {
+  for (const [width, height] of [[1487, 1058], [1280, 900], [768, 900], [375, 812]] as const) {
+    // A fresh page per width: the Tauri mock binding can only be registered once per page.
+    const page = await context.newPage();
+    await page.setViewportSize({ width, height });
+    const browserErrors = await openWiki(page, "en", "light", "cards");
+
+    await expect(page.getByTestId("wiki-cards")).toBeVisible();
+    await expect(page.getByText("1–7 of 7", { exact: true })).toBeVisible();
+    await expect(page.locator(".asset-card")).toHaveCount(7);
+
+    const lensGroup = page.getByRole("group", { name: "View" });
+    await expect(lensGroup.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "true");
+    await expect(lensGroup.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "false");
+
+    const fitsViewport = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+    expect(fitsViewport).toBe(true);
+    const cardBoxes = await Promise.all((await page.locator(".asset-card").all()).map((card) => card.boundingBox()));
+    expect(cardBoxes).toHaveLength(7);
+    for (const box of cardBoxes) {
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    }
+
+    await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-light-${width}x${height}.png`, fullPage: true });
+
+    await expect(page.getByRole("button", { name: "Open Wenlan product principles" })).toBeVisible();
+    await page.getByRole("button", { name: "Open Wenlan product principles" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Wenlan product principles" })).toBeVisible();
+
+    expect(browserErrors.pageErrors).toEqual([]);
+    expect(browserErrors.consoleErrors).toEqual([]);
+    await page.close();
+  }
+});
+
+test("Wiki cards lens keeps Traditional Chinese titles inside the card", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const browserErrors = await openWiki(page, "zh-Hant", "light", "cards");
+
+  const lensGroup = page.getByRole("group", { name: "檢視" });
+  await expect(lensGroup).toBeVisible();
+  await expect(page.getByTestId("wiki-cards")).toBeVisible();
+
+  const cards = page.locator(".asset-card");
+  const cardCount = await cards.count();
+  expect(cardCount).toBeGreaterThan(0);
+  for (let index = 0; index < cardCount; index += 1) {
+    const cardBox = await cards.nth(index).boundingBox();
+    const titleBox = await cards.nth(index).locator(".asset-card-title").boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(titleBox).not.toBeNull();
+    expect(titleBox!.x).toBeGreaterThanOrEqual(cardBox!.x - 1);
+    expect(titleBox!.y).toBeGreaterThanOrEqual(cardBox!.y - 1);
+    expect(titleBox!.x + titleBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
+    expect(titleBox!.y + titleBox!.height).toBeLessThanOrEqual(cardBox!.y + cardBox!.height + 1);
+  }
+
+  await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-zh-hant-375x812.png`, fullPage: true });
+
+  await lensGroup.getByRole("button", { name: "列表" }).click();
+  await expect(lensGroup.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
+  await expect(lensGroup.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("table")).toBeVisible();
+
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });

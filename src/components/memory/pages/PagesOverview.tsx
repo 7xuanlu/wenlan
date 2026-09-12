@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { formatLocaleDate } from "../../../lib/dateFormat";
+import type { TFunction } from "i18next";
+import { readAssetLens, writeAssetLens, type AssetLens } from "../../../lib/assetLens";
+import { formatLocaleDate, type LocaleDateDisplay } from "../../../lib/dateFormat";
 import { listRefinements, type DistillReviewResponse, type Page } from "../../../lib/tauri";
 import { useTruthStatus } from "../../../hooks/useTruthStatus";
+import { AssetCard } from "../assets/AssetCard";
+import { AssetLensToggle } from "../assets/AssetLensToggle";
+import "../assets/assetCards.css";
 import { PageTruthBadges } from "../PageTruthBadges";
 import ReviewDialog from "../ReviewDialog";
 import { reviewSuppressKey, useSuppressedReviewItems } from "../reviewSuppression";
@@ -75,6 +80,72 @@ function SpaceChip({
   );
 }
 
+interface WikiPageView {
+  readonly isDraft: boolean;
+  readonly displayTitle: string;
+  readonly assignedSpace: string | undefined;
+  readonly updated: LocaleDateDisplay | null;
+  readonly spaceDestination: string;
+  readonly isUnconfirmed: boolean;
+  readonly hasCleanupSuggestion: boolean;
+  readonly pageActionLabel: string;
+  readonly openPage: () => void;
+}
+
+// One source of truth for the per-page display both lenses share: the row
+// title button and the card open control show the same title, carry the same
+// accessible action label, and navigate identically.
+function describeWikiPage(
+  page: Page,
+  deps: {
+    readonly t: TFunction;
+    readonly language: string;
+    readonly cleanupSuggestionIds: ReadonlySet<string>;
+    readonly onSelectDraft: (draftId: string, space: string | null) => void;
+    readonly onSelectPage: (pageId: string) => void;
+  },
+): WikiPageView {
+  const { t, language, cleanupSuggestionIds, onSelectDraft, onSelectPage } = deps;
+  const isDraft = page.status === "draft";
+  const displayTitle = isDraft && page.title.trim().length === 0
+    ? t("pages.overview.untitledDraft")
+    : page.title;
+  const assignedSpace = pageSpaceContext(page);
+  const timestamp = modifiedAt(page);
+  const updated = timestamp > 0
+    ? formatLocaleDate(new Date(timestamp), language)
+    : null;
+  const spaceDestination = assignedSpace
+    ? t("pages.overview.openSpace", { space: assignedSpace })
+    : "";
+  const isUnconfirmed = isUnconfirmedPage(page);
+  const hasCleanupSuggestion = !isDraft && cleanupSuggestionIds.has(page.id);
+  const stateLabels = [
+    isDraft ? t("pages.overview.draft") : null,
+    isUnconfirmed ? t("pages.overview.unconfirmed") : null,
+    hasCleanupSuggestion ? t("pages.overview.cleanupSuggested") : null,
+  ].filter((label): label is string => label !== null);
+  const pageActionLabel = [
+    t("pages.overview.openPage", { title: displayTitle }),
+    ...stateLabels,
+  ].join(" · ");
+  const openPage = () => {
+    if (isDraft) onSelectDraft(page.id, assignedSpace ?? null);
+    else onSelectPage(page.id);
+  };
+  return {
+    isDraft,
+    displayTitle,
+    assignedSpace,
+    updated,
+    spaceDestination,
+    isUnconfirmed,
+    hasCleanupSuggestion,
+    pageActionLabel,
+    openPage,
+  };
+}
+
 export function PagesOverview({
   onCreatePage,
   onSelectDraft,
@@ -86,6 +157,7 @@ export function PagesOverview({
   const [spaceFilter, setSpaceFilter] = useState("all");
   const [sort, setSort] = useState<PageSort>("recent");
   const [pageIndex, setPageIndex] = useState(0);
+  const [lens, setLens] = useState<AssetLens>(() => readAssetLens("wiki"));
   const [openCandidateId, setOpenCandidateId] = useState<string | null>(null);
   const { hiddenKeys, hide: hideReviewItem } = useSuppressedReviewItems();
   const { cutoverLive } = useTruthStatus();
@@ -155,6 +227,32 @@ export function PagesOverview({
   useEffect(() => {
     setPageIndex(0);
   }, [sort, spaceFilter, statusFilter]);
+
+  const handleLensChange = (next: AssetLens) => {
+    setLens(next);
+    writeAssetLens("wiki", next);
+  };
+
+  const describePage = (page: Page): WikiPageView => describeWikiPage(page, {
+    t,
+    language: i18n.language,
+    cleanupSuggestionIds,
+    onSelectDraft,
+    onSelectPage,
+  });
+
+  const pagination = (
+    <footer className="wiki-pagination">
+      <span>{t("pages.overview.paginationRange", { start: rangeStart, end: rangeEnd, total: filteredPages.length })}</span>
+      <div>
+        <button disabled={safePageIndex === 0} onClick={() => setPageIndex((current) => Math.max(0, current - 1))} type="button">{t("pages.overview.previous")}</button>
+        <button disabled={safePageIndex >= pageCount - 1} onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))} type="button">
+          {t("pages.overview.next")}
+          <span aria-hidden="true">→</span>
+        </button>
+      </div>
+    </footer>
+  );
 
   const resolveCandidate = async ({
     item,
@@ -261,6 +359,9 @@ export function PagesOverview({
             <option value="title">{t("pages.overview.sortTitle")}</option>
           </select>
         </label>
+        <span className="wiki-filters-side">
+          <AssetLensToggle onChange={handleLensChange} value={lens} />
+        </span>
       </div>
 
       {isPending ? (
@@ -274,6 +375,47 @@ export function PagesOverview({
         </div>
       ) : filteredPages.length === 0 ? (
         <p className="wiki-state">{t("pages.overview.noMatches")}</p>
+      ) : lens === "cards" ? (
+        <div className="wiki-cards-wrap" data-testid="pages-library">
+          <div className="asset-cards" data-testid="wiki-cards">
+            {visiblePages.map((page) => {
+              const view = describePage(page);
+              return (
+                <AssetCard
+                  key={page.id}
+                  context={page.summary}
+                  footer={(
+                    <>
+                      {view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
+                      {view.isDraft && (
+                        <span className="wiki-page-state wiki-page-state--draft">
+                          {t("pages.overview.draft")}
+                        </span>
+                      )}
+                      {view.isUnconfirmed && (
+                        <span className="wiki-page-state wiki-page-state--unconfirmed">
+                          {t("pages.overview.unconfirmed")}
+                        </span>
+                      )}
+                      {view.hasCleanupSuggestion && (
+                        <span className="wiki-page-state wiki-page-state--attention">
+                          {t("pages.overview.cleanupSuggested")}
+                        </span>
+                      )}
+                      <PageTruthBadges cutoverLive={cutoverLive} truth={page.truth} />
+                      {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
+                    </>
+                  )}
+                  onOpen={view.openPage}
+                  openLabel={view.pageActionLabel}
+                  testId={`wiki-card-${page.id}`}
+                  title={view.displayTitle}
+                />
+              );
+            })}
+          </div>
+          {pagination}
+        </div>
       ) : (
         <div className="wiki-table-wrap" data-testid="pages-library">
           <table className="wiki-table">
@@ -286,59 +428,33 @@ export function PagesOverview({
             </thead>
             <tbody>
               {visiblePages.map((page) => {
-                const isDraft = page.status === "draft";
-                const displayTitle = isDraft && page.title.trim().length === 0
-                  ? t("pages.overview.untitledDraft")
-                  : page.title;
-                const assignedSpace = pageSpaceContext(page);
-                const timestamp = modifiedAt(page);
-                const updated = timestamp > 0
-                  ? formatLocaleDate(new Date(timestamp), i18n.language)
-                  : null;
-                const spaceDestination = assignedSpace
-                  ? t("pages.overview.openSpace", { space: assignedSpace })
-                  : "";
-                const isUnconfirmed = isUnconfirmedPage(page);
-                const hasCleanupSuggestion = !isDraft && cleanupSuggestionIds.has(page.id);
-                const stateLabels = [
-                  isDraft ? t("pages.overview.draft") : null,
-                  isUnconfirmed ? t("pages.overview.unconfirmed") : null,
-                  hasCleanupSuggestion ? t("pages.overview.cleanupSuggested") : null,
-                ].filter((label): label is string => label !== null);
-                const pageActionLabel = [
-                  t("pages.overview.openPage", { title: displayTitle }),
-                  ...stateLabels,
-                ].join(" · ");
-                const openPage = () => {
-                  if (isDraft) onSelectDraft(page.id, assignedSpace ?? null);
-                  else onSelectPage(page.id);
-                };
+                const view = describePage(page);
                 return (
-                  <tr className="wiki-page-row" key={page.id} onClick={openPage}>
+                  <tr className="wiki-page-row" key={page.id} onClick={view.openPage}>
                     <td>
                       <div className="wiki-page-cell">
                         <button
                           className="wiki-page-link"
-                          aria-label={pageActionLabel}
+                          aria-label={view.pageActionLabel}
                           onClick={(event) => {
                             event.stopPropagation();
-                            openPage();
+                            view.openPage();
                           }}
                           type="button"
                         >
                           <span className="wiki-page-link-label">
-                            <span className="wiki-page-link-title">{displayTitle}</span>
-                            {isDraft && (
+                            <span className="wiki-page-link-title">{view.displayTitle}</span>
+                            {view.isDraft && (
                               <span className="wiki-page-state wiki-page-state--draft">
                                 {t("pages.overview.draft")}
                               </span>
                             )}
-                            {isUnconfirmed && (
+                            {view.isUnconfirmed && (
                               <span className="wiki-page-state wiki-page-state--unconfirmed">
                                 {t("pages.overview.unconfirmed")}
                               </span>
                             )}
-                            {hasCleanupSuggestion && (
+                            {view.hasCleanupSuggestion && (
                               <span className="wiki-page-state wiki-page-state--attention">
                                 {t("pages.overview.cleanupSuggested")}
                               </span>
@@ -347,28 +463,19 @@ export function PagesOverview({
                           </span>
                         </button>
                         <div className="wiki-page-mobile-meta">
-                          {assignedSpace && <SpaceChip ariaLabel={spaceDestination} label={assignedSpace} onSelectSpace={onSelectSpace} />}
-                          {updated && <time dateTime={updated.dateTime}>{updated.label}</time>}
+                          {view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
+                          {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
                         </div>
                       </div>
                     </td>
-                    <td data-testid={`page-space-${page.id}`}>{assignedSpace && <SpaceChip ariaLabel={spaceDestination} label={assignedSpace} onSelectSpace={onSelectSpace} />}</td>
-                    <td>{updated && <time dateTime={updated.dateTime}>{updated.label}</time>}</td>
+                    <td data-testid={`page-space-${page.id}`}>{view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}</td>
+                    <td>{view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          <footer className="wiki-pagination">
-            <span>{t("pages.overview.paginationRange", { start: rangeStart, end: rangeEnd, total: filteredPages.length })}</span>
-            <div>
-              <button disabled={safePageIndex === 0} onClick={() => setPageIndex((current) => Math.max(0, current - 1))} type="button">{t("pages.overview.previous")}</button>
-              <button disabled={safePageIndex >= pageCount - 1} onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))} type="button">
-                {t("pages.overview.next")}
-                <span aria-hidden="true">→</span>
-              </button>
-            </div>
-          </footer>
+          {pagination}
         </div>
       )}
 

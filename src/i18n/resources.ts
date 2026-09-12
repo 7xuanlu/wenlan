@@ -220,6 +220,13 @@ const en = {
     fixtureNotice: "Fixture data · resets on relaunch",
     reset: "Reset test data",
   },
+  assets: {
+    lens: {
+      viewLabel: "View",
+      rows: "Rows",
+      cards: "Cards",
+    },
+  },
   pages: {
     editor: {
       heading: "Page draft",
@@ -2051,6 +2058,13 @@ const zhHans = {
     fixtureNotice: "固定测试数据 · 重新启动后重置",
     reset: "重置测试数据",
   },
+  assets: {
+    lens: {
+      viewLabel: "视图",
+      rows: "列表",
+      cards: "卡片",
+    },
+  },
   pages: {
     editor: {
       heading: "页面草稿",
@@ -3847,6 +3861,13 @@ const zhHant = {
     testData: "測試資料",
     fixtureNotice: "固定測試資料 · 重新啟動後重設",
     reset: "重設測試資料",
+  },
+  assets: {
+    lens: {
+      viewLabel: "檢視",
+      rows: "列表",
+      cards: "卡片",
+    },
   },
   pages: {
     editor: {
