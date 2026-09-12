@@ -5,6 +5,9 @@ interface AssetCardProps {
   readonly title: string;
   readonly context?: string | null;
   readonly footer: ReactNode;
+  /** Review/truth state badges. Rendered on their own line so the footer
+   *  always stays "space left, date right" and rows keep equal footers. */
+  readonly status?: ReactNode;
   readonly onOpen: () => void;
   readonly openLabel: string;
   readonly testId?: string;
@@ -22,6 +25,7 @@ export function AssetCard({
   title,
   context,
   footer,
+  status,
   onOpen,
   openLabel,
   testId,
@@ -39,6 +43,7 @@ export function AssetCard({
         <span className="asset-card-title">{title}</span>
       </button>
       {context ? <p className="asset-card-context">{context}</p> : null}
+      {status ? <div className="asset-card-status">{status}</div> : null}
       <div className="asset-card-footer">{footer}</div>
     </article>
   );

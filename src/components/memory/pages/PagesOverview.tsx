@@ -387,6 +387,11 @@ export function PagesOverview({
                   footer={(
                     <>
                       {view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
+                      {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
+                    </>
+                  )}
+                  status={(view.isDraft || view.isUnconfirmed || view.hasCleanupSuggestion || (cutoverLive && page.truth)) ? (
+                    <>
                       {view.isDraft && (
                         <span className="wiki-page-state wiki-page-state--draft">
                           {t("pages.overview.draft")}
@@ -403,9 +408,8 @@ export function PagesOverview({
                         </span>
                       )}
                       <PageTruthBadges cutoverLive={cutoverLive} truth={page.truth} />
-                      {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
                     </>
-                  )}
+                  ) : undefined}
                   onOpen={view.openPage}
                   openLabel={view.pageActionLabel}
                   testId={`wiki-card-${page.id}`}

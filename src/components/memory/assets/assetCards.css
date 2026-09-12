@@ -33,7 +33,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 132px;
+  min-height: 112px;
   min-width: 0;
   overflow-wrap: anywhere;
   padding: 16px 16px 14px;
@@ -88,6 +88,13 @@
   -webkit-line-clamp: 2;
 }
 
+.asset-card-status {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
 .asset-card-footer {
   align-items: center;
   display: flex;
@@ -107,9 +114,11 @@
 
 .asset-card-footer time {
   color: var(--mem-text-meta-aa);
-  font-family: var(--mem-font-mono);
+  font-family: var(--mem-font-body);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   margin-left: auto;
+  white-space: nowrap;
 }
 
 /* Icon-only lens toggle: two buttons in one bordered group. */
