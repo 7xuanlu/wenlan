@@ -11,16 +11,13 @@
 // document.
 //
 import { expect, test, type Page } from "@playwright/test";
+import type { ActivityResponse } from "../src/lib/tauri";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 /** Widest supported window, the common laptop, the tablet breakpoint, and the
  *  narrowest phone the shell claims to support. The last two put the sidebar
  *  in its overlay drawer, which is a different render path. */
 const WIDTHS = [1487, 1280, 768, 375] as const;
-
-/** Below this the sidebar is a drawer, closed until the toggle opens it.
- *  Mirrors NARROW_QUERY in navigation/useResponsiveSidebar.ts. */
-const OVERLAY_MAX_WIDTH = 899;
 
 const VIEWS = ["Home", "Wiki", "Entities", "Spaces"] as const;
 
@@ -29,7 +26,7 @@ const VIEWS = ["Home", "Wiki", "Entities", "Spaces"] as const;
  * to render rather than three empty states. Synthesis runs on Anthropic and
  * everyday on device: that mix is the one the trust sentence has to get right.
  */
-const ACTIVITY_FIXTURE = {
+const ACTIVITY_FIXTURE: ActivityResponse = {
   state: "organizing",
   last_activity_at: 1_783_728_000,
   assets: [
@@ -40,9 +37,9 @@ const ACTIVITY_FIXTURE = {
       total: 12,
       blocked: 0,
       steps: [
-        { name: "store", state: "idle", done: 12, total: 12, blocked: 0, job: null },
-        { name: "summarize", state: "running", done: 7, total: 12, blocked: 0, job: "everyday" },
-        { name: "link", state: "idle", done: 7, total: 12, blocked: 0, job: "everyday" },
+        { name: "store", state: "idle", done: 12, total: 12, failed: 0, job: null },
+        { name: "summarize", state: "running", done: 7, total: 12, failed: 0, job: "everyday" },
+        { name: "link", state: "idle", done: 7, total: 12, failed: 0, job: "everyday" },
       ],
     },
     {
@@ -52,8 +49,8 @@ const ACTIVITY_FIXTURE = {
       total: 21,
       blocked: 0,
       steps: [
-        { name: "detect", state: "idle", done: 21, total: 21, blocked: 0, job: "everyday" },
-        { name: "confirm", state: "idle", done: 9, total: 21, blocked: 0, job: null },
+        { name: "detect", state: "idle", done: 21, total: 21, failed: 0, job: "everyday" },
+        { name: "confirm", state: "idle", done: 9, total: 21, failed: 0, job: null },
       ],
     },
     {
@@ -63,7 +60,7 @@ const ACTIVITY_FIXTURE = {
       total: 3,
       blocked: 0,
       steps: [
-        { name: "write", state: "idle", done: 3, total: 3, blocked: 0, job: "synthesis" },
+        { name: "write", state: "idle", done: 3, total: 3, failed: 0, job: "synthesis" },
       ],
     },
   ],
