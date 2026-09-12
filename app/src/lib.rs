@@ -1538,6 +1538,7 @@ pub fn run() {
             search::rebuild_activities,
             search::get_capture_stats,
             search::get_pipeline_status,
+            search::get_activity,
             search::list_all_tags,
             search::set_document_tags,
             search::delete_tag,

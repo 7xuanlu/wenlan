@@ -172,12 +172,13 @@ pub struct CliReader {
     pub adapter: &'static str,
 }
 
-/// All 177 registered `(method, path, handler)` triples.
+/// All 178 registered `(method, path, handler)` triples.
 ///
-/// 62 page-bearing, 115 not. Expands to 181 `(builder, method, path)`
-/// runtime entries: 175 in `main`, 6 in `repair`.
+/// 62 page-bearing, 116 not. Expands to 182 `(builder, method, path)`
+/// runtime entries: 176 in `main`, 6 in `repair`.
 #[rustfmt::skip]
 pub const HTTP_READERS: &[HttpReader] = &[
+    HttpReader { method: ReaderMethod::Get, path: "/api/activity", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Get, path: "/api/activities", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_list_activities", evidence: "AgentActivityRow.detail = title={page.title}" },
     HttpReader { method: ReaderMethod::Get, path: "/api/agents", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "DEMOTED — proof in the inventory doc" },
     HttpReader { method: ReaderMethod::Delete, path: "/api/agents/{name}", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_delete_agent", evidence: "opaque response type — fail-closed" },

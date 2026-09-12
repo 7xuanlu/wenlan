@@ -430,6 +430,17 @@ pub async fn get_pipeline_status(
     client.pipeline_status().await
 }
 
+#[tauri::command]
+pub async fn get_activity(
+    state: tauri::State<'_, State>,
+) -> Result<wenlan_types::activity::ActivityResponse, String> {
+    let client = {
+        let s = state.read().await;
+        s.client.clone()
+    };
+    client.activity().await
+}
+
 #[cfg(test)]
 mod pipeline_status_command_type_tests {
     use super::*;
