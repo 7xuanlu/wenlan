@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.18.7](https://github.com/7xuanlu/wenlan/compare/v0.18.6...v0.18.7) (2026-09-12)
+
+
+### Features
+
+* **activity:** add GET /api/activity background-work summary route ([#736](https://github.com/7xuanlu/wenlan/issues/736)) ([1d2de2e](https://github.com/7xuanlu/wenlan/commit/1d2de2e378a2abe9b0906881384e706aabeab857))
+* **entities:** add a Cards lens to the Entities view ([#734](https://github.com/7xuanlu/wenlan/issues/734)) ([692180b](https://github.com/7xuanlu/wenlan/commit/692180b116fc540d0363971b2168bb2a37b5b669))
+* guide first use through source-backed imports and citations ([#728](https://github.com/7xuanlu/wenlan/issues/728)) ([82d3058](https://github.com/7xuanlu/wenlan/commit/82d30581723cc59f806f4c5364fc1e4c225b57b2))
+* **quick-capture:** center the window over the app and dim it when opened from the toolbar ([#732](https://github.com/7xuanlu/wenlan/issues/732)) ([44590a5](https://github.com/7xuanlu/wenlan/commit/44590a534e372b3b8db68f01bdef97d183e05594))
+* **spaces:** add a Cards lens to the Spaces overview ([#735](https://github.com/7xuanlu/wenlan/issues/735)) ([28ed342](https://github.com/7xuanlu/wenlan/commit/28ed342458208eb32dc2b29fada6621b66466277))
+* **wiki:** add a Cards lens with an icon Rows/Cards toggle ([#733](https://github.com/7xuanlu/wenlan/issues/733)) ([8d983f4](https://github.com/7xuanlu/wenlan/commit/8d983f45c316b670b85afeb93e188e9cfd8fb3ca))
+
+
+### Bug Fixes
+
+* **distill:** let re-distill and force rebuild use a connected local server ([#730](https://github.com/7xuanlu/wenlan/issues/730)) ([e062d29](https://github.com/7xuanlu/wenlan/commit/e062d2945a82feb87a209bcf06ced3d90f8cadb6)), closes [#727](https://github.com/7xuanlu/wenlan/issues/727)
+* **wiki:** make the Wiki list readable on first look and list pages only ([#731](https://github.com/7xuanlu/wenlan/issues/731)) ([87ebe18](https://github.com/7xuanlu/wenlan/commit/87ebe1880a186523e4f763e0454785e4a00e7a88))
+
 ## [0.18.6](https://github.com/7xuanlu/wenlan/compare/v0.18.5...v0.18.6) (2026-09-09)
 
 
