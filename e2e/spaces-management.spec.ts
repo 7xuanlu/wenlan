@@ -18,7 +18,7 @@ async function openMenu(page: Page, id: string, name: string): Promise<void> {
 test("manages Spaces, cleans MRU, and preserves data after a rejected mutation", async ({ page }) => {
   // Given a clean typed fixture with command capture.
   const browserErrors = collectBrowserErrors(page);
-  const controller = await installTauriMock(page, { locale: "en", rawActions: [] });
+  const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
 
   // When create, filter, star, reorder, rename, failure, suggestions, and delete run.
@@ -116,7 +116,7 @@ test("recovers from corrupt recent-space storage on reload", async ({ page }) =>
   await installTauriMock(page, {
     locale: "en",
     rawActions: [],
-    localStorage: { "wenlan:recent-spaces:v1": "{corrupt" },
+    localStorage: { "wenlan:recent-spaces:v1": "{corrupt", "wenlan-spaces-view-mode": "rows" },
   });
 
   // When Home reloads.

@@ -18,6 +18,8 @@ function renderConfirmed(onReorder = vi.fn()) {
       noResults={false}
       pageCounts={new Map()}
       pendingIds={[]}
+      lens="rows"
+      onLensChange={() => undefined}
       onSelect={() => undefined}
       onStar={() => undefined}
       onRename={async () => true}

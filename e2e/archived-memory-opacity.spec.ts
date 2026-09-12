@@ -59,7 +59,7 @@ const memories: readonly MemoryItem[] = [
 
 async function openApp(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await installTauriMock(page, { locale: "en", rawActions: [], memories });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [], memories });
   await page.goto("/");
 }
 

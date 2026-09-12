@@ -59,7 +59,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   await mkdir(evidenceDir, { recursive: true });
   const browserErrors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 1280, height: 900 });
-  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await settle(page);
 
@@ -156,7 +156,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   const dpr2Context = await browser.newContext({ deviceScaleFactor: 2, viewport: { width: 1280, height: 900 } });
   const dpr2Page = await dpr2Context.newPage();
   const dpr2Errors = collectBrowserErrors(dpr2Page);
-  await installTauriMock(dpr2Page, { locale: "en", rawActions: [] });
+  await installTauriMock(dpr2Page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await dpr2Page.goto("/");
   await settle(dpr2Page);
   expect(await dpr2Page.evaluate(() => devicePixelRatio)).toBe(2);
@@ -184,7 +184,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   const zhHantContext = await browser.newContext({ deviceScaleFactor: 1, viewport: { width: 1280, height: 900 } });
   const zhHantPage = await zhHantContext.newPage();
   const zhHantErrors = collectBrowserErrors(zhHantPage);
-  await installTauriMock(zhHantPage, { locale: "zh-Hant", rawActions: [] });
+  await installTauriMock(zhHantPage, { locale: "zh-Hant", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await zhHantPage.goto("/");
   await spacesButton(zhHantPage, "主要導覽", "空間").click();
   await zhHantPage.getByRole("button", { name: "Wenlan", exact: true }).click();

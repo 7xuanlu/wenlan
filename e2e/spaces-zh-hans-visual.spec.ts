@@ -18,7 +18,7 @@ test("captures Simplified Chinese Space and Entity dossiers at physical DPR2", a
   const page = await context.newPage();
   const errors = collectBrowserErrors(page);
   await mkdir(evidenceDir, { recursive: true });
-  await installTauriMock(page, { locale: "zh-Hans", rawActions: [] });
+  await installTauriMock(page, { locale: "zh-Hans", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await page.getByTitle("显示侧边栏").click();
   await page

@@ -38,7 +38,7 @@ test("opens Home Recent by stable id, prunes missing history, and preserves sele
   await installTauriMock(page, {
     locale: "en",
     rawActions: [],
-    localStorage: { [RECENT_SPACES_KEY]: recentHistory },
+    localStorage: { [RECENT_SPACES_KEY]: recentHistory, "wenlan-spaces-view-mode": "rows" },
   });
   await page.goto("/");
 
@@ -75,7 +75,7 @@ test("opens Home Recent by stable id, prunes missing history, and preserves sele
 
 test("keeps keyboard editor drafts after failure and preserves raw-memory ordering and delete cancellation", async ({ page }) => {
   const errors = collectBrowserErrors(page);
-  const controller = await installTauriMock(page, { locale: "en", rawActions: [] });
+  const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpace(page);
 
@@ -140,7 +140,7 @@ test("keeps keyboard editor drafts after failure and preserves raw-memory orderi
 
 test("keeps and discards suggested Spaces through their dossier controls", async ({ page }) => {
   const errors = collectBrowserErrors(page);
-  const controller = await installTauriMock(page, { locale: "en", rawActions: [] });
+  const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpaces(page);
 
@@ -173,7 +173,7 @@ test("keeps and discards suggested Spaces through their dossier controls", async
 
 test("saves Space title and description through one keyboard-only dossier mutation", async ({ page }) => {
   const errors = collectBrowserErrors(page);
-  const controller = await installTauriMock(page, { locale: "en", rawActions: [] });
+  const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpace(page);
 

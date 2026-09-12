@@ -176,9 +176,9 @@ test("creates a Space and navigates to its rendered detail", async ({ page }) =>
   );
   await page.getByRole("button", { name: "Create", exact: true }).click();
 
-  const row = page.getByTestId("space-row-space-review-lane");
-  await expect(row.getByRole("button", { name: "Review Lane", exact: true })).toBeVisible();
-  await row.getByRole("button", { name: "Review Lane", exact: true }).click();
+  const card = page.getByTestId("space-card-space-review-lane");
+  await expect(card.getByRole("button", { name: "Open Review Lane", exact: true })).toBeVisible();
+  await card.getByRole("button", { name: "Open Review Lane", exact: true }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: "Review Lane" }),
   ).toBeVisible();

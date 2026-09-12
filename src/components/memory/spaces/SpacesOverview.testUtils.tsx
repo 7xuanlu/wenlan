@@ -71,7 +71,13 @@ export function createQueryClient(): QueryClient {
 export function renderOverview(
   overrides: Partial<SpacesOverviewProps> = {},
   queryClient = createQueryClient(),
+  options?: { readonly lens?: "rows" | "cards" },
 ): ReturnType<typeof render> & { readonly queryClient: QueryClient } {
+  if (options?.lens !== undefined) {
+    window.localStorage.setItem("wenlan-spaces-view-mode", options.lens);
+  } else if (window.localStorage.getItem("wenlan-spaces-view-mode") === null) {
+    window.localStorage.setItem("wenlan-spaces-view-mode", "rows");
+  }
   const props: SpacesOverviewProps = {
     labels,
     onSelectSpace: () => undefined,
