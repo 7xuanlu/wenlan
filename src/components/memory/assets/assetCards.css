@@ -45,6 +45,10 @@
   background: var(--mem-card-hover);
 }
 
+.asset-card--detected {
+  border-style: dashed;
+}
+
 .asset-card-open {
   background: transparent;
   border: 0;

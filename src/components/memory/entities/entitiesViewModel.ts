@@ -112,6 +112,73 @@ export function selectionSummary(count: number, t: TFunction): string {
   return t("entities.selection", { count });
 }
 
+// CJK leading-character detection: Han Extension A, Han Unified,
+// CJK Compatibility Ideographs, Hiragana/Katakana, Hangul Syllables.
+const CJK_PATTERN = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/u;
+
+/** True for a CJK leading character (Han, Hiragana, Katakana, Hangul). */
+function isCjkCharacter(character: string): boolean {
+  return CJK_PATTERN.test(character);
+}
+
+/** Up to two initials for the card disc: first letters of the first two
+ * words, uppercased for Latin; a CJK name yields its first character only.
+ * Empty or blank names yield "?". */
+export function entityInitials(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed === "") return "?";
+  const characters = Array.from(trimmed);
+  const first = characters[0] ?? "?";
+  if (isCjkCharacter(first)) return first;
+  const words = trimmed.split(/\s+/).slice(0, 2);
+  const initials = words.map((word) => Array.from(word)[0] ?? "").join("");
+  if (initials === "") return "?";
+  return initials.toUpperCase();
+}
+
+export interface EntityCardDescription {
+  readonly initials: string;
+  readonly context: string;
+  readonly countLabel: string;
+  readonly typeLabel: string;
+  /** Accessible open label for the established tab; null where there is no
+   * dossier to open (detected/archived). */
+  readonly openLabel: string | null;
+}
+
+/** One source of truth for the per-entity card display the cards lens
+ * shares: initials, the one-line context sentence, the memory count, and the
+ * open label. `archivedWhen` is the preformatted relative time for the
+ * archived tab (via `formatRelativeEntityTime`); pass null elsewhere or when
+ * unavailable. Kept pure for tests: the caller formats the time. */
+export function describeEntityCard(
+  entity: Entity,
+  tab: EntityTab,
+  t: TFunction,
+  archivedWhen: string | null,
+): EntityCardDescription {
+  let context: string;
+  if (tab === "detected") {
+    context = t("entities.card.detectedContext", { count: entity.memory_count });
+  } else if (tab === "established") {
+    // Manual and citation read as sentences on their own; only the memory
+    // count needs the "Confirmed by" prefix.
+    if (entity.established_by === "manual") context = t("entities.card.establishedManual");
+    else if (entity.established_by === "auto:citation") context = t("entities.card.establishedCitation");
+    else context = t("entities.card.establishedContext", { by: establishedByLabel(entity, t) });
+  } else {
+    context = t("entities.card.archivedContext", { when: archivedWhen ?? "" });
+  }
+  return {
+    initials: entityInitials(entity.name),
+    context,
+    countLabel: t("entities.card.memories", { count: entity.memory_count }),
+    // Same label the Type chips use; unknown types fall back to the raw slug.
+    typeLabel: t(`entities.filters.type_${entity.entity_type}`, { defaultValue: entity.entity_type }),
+    openLabel: tab === "established" ? t("entities.actions.openNamed", { name: entity.name }) : null,
+  };
+}
+
 export function toggleSelected(selected: ReadonlySet<string>, id: string): Set<string> {
   const next = new Set(selected);
   if (next.has(id)) next.delete(id);

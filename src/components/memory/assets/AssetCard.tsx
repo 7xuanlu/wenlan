@@ -8,10 +8,14 @@ interface AssetCardProps {
   /** Review/truth state badges. Rendered on their own line so the footer
    *  always stays "space left, date right" and rows keep equal footers. */
   readonly status?: ReactNode;
-  readonly onOpen: () => void;
-  readonly openLabel: string;
+  /** Open action for the title. When absent the title renders as plain text
+   * (no button), for entities with no dossier to open. */
+  readonly onOpen?: () => void;
+  readonly openLabel?: string;
   readonly testId?: string;
   readonly children?: ReactNode;
+  /** Visual modifier. `detected` renders a dashed edge for not-yet-kept entities. */
+  readonly variant?: "detected";
 }
 
 /**
@@ -30,18 +34,26 @@ export function AssetCard({
   openLabel,
   testId,
   children,
+  variant,
 }: AssetCardProps) {
   return (
-    <article className="asset-card" data-testid={testId}>
+    <article
+      className={variant === "detected" ? "asset-card asset-card--detected" : "asset-card"}
+      data-testid={testId}
+    >
       {children}
-      <button
-        aria-label={openLabel}
-        className="asset-card-open"
-        onClick={onOpen}
-        type="button"
-      >
+      {onOpen ? (
+        <button
+          aria-label={openLabel}
+          className="asset-card-open"
+          onClick={onOpen}
+          type="button"
+        >
+          <span className="asset-card-title">{title}</span>
+        </button>
+      ) : (
         <span className="asset-card-title">{title}</span>
-      </button>
+      )}
       {context ? <p className="asset-card-context">{context}</p> : null}
       {status ? <div className="asset-card-status">{status}</div> : null}
       <div className="asset-card-footer">{footer}</div>

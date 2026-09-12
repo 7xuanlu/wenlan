@@ -122,6 +122,11 @@
   color: var(--mem-accent-indigo);
 }
 
+.entities-filters-side {
+  margin-left: auto;
+  min-width: 0;
+}
+
 .entities-matchline {
   align-items: center;
   color: var(--mem-text-secondary);
@@ -263,6 +268,55 @@
 
 .entities-name-link:hover {
   text-decoration: underline;
+}
+
+.entity-card-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.entity-initials {
+  align-items: center;
+  background: var(--mem-surface);
+  border: 1px solid var(--mem-border);
+  border-radius: 50%;
+  box-shadow: none;
+  color: var(--mem-text-secondary);
+  display: inline-flex;
+  flex: none;
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  font-weight: 600;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.entity-card-type {
+  color: var(--mem-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-card-count {
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: nowrap;
+}
+
+.entity-card-actions {
+  display: flex;
+  flex-basis: 100%;
+  gap: 6px;
+  min-width: 0;
 }
 
 .entities-scrim {

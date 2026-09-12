@@ -94,6 +94,17 @@ describe("AssetCard", () => {
     expect(onSelectSpace).toHaveBeenCalledTimes(1);
   });
 
+  it("renders the title as plain text when there is no open action", () => {
+    const { container } = render(
+      <AssetCard footer={<span>footer</span>} testId="card-no-open" title="Detected entity" />,
+    );
+
+    expect(screen.getByText("Detected entity")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector(".asset-card-open")).toBeNull();
+    expect(container.querySelector("span.asset-card-title")).not.toBeNull();
+  });
+
   it("renders the future avatar slot above the title", () => {
     const { container } = render(
       <AssetCard
