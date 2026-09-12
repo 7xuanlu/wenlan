@@ -52,17 +52,17 @@ export function SpaceActionsMenu(props: SpaceActionsMenuProps) {
       </button>
       {menuOpen ? (
         <div className="mem-popover-surface spaces-menu" role="menu" onKeyDown={closeMenuOnEscape}>
-          <button role="menuitem" onClick={() => { props.onStar(props.space); setMenuOpen(false); }}>
+          <button type="button" role="menuitem" onClick={() => { props.onStar(props.space); setMenuOpen(false); }}>
             {props.space.starred ? props.labels.unstar : props.labels.star}
           </button>
-          <button role="menuitem" onClick={() => { props.onRename(props.space); setMenuOpen(false); }}>{props.labels.rename}</button>
-          <button role="menuitem" disabled={!props.canMoveUp} onClick={() => { props.onMoveUp(props.space); setMenuOpen(false); }}>
+          <button type="button" role="menuitem" onClick={() => { props.onRename(props.space); setMenuOpen(false); }}>{props.labels.rename}</button>
+          <button type="button" role="menuitem" disabled={!props.canMoveUp} onClick={() => { props.onMoveUp(props.space); setMenuOpen(false); }}>
             {props.labels.moveUp}
           </button>
-          <button role="menuitem" disabled={!props.canMoveDown} onClick={() => { props.onMoveDown(props.space); setMenuOpen(false); }}>
+          <button type="button" role="menuitem" disabled={!props.canMoveDown} onClick={() => { props.onMoveDown(props.space); setMenuOpen(false); }}>
             {props.labels.moveDown}
           </button>
-          <button role="menuitem" className="spaces-danger" onClick={() => { props.onDelete(props.space); setMenuOpen(false); }}>
+          <button type="button" role="menuitem" className="spaces-danger" onClick={() => { props.onDelete(props.space); setMenuOpen(false); }}>
             {props.labels.delete}
           </button>
         </div>

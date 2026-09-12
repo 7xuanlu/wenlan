@@ -139,6 +139,38 @@ describe("SpacesOverview cards lens", () => {
     expect(await screen.findByRole("columnheader", { name: labels.pages })).toBeInTheDocument();
     expect(screen.queryByTestId("spaces-cards")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("wenlan-spaces-view-mode")).toBe("rows");
+    expect(screen.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cards" }));
+
+    expect(await screen.findByTestId("spaces-cards")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("wenlan-spaces-view-mode")).toBe("cards");
+    expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps the lens toggle visible when the filter matches nothing", async () => {
+    renderOverview({}, undefined, { lens: "cards" });
+    await screen.findByTestId("space-card-work");
+
+    fireEvent.change(screen.getByLabelText(labels.filterLabel), { target: { value: "zzz" } });
+
+    expect(screen.getByText(labels.noResults)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cards" })).toBeInTheDocument();
+  });
+
+  it("omits the description and shows a dash for a space that was never updated", async () => {
+    api.listSpaces.mockResolvedValue([
+      makeSpace({ id: "bare", name: "Bare", description: null, updated_at: 0, memory_count: 1, entity_count: 1 }),
+    ]);
+    renderOverview({}, undefined, { lens: "cards" });
+
+    const card = await screen.findByTestId("space-card-bare");
+    expect(card.querySelector(".asset-card-context")).toBeNull();
+    expect(within(card).getByTestId("space-card-updated")).toHaveTextContent("—");
+    expect(within(card).getByTestId("space-card-memories")).toHaveTextContent("1 memory");
+    expect(within(card).getByTestId("space-card-entities")).toHaveTextContent("1 entity");
   });
 
   it("filters cards by name", async () => {
