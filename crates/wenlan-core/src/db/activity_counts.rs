@@ -16,6 +16,14 @@ pub struct StepCount {
     pub count: u64,
 }
 
+/// Memories a step has not started: distinct `source_id`s with `source =
+/// 'memory'` and no `enrichment_steps` row for `step_name`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepBacklog {
+    pub step_name: String,
+    pub count: u64,
+}
+
 /// Every count `GET /api/activity` composes into an `ActivityResponse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityCounts {
@@ -23,9 +31,11 @@ pub struct ActivityCounts {
     pub memories_total: u64,
     /// `(step_name, status, count)` cells from `enrichment_steps`.
     pub step_counts: Vec<StepCount>,
-    /// The "raw" count from `pipeline_status`: distinct memory `source_id`s
-    /// with no `enrichment_steps` row at all.
-    pub memories_without_steps: u64,
+    /// Memories (source = 'memory') with no `enrichment_steps` row for this
+    /// step name. Keyed by step name: the backlog a step has not started.
+    /// One entry each for `title_enrich`, `page_growth`, `entity_extract`
+    /// and `entity_link`, even when the count is zero.
+    pub memories_without_step: Vec<StepBacklog>,
     /// Entity shadow pages that are live but unconfirmed.
     pub entities_detected: u64,
     /// Entity shadow pages that are live and confirmed.
@@ -85,14 +95,44 @@ impl MemoryDB {
         }
         drop(step_rows);
 
-        // Same SQL as the "raw" count in `pipeline_status`.
-        let memories_without_steps = scalar_u64(
-            &conn,
-            "SELECT COUNT(DISTINCT source_id) FROM memories WHERE source = 'memory' \
-             AND source_id NOT IN (SELECT DISTINCT source_id FROM enrichment_steps)",
-            "activity_counts memories_without_steps",
-        )
-        .await?;
+        // Per-step backlog: memories with no row for that step at all. The
+        // `pipeline_status` "raw" count cannot answer this per step — a
+        // memory with only a `title_enrich` row is still waiting on
+        // `page_growth` — so each step gets its own correlated subquery.
+        let mut backlog_rows = conn
+            .query(
+                "SELECT s.name, (SELECT COUNT(*) FROM memories m WHERE m.source = 'memory' \
+                 AND NOT EXISTS (SELECT 1 FROM enrichment_steps e \
+                 WHERE e.source_id = m.source_id AND e.step_name = s.name)) \
+                 FROM (SELECT 'title_enrich' AS name UNION ALL SELECT 'page_growth' \
+                 UNION ALL SELECT 'entity_extract' UNION ALL SELECT 'entity_link') s",
+                (),
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("activity_counts memories_without_step: {e}"))
+            })?;
+        let mut memories_without_step = Vec::new();
+        while let Some(row) = backlog_rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("activity_counts memories_without_step row: {e}"))
+        })? {
+            memories_without_step.push(StepBacklog {
+                step_name: row.get::<String>(0).map_err(|e| {
+                    WenlanError::VectorDb(format!(
+                        "activity_counts memories_without_step name: {e}"
+                    ))
+                })?,
+                count: row
+                    .get::<i64>(1)
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!(
+                            "activity_counts memories_without_step count: {e}"
+                        ))
+                    })?
+                    .max(0) as u64,
+            });
+        }
+        drop(backlog_rows);
 
         // Entity lifecycle predicates mirror `entity_status_predicate` in
         // db.rs, over the same `entity_page_map`/`pages` shadow shape the
@@ -161,7 +201,7 @@ impl MemoryDB {
         Ok(ActivityCounts {
             memories_total,
             step_counts,
-            memories_without_steps,
+            memories_without_step,
             entities_detected,
             entities_confirmed,
             pages_active,
@@ -222,7 +262,24 @@ mod tests {
             ActivityCounts {
                 memories_total: 0,
                 step_counts: vec![],
-                memories_without_steps: 0,
+                memories_without_step: vec![
+                    StepBacklog {
+                        step_name: "title_enrich".to_string(),
+                        count: 0,
+                    },
+                    StepBacklog {
+                        step_name: "page_growth".to_string(),
+                        count: 0,
+                    },
+                    StepBacklog {
+                        step_name: "entity_extract".to_string(),
+                        count: 0,
+                    },
+                    StepBacklog {
+                        step_name: "entity_link".to_string(),
+                        count: 0,
+                    },
+                ],
                 entities_detected: 0,
                 entities_confirmed: 0,
                 pages_active: 0,
@@ -245,22 +302,24 @@ mod tests {
             .await
             .unwrap();
         }
-        // One memory with a done + a failed step, one raw memory, one
-        // non-memory row the reader must ignore.
-        seed_memory(
-            &db,
-            "row-1",
-            "mem-1",
-            &[("title_enrich", "ok", 100), ("page_growth", "failed", 200)],
-        )
-        .await;
-        seed_memory(&db, "row-2", "mem-2", &[]).await;
+        // Eight memories: one with a done `title_enrich` row, none with a
+        // `page_growth` row, plus one non-memory row the reader must ignore.
+        for index in 1..=8 {
+            let id = format!("row-{index}");
+            let source_id = format!("mem-{index}");
+            let steps: &[(&str, &str, i64)] = if index == 1 {
+                &[("title_enrich", "ok", 100)]
+            } else {
+                &[]
+            };
+            seed_memory(&db, &id, &source_id, steps).await;
+        }
         {
             let conn = db.conn.lock().await;
             conn.execute(
                 "INSERT INTO memories (id, content, source, source_id, title, chunk_index, \
                  last_modified, chunk_type, space) \
-                 VALUES ('row-3', 'content', 'note', 'note-1', 'title', 0, 0, 'text', 'work')",
+                 VALUES ('row-note-1', 'content', 'note', 'note-1', 'title', 0, 0, 'text', 'work')",
                 (),
             )
             .await
@@ -299,23 +358,32 @@ mod tests {
         .unwrap();
 
         let counts = db.activity_counts().await.unwrap();
-        assert_eq!(counts.memories_total, 2);
-        assert_eq!(counts.memories_without_steps, 1);
+        assert_eq!(counts.memories_total, 8);
         let mut cells: Vec<(&str, &str, u64)> = counts
             .step_counts
             .iter()
             .map(|cell| (cell.step_name.as_str(), cell.status.as_str(), cell.count))
             .collect();
         cells.sort();
-        assert_eq!(
-            cells,
-            vec![("page_growth", "failed", 1), ("title_enrich", "ok", 1)]
-        );
+        assert_eq!(cells, vec![("title_enrich", "ok", 1)]);
+        let backlog = |step_name: &str| {
+            counts
+                .memories_without_step
+                .iter()
+                .find(|entry| entry.step_name == step_name)
+                .map(|entry| entry.count)
+        };
+        // The one memory with a `title_enrich` row is still waiting on every
+        // other step; the seven without any row wait on all four.
+        assert_eq!(backlog("title_enrich"), Some(7));
+        assert_eq!(backlog("page_growth"), Some(8));
+        assert_eq!(backlog("entity_extract"), Some(8));
+        assert_eq!(backlog("entity_link"), Some(8));
         assert_eq!(counts.entities_detected, 1);
         assert_eq!(counts.entities_confirmed, 1);
         assert_eq!(counts.pages_active, 3);
         assert_eq!(counts.pages_stale, 1);
         assert_eq!(counts.pages_refresh_blocked, 1);
-        assert_eq!(counts.last_step_updated_at, Some(200));
+        assert_eq!(counts.last_step_updated_at, Some(100));
     }
 }

@@ -72,6 +72,18 @@ fn tally(counts: &ActivityCounts, step_names: &[&str]) -> StepTally {
     tally
 }
 
+/// Memories with no `enrichment_steps` row for this step name: work the step
+/// has not started. Zero when the reader has no entry (defensive; the reader
+/// always emits all four).
+fn backlog(counts: &ActivityCounts, step_name: &str) -> u64 {
+    counts
+        .memories_without_step
+        .iter()
+        .find(|entry| entry.step_name == step_name)
+        .map(|entry| entry.count)
+        .unwrap_or(0)
+}
+
 /// Per-step liveness from its backlog and its lane: failed work blocks even
 /// when the lane is healthy; waiting work blocks only when no lane serves it.
 fn step_state(pending: u64, failed: u64, lane_available: bool) -> ActivityStepState {
@@ -92,6 +104,52 @@ fn rollup(states: &[ActivityStepState]) -> ActivityStepState {
     } else {
         ActivityStepState::Idle
     }
+}
+
+/// The asset's headline numbers follow the first step that is doing or
+/// waiting on work, so the bar and the blocked count describe the same
+/// thing. When every step is idle the asset rests on its settled step:
+/// Summarize for Memories, Confirm for Entities, Write for Pages.
+fn headline(steps: &[ActivityStep], resting: ActivityStepName) -> (u64, u64) {
+    steps
+        .iter()
+        .find(|step| {
+            matches!(
+                step.state,
+                ActivityStepState::Running | ActivityStepState::Blocked
+            )
+        })
+        .or_else(|| steps.iter().find(|step| step.name == resting))
+        .map(|step| (step.done, step.total))
+        .unwrap_or((0, 0))
+}
+
+/// One step's share of its asset's blocked count: failed work, plus waiting
+/// work when this step's lane cannot serve it. Steps with no lane (Store,
+/// Confirm) contribute failed work only — their backlog is someone else's
+/// turn (the import request, the user), never a missing model.
+fn blocked_contribution(step: &ActivityStep, lane_available: bool) -> u64 {
+    let pending = step.total.saturating_sub(step.done + step.failed);
+    step.failed
+        + if step.job.is_some() && !lane_available {
+            pending
+        } else {
+            0
+        }
+}
+
+/// An asset's blocked count is the maximum across its steps, not the sum:
+/// the number is shown as a count of items ("12 pages blocked"), and one
+/// memory pending in two steps is still one item. A floor, stated honestly:
+/// distinct memories may be blocked in different steps, so the true item
+/// count is at least the max and at most the sum — the max is the claim we
+/// can prove.
+fn blocked_max(steps: &[ActivityStep], lane_available: bool) -> u64 {
+    steps
+        .iter()
+        .map(|step| blocked_contribution(step, lane_available))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Map a `JobRoute.source` string onto its lane. Unknown sources fall to
@@ -137,10 +195,10 @@ pub(crate) fn compose_activity(
         failed: 0,
         job: ActivityStepName::Store.job(),
     };
-    // Summarize (Enrich) is `title_enrich`; memories with no step row at all
-    // are still waiting for it, so they count as pending here.
+    // Summarize (Enrich) is `title_enrich`; memories with no row for it are
+    // still waiting on it, so the per-step backlog counts as pending here.
     let summarize_tally = tally(&counts, &["title_enrich"]);
-    let summarize_pending = summarize_tally.pending + counts.memories_without_steps;
+    let summarize_pending = summarize_tally.pending + backlog(&counts, "title_enrich");
     let summarize = ActivityStep {
         name: ActivityStepName::Summarize,
         state: step_state(
@@ -153,40 +211,41 @@ pub(crate) fn compose_activity(
         failed: summarize_tally.failed,
         job: ActivityStepName::Summarize.job(),
     };
-    // Link is `page_growth`.
+    // Link is `page_growth`, with the same per-step backlog treatment as
+    // Summarize: a memory with no `page_growth` row is waiting on Link even
+    // when it already has rows for other steps.
     let link_tally = tally(&counts, &["page_growth"]);
+    let link_pending = link_tally.pending + backlog(&counts, "page_growth");
     let link = ActivityStep {
         name: ActivityStepName::Link,
-        state: step_state(
-            link_tally.pending,
-            link_tally.failed,
-            everyday_route.available,
-        ),
+        state: step_state(link_pending, link_tally.failed, everyday_route.available),
         done: link_tally.done,
-        total: link_tally.done + link_tally.failed + link_tally.pending,
+        total: link_tally.done + link_tally.failed + link_pending,
         failed: link_tally.failed,
         job: ActivityStepName::Link.job(),
     };
+    let memory_steps = vec![store, summarize, link];
+    let (memories_done, memories_total) = headline(&memory_steps, ActivityStepName::Summarize);
     let memories = ActivityAssetStatus {
         kind: ActivityAssetKind::Memories,
-        state: rollup(&[store.state, summarize.state, link.state]),
-        done: summarize.done,
-        total: summarize.total,
-        blocked: summarize.failed
-            + link.failed
-            + if everyday_route.available {
-                0
-            } else {
-                summarize_pending + link_tally.pending
-            },
-        steps: vec![store, summarize, link],
+        state: rollup(&[
+            memory_steps[0].state,
+            memory_steps[1].state,
+            memory_steps[2].state,
+        ]),
+        done: memories_done,
+        total: memories_total,
+        blocked: blocked_max(&memory_steps, everyday_route.available),
+        steps: memory_steps,
     };
 
     // ── Entities ────────────────────────────────────────────────────
     // Detect is `entity_extract` + `entity_link`: a memory is done only when
     // both are done. The reader returns counts, not pairs, so `done` is the
     // overlap lower bound (`min`) and `failed` the union upper bound (`max`);
-    // pending is the rest of the memory population.
+    // pending is the rest of the memory population. That total already covers
+    // every memory, so memories with no row for either step are pending here
+    // without a backlog term (adding one would double-count).
     let extract = tally(&counts, &["entity_extract"]);
     let entity_link = tally(&counts, &["entity_link"]);
     let detect_done = extract.done.min(entity_link.done);
@@ -210,18 +269,17 @@ pub(crate) fn compose_activity(
         failed: 0,
         job: ActivityStepName::Confirm.job(),
     };
+    let entity_steps = vec![detect, confirm];
+    let (entities_done, entities_total) = headline(&entity_steps, ActivityStepName::Confirm);
     let entities = ActivityAssetStatus {
         kind: ActivityAssetKind::Entities,
-        state: rollup(&[detect.state, confirm.state]),
-        done: confirm.done,
-        total: confirm.total,
-        blocked: detect.failed
-            + if everyday_route.available {
-                0
-            } else {
-                detect_pending
-            },
-        steps: vec![detect, confirm],
+        state: rollup(&[entity_steps[0].state, entity_steps[1].state]),
+        done: entities_done,
+        total: entities_total,
+        // Detect's share is already a memory count (min/max over the memory
+        // population), so the max keeps it exact.
+        blocked: blocked_max(&entity_steps, everyday_route.available),
+        steps: entity_steps,
     };
 
     // ── Pages ───────────────────────────────────────────────────────
@@ -242,18 +300,15 @@ pub(crate) fn compose_activity(
         failed: counts.pages_refresh_blocked,
         job: ActivityStepName::Write.job(),
     };
+    let page_steps = vec![write];
+    let (pages_done, pages_total) = headline(&page_steps, ActivityStepName::Write);
     let pages = ActivityAssetStatus {
         kind: ActivityAssetKind::Pages,
-        state: write.state,
-        done: write.done,
-        total: write.total,
-        blocked: write.failed
-            + if synthesis_route.available {
-                0
-            } else {
-                write_pending
-            },
-        steps: vec![write],
+        state: page_steps[0].state,
+        done: pages_done,
+        total: pages_total,
+        blocked: blocked_max(&page_steps, synthesis_route.available),
+        steps: page_steps,
     };
 
     // ── Overall ─────────────────────────────────────────────────────
@@ -292,7 +347,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
-    use wenlan_core::db::StepCount;
+    use wenlan_core::db::{StepBacklog, StepCount};
 
     fn job_route(source: &str, model: Option<&str>, mode: &str) -> JobRoute {
         JobRoute {
@@ -314,7 +369,7 @@ mod tests {
         ActivityCounts {
             memories_total: 0,
             step_counts: vec![],
-            memories_without_steps: 0,
+            memories_without_step: vec![],
             entities_detected: 0,
             entities_confirmed: 0,
             pages_active: 0,
@@ -344,6 +399,36 @@ mod tests {
 
     fn memories_asset(response: &ActivityResponse) -> &ActivityAssetStatus {
         &response.assets[0]
+    }
+
+    fn entities_asset(response: &ActivityResponse) -> &ActivityAssetStatus {
+        &response.assets[1]
+    }
+
+    /// Eight memories with no step row for any step: every lane-served step
+    /// has the whole population as backlog.
+    fn unstarted_backlog() -> Vec<StepBacklog> {
+        [
+            "title_enrich",
+            "page_growth",
+            "entity_extract",
+            "entity_link",
+        ]
+        .into_iter()
+        .map(|step_name| StepBacklog {
+            step_name: step_name.to_string(),
+            count: 8,
+        })
+        .collect()
+    }
+
+    fn eight_memories_no_rows() -> ActivityCounts {
+        ActivityCounts {
+            memories_total: 8,
+            step_counts: vec![],
+            memories_without_step: unstarted_backlog(),
+            ..empty_counts()
+        }
     }
 
     fn pages_asset(response: &ActivityResponse) -> &ActivityAssetStatus {
@@ -388,7 +473,6 @@ mod tests {
                 status: "pending".to_string(),
                 count: 10,
             }],
-            memories_without_steps: 0,
             ..empty_counts()
         };
         let response = compose_activity(counts, &[], &everyday, &synthesis);
@@ -410,7 +494,6 @@ mod tests {
                 status: "pending".to_string(),
                 count: 10,
             }],
-            memories_without_steps: 0,
             ..empty_counts()
         };
         let response = compose_activity(counts, &[], &everyday, &synthesis);
@@ -430,7 +513,6 @@ mod tests {
                 status: "failed".to_string(),
                 count: 2,
             }],
-            memories_without_steps: 0,
             ..empty_counts()
         };
         let response = compose_activity(counts, &[], &everyday, &synthesis);
@@ -481,6 +563,74 @@ mod tests {
         assert_eq!(response.state, ActivityState::Organizing);
         // The batch's write is newer than any step row: it wins the timestamp.
         assert_eq!(response.last_activity_at, Some(1_700_000_100));
+    }
+
+    #[test]
+    fn link_counts_memories_with_no_step_row() {
+        let (everyday, synthesis) = pinned_local();
+        let response = compose_activity(eight_memories_no_rows(), &[], &everyday, &synthesis);
+        assert_eq!(response.state, ActivityState::Organizing);
+        let memories = memories_asset(&response);
+        let link = memories
+            .steps
+            .iter()
+            .find(|step| step.name == ActivityStepName::Link)
+            .expect("Link step");
+        assert_eq!(link.state, ActivityStepState::Running);
+        assert_eq!((link.done, link.total, link.failed), (0, 8, 0));
+        assert_eq!((memories.done, memories.total), (0, 8));
+    }
+
+    #[test]
+    fn asset_headline_follows_the_live_step() {
+        let everyday = job_route("basic", None, "unconfigured");
+        let (_, synthesis) = pinned_local();
+        let response = compose_activity(eight_memories_no_rows(), &[], &everyday, &synthesis);
+        assert_eq!(response.state, ActivityState::Blocked);
+        // Detect is the live Entities step, so the asset reports Detect's
+        // 0/8 — not Confirm's 0/0.
+        let entities = entities_asset(&response);
+        assert_eq!(entities.state, ActivityStepState::Blocked);
+        assert_eq!((entities.done, entities.total), (0, 8));
+    }
+
+    #[test]
+    fn blocked_counts_items_not_step_instances() {
+        let everyday = job_route("basic", None, "unconfigured");
+        let (_, synthesis) = pinned_local();
+        let response = compose_activity(eight_memories_no_rows(), &[], &everyday, &synthesis);
+        // Eight memories pending in both Summarize and Link is eight blocked
+        // items, not sixteen.
+        assert_eq!(memories_asset(&response).blocked, 8);
+    }
+
+    #[test]
+    fn idle_asset_rests_on_its_settled_step() {
+        let (everyday, synthesis) = pinned_local();
+        let counts = ActivityCounts {
+            memories_total: 8,
+            step_counts: [
+                "title_enrich",
+                "page_growth",
+                "entity_extract",
+                "entity_link",
+            ]
+            .into_iter()
+            .map(|step_name| StepCount {
+                step_name: step_name.to_string(),
+                status: "ok".to_string(),
+                count: 8,
+            })
+            .collect(),
+            entities_confirmed: 5,
+            ..empty_counts()
+        };
+        let response = compose_activity(counts, &[], &everyday, &synthesis);
+        assert_eq!(response.state, ActivityState::UpToDate);
+        // Every step idle: Entities rests on Confirm's 5/5, not Detect's 8/8.
+        let entities = entities_asset(&response);
+        assert_eq!(entities.state, ActivityStepState::Idle);
+        assert_eq!((entities.done, entities.total), (5, 5));
     }
 
     #[tokio::test]
