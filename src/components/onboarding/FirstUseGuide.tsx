@@ -342,7 +342,7 @@ function FirstUseLive({
           <h2 id="fus-live-active" className="fus-section-title">
             {t("firstUse.live.activeTitle")}
           </h2>
-          <ImportPhaseList phases={displayPhases} pageCount={summary.pagesDistilled} />
+          <ImportPhaseList phases={displayPhases} />
           <p className="fus-note">
             {t("importBatch.summaryImported", {
               count: summary.memoriesImported,

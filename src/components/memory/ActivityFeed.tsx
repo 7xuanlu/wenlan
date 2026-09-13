@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -9,20 +9,14 @@ import {
   type AgentActivityItem,
 } from "../../lib/tauri";
 import { resolveAgentDisplayName } from "../../lib/agents";
+import { relativeTime } from "../../lib/relativeTime";
+import ActivityNow, { useActivityNowPlacement } from "./activity/ActivityNow";
 import { Select } from "./settings/primitives";
 
 interface ActivityFeedProps {
   onNavigateMemory: (sourceId: string) => void;
-}
-
-function relativeTime(ts: number, t: TFunction, language: string): string {
-  const now = Date.now() / 1000;
-  const diff = now - ts;
-  if (diff < 60) return t("activity.relative.justNow");
-  if (diff < 3600) return t("activity.relative.minutesAgo", { count: Math.floor(diff / 60) });
-  if (diff < 86400) return t("activity.relative.hoursAgo", { count: Math.floor(diff / 3600) });
-  if (diff < 604800) return t("activity.relative.daysAgo", { count: Math.floor(diff / 86400) });
-  return new Date(ts * 1000).toLocaleDateString(language);
+  /** Navigates to Settings, Intelligence from the Now section's models line. */
+  onOpenIntelligence?: () => void;
 }
 
 type TimeGroup = "today" | "yesterday" | "thisWeek" | "older";
@@ -368,7 +362,11 @@ function FilterSelect({
   );
 }
 
-export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
+export default function ActivityFeed({
+  onNavigateMemory,
+  onOpenIntelligence,
+}: ActivityFeedProps) {
+  const nowPlacement = useActivityNowPlacement();
   const { t, i18n } = useTranslation();
   const { data: activities = [] } = useQuery({
     queryKey: ["agentActivity"],
@@ -456,25 +454,46 @@ export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
     return true;
   });
 
-  if (activities.length === 0) {
-    return (
-      <div
-        className="flex flex-col items-center justify-center h-full"
-        style={{ minHeight: 300 }}
-      >
-        <p
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "14px",
-            color: "var(--mem-text-tertiary)",
-            textAlign: "center",
-            maxWidth: 320,
-            lineHeight: 1.6,
-          }}
-        >
-          {t("activity.empty.noActivity")}
-        </p>
+  const now = <ActivityNow onOpenIntelligence={onOpenIntelligence} />;
+
+  // The rail is a sticky second column. `min-w-0` on the feed column keeps a
+  // long event sentence from pushing the rail off the right edge.
+  const withNow = (body: ReactNode) =>
+    nowPlacement === "rail" ? (
+      <div className="mem-activity-rail-shell">
+        <div className="min-w-0 flex-1">{body}</div>
+        <div className="mem-activity-rail">{now}</div>
       </div>
+    ) : (
+      body
+    );
+
+  // No agent has read from the library yet — but background work still has
+  // something to say, and this is the page a new user lands on to find out
+  // what Wenlan is doing. Returning the bare empty state here hid the Now
+  // section exactly when it was the only thing worth reading.
+  if (activities.length === 0) {
+    return withNow(
+      <div className="flex flex-col">
+        {nowPlacement !== "rail" && <div style={{ marginBottom: 20 }}>{now}</div>}
+        <div
+          className="flex flex-col items-center justify-center h-full"
+          style={{ minHeight: 300 }}
+        >
+          <p
+            style={{
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "14px",
+              color: "var(--mem-text-tertiary)",
+              textAlign: "center",
+              maxWidth: 320,
+              lineHeight: 1.6,
+            }}
+          >
+            {t("activity.empty.noActivity")}
+          </p>
+        </div>
+      </div>,
     );
   }
 
@@ -500,8 +519,11 @@ export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
   const hasAgentFilter = agents.length > 1;
   const showToolbar = hasActionFilter || hasAgentFilter;
 
-  return (
+  const feed = (
     <div className="flex flex-col">
+      {/* The Now section above the toolbar in the card layout. The rail keeps
+          it out of this column entirely; the timeline puts it in the groups. */}
+      {nowPlacement === "card" && <div style={{ marginBottom: 20 }}>{now}</div>}
       {/* Toolbar — right-aligned dropdowns, same pattern as MemoryStream. */}
       {showToolbar && (
         <div
@@ -566,6 +588,7 @@ export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
         </div>
       ) : null}
       <div className="flex flex-col gap-8">
+      {nowPlacement === "timeline" && now}
       {grouped.map(([group, items]) => (
         <section key={group}>
           <h3
@@ -598,6 +621,8 @@ export default function ActivityFeed({ onNavigateMemory }: ActivityFeedProps) {
       </div>
     </div>
   );
+
+  return withNow(feed);
 }
 
 function ActivityEntry({

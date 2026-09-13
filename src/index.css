@@ -3789,3 +3789,154 @@ p.entity-error {
 .content-renderer a.content-page-link { border-bottom: 1px solid color-mix(in srgb, var(--mem-accent-indigo) 45%, transparent); border-radius: 2px; padding: 0 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .content-renderer a.content-page-link:hover { background: var(--mem-indigo-bg); }
 .content-renderer a.content-page-link:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
+
+/* Toolbar Activity button. It carries the background state, so it is the one
+   entry into activity on every view. The clock hands sweep only while
+   steeping, so the one moving thing on the page always means "work is in
+   flight". Blocked is amber and STILL: nothing is lost when work is waiting,
+   so it must not read as an alarm. Up to date is the plain button. */
+.mem-activity-status {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  gap: 8px;
+  padding: 6px 8px;
+  transition: background-color 150ms ease, color 150ms ease;
+  white-space: nowrap;
+}
+.mem-activity-status:hover,
+.mem-activity-status[aria-expanded="true"] { background: var(--mem-hover-strong); }
+.mem-activity-status[aria-current="page"] { color: var(--mem-text); }
+.mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
+/* The icon carries state, never a number: the assets count different things
+   (memories, entities, pages), so no single figure is true for all three.
+   State is told by FORM as well as color, so it survives color blindness:
+   Steeping sweeps the clock hands (work moving, nothing to do), Blocked turns
+   them into "!" (it needs you). Up to date is the plain clock. */
+.mem-activity-status-icon { flex-shrink: 0; transition: color 150ms ease; }
+.mem-activity-status-icon[data-icon-state="organizing"] { color: var(--mem-accent-indigo); }
+.mem-activity-status-icon[data-icon-state="blocked"] { color: var(--mem-accent-amber); }
+.mem-activity-hands { transform-box: view-box; transform-origin: 50% 50%; }
+@keyframes mem-activity-hands-sweep { to { transform: rotate(360deg); } }
+.mem-activity-hands-sweep { animation: mem-activity-hands-sweep 6s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .mem-activity-hands-sweep { animation: none; }
+}
+
+/* The summary drops down from the button, right-aligned to it, since the
+   button sits at the window's right edge. Capped to the viewport so it never
+   pushes past the window at phone widths. */
+.mem-activity-status-anchor { position: relative; }
+.mem-activity-popover {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(320px, calc(100vw - 32px));
+  z-index: 40;
+}
+/* Grid items default to min-width:auto, so one unbreakable line would widen
+   the whole popover past its border instead of wrapping. */
+.mem-activity-popover > * { min-width: 0; }
+/* The cause of a Blocked library, said once per missing model. Warning tint,
+   not danger: nothing is lost while work waits for a model. */
+.mem-activity-causes {
+  align-items: center;
+  background: var(--mem-status-warning-bg);
+  border-radius: 6px;
+  color: var(--mem-text);
+  display: flex;
+  flex-wrap: wrap;
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+  gap: 6px 10px;
+  line-height: 1.45;
+  padding: 7px 9px;
+}
+/* The sentences take the room; the action wraps under them only when a locale
+   or two causes leave no space beside them. */
+.mem-activity-causes-text { display: grid; flex: 1 1 160px; gap: 4px; min-width: 0; }
+.mem-activity-causes p { margin: 0; }
+.mem-activity-causes .mem-activity-popover-action { background: var(--mem-popover); color: var(--mem-text); margin-left: 0; }
+.mem-activity-causes .mem-activity-popover-action:hover { border-color: var(--mem-text-tertiary); }
+.mem-activity-popover-action {
+  background: transparent;
+  border: 1px solid var(--mem-border);
+  border-radius: 5px;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+.mem-activity-popover-action:hover { background: var(--mem-hover); color: var(--mem-text); }
+.mem-activity-popover-action:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
+
+/* ── Activity page, Now section ──────────────────────────────────────────── */
+.mem-activity-now-title {
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+/* The rail and card share a surface; the timeline deliberately has none, so it
+   reads as the newest group in the feed rather than a widget parked in it. */
+.mem-activity-now-surface {
+  background: var(--mem-surface);
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  padding: 14px;
+}
+.mem-activity-rail-shell { display: flex; gap: 24px; }
+.mem-activity-rail {
+  align-self: flex-start;
+  flex: 0 0 300px;
+  position: sticky;
+  top: 0;
+  width: 300px;
+}
+.mem-activity-steps-toggle {
+  background: transparent;
+  border: none;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: 10px;
+  margin-left: auto;
+  padding: 0;
+}
+.mem-activity-steps-toggle:hover { color: var(--mem-text); }
+.mem-activity-steps-toggle:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
+.mem-activity-lane-chip {
+  border: 1px solid var(--mem-border);
+  border-radius: 4px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-body);
+  font-size: 9px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.mem-activity-inline-link {
+  background: transparent;
+  border: none;
+  color: var(--mem-accent-indigo);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+.mem-activity-inline-link:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }

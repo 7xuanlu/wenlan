@@ -14,6 +14,7 @@ const localeCases: Record<Exclude<AppLocale, "en">, {
   home: string;
   navigation: string;
   activity: string;
+  seeAllActivity: string;
   action: string;
   spaces: string;
   actionLabels: string[];
@@ -22,6 +23,7 @@ const localeCases: Record<Exclude<AppLocale, "en">, {
     home: "首页",
     navigation: "主导航",
     activity: "活动",
+    seeAllActivity: "查看全部活动",
     action: "动作",
     spaces: "空间",
     actionLabels: [
@@ -35,6 +37,7 @@ const localeCases: Record<Exclude<AppLocale, "en">, {
     home: "首頁",
     navigation: "主要導覽",
     activity: "活動",
+    seeAllActivity: "查看全部活動",
     action: "動作",
     spaces: "空間",
     actionLabels: [
@@ -73,7 +76,12 @@ test.describe("Chinese interface localization", () => {
       await expect(page.getByText("Home", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Activity", { exact: true })).toHaveCount(0);
 
-      await header.getByRole("button", { name: labels.activity }).click();
+      // The toolbar Activity button opens its summary; the summary's own
+      // action goes to the Activity page.
+      const activityButton = page.getByTestId("activity-status");
+      await expect(activityButton).toHaveAttribute("aria-haspopup", "dialog");
+      await activityButton.click();
+      await page.getByRole("button", { name: labels.seeAllActivity }).click();
 
       const actionFilter = page.getByLabel(labels.action);
       await expect(actionFilter).toBeVisible();
