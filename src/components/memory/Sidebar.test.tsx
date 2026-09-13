@@ -10,7 +10,8 @@ import { RECENT_SPACES_STORAGE_KEY } from "../../lib/recentSpaces";
 import type { Page, Space } from "../../lib/tauri";
 import Sidebar, { SidebarHeaderDivider, SidebarToggleButton } from "./Sidebar";
 
-const { listAgentsMock, listAllActivePagesMock, listSpacesMock } = vi.hoisted(() => ({
+const { getActivityMock, listAgentsMock, listAllActivePagesMock, listSpacesMock } = vi.hoisted(() => ({
+  getActivityMock: vi.fn(),
   listAgentsMock: vi.fn().mockResolvedValue([]),
   listAllActivePagesMock: vi.fn().mockResolvedValue([]),
   listSpacesMock: vi.fn().mockResolvedValue([]),
@@ -18,6 +19,9 @@ const { listAgentsMock, listAllActivePagesMock, listSpacesMock } = vi.hoisted(()
 
 vi.mock("../../lib/tauri", () => ({
   getMemoryStats: vi.fn().mockResolvedValue({ total: 0, new_today: 0, confirmed: 0, domains: [] }),
+  // The footer status line reads this on every page, so it belongs in the base
+  // mock rather than in the one test that looks at it.
+  getActivity: getActivityMock,
   listAgents: listAgentsMock,
   listSpaces: listSpacesMock,
 }));
@@ -105,6 +109,13 @@ function renderSidebar(extraProps: Partial<ComponentProps<typeof Sidebar>> = {})
 
 describe("Sidebar", () => {
   beforeEach(async () => {
+    getActivityMock.mockResolvedValue({
+      state: "up_to_date",
+      last_activity_at: null,
+      assets: [],
+      everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+      synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
+    });
     listAgentsMock.mockResolvedValue([]);
     listAllActivePagesMock.mockResolvedValue([]);
     listSpacesMock.mockResolvedValue([]);
@@ -363,7 +374,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("button", { name: "Sources" })).not.toBeInTheDocument();
   });
 
-  it("uses the account card as the only sidebar footer item", () => {
+  it("keeps the account card below the primary nav, with no brand button", () => {
     renderSidebar();
 
     const spaces = screen.getByRole("button", { name: "Spaces" });
@@ -371,6 +382,15 @@ describe("Sidebar", () => {
 
     expect(spaces.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Wenlan" })).not.toBeInTheDocument();
+  });
+
+  it("puts the background status line under the account card", async () => {
+    renderSidebar();
+
+    const account = screen.getByTestId("identity-card");
+    const status = await screen.findByTestId("activity-status");
+
+    expect(account.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps the account card as the footer after locale changes", async () => {

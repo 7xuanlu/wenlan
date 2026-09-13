@@ -3789,3 +3789,15 @@ p.entity-error {
 .content-renderer a.content-page-link { border-bottom: 1px solid color-mix(in srgb, var(--mem-accent-indigo) 45%, transparent); border-radius: 2px; padding: 0 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .content-renderer a.content-page-link:hover { background: var(--mem-indigo-bg); }
 .content-renderer a.content-page-link:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
+
+/* Sidebar activity status line. The dot pulses only while organizing, so the
+   one moving thing on the page always means "work is in flight". Blocked is
+   amber and STILL: nothing is lost when work is waiting, so it must not read
+   as an alarm, and a second moving dot would compete with the first. */
+.mem-activity-status:hover { background: var(--mem-surface); }
+.mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: -2px; }
+@keyframes mem-activity-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.mem-activity-dot-pulse { animation: mem-activity-dot-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .mem-activity-dot-pulse { animation: none; }
+}
