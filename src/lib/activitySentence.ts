@@ -13,7 +13,6 @@ import type { ParseKeys } from "i18next";
 import type {
   ActivityAssetKind,
   ActivityAssetStatus,
-  ActivityJob,
   ActivityLane,
   ActivityResponse,
   ActivityRoute,
@@ -32,36 +31,88 @@ export interface Phrase {
   readonly params?: Record<string, string | number>;
 }
 
+// ── Words this build knows ─────────────────────────────────────────────────
+//
+// A daemon newer than this app can send a word in any of the response's enums
+// that this build has no copy for. The Rust client reads it as "unknown"; the
+// browser preview proxies the daemon's JSON untouched, so it can arrive as the
+// raw new word. Either way it is not in this build's tables, and every surface
+// reads the response through the narrowing below so no lookup ever sees it.
+
+export type KnownActivityState = Exclude<ActivityState, "unknown">;
+export type KnownActivityAssetKind = Exclude<ActivityAssetKind, "unknown">;
+export type KnownActivityStepName = Exclude<ActivityStepName, "unknown">;
+export type KnownActivityLane = Exclude<ActivityLane, "unknown">;
+/** The two jobs, by the response field that carries each route. */
+export type ActivityRouteJob = "everyday" | "synthesis";
+export const ROUTE_JOBS: readonly ActivityRouteJob[] = ["everyday", "synthesis"];
+
+export type KnownActivityStep = Omit<ActivityStep, "name"> & {
+  readonly name: KnownActivityStepName;
+};
+export type KnownActivityAsset = Omit<ActivityAssetStatus, "kind" | "steps"> & {
+  readonly kind: KnownActivityAssetKind;
+  readonly steps: KnownActivityStep[];
+};
+
+function has<K extends string>(table: Readonly<Record<K, unknown>>, word: string): word is K {
+  return Object.prototype.hasOwnProperty.call(table, word);
+}
+
+const STATE_WORDS: Readonly<Record<KnownActivityState, true>> = {
+  up_to_date: true,
+  organizing: true,
+  waiting_for_idle: true,
+  blocked: true,
+};
+
+/**
+ * The state, or undefined when a newer daemon sent one this app predates.
+ * An unknown state makes no claim: the toolbar shows a plain clock and the
+ * headlines drop, while the rows, models and trust sentence still read from
+ * the rest of the response.
+ */
+export function knownState(activity: ActivityResponse): KnownActivityState | undefined {
+  return has(STATE_WORDS, activity.state) ? activity.state : undefined;
+}
+
+/**
+ * The assets and steps this build can name. An asset group or a step it has
+ * no words for is left out rather than shown as a raw key: its counts are in
+ * a unit this build cannot name, so no row here could say what they count.
+ */
+export function knownAssets(activity: ActivityResponse): KnownActivityAsset[] {
+  const assets: KnownActivityAsset[] = [];
+  for (const asset of activity.assets) {
+    const kind = asset.kind;
+    if (!has(OWN_STEP, kind)) continue;
+    const steps: KnownActivityStep[] = [];
+    for (const step of asset.steps) {
+      const name = step.name;
+      if (has(STEP_UNIT, name)) steps.push({ ...step, name });
+    }
+    assets.push({ ...asset, kind, steps });
+  }
+  return assets;
+}
+
 /**
  * The job whose lane governs an asset. Memories and Entities run on the
  * everyday route; Pages on synthesis. This mirrors `ActivityStepName::job()`
  * in wenlan-types, which is the server-side authority — Store and Confirm
  * carry no lane, so an asset is governed by whichever of its steps does.
  */
-export function governingJob(kind: ActivityAssetKind): ActivityJob {
+export function governingJob(kind: KnownActivityAssetKind): ActivityRouteJob {
   return kind === "pages" ? "synthesis" : "everyday";
 }
 
 export function routeFor(
   activity: ActivityResponse,
-  kind: ActivityAssetKind,
+  kind: KnownActivityAssetKind,
 ): ActivityRoute {
   return governingJob(kind) === "synthesis"
     ? activity.synthesis
     : activity.everyday;
-}
-
-/** The states this build has words for. */
-export type KnownActivityState = Exclude<ActivityState, "unknown">;
-
-/**
- * The state, or undefined when a newer daemon sent one this app predates.
- * An unknown state makes no claim: the toolbar shows the plain Activity
- * button and the Now section drops its headline, while the rows, models and
- * trust sentence still read from the rest of the response.
- */
-export function knownState(activity: ActivityResponse): KnownActivityState | undefined {
-  return activity.state === "unknown" ? undefined : activity.state;
 }
 
 /**
@@ -73,21 +124,21 @@ export function knownState(activity: ActivityResponse): KnownActivityState | und
  * One memory can name several entities or none, so a memory count printed
  * beside "Entities" is a wrong number, not a rounding.
  */
-const OWN_STEP: Record<ActivityAssetKind, ActivityStepName> = {
+const OWN_STEP: Readonly<Record<KnownActivityAssetKind, KnownActivityStepName>> = {
   memories: "store",
   entities: "confirm",
   pages: "write",
 };
 
 function findStep(
-  asset: ActivityAssetStatus,
-  name: ActivityStepName,
-): ActivityStep | undefined {
+  asset: KnownActivityAsset,
+  name: KnownActivityStepName,
+): KnownActivityStep | undefined {
   return asset.steps.find((step) => step.name === name);
 }
 
 /** What one step counts. Detect scans memories; Confirm settles entities. */
-const STEP_UNIT: Record<ActivityStepName, ActivityAssetKind> = {
+const STEP_UNIT: Readonly<Record<KnownActivityStepName, KnownActivityAssetKind>> = {
   store: "memories",
   summarize: "memories",
   link: "memories",
@@ -97,7 +148,7 @@ const STEP_UNIT: Record<ActivityStepName, ActivityAssetKind> = {
 };
 
 /** "3 of 12 memories": a step's count with the unit it actually counts. */
-export function stepCount(step: ActivityStep): Phrase {
+export function stepCount(step: KnownActivityStep): Phrase {
   return {
     key: `activityStatus.stepCount.${STEP_UNIT[step.name]}`,
     params: { count: step.total, done: step.done },
@@ -105,7 +156,7 @@ export function stepCount(step: ActivityStep): Phrase {
 }
 
 /** The row's number, always in the asset's own unit. */
-export function assetCount(asset: ActivityAssetStatus): number {
+export function assetCount(asset: KnownActivityAsset): number {
   return findStep(asset, OWN_STEP[asset.kind])?.total ?? asset.total;
 }
 
@@ -116,7 +167,7 @@ export function assetCount(asset: ActivityAssetStatus): number {
  * user's call in the Wiki, so a bar that filled only as the user confirmed
  * would read as background work that never finishes.
  */
-export function assetProgress(asset: ActivityAssetStatus): number {
+export function assetProgress(asset: KnownActivityAsset): number {
   const { done, total } =
     asset.kind === "entities" ? (findStep(asset, "detect") ?? asset) : asset;
   // An asset with nothing in it has no progress to draw; 0/0 would otherwise
@@ -139,7 +190,7 @@ export function assetProgress(asset: ActivityAssetStatus): number {
  */
 export function assetSentence(
   activity: ActivityResponse,
-  asset: ActivityAssetStatus,
+  asset: KnownActivityAsset,
 ): Phrase {
   const kind = asset.kind;
   const route = routeFor(activity, kind);
@@ -179,7 +230,7 @@ export function assetSentence(
  * never "running": an entity waits for the user in the Wiki, so found but
  * unconfirmed entities are the settled state, not unfinished work.
  */
-function entitySentence(asset: ActivityAssetStatus): Phrase {
+function entitySentence(asset: KnownActivityAsset): Phrase {
   const detect = findStep(asset, "detect");
   if (detect !== undefined && detect.done < detect.total) {
     return {
@@ -208,8 +259,10 @@ function entitySentence(asset: ActivityAssetStatus): Phrase {
  * is available) is not listed: its rows carry their own cause.
  */
 export function blockedCauses(activity: ActivityResponse): Phrase[] {
-  const jobs = new Set<ActivityJob>();
-  for (const asset of activity.assets) {
+  const jobs = new Set<ActivityRouteJob>();
+  // An asset this build cannot name is skipped: its governing model is
+  // unknown here, and a guessed cause would send the user to the wrong fix.
+  for (const asset of knownAssets(activity)) {
     if (asset.blocked > 0 && !routeFor(activity, asset.kind).available) {
       jobs.add(governingJob(asset.kind));
     }
@@ -217,7 +270,7 @@ export function blockedCauses(activity: ActivityResponse): Phrase[] {
   // A pinned source that is not serving (a model still loading, a local
   // server that is down) is a different fix from no choice at all: saying
   // "none is chosen" there would contradict the Intelligence page.
-  return (["everyday", "synthesis"] as const)
+  return ROUTE_JOBS
     .filter((job) => jobs.has(job))
     .map((job) => ({
       key:
@@ -234,15 +287,31 @@ export function routeSentence(route: ActivityRoute): Phrase {
     : { key: "activityStatus.route", params: { model: route.model } };
 }
 
+/**
+ * Whether each lane sends text to a vendor. A table rather than a list of the
+ * cloud ones, so a lane added to the wire type fails `tsc` here until someone
+ * decides which side it is on.
+ */
+const LANE_IS_CLOUD: Readonly<Record<KnownActivityLane, boolean>> = {
+  on_device: false,
+  external: false,
+  anthropic: true,
+  basic: false,
+  none: false,
+};
+
+/** The lane, or undefined when a newer daemon named one this app predates. */
+export function knownLane(lane: ActivityLane): KnownActivityLane | undefined {
+  return has(LANE_IS_CLOUD, lane) ? lane : undefined;
+}
+
 /** Lane chip copy for a resolved route. */
-export function laneKey(lane: ActivityLane): ParseKeys {
+export function laneKey(lane: KnownActivityLane): ParseKeys {
   return `activityStatus.lane.${lane}`;
 }
 
-const CLOUD_LANES: readonly ActivityLane[] = ["anthropic"];
-
-export function isCloud(route: ActivityRoute): boolean {
-  return CLOUD_LANES.includes(route.lane);
+export function isCloud(lane: KnownActivityLane): boolean {
+  return LANE_IS_CLOUD[lane];
 }
 
 /**
@@ -268,16 +337,28 @@ export type TrustPhrase =
  * `basic` and `none` run no model at all. Any cloud lane names its vendor and
  * says which work leaves the device, because claiming local while sending text
  * to a vendor is the one thing this sentence must never do.
+ *
+ * So a lane this build does not know gets no sentence at all (undefined): it
+ * may be a vendor this app has never heard of, and "nothing leaves your
+ * device" would then be the false claim.
+ *
+ * Job names come from the field carrying each route, not from `route.job`,
+ * which a newer daemon could fill with a word this build cannot name.
  */
-export function trustSentence(activity: ActivityResponse): TrustPhrase {
-  const cloud = [activity.everyday, activity.synthesis].filter(isCloud);
+export function trustSentence(activity: ActivityResponse): TrustPhrase | undefined {
+  const cloud: { job: ActivityRouteJob; lane: KnownActivityLane }[] = [];
+  for (const job of ROUTE_JOBS) {
+    const lane = knownLane(activity[job].lane);
+    if (lane === undefined) return undefined;
+    if (isCloud(lane)) cloud.push({ job, lane });
+  }
   if (cloud.length === 0)
     return { kind: "local", key: "activityStatus.trustLocal" };
 
   return {
     kind: "cloud",
     key: "activityStatus.trustCloud",
-    jobKeys: cloud.map((route) => `activityStatus.job.${route.job}` as const),
+    jobKeys: cloud.map(({ job }) => `activityStatus.job.${job}` as const),
     vendorKey: laneKey(cloud[0].lane),
   };
 }

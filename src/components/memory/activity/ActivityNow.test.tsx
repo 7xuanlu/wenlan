@@ -255,6 +255,38 @@ describe("ActivityNow", () => {
     expect(trust).not.toHaveTextContent("Nothing leaves your device");
   });
 
+  // A lane this app cannot name may be a cloud vendor, so claiming the work
+  // stays on the device would be false.
+  it("drops the trust line, chip and model for a lane from a newer daemon", async () => {
+    renderNow(activity({ everyday: route("everyday", "unknown", "new-model") }));
+    const models = await screen.findByTestId("activity-now-models");
+    expect(models).toHaveTextContent("qwen3-8b on this machine");
+    expect(models).not.toHaveTextContent("new-model");
+    expect(screen.queryByTestId("activity-now-trust")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("activity-steps-toggle-memories"));
+    expect(screen.getByTestId("activity-step-summarize")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-step-lane-summarize")).toBeNull();
+  });
+
+  it("leaves out a step from a newer daemon", async () => {
+    const base = activity();
+    renderNow(
+      activity({
+        assets: [
+          {
+            ...base.assets[0],
+            steps: [...base.assets[0].steps, step("unknown", { done: 1, total: 1 })],
+          },
+          asset("unknown", { done: 3, total: 3 }),
+        ],
+      }),
+    );
+    await userEvent.click(await screen.findByTestId("activity-steps-toggle-memories"));
+    expect(screen.getByTestId("activity-step-summarize")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-step-unknown")).toBeNull();
+  });
+
   it("renders nothing until the first read lands", () => {
     getActivityMock.mockReturnValue(new Promise(() => {}));
     const queryClient = new QueryClient({

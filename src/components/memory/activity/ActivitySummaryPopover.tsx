@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useTranslation } from "react-i18next";
-import type {
-  ActivityAssetKind,
-  ActivityAssetStatus,
-  ActivityResponse,
-} from "../../../lib/tauri";
+import type { ActivityResponse } from "../../../lib/tauri";
 import { relativeTime } from "../../../lib/relativeTime";
 import {
   assetCount,
   assetProgress,
   assetSentence,
   blockedCauses,
+  knownAssets,
   knownState,
   trustSentence,
+  type KnownActivityAsset,
+  type KnownActivityAssetKind,
 } from "../../../lib/activitySentence";
 
 /**
@@ -30,7 +29,7 @@ import {
  * Memories first because everything starts there, then what was found in them,
  * then what was written from them.
  */
-export const ASSET_ORDER: readonly ActivityAssetKind[] = [
+export const ASSET_ORDER: readonly KnownActivityAssetKind[] = [
   "memories",
   "entities",
   "pages",
@@ -42,7 +41,7 @@ export const ASSET_ORDER: readonly ActivityAssetKind[] = [
  * identical squares. Warm is the nearest token that stays distinct in both
  * themes.
  */
-const ASSET_COLOR: Record<ActivityAssetKind, string> = {
+const ASSET_COLOR: Record<KnownActivityAssetKind, string> = {
   memories: "var(--mem-accent-indigo)",
   entities: "var(--mem-accent-sage)",
   pages: "var(--mem-accent-warm)",
@@ -63,7 +62,7 @@ function AssetRow({
   asset,
 }: {
   readonly activity: ActivityResponse;
-  readonly asset: ActivityAssetStatus;
+  readonly asset: KnownActivityAsset;
 }) {
   const { t } = useTranslation();
   const phrase = assetSentence(activity, asset);
@@ -190,7 +189,9 @@ export default function ActivitySummaryPopover({
   const state = knownState(activity);
   const trust = trustSentence(activity);
   const trustText =
-    trust.kind === "local"
+    trust === undefined
+      ? undefined
+      : trust.kind === "local"
       ? t(trust.key)
       : t(trust.key, {
           // The mapping returns keys, not prose, so the join happens here where
@@ -201,7 +202,7 @@ export default function ActivitySummaryPopover({
           vendor: t(trust.vendorKey),
         });
 
-  const byKind = new Map(activity.assets.map((asset) => [asset.kind, asset]));
+  const byKind = new Map(knownAssets(activity).map((asset) => [asset.kind, asset]));
 
   return (
     <div
@@ -249,20 +250,23 @@ export default function ActivitySummaryPopover({
         })}
       </div>
 
-      <p
-        data-testid="activity-summary-trust"
-        style={{
-          borderTop: "1px solid var(--mem-border)",
-          color: "var(--mem-text-tertiary)",
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "10px",
-          lineHeight: 1.45,
-          margin: 0,
-          paddingTop: "9px",
-        }}
-      >
-        {trustText}
-      </p>
+      {/* No trust line at all when a lane is unknown: see trustSentence. */}
+      {trustText !== undefined && (
+        <p
+          data-testid="activity-summary-trust"
+          style={{
+            borderTop: "1px solid var(--mem-border)",
+            color: "var(--mem-text-tertiary)",
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "10px",
+            lineHeight: 1.45,
+            margin: 0,
+            paddingTop: "9px",
+          }}
+        >
+          {trustText}
+        </p>
+      )}
 
       {/* Wraps as whole items: the sidebar is ~300px wide, and in some locales
           the time and the button do not fit on one line. */}

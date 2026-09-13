@@ -23,7 +23,7 @@ pub enum ActivityState {
     Blocked,
     /// A state this build does not know, sent by a newer daemon. The daemon
     /// never sends it; it lets an older reader keep the rest of the response
-    /// instead of failing to parse it.
+    /// instead of failing to parse it. Every enum in this response has one.
     #[serde(other)]
     Unknown,
 }
@@ -35,6 +35,9 @@ pub enum ActivityAssetKind {
     Memories,
     Entities,
     Pages,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One background step inside an asset. `Store` and `Confirm` finish without
@@ -48,6 +51,9 @@ pub enum ActivityStepName {
     Detect,
     Confirm,
     Write,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 impl ActivityStepName {
@@ -60,7 +66,7 @@ impl ActivityStepName {
                 Some(ActivityJob::Everyday)
             }
             ActivityStepName::Write => Some(ActivityJob::Synthesis),
-            ActivityStepName::Store | ActivityStepName::Confirm => None,
+            ActivityStepName::Store | ActivityStepName::Confirm | ActivityStepName::Unknown => None,
         }
     }
 }
@@ -73,6 +79,9 @@ pub enum ActivityStepState {
     Idle,
     Running,
     Blocked,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The two background job classes, served by the resolved routing lanes.
@@ -81,6 +90,9 @@ pub enum ActivityStepState {
 pub enum ActivityJob {
     Everyday,
     Synthesis,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Resolved lane serving a job. Mirrors `JobRoute.source` strings verbatim.
@@ -92,6 +104,9 @@ pub enum ActivityLane {
     Anthropic,
     Basic,
     None,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One resolved job route: which lane serves the job and whether it can run.
@@ -181,6 +196,7 @@ mod tests {
         assert_eq!(ActivityStepName::Write.job(), Some(ActivityJob::Synthesis));
         assert_eq!(ActivityStepName::Store.job(), None);
         assert_eq!(ActivityStepName::Confirm.job(), None);
+        assert_eq!(ActivityStepName::Unknown.job(), None);
     }
 
     #[test]
@@ -227,15 +243,32 @@ mod tests {
     }
 
     /// An app older than its daemon must not lose the whole response to one
-    /// state word it has never seen.
+    /// word it has never seen, in any of the response's enums.
     #[test]
-    fn activity_response_with_a_newer_state_still_parses() {
-        let json = r#"{"state":"a_state_from_a_newer_daemon","last_activity_at":null,
-            "assets":[{"kind":"pages","state":"idle","done":2,"total":2,"blocked":0,"steps":[]}],
-            "everyday":{"job":"everyday","lane":"on_device","model":"m","mode":"pinned","available":true},
+    fn activity_response_with_newer_words_still_parses() {
+        let json = r#"{"state":"new_state","last_activity_at":null,
+            "assets":[{"kind":"new_kind","state":"new_step_state","done":2,"total":2,"blocked":0,
+                "steps":[{"name":"new_step","state":"idle","done":2,"total":2,"failed":0,"job":"new_job"}]}],
+            "everyday":{"job":"everyday","lane":"new_lane","model":"m","mode":"pinned","available":true},
             "synthesis":{"job":"synthesis","lane":"on_device","model":"m","mode":"pinned","available":true}}"#;
         let response: ActivityResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.state, ActivityState::Unknown);
-        assert_eq!(response.assets[0].total, 2);
+        let asset = &response.assets[0];
+        assert_eq!(asset.kind, ActivityAssetKind::Unknown);
+        assert_eq!(asset.state, ActivityStepState::Unknown);
+        assert_eq!(asset.total, 2);
+        assert_eq!(asset.steps[0].name, ActivityStepName::Unknown);
+        assert_eq!(asset.steps[0].job, Some(ActivityJob::Unknown));
+        assert_eq!(response.everyday.lane, ActivityLane::Unknown);
+        assert_eq!(response.synthesis.lane, ActivityLane::OnDevice);
+
+        // The app hands this struct on to the webview, which reads "unknown".
+        let passed_on = serde_json::to_value(&response).unwrap();
+        assert_eq!(passed_on["state"], "unknown");
+        assert_eq!(passed_on["assets"][0]["kind"], "unknown");
+        assert_eq!(passed_on["assets"][0]["state"], "unknown");
+        assert_eq!(passed_on["assets"][0]["steps"][0]["name"], "unknown");
+        assert_eq!(passed_on["assets"][0]["steps"][0]["job"], "unknown");
+        assert_eq!(passed_on["everyday"]["lane"], "unknown");
     }
 }

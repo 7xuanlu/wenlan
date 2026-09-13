@@ -8,20 +8,24 @@ import {
   blockedCauses,
   governingJob,
   isCloud,
+  knownAssets,
+  knownLane,
   knownState,
   laneKey,
   routeFor,
   routeSentence,
   stepCount,
   trustSentence,
+  type KnownActivityAsset,
+  type KnownActivityAssetKind,
+  type KnownActivityLane,
+  type KnownActivityStep,
 } from "./activitySentence";
 import type {
-  ActivityAssetKind,
   ActivityAssetStatus,
   ActivityLane,
   ActivityResponse,
   ActivityRoute,
-  ActivityStep,
 } from "./tauri";
 
 function route(
@@ -39,9 +43,9 @@ function route(
 }
 
 function asset(
-  kind: ActivityAssetKind,
-  fields: Partial<ActivityAssetStatus> = {},
-): ActivityAssetStatus {
+  kind: KnownActivityAssetKind,
+  fields: Partial<KnownActivityAsset> = {},
+): KnownActivityAsset {
   return {
     kind,
     state: "idle",
@@ -54,10 +58,10 @@ function asset(
 }
 
 function step(
-  name: ActivityStep["name"],
+  name: KnownActivityStep["name"],
   done: number,
   total: number = done,
-): ActivityStep {
+): KnownActivityStep {
   return { name, state: "idle", done, total, failed: 0, job: null };
 }
 
@@ -311,7 +315,7 @@ describe("units", () => {
   });
 
   it("counts each step in the unit it works on", () => {
-    const say = (s: ActivityStep) => {
+    const say = (s: KnownActivityStep) => {
       const phrase = stepCount(s);
       return i18n.t(phrase.key, phrase.params);
     };
@@ -355,15 +359,81 @@ describe("trustSentence", () => {
       synthesis: route("synthesis", "anthropic", true),
     });
     const trust = trustSentence(a);
-    expect(trust.kind === "cloud" && trust.jobKeys).toEqual([
+    expect(trust?.kind === "cloud" && trust.jobKeys).toEqual([
       "activityStatus.job.everyday",
       "activityStatus.job.synthesis",
     ]);
   });
 
   it("treats a local server as local, not as a vendor", () => {
-    expect(isCloud(route("everyday", "external", true))).toBe(false);
-    expect(isCloud(route("everyday", "anthropic", true))).toBe(true);
+    expect(isCloud("external")).toBe(false);
+    expect(isCloud("anthropic")).toBe(true);
+  });
+
+  // A lane this app predates may be a vendor it has never heard of, so it must
+  // never read as "nothing leaves your device".
+  it("says nothing about trust when a lane is unknown", () => {
+    // Beside a cloud lane too: naming only Anthropic would imply the unknown
+    // lane stays on the device.
+    for (const other of ["on_device", "anthropic"] as const) {
+      for (const lane of ["unknown", "a_lane_from_a_newer_daemon"]) {
+        const a = activity({
+          everyday: route("everyday", other, true),
+          synthesis: route("synthesis", lane as ActivityLane, true),
+        });
+        expect(trustSentence(a)).toBeUndefined();
+      }
+    }
+  });
+
+  it("names jobs by the field that carries each route, not by route.job", () => {
+    const a = activity({
+      everyday: { ...route("everyday", "anthropic", true), job: "unknown" },
+    });
+    const trust = trustSentence(a);
+    expect(trust?.kind === "cloud" && trust.jobKeys).toEqual(["activityStatus.job.everyday"]);
+  });
+});
+
+describe("words from a newer daemon", () => {
+  it("knows each lane this build has copy for, and no other", () => {
+    expect(knownLane("on_device")).toBe("on_device");
+    expect(knownLane("unknown")).toBeUndefined();
+    expect(knownLane("a_lane_from_a_newer_daemon" as ActivityLane)).toBeUndefined();
+  });
+
+  it("reads a raw new state word as unknown, as the browser preview sends it", () => {
+    expect(knownState(activity({ state: "paused" as ActivityResponse["state"] }))).toBeUndefined();
+  });
+
+  it("leaves out assets and steps this build cannot name", () => {
+    const newer: ActivityAssetStatus = {
+      ...asset("memories"),
+      kind: "unknown",
+      blocked: 5,
+    };
+    const memories: ActivityAssetStatus = {
+      ...asset("memories", { total: 4 }),
+      steps: [
+        step("store", 4),
+        { ...step("store", 1), name: "unknown" },
+        { ...step("store", 1), name: "a_step_from_a_newer_daemon" as "unknown" },
+      ],
+    };
+    const known = knownAssets(activity({ assets: [newer, memories] }));
+    expect(known.map((a) => a.kind)).toEqual(["memories"]);
+    expect(known[0].steps.map((s) => s.name)).toEqual(["store"]);
+    expect(known[0].total).toBe(4);
+  });
+
+  it("never names a missing model for an asset it cannot name", () => {
+    const newer: ActivityAssetStatus = { ...asset("memories", { blocked: 5 }), kind: "unknown" };
+    const a = activity({
+      assets: [newer],
+      everyday: route("everyday", "none", false),
+      synthesis: route("synthesis", "none", false),
+    });
+    expect(blockedCauses(a)).toEqual([]);
   });
 });
 
@@ -371,8 +441,8 @@ describe("key coverage", () => {
   // Every key these functions can return must exist, or the surface renders the
   // key string itself. i18n parity is covered elsewhere; this checks that the
   // mapping and the copy agree on names.
-  const kinds: ActivityAssetKind[] = ["memories", "entities", "pages"];
-  const lanes: ActivityLane[] = [
+  const kinds: KnownActivityAssetKind[] = ["memories", "entities", "pages"];
+  const lanes: KnownActivityLane[] = [
     "on_device",
     "external",
     "anthropic",
@@ -381,7 +451,7 @@ describe("key coverage", () => {
   ];
 
   it("resolves every asset sentence key", () => {
-    const shapes: ActivityAssetStatus[] = kinds.flatMap((kind) => [
+    const shapes: KnownActivityAsset[] = kinds.flatMap((kind) => [
       asset(kind),
       asset(kind, { done: 1, total: 4 }),
       asset(kind, { done: 4, total: 4 }),

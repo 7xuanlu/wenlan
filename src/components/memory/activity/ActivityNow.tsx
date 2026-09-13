@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import type {
-  ActivityAssetKind,
-  ActivityAssetStatus,
-  ActivityResponse,
-  ActivityStep,
-} from "../../../lib/tauri";
+import type { ActivityResponse } from "../../../lib/tauri";
 import { useActivity } from "../../../lib/useActivity";
 import {
   ACTIVITY_RAIL_MIN_WIDTH,
@@ -15,12 +10,18 @@ import {
 } from "../../../lib/activityNowLayout";
 import {
   assetSentence,
+  knownAssets,
+  knownLane,
   knownState,
   laneKey,
   routeFor,
   routeSentence,
+  ROUTE_JOBS,
   stepCount,
   trustSentence,
+  type KnownActivityAsset,
+  type KnownActivityAssetKind,
+  type KnownActivityStep,
 } from "../../../lib/activitySentence";
 import { ASSET_ORDER, BlockedCauses } from "./ActivitySummaryPopover";
 
@@ -75,7 +76,7 @@ export function useActivityNowPlacement(): ActivityNowLayout {
   return effectiveLayout(preference, wideEnoughForRail);
 }
 
-const ASSET_COLOR: Record<ActivityAssetKind, string> = {
+const ASSET_COLOR: Record<KnownActivityAssetKind, string> = {
   memories: "var(--mem-accent-indigo)",
   entities: "var(--mem-accent-sage)",
   pages: "var(--mem-accent-warm)",
@@ -87,14 +88,15 @@ function StepRow({
   step,
 }: {
   readonly activity: ActivityResponse;
-  readonly kind: ActivityAssetKind;
-  readonly step: ActivityStep;
+  readonly kind: KnownActivityAssetKind;
+  readonly step: KnownActivityStep;
 }) {
   const { t } = useTranslation();
   // Store and Confirm run no model, so they carry no lane. `job` is the
   // server's own answer to "which route does this step use"; a null one means
-  // the question does not apply, not that the lane is missing.
-  const lane = step.job === null ? null : routeFor(activity, kind).lane;
+  // the question does not apply, not that the lane is missing. A lane this
+  // build cannot name gets no chip rather than a raw key.
+  const lane = step.job === null ? undefined : knownLane(routeFor(activity, kind).lane);
   const count = stepCount(step);
 
   return (
@@ -141,7 +143,7 @@ function StepRow({
       >
         {t(count.key, count.params)}
       </span>
-      {lane !== null && (
+      {lane !== undefined && (
         <span
           className="mem-activity-lane-chip"
           data-testid={`activity-step-lane-${step.name}`}
@@ -158,7 +160,7 @@ function AssetBlock({
   asset,
 }: {
   readonly activity: ActivityResponse;
-  readonly asset: ActivityAssetStatus;
+  readonly asset: KnownActivityAsset;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -238,11 +240,13 @@ function NowBody({
   readonly onOpenIntelligence?: () => void;
 }) {
   const { t } = useTranslation();
-  const byKind = new Map(activity.assets.map((asset) => [asset.kind, asset]));
+  const byKind = new Map(knownAssets(activity).map((asset) => [asset.kind, asset]));
   const trust = trustSentence(activity);
   const state = knownState(activity);
   const trustText =
-    trust.kind === "local"
+    trust === undefined
+      ? undefined
+      : trust.kind === "local"
       ? t(trust.key)
       : t(trust.key, {
           jobs: trust.jobKeys
@@ -296,16 +300,21 @@ function NowBody({
             margin: 0,
           }}
         >
-          {[activity.everyday, activity.synthesis]
-            .map((route) => {
-              const phrase = routeSentence(route);
-              return t(phrase.key, {
+          {/* A route on a lane this build cannot name is left out: its
+              sentence would need a word for where the work runs. */}
+          {ROUTE_JOBS.flatMap((job) => {
+            const route = activity[job];
+            const lane = knownLane(route.lane);
+            if (lane === undefined) return [];
+            const phrase = routeSentence(route);
+            return [
+              t(phrase.key, {
                 ...phrase.params,
-                job: t(`activityStatus.jobTitle.${route.job}`),
-                lane: t(laneKey(route.lane)),
-              });
-            })
-            .join(" ")}
+                job: t(`activityStatus.jobTitle.${job}`),
+                lane: t(laneKey(lane)),
+              }),
+            ];
+          }).join(" ")}
           {onOpenIntelligence !== undefined && (
             <>
               {" "}
@@ -320,18 +329,21 @@ function NowBody({
             </>
           )}
         </p>
-        <p
-          data-testid="activity-now-trust"
-          style={{
-            color: "var(--mem-text-tertiary)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "10px",
-            lineHeight: 1.45,
-            margin: 0,
-          }}
-        >
-          {trustText}
-        </p>
+        {/* No trust line at all when a lane is unknown: see trustSentence. */}
+        {trustText !== undefined && (
+          <p
+            data-testid="activity-now-trust"
+            style={{
+              color: "var(--mem-text-tertiary)",
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "10px",
+              lineHeight: 1.45,
+              margin: 0,
+            }}
+          >
+            {trustText}
+          </p>
+        )}
       </div>
     </div>
   );

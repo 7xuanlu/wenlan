@@ -285,6 +285,13 @@ describe("ActivitySummaryPopover", () => {
     expect(trust).not.toHaveTextContent("Nothing leaves your device");
   });
 
+  // A lane this app cannot name may be a cloud vendor.
+  it("makes no trust claim for a lane from a newer daemon", async () => {
+    await openPopover(activity({ synthesis: route("synthesis", "unknown", true) }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-summary-trust")).toBeNull();
+  });
+
   it("says it is waiting, not steeping, while work is held for a quiet moment", async () => {
     await openPopover(
       activity({

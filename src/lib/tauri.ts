@@ -569,30 +569,33 @@ export async function getPipelineStatus(): Promise<PipelineStatusResponse> {
 // ── Activity status (daemon ≥ activity route; GET /api/activity) ───────────
 // Field names and enum string values mirror wenlan_types::activity exactly.
 
-// "unknown" is a state from a daemon newer than this app: the app's Rust
-// client reads any unrecognized state word as it rather than failing the read.
+// "unknown" is a word from a daemon newer than this app: the app's Rust client
+// reads any unrecognized value in these enums as it rather than failing the
+// read. activitySentence.ts narrows each one to the words this build knows.
 export type ActivityState =
   | "up_to_date"
   | "organizing"
   | "waiting_for_idle"
   | "blocked"
   | "unknown";
-export type ActivityAssetKind = "memories" | "entities" | "pages";
+export type ActivityAssetKind = "memories" | "entities" | "pages" | "unknown";
 export type ActivityStepName =
   | "store"
   | "summarize"
   | "link"
   | "detect"
   | "confirm"
-  | "write";
-export type ActivityStepState = "idle" | "running" | "blocked";
-export type ActivityJob = "everyday" | "synthesis";
+  | "write"
+  | "unknown";
+export type ActivityStepState = "idle" | "running" | "blocked" | "unknown";
+export type ActivityJob = "everyday" | "synthesis" | "unknown";
 export type ActivityLane =
   | "on_device"
   | "external"
   | "anthropic"
   | "basic"
-  | "none";
+  | "none"
+  | "unknown";
 
 export interface ActivityRoute {
   job: ActivityJob;
