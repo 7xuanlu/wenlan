@@ -18,6 +18,7 @@ import {
   laneKey,
   routeFor,
   routeSentence,
+  stepCount,
   trustSentence,
 } from "../../../lib/activitySentence";
 import { ASSET_ORDER, BlockedCauses } from "./ActivitySummaryPopover";
@@ -93,6 +94,7 @@ function StepRow({
   // server's own answer to "which route does this step use"; a null one means
   // the question does not apply, not that the lane is missing.
   const lane = step.job === null ? null : routeFor(activity, kind).lane;
+  const count = stepCount(step);
 
   return (
     <div
@@ -136,7 +138,7 @@ function StepRow({
           whiteSpace: "nowrap",
         }}
       >
-        {t("activityStatus.stepCount", { done: step.done, total: step.total })}
+        {t(count.key, count.params)}
       </span>
       {lane !== null && (
         <span

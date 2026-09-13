@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { i18n } from "../i18n";
 import {
+  assetCount,
+  assetProgress,
   assetSentence,
   blockedCauses,
   governingJob,
@@ -9,6 +11,7 @@ import {
   laneKey,
   routeFor,
   routeSentence,
+  stepCount,
   trustSentence,
 } from "./activitySentence";
 import type {
@@ -49,8 +52,12 @@ function asset(
   };
 }
 
-function step(name: ActivityStep["name"], done: number): ActivityStep {
-  return { name, state: "idle", done, total: done, failed: 0, job: null };
+function step(
+  name: ActivityStep["name"],
+  done: number,
+  total: number = done,
+): ActivityStep {
+  return { name, state: "idle", done, total, failed: 0, job: null };
 }
 
 function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
@@ -186,9 +193,9 @@ describe("assetSentence", () => {
 
   it("takes the entity confirmed count from the confirm step", () => {
     const entities = asset("entities", {
-      done: 21,
+      done: 9,
       total: 21,
-      steps: [step("detect", 21), step("confirm", 9)],
+      steps: [step("detect", 40), step("confirm", 9, 21)],
     });
     expect(assetSentence(activity(), entities)).toEqual({
       key: "activityStatus.assetDone.entities",
@@ -202,6 +209,87 @@ describe("assetSentence", () => {
       count: 3,
       confirmed: 0,
     });
+  });
+});
+
+describe("units", () => {
+  // The Entities asset's done/total follow its busy step, and Detect counts
+  // memories while Confirm counts entities. These pin every number to the unit
+  // its sentence names: a memory count beside "Entities" is a wrong number.
+  const scanning = asset("entities", {
+    done: 2,
+    total: 10,
+    steps: [step("detect", 2, 10), step("confirm", 1, 3)],
+  });
+
+  it("counts an entities row in entities even while memories are scanned", () => {
+    expect(assetCount(scanning)).toBe(3);
+    expect(assetCount(asset("memories", { total: 7, steps: [step("store", 9)] }))).toBe(9);
+    expect(assetCount(asset("pages", { total: 4 }))).toBe(4);
+  });
+
+  it("says scanning in memories, with the memory total as the plural count", () => {
+    expect(assetSentence(activity(), scanning)).toEqual({
+      key: "activityStatus.assetRunning.entities",
+      params: { count: 10, done: 2, total: 10 },
+    });
+    expect(i18n.t("activityStatus.assetRunning.entities", { count: 10, done: 2, total: 10 })).toBe(
+      "2 of 10 memories scanned for entities",
+    );
+  });
+
+  it("treats unconfirmed entities as settled, not as unfinished work", () => {
+    // Confirm waits for the user in the Wiki; 3 found and 1 confirmed is done.
+    const settled = asset("entities", {
+      done: 1,
+      total: 3,
+      steps: [step("detect", 10), step("confirm", 1, 3)],
+    });
+    expect(assetSentence(activity(), settled)).toEqual({
+      key: "activityStatus.assetDone.entities",
+      params: { count: 3, confirmed: 1 },
+    });
+    expect(assetProgress(settled)).toBe(1);
+  });
+
+  it("names memories when entity detection is blocked", () => {
+    const noModel = activity({ everyday: route("everyday", "none", false) });
+    const blocked = asset("entities", {
+      blocked: 8,
+      done: 0,
+      total: 8,
+      steps: [step("detect", 0, 8), step("confirm", 0, 0)],
+    });
+    const phrase = assetSentence(noModel, blocked);
+    expect(i18n.t(phrase.key, phrase.params)).toBe(
+      "8 memories not yet scanned for entities",
+    );
+
+    const failed = assetSentence(activity(), {
+      ...blocked,
+      blocked: 2,
+      steps: [step("detect", 6, 8), step("confirm", 4, 5)],
+    });
+    // total is the memory population, not the 5 entities found.
+    expect(failed.params).toEqual({ count: 2, total: 8 });
+  });
+
+  it("keeps the searchable reassurance on blocked memories", () => {
+    const noModel = activity({ everyday: route("everyday", "none", false) });
+    const phrase = assetSentence(noModel, asset("memories", { blocked: 8, total: 8 }));
+    expect(i18n.t(phrase.key, phrase.params)).toBe(
+      "8 not yet summarized. All are searchable now.",
+    );
+  });
+
+  it("counts each step in the unit it works on", () => {
+    const say = (s: ActivityStep) => {
+      const phrase = stepCount(s);
+      return i18n.t(phrase.key, phrase.params);
+    };
+    expect(say(step("detect", 2, 10))).toBe("2 of 10 memories");
+    expect(say(step("confirm", 1, 3))).toBe("1 of 3 entities");
+    expect(say(step("write", 1, 1))).toBe("1 of 1 page");
   });
 });
 
@@ -270,6 +358,11 @@ describe("key coverage", () => {
       asset(kind, { done: 1, total: 4 }),
       asset(kind, { done: 4, total: 4 }),
       asset(kind, { done: 1, total: 4, blocked: 3 }),
+      asset(kind, {
+        done: 1,
+        total: 4,
+        steps: [step("detect", 1, 4), step("confirm", 0, 2)],
+      }),
     ]);
     for (const available of [true, false]) {
       const a = activity({

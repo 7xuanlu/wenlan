@@ -59,33 +59,43 @@ export const enActivityStatus = {
     entities: "Nothing found yet",
     pages: "No pages yet",
   },
+  // Every number names its unit. Entities' running and blocked counts are
+  // MEMORIES scanned for entities, not entities: one memory can name several
+  // entities or none, so "8" beside "Entities" would be a wrong number.
   assetRunning: {
     memories: "{{done}} of {{total}} summarized and linked",
-    entities: "{{done}} of {{total}} checked",
-    pages: "{{done}} of {{total}} pages written",
+    entities_one: "{{done}} of {{total}} memory scanned for entities",
+    entities_other: "{{done}} of {{total}} memories scanned for entities",
+    pages: "{{done}} of {{total}} pages current, the rest updating",
   },
-  // Rows say only how many are waiting. The cause and the fix are said ONCE,
-  // per missing model, by blockedCause: Memories and Entities share the
-  // everyday model, so a per-row cause printed the same sentence twice.
+  // Rows say only how many are waiting, in their own unit. The cause and the
+  // fix are said ONCE, per missing model, by blockedCause: Memories and
+  // Entities share the everyday model, so a per-row cause printed the same
+  // sentence twice.
   assetBlockedNoModel: {
-    memories: "{{count}} waiting for a model",
-    entities: "{{count}} waiting for a model",
-    pages: "{{count}} waiting for a model",
+    memories: "{{count}} not yet summarized. All are searchable now.",
+    entities_one: "{{count}} memory not yet scanned for entities",
+    entities_other: "{{count}} memories not yet scanned for entities",
+    pages_one: "{{count}} page waiting to be updated",
+    pages_other: "{{count}} pages waiting to be updated",
   },
+  // The popover opens on this, with turnOnModel beside it, so it names what
+  // stopped and why; the button carries the fix. turnOnModel repeats Home's
+  // empty-state button word for word: one action, one name.
   blockedCause: {
-    everyday: "No everyday model is loaded. Choose one in Settings, Intelligence.",
-    synthesis:
-      "No page-writing model is loaded. Choose one in Settings, Intelligence.",
+    everyday: "Steeping is paused: no everyday model is loaded.",
+    synthesis: "Page writing is paused: no page-writing model is loaded.",
   },
+  turnOnModel: "Turn on a model",
   assetBlockedFailed: {
     memories_one:
       "{{count}} of {{total}} blocked: summarizing failed. All {{total}} are still searchable.",
     memories_other:
       "{{count}} of {{total}} blocked: summarizing failed. All {{total}} are still searchable.",
     entities:
-      "{{count}} of {{total}} blocked: detection failed. Your memories are unaffected.",
+      "{{count}} of {{total}} memories blocked: entity detection failed. Your memories are unaffected.",
     pages:
-      "{{count}} of {{total}} blocked: page writing failed. Your sources are unaffected.",
+      "{{count}} of {{total}} pages blocked: page writing failed. Your sources are unaffected.",
   },
   openActivity: "See all activity",
   jobSeparator: " and ",
@@ -120,7 +130,15 @@ export const enActivityStatus = {
     running: "Running",
     blocked: "Blocked",
   },
-  stepCount: "{{done}} of {{total}}",
+  // Per step, in that step's unit: Detect counts memories, Confirm entities.
+  stepCount: {
+    memories_one: "{{done}} of {{count}} memory",
+    memories_other: "{{done}} of {{count}} memories",
+    entities_one: "{{done}} of {{count}} entity",
+    entities_other: "{{done}} of {{count}} entities",
+    pages_one: "{{done}} of {{count}} page",
+    pages_other: "{{done}} of {{count}} pages",
+  },
   lane: {
     on_device: "on this machine",
     external: "on your local server",
@@ -195,23 +213,27 @@ export const hansActivityStatus = {
   },
   assetRunning: {
     memories: "{{total}} 条中已完成 {{done}} 条的摘要与关联",
-    entities: "{{total}} 个中已核对 {{done}} 个",
-    pages: "{{total}} 个页面中已写好 {{done}} 个",
+    entities_one: "{{total}} 条记忆中已有 {{done}} 条完成实体扫描",
+    entities_other: "{{total}} 条记忆中已有 {{done}} 条完成实体扫描",
+    pages: "{{total}} 个页面中 {{done}} 个为最新，其余正在更新",
   },
   assetBlockedNoModel: {
-    memories: "{{count}} 条在等待模型",
-    entities: "{{count}} 个在等待模型",
-    pages: "{{count}} 个在等待模型",
+    memories: "{{count}} 条尚未生成摘要。全部已可搜索。",
+    entities_one: "{{count}} 条记忆尚未扫描实体",
+    entities_other: "{{count}} 条记忆尚未扫描实体",
+    pages_one: "{{count}} 个页面等待更新",
+    pages_other: "{{count}} 个页面等待更新",
   },
   blockedCause: {
-    everyday: "未加载日常模型。请在「设置 - 智能」中选择一个。",
-    synthesis: "未加载写页面的模型。请在「设置 - 智能」中选择一个。",
+    everyday: "沉淀已暂停：未加载日常模型。",
+    synthesis: "页面撰写已暂停：未加载写页面的模型。",
   },
+  turnOnModel: "启用模型",
   assetBlockedFailed: {
     memories_one: "{{total}} 条中有 {{count}} 条暂停：生成摘要失败。全部 {{total}} 条仍可搜索。",
     memories_other: "{{total}} 条中有 {{count}} 条暂停：生成摘要失败。全部 {{total}} 条仍可搜索。",
-    entities: "{{total}} 个中有 {{count}} 个暂停：识别失败。你的记忆不受影响。",
-    pages: "{{total}} 个中有 {{count}} 个暂停：写页面失败。你的来源不受影响。",
+    entities: "{{total}} 条记忆中有 {{count}} 条暂停：实体识别失败。你的记忆不受影响。",
+    pages: "{{total}} 个页面中有 {{count}} 个暂停：写页面失败。你的来源不受影响。",
   },
   openActivity: "查看全部活动",
   jobSeparator: "和",
@@ -241,7 +263,14 @@ export const hansActivityStatus = {
     running: "进行中",
     blocked: "已暂停",
   },
-  stepCount: "{{total}} 中已完成 {{done}}",
+  stepCount: {
+    memories_one: "{{count}} 条记忆中已完成 {{done}} 条",
+    memories_other: "{{count}} 条记忆中已完成 {{done}} 条",
+    entities_one: "{{count}} 个实体中已完成 {{done}} 个",
+    entities_other: "{{count}} 个实体中已完成 {{done}} 个",
+    pages_one: "{{count}} 个页面中已完成 {{done}} 个",
+    pages_other: "{{count}} 个页面中已完成 {{done}} 个",
+  },
   lane: {
     on_device: "在本机",
     external: "在你的本地服务器",
@@ -307,23 +336,27 @@ export const hantActivityStatus = {
   },
   assetRunning: {
     memories: "{{total}} 則中已完成 {{done}} 則的摘要與關聯",
-    entities: "{{total}} 個中已核對 {{done}} 個",
-    pages: "{{total}} 個頁面中已寫好 {{done}} 個",
+    entities_one: "{{total}} 則記憶中已有 {{done}} 則完成實體掃描",
+    entities_other: "{{total}} 則記憶中已有 {{done}} 則完成實體掃描",
+    pages: "{{total}} 個頁面中 {{done}} 個為最新，其餘正在更新",
   },
   assetBlockedNoModel: {
-    memories: "{{count}} 則在等待模型",
-    entities: "{{count}} 個在等待模型",
-    pages: "{{count}} 個在等待模型",
+    memories: "{{count}} 則尚未產生摘要。全部已可搜尋。",
+    entities_one: "{{count}} 則記憶尚未掃描實體",
+    entities_other: "{{count}} 則記憶尚未掃描實體",
+    pages_one: "{{count}} 個頁面等待更新",
+    pages_other: "{{count}} 個頁面等待更新",
   },
   blockedCause: {
-    everyday: "未載入日常模型。請在「設定 - 智慧」中選擇一個。",
-    synthesis: "未載入寫頁面的模型。請在「設定 - 智慧」中選擇一個。",
+    everyday: "沉澱已暫停：未載入日常模型。",
+    synthesis: "頁面撰寫已暫停：未載入寫頁面的模型。",
   },
+  turnOnModel: "啟用模型",
   assetBlockedFailed: {
     memories_one: "{{total}} 則中有 {{count}} 則暫停：產生摘要失敗。全部 {{total}} 則仍可搜尋。",
     memories_other: "{{total}} 則中有 {{count}} 則暫停：產生摘要失敗。全部 {{total}} 則仍可搜尋。",
-    entities: "{{total}} 個中有 {{count}} 個暫停：辨識失敗。你的記憶不受影響。",
-    pages: "{{total}} 個中有 {{count}} 個暫停：寫頁面失敗。你的來源不受影響。",
+    entities: "{{total}} 則記憶中有 {{count}} 則暫停：實體辨識失敗。你的記憶不受影響。",
+    pages: "{{total}} 個頁面中有 {{count}} 個暫停：寫頁面失敗。你的來源不受影響。",
   },
   openActivity: "查看全部活動",
   jobSeparator: "和",
@@ -353,7 +386,14 @@ export const hantActivityStatus = {
     running: "進行中",
     blocked: "已暫停",
   },
-  stepCount: "{{total}} 中已完成 {{done}}",
+  stepCount: {
+    memories_one: "{{count}} 則記憶中已完成 {{done}} 則",
+    memories_other: "{{count}} 則記憶中已完成 {{done}} 則",
+    entities_one: "{{count}} 個實體中已完成 {{done}} 個",
+    entities_other: "{{count}} 個實體中已完成 {{done}} 個",
+    pages_one: "{{count}} 個頁面中已完成 {{done}} 個",
+    pages_other: "{{count}} 個頁面中已完成 {{done}} 個",
+  },
   lane: {
     on_device: "在本機",
     external: "在你的本機伺服器",

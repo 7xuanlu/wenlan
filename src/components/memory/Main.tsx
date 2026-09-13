@@ -591,6 +591,7 @@ export default function Main({
                   setViewHistory([]);
                 });
               }}
+              onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
             />
             {/* Quick Capture */}
             <button

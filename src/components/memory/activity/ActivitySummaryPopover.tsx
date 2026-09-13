@@ -7,6 +7,8 @@ import type {
 } from "../../../lib/tauri";
 import { relativeTime } from "../../../lib/relativeTime";
 import {
+  assetCount,
+  assetProgress,
   assetSentence,
   blockedCauses,
   trustSentence,
@@ -15,7 +17,9 @@ import {
 /**
  * Tier 1: the summary the toolbar Activity button opens.
  *
- * One headline, the three assets the user already knows from the nav, and a
+ * It opens on what the user can act on: a missing model and the button that
+ * fixes it, or, when nothing needs them, one headline. Then the three assets
+ * the user already knows from the nav, each counted in its own unit, and a
  * trust line. The steps behind each asset stay one level down on the Activity
  * page: this surface answers "what is Wenlan doing for me", not "how".
  */
@@ -49,6 +53,8 @@ interface ActivitySummaryPopoverProps {
   readonly onClose: () => void;
   /** Navigates to the Activity view. Absent when the shell has no such route. */
   readonly onOpenActivity?: () => void;
+  /** Navigates to Settings, Intelligence. Absent when the shell has no route. */
+  readonly onOpenIntelligence?: () => void;
 }
 
 function AssetRow({
@@ -60,9 +66,7 @@ function AssetRow({
 }) {
   const { t } = useTranslation();
   const phrase = assetSentence(activity, asset);
-  // An asset with nothing in it has no progress to draw; 0/0 would otherwise
-  // render as a full bar, which reads as finished rather than empty.
-  const fraction = asset.total === 0 ? 0 : asset.done / asset.total;
+  const fraction = assetProgress(asset);
 
   return (
     <div data-testid={`activity-asset-${asset.kind}`} style={{ display: "grid", gap: "4px" }}>
@@ -96,7 +100,7 @@ function AssetRow({
             marginLeft: "auto",
           }}
         >
-          {asset.total}
+          {assetCount(asset)}
         </span>
       </div>
       <p
@@ -137,23 +141,39 @@ function AssetRow({
 
 /**
  * Why a Blocked library is waiting, one sentence per missing model, said once
- * under the headline instead of on every row. Shared with the Now section.
+ * instead of on every row. Shared with the Now section, which has no action
+ * here because its models line already links to Settings, Intelligence.
  */
 export function BlockedCauses({
   activity,
   testId,
+  onTurnOnModel,
 }: {
   readonly activity: ActivityResponse;
   readonly testId: string;
+  /** Renders one "Turn on a model" button for every cause listed. */
+  readonly onTurnOnModel?: () => void;
 }) {
   const { t } = useTranslation();
   const causes = blockedCauses(activity);
   if (causes.length === 0) return null;
   return (
     <div data-testid={testId} className="mem-activity-causes">
-      {causes.map((cause) => (
-        <p key={cause.key}>{t(cause.key)}</p>
-      ))}
+      <div className="mem-activity-causes-text">
+        {causes.map((cause) => (
+          <p key={cause.key}>{t(cause.key)}</p>
+        ))}
+      </div>
+      {onTurnOnModel !== undefined && (
+        <button
+          type="button"
+          className="mem-activity-popover-action"
+          data-testid={`${testId}-action`}
+          onClick={onTurnOnModel}
+        >
+          {t("activityStatus.turnOnModel")}
+        </button>
+      )}
     </div>
   );
 }
@@ -162,6 +182,7 @@ export default function ActivitySummaryPopover({
   activity,
   onClose,
   onOpenActivity,
+  onOpenIntelligence,
 }: ActivitySummaryPopoverProps) {
   const { t, i18n } = useTranslation();
 
@@ -187,19 +208,35 @@ export default function ActivitySummaryPopover({
       role="dialog"
       aria-label={t("activityStatus.statusLabel")}
     >
-      <p
-        data-testid="activity-summary-headline"
-        style={{
-          color: "var(--mem-text)",
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "12px",
-          lineHeight: 1.45,
-          margin: 0,
-        }}
-      >
-        {t(`activityStatus.headline.${activity.state}`)}
-      </p>
-      <BlockedCauses activity={activity} testId="activity-summary-causes" />
+      {/* A missing model IS the headline: "Some steeping is waiting on you"
+          above it only delayed the sentence that says what to do. */}
+      {blockedCauses(activity).length > 0 ? (
+        <BlockedCauses
+          activity={activity}
+          testId="activity-summary-causes"
+          onTurnOnModel={
+            onOpenIntelligence === undefined
+              ? undefined
+              : () => {
+                  onOpenIntelligence();
+                  onClose();
+                }
+          }
+        />
+      ) : (
+        <p
+          data-testid="activity-summary-headline"
+          style={{
+            color: "var(--mem-text)",
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "12px",
+            lineHeight: 1.45,
+            margin: 0,
+          }}
+        >
+          {t(`activityStatus.headline.${activity.state}`)}
+        </p>
+      )}
 
       <div style={{ display: "grid", gap: "10px" }}>
         {ASSET_ORDER.map((kind) => {

@@ -17,6 +17,8 @@ import type {
   ActivityLane,
   ActivityResponse,
   ActivityRoute,
+  ActivityStep,
+  ActivityStepName,
 } from "./tauri";
 
 /**
@@ -49,6 +51,66 @@ export function routeFor(
 }
 
 /**
+ * The step that counts an asset's OWN items: memories for Memories, entities
+ * for Entities, pages for Pages.
+ *
+ * The asset's `done`/`total` follow whichever step is busy, and the steps do
+ * not share a unit: Detect counts memories scanned, Confirm counts entities.
+ * One memory can name several entities or none, so a memory count printed
+ * beside "Entities" is a wrong number, not a rounding.
+ */
+const OWN_STEP: Record<ActivityAssetKind, ActivityStepName> = {
+  memories: "store",
+  entities: "confirm",
+  pages: "write",
+};
+
+function findStep(
+  asset: ActivityAssetStatus,
+  name: ActivityStepName,
+): ActivityStep | undefined {
+  return asset.steps.find((step) => step.name === name);
+}
+
+/** What one step counts. Detect scans memories; Confirm settles entities. */
+const STEP_UNIT: Record<ActivityStepName, ActivityAssetKind> = {
+  store: "memories",
+  summarize: "memories",
+  link: "memories",
+  detect: "memories",
+  confirm: "entities",
+  write: "pages",
+};
+
+/** "3 of 12 memories": a step's count with the unit it actually counts. */
+export function stepCount(step: ActivityStep): Phrase {
+  return {
+    key: `activityStatus.stepCount.${STEP_UNIT[step.name]}`,
+    params: { count: step.total, done: step.done },
+  };
+}
+
+/** The row's number, always in the asset's own unit. */
+export function assetCount(asset: ActivityAssetStatus): number {
+  return findStep(asset, OWN_STEP[asset.kind])?.total ?? asset.total;
+}
+
+/**
+ * The row's progress, as a fraction of the work Wenlan does on its own.
+ *
+ * Entities draws Detect (memories scanned), not Confirm: confirming is the
+ * user's call in the Wiki, so a bar that filled only as the user confirmed
+ * would read as background work that never finishes.
+ */
+export function assetProgress(asset: ActivityAssetStatus): number {
+  const { done, total } =
+    asset.kind === "entities" ? (findStep(asset, "detect") ?? asset) : asset;
+  // An asset with nothing in it has no progress to draw; 0/0 would otherwise
+  // render as a full bar, which reads as finished rather than empty.
+  return total === 0 ? 0 : done / total;
+}
+
+/**
  * Which sentence an asset row gets.
  *
  * The two Blocked causes are told apart by the governing route, not by the
@@ -56,6 +118,10 @@ export function routeFor(
  * an available one means the work ran and failed. The spec requires both to
  * name their own cause and next action, and only the route can tell them
  * apart — `blocked > 0` is true in both cases.
+ *
+ * Every number is in the unit its sentence names. Entities' blocked and
+ * running counts are memories (the daemon counts memories not yet scanned),
+ * so their copy says "memories"; only the settled sentence counts entities.
  */
 export function assetSentence(
   activity: ActivityResponse,
@@ -65,16 +131,19 @@ export function assetSentence(
   const route = routeFor(activity, kind);
 
   if (asset.blocked > 0) {
+    const scanned = kind === "entities" ? findStep(asset, "detect") : undefined;
     return route.available
       ? {
           key: `activityStatus.assetBlockedFailed.${kind}`,
-          params: { count: asset.blocked, total: asset.total },
+          params: { count: asset.blocked, total: (scanned ?? asset).total },
         }
       : {
           key: `activityStatus.assetBlockedNoModel.${kind}`,
           params: { count: asset.blocked },
         };
   }
+
+  if (kind === "entities") return entitySentence(asset);
 
   if (asset.total === 0) return { key: `activityStatus.assetEmpty.${kind}` };
 
@@ -85,21 +154,34 @@ export function assetSentence(
     };
   }
 
-  if (kind === "entities") {
-    // "21 found, 9 confirmed in the Wiki" — confirmed is the Confirm step's
-    // own done count, not the asset's, because an entity can be detected and
-    // never earn enough substance to be confirmed.
-    const confirmed =
-      asset.steps.find((step) => step.name === "confirm")?.done ?? 0;
-    return {
-      key: "activityStatus.assetDone.entities",
-      params: { count: asset.total, confirmed },
-    };
-  }
-
   return {
     key: `activityStatus.assetDone.${kind}`,
     params: { count: asset.total },
+  };
+}
+
+/**
+ * Entities is running only while memories are still being scanned. Confirm is
+ * never "running": an entity waits for the user in the Wiki, so found but
+ * unconfirmed entities are the settled state, not unfinished work.
+ */
+function entitySentence(asset: ActivityAssetStatus): Phrase {
+  const detect = findStep(asset, "detect");
+  if (detect !== undefined && detect.done < detect.total) {
+    return {
+      key: "activityStatus.assetRunning.entities",
+      params: { count: detect.total, done: detect.done, total: detect.total },
+    };
+  }
+
+  const found = assetCount(asset);
+  if (found === 0) return { key: "activityStatus.assetEmpty.entities" };
+
+  // "21 found, 9 confirmed in the Wiki": an entity can be detected and never
+  // earn enough substance to be confirmed.
+  return {
+    key: "activityStatus.assetDone.entities",
+    params: { count: found, confirmed: findStep(asset, "confirm")?.done ?? 0 },
   };
 }
 

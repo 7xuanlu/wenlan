@@ -3814,16 +3814,15 @@ p.entity-error {
 .mem-activity-status[aria-expanded="true"] { background: var(--mem-hover-strong); }
 .mem-activity-status[aria-current="page"] { color: var(--mem-text); }
 .mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
-.mem-activity-status-badge {
-  align-items: center;
-  color: var(--mem-text-tertiary);
-  display: inline-flex;
-  font-family: var(--mem-font-mono);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  gap: 5px;
-}
-.mem-activity-dot { border-radius: 50%; flex-shrink: 0; height: 6px; width: 6px; }
+/* The badge carries state, never a number: the assets count different things
+   (memories, entities, pages), so no single figure is true for all three.
+   State is told by FORM as well as color, so it survives color blindness:
+   Steeping is a pulsing ring (work moving, nothing to do), Blocked a solid
+   amber dot (it needs you). Up to date draws nothing. */
+.mem-activity-status-badge { align-items: center; display: inline-flex; }
+.mem-activity-dot { border-radius: 50%; box-sizing: border-box; flex-shrink: 0; height: 7px; width: 7px; }
+.mem-activity-dot[data-dot-state="organizing"] { border: 1.5px solid var(--mem-accent-indigo); }
+.mem-activity-dot[data-dot-state="blocked"] { background: var(--mem-accent-amber); }
 @keyframes mem-activity-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .mem-activity-dot-pulse { animation: mem-activity-dot-pulse 1.8s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
@@ -3850,17 +3849,24 @@ p.entity-error {
 /* The cause of a Blocked library, said once per missing model. Warning tint,
    not danger: nothing is lost while work waits for a model. */
 .mem-activity-causes {
+  align-items: center;
   background: var(--mem-status-warning-bg);
   border-radius: 6px;
   color: var(--mem-text);
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   font-family: var(--mem-font-body);
   font-size: 11px;
-  gap: 4px;
+  gap: 6px 10px;
   line-height: 1.45;
   padding: 7px 9px;
 }
+/* The sentences take the room; the action wraps under them only when a locale
+   or two causes leave no space beside them. */
+.mem-activity-causes-text { display: grid; flex: 1 1 160px; gap: 4px; min-width: 0; }
 .mem-activity-causes p { margin: 0; }
+.mem-activity-causes .mem-activity-popover-action { background: var(--mem-popover); color: var(--mem-text); margin-left: 0; }
+.mem-activity-causes .mem-activity-popover-action:hover { border-color: var(--mem-text-tertiary); }
 .mem-activity-popover-action {
   background: transparent;
   border: 1px solid var(--mem-border);

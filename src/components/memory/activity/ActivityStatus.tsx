@@ -2,7 +2,6 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import type { ActivityResponse, ActivityState } from "../../../lib/tauri";
 import { useActivity } from "../../../lib/useActivity";
 import ActivitySummaryPopover from "./ActivitySummaryPopover";
 
@@ -12,45 +11,21 @@ import ActivitySummaryPopover from "./ActivitySummaryPopover";
  * It is the ONE way into activity. The toolbar sits on every view (Settings
  * and a collapsed sidebar included), so the state rides on the button that
  * already names the destination rather than on a second entry in the sidebar.
- * Up to date looks like the plain button; Steeping adds a pulsing dot and the
- * busiest asset's progress; Blocked adds a still amber dot and the stuck count.
+ * Up to date looks like the plain button; Steeping adds a pulsing ring;
+ * Blocked adds a solid amber dot. No number: memories, entities and pages are
+ * counted in different units, so any one figure here would be wrong for two of
+ * them. The counts live in the summary, each beside its own unit. Amber is not
+ * red on purpose: blocked work is waiting, nothing is lost.
  * A click opens the summary below it; the summary links to the full page.
  */
-
-/** Dot color per state. Amber is not red on purpose: nothing is lost when
- *  work is blocked, it is waiting, so the palette must not read as an error. */
-const DOT_COLOR: Record<ActivityState, string> = {
-  up_to_date: "var(--mem-accent-sage)",
-  organizing: "var(--mem-accent-indigo)",
-  blocked: "var(--mem-accent-amber)",
-};
-
-/**
- * The trailing number.
- *
- * Steeping shows the busiest asset — the one with the most work left, not
- * the first in the list — because that is the one the user is waiting on.
- * Blocked shows the total stuck across every asset.
- */
-export function statusDetail(activity: ActivityResponse): string | null {
-  if (activity.state === "blocked") {
-    const blocked = activity.assets.reduce((sum, a) => sum + a.blocked, 0);
-    return blocked > 0 ? String(blocked) : null;
-  }
-  if (activity.state === "organizing") {
-    const busiest = activity.assets
-      .filter((a) => a.total > a.done)
-      .sort((a, b) => b.total - b.done - (a.total - a.done))[0];
-    return busiest ? `${busiest.done}/${busiest.total}` : null;
-  }
-  return null;
-}
 
 interface ActivityStatusProps {
   readonly expanded: boolean;
   readonly onToggle: () => void;
   /** Navigates to the Activity view. Absent when the shell has no such route. */
   readonly onOpenActivity?: () => void;
+  /** Navigates to Settings, Intelligence, where a missing model is chosen. */
+  readonly onOpenIntelligence?: () => void;
   /** True while the Activity view is the current page. */
   readonly current?: boolean;
 }
@@ -59,6 +34,7 @@ export default function ActivityStatus({
   expanded,
   onToggle,
   onOpenActivity,
+  onOpenIntelligence,
   current = false,
 }: ActivityStatusProps) {
   const { t } = useTranslation();
@@ -101,7 +77,6 @@ export default function ActivityStatus({
   // claiming a state before the app has asked would be a claim it cannot back.
   // It is the same element either way, so focus survives the first read.
   const loaded = activity !== undefined;
-  const detail = loaded ? statusDetail(activity) : null;
   const stateWord = loaded ? t(`activityStatus.state.${activity.state}`) : undefined;
   const quiet = !loaded || activity.state === "up_to_date";
 
@@ -137,11 +112,7 @@ export default function ActivityStatus({
                   ? "mem-activity-dot mem-activity-dot-pulse"
                   : "mem-activity-dot"
               }
-              style={{ backgroundColor: DOT_COLOR[activity.state] }}
             />
-            {detail !== null && (
-              <span data-testid="activity-status-detail">{detail}</span>
-            )}
           </span>
         )}
       </button>
@@ -150,6 +121,7 @@ export default function ActivityStatus({
           activity={activity}
           onClose={close}
           onOpenActivity={onOpenActivity}
+          onOpenIntelligence={onOpenIntelligence}
         />
       )}
     </div>

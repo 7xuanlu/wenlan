@@ -44,11 +44,11 @@ const ACTIVITY_FIXTURE: ActivityResponse = {
     {
       kind: "entities",
       state: "idle",
-      done: 21,
+      done: 9,
       total: 21,
       blocked: 0,
       steps: [
-        { name: "detect", state: "idle", done: 21, total: 21, failed: 0, job: "everyday" },
+        { name: "detect", state: "idle", done: 12, total: 12, failed: 0, job: "everyday" },
         { name: "confirm", state: "idle", done: 9, total: 21, failed: 0, job: null },
       ],
     },
@@ -114,8 +114,14 @@ for (const width of WIDTHS) {
       const button = page.getByTestId("activity-status");
       await expect(button).toBeVisible();
       await expect(button).toHaveAttribute("data-state", "organizing");
-      // Memories is the busiest asset: 5 left against 0 everywhere else.
-      await expect(page.getByTestId("activity-status-detail")).toHaveText("7/12");
+      // State, never a number: the assets count different things, so the
+      // badge is a ring while steeping and the word lives in the name.
+      await expect(button).toHaveText("Activity");
+      await expect(button).toHaveAccessibleName("Activity, Steeping");
+      await expect(page.getByTestId("activity-status-dot")).toHaveAttribute(
+        "data-dot-state",
+        "organizing",
+      );
 
       // The status lives in the top toolbar, fully on screen, and there is
       // exactly one of it: no second copy left behind in a sidebar.
@@ -260,8 +266,89 @@ test("the popover is reachable and readable from the keyboard alone", async ({ p
 
   // The popover follows the button in the DOM, so Tab from the trigger has to
   // land inside it rather than skipping over it into the rest of the toolbar.
-  // The Intelligence link is the first stop when a cause is named; this
-  // fixture has none, so the first stop is See all activity.
+  // "Turn on a model" is the first stop when a model is missing; this fixture
+  // has none, so the first stop is See all activity.
   await page.keyboard.press("Tab");
   await expect(popover.getByTestId("activity-summary-open")).toBeFocused();
+});
+
+/** Everyday has no model: memories wait, and so does scanning them for entities. */
+const BLOCKED_FIXTURE: ActivityResponse = {
+  ...ACTIVITY_FIXTURE,
+  state: "blocked",
+  assets: [
+    {
+      kind: "memories",
+      state: "blocked",
+      done: 0,
+      total: 8,
+      blocked: 8,
+      steps: [
+        { name: "store", state: "idle", done: 8, total: 8, failed: 0, job: null },
+        { name: "summarize", state: "blocked", done: 0, total: 8, failed: 0, job: "everyday" },
+        { name: "link", state: "blocked", done: 0, total: 8, failed: 0, job: "everyday" },
+      ],
+    },
+    {
+      kind: "entities",
+      state: "blocked",
+      done: 0,
+      total: 8,
+      blocked: 8,
+      steps: [
+        { name: "detect", state: "blocked", done: 0, total: 8, failed: 0, job: "everyday" },
+        { name: "confirm", state: "idle", done: 0, total: 0, failed: 0, job: null },
+      ],
+    },
+    ACTIVITY_FIXTURE.assets[2],
+  ],
+  everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+  synthesis: { job: "synthesis", lane: "on_device", model: "Qwen3 8B", mode: "pinned", available: true },
+};
+
+test("a missing model leads the popover, in units that match each row", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
+  await installActivityFixture(page, BLOCKED_FIXTURE);
+  await page.goto("/");
+
+  const trigger = page.getByTestId("activity-status");
+  await expect(trigger).toHaveAttribute("data-state", "blocked");
+  await expect(trigger).toHaveText("Activity");
+  await expect(page.getByTestId("activity-status-dot")).toHaveAttribute("data-dot-state", "blocked");
+
+  await trigger.click();
+  const popover = page.getByRole("dialog", { name: "Background activity" });
+  await expect(popover).toBeVisible();
+
+  // The cause is the first thing in the popover, and it carries the fix.
+  const causes = popover.getByTestId("activity-summary-causes");
+  await expect(causes).toContainText("Steeping is paused: no everyday model is loaded.");
+  expect(await popover.evaluate((node) => node.firstElementChild?.getAttribute("data-testid"))).toBe(
+    "activity-summary-causes",
+  );
+  await expect(popover.getByTestId("activity-summary-headline")).toHaveCount(0);
+
+  // Each row counts its own thing: 8 memories waiting, 0 entities found yet.
+  await expect(popover.getByTestId("activity-asset-memories")).toContainText(
+    "8 not yet summarized. All are searchable now.",
+  );
+  await expect(popover.getByTestId("activity-asset-count-entities")).toHaveText("0");
+  await expect(popover.getByTestId("activity-asset-entities")).toContainText(
+    "8 memories not yet scanned for entities",
+  );
+
+  // Tab from the trigger lands on the fix first.
+  await trigger.focus();
+  await page.keyboard.press("Tab");
+  const turnOn = popover.getByRole("button", { name: "Turn on a model" });
+  await expect(turnOn).toBeFocused();
+
+  await turnOn.click();
+  await expect(popover).toBeHidden();
+  await expect(page.getByText("On-device and routed models")).toBeVisible();
+
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
 });

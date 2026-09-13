@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import ActivityStatus, { statusDetail } from "./ActivityStatus";
+import ActivityStatus from "./ActivityStatus";
 import type {
   ActivityAssetKind,
   ActivityAssetStatus,
@@ -108,7 +108,6 @@ describe("ActivityStatus", () => {
     expect(button).toHaveAccessibleName("Activity, Up to date");
     expect(button).toHaveAttribute("title", "Up to date");
     expect(screen.queryByTestId("activity-status-dot")).toBeNull();
-    expect(screen.queryByTestId("activity-status-detail")).toBeNull();
   });
 
   it("marks itself as the current page on the Activity view", async () => {
@@ -117,39 +116,26 @@ describe("ActivityStatus", () => {
     expect(await loadedTrigger()).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows the busiest asset's progress while steeping", async () => {
-    getActivityMock.mockResolvedValue(
-      activity({
-        state: "organizing",
-        assets: [
-          // Most work left is 8, on pages, even though memories is listed first.
-          asset("memories", { done: 9, total: 10 }),
-          asset("pages", { done: 2, total: 10 }),
-        ],
-      }),
-    );
-    renderStatus();
-
-    expect(await screen.findByTestId("activity-status-detail")).toHaveTextContent(
-      "2/10",
-    );
-  });
-
-  it("shows the total stuck count when blocked", async () => {
-    getActivityMock.mockResolvedValue(
-      activity({
-        state: "blocked",
-        assets: [
-          asset("memories", { blocked: 3, total: 10, done: 7 }),
-          asset("pages", { blocked: 2, total: 4, done: 2 }),
-        ],
-      }),
-    );
-    renderStatus();
-
-    const line = await loadedTrigger();
-    expect(line).toHaveAttribute("data-state", "blocked");
-    expect(screen.getByTestId("activity-status-detail")).toHaveTextContent("5");
+  it("shows no number in any state", async () => {
+    // Memories, entities and pages count different things, so no one figure
+    // on the button is true for all three. The state is the dot's form.
+    for (const state of ["organizing", "blocked"] as const) {
+      getActivityMock.mockResolvedValue(
+        activity({
+          state,
+          assets: [
+            asset("memories", { blocked: 3, done: 7, total: 10 }),
+            asset("entities", { blocked: 8, done: 2, total: 10 }),
+            asset("pages", { done: 2, total: 4 }),
+          ],
+        }),
+      );
+      const { unmount } = renderStatus();
+      const button = await loadedTrigger();
+      expect(button).toHaveAttribute("data-state", state);
+      expect(button.textContent).toBe("Activity");
+      unmount();
+    }
   });
 
   it("reports Blocked even when other assets are still steeping", async () => {
@@ -168,7 +154,11 @@ describe("ActivityStatus", () => {
 
     const line = await loadedTrigger();
     expect(line).toHaveAttribute("data-state", "blocked");
-    expect(screen.getByTestId("activity-status-detail")).toHaveTextContent("4");
+    expect(line).toHaveAccessibleName("Activity, Blocked");
+    expect(screen.getByTestId("activity-status-dot")).toHaveAttribute(
+      "data-dot-state",
+      "blocked",
+    );
   });
 
   it("pulses the dot only while steeping", async () => {
@@ -218,30 +208,5 @@ describe("ActivityStatus", () => {
 
     await userEvent.click(document.body);
     expect(onToggle).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("statusDetail", () => {
-  it("gives no number when everything is organized", () => {
-    expect(statusDetail(activity())).toBeNull();
-  });
-
-  it("gives no number when steeping with nothing outstanding", () => {
-    // Defensive: the daemon can report organizing on the tick where the last
-    // item finished. An empty busiest asset must not render "undefined".
-    expect(
-      statusDetail(
-        activity({
-          state: "organizing",
-          assets: [asset("memories", { done: 4, total: 4 })],
-        }),
-      ),
-    ).toBeNull();
-  });
-
-  it("gives no number when blocked with no stuck items", () => {
-    expect(
-      statusDetail(activity({ state: "blocked", assets: [asset("pages")] })),
-    ).toBeNull();
   });
 });

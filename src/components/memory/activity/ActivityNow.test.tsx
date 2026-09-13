@@ -187,7 +187,7 @@ describe("ActivityNow", () => {
       "summary and tags so recall is accurate",
     );
     expect(screen.getByTestId("activity-step-count-summarize")).toHaveTextContent(
-      "143 of 143",
+      "143 of 143 memories",
     );
 
     await userEvent.click(toggle);

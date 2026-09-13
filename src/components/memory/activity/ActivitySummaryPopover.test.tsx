@@ -50,7 +50,10 @@ function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
 /** Renders the Activity button and opens the popover, the way a user reaches it. */
 async function openPopover(
   data: ActivityResponse,
-  options: { readonly onOpenActivity?: (() => void) | null } = {},
+  options: {
+    readonly onOpenActivity?: (() => void) | null;
+    readonly onOpenIntelligence?: () => void;
+  } = {},
 ) {
   // null means "the shell has no Activity route"; omitted means "wire a spy".
   const onOpenActivity =
@@ -67,6 +70,7 @@ async function openPopover(
         expanded={open}
         onToggle={() => setOpen((value) => !value)}
         onOpenActivity={onOpenActivity}
+        onOpenIntelligence={options.onOpenIntelligence}
       />
     );
   }
@@ -108,16 +112,39 @@ describe("ActivitySummaryPopover", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(
-      dialog.textContent?.match(/No everyday model is loaded/g) ?? [],
+      dialog.textContent?.match(/no everyday model is loaded/g) ?? [],
     ).toHaveLength(1);
     // Pages has nothing blocked, so its model is not named as a cause.
-    expect(dialog).not.toHaveTextContent("No page-writing model");
+    expect(dialog).not.toHaveTextContent("no page-writing model");
     expect(screen.getByTestId("activity-asset-memories")).toHaveTextContent(
-      "8 waiting for a model",
+      "8 not yet summarized. All are searchable now.",
     );
     expect(screen.getByTestId("activity-asset-entities")).toHaveTextContent(
-      "8 waiting for a model",
+      "8 memories not yet scanned for entities",
     );
+  });
+
+  it("counts the Entities row in entities, not in the memories being scanned", async () => {
+    // Blocked detection reports memories; the row's number is still entities.
+    await openPopover(
+      activity({
+        state: "blocked",
+        everyday: route("everyday", "none", false),
+        assets: [
+          asset("memories", { total: 8, blocked: 8, steps: [
+            { name: "store", state: "idle", done: 8, total: 8, failed: 0, job: null },
+          ] }),
+          asset("entities", { done: 0, total: 8, blocked: 8, steps: [
+            { name: "detect", state: "blocked", done: 0, total: 8, failed: 0, job: "everyday" },
+            { name: "confirm", state: "idle", done: 0, total: 0, failed: 0, job: null },
+          ] }),
+          asset("pages"),
+        ],
+      }),
+    );
+
+    expect(screen.getByTestId("activity-asset-count-memories")).toHaveTextContent("8");
+    expect(screen.getByTestId("activity-asset-count-entities")).toHaveTextContent("0");
   });
 
   it("opens a dialog with the three asset rows in a fixed order", async () => {
@@ -181,11 +208,55 @@ describe("ActivitySummaryPopover", () => {
     );
 
     expect(screen.getByTestId("activity-asset-pages")).toHaveTextContent(
-      "12 waiting for a model",
+      "12 pages waiting to be updated",
     );
     const causes = screen.getByTestId("activity-summary-causes");
-    expect(causes).toHaveTextContent("No page-writing model is loaded");
-    expect(causes).toHaveTextContent("Settings, Intelligence");
+    expect(causes).toHaveTextContent(
+      "Page writing is paused: no page-writing model is loaded.",
+    );
+  });
+
+  it("opens on the missing model and the button that fixes it", async () => {
+    const onOpenIntelligence = vi.fn();
+    await openPopover(
+      activity({
+        state: "blocked",
+        everyday: route("everyday", "none", false),
+        synthesis: route("synthesis", "none", false),
+        assets: [
+          asset("memories", { total: 8, blocked: 8 }),
+          asset("entities"),
+          asset("pages", { total: 2, blocked: 2 }),
+        ],
+      }),
+      { onOpenIntelligence },
+    );
+
+    const dialog = screen.getByRole("dialog");
+    const causes = screen.getByTestId("activity-summary-causes");
+    // The cause replaces the generic headline and comes first.
+    expect(screen.queryByTestId("activity-summary-headline")).toBeNull();
+    expect(dialog.firstElementChild).toBe(causes);
+    // Two missing models, one button.
+    const actions = screen.getAllByRole("button", { name: "Turn on a model" });
+    expect(actions).toHaveLength(1);
+
+    await userEvent.click(actions[0]);
+    expect(onOpenIntelligence).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the headline when blocked work failed rather than lacking a model", async () => {
+    await openPopover(
+      activity({
+        state: "blocked",
+        assets: [asset("memories", { total: 10, done: 7, blocked: 3 })],
+      }),
+      { onOpenIntelligence: vi.fn() },
+    );
+    expect(screen.getByTestId("activity-summary-headline")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-summary-causes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Turn on a model" })).toBeNull();
   });
 
   it("draws no progress for an asset with nothing in it", async () => {
