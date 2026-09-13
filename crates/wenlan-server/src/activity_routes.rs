@@ -320,7 +320,7 @@ pub(crate) fn compose_activity(
     ActivityResponse {
         state,
         last_activity_at: counts
-            .last_step_updated_at
+            .last_work_at
             .max(batches.iter().map(|batch| batch.updated_at).max()),
         assets,
         everyday: everyday_route,
@@ -373,7 +373,7 @@ mod tests {
             pages_total: 0,
             pages_stale: 0,
             pages_refresh_blocked: 0,
-            last_step_updated_at: None,
+            last_work_at: None,
         }
     }
 
