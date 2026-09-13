@@ -43,6 +43,7 @@ function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
     assets: [asset("memories"), asset("entities"), asset("pages")],
     everyday: route("everyday", "on_device", true),
     synthesis: route("synthesis", "on_device", true),
+    refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     ...fields,
   };
 }

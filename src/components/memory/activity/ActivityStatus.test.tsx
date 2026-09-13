@@ -50,6 +50,7 @@ function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
       mode: "pinned",
       available: true,
     },
+    refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     ...fields,
   };
 }

@@ -61,6 +61,7 @@ describe("ActivityFeed i18n", () => {
       assets: [],
       everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
       synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
+      refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     });
     await i18n.changeLanguage("zh-Hant");
     agentsMock.mockResolvedValue([

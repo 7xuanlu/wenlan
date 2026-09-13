@@ -213,9 +213,11 @@ fn manifest_counts_match_the_spec() {
     // batch-status lane added GET `/api/import/batches/active` and GET
     // `/api/import/batches/{batch_id}/status`. Then 178 after the activity
     // status lane added GET `/api/activity` (counts-only, not page-bearing).
+    // Then 177 after the debug pipeline diagnostic route was removed
+    // (Diagnostics migrated to `/api/activity`).
     assert_eq!(
         HTTP_READERS.len(),
-        178,
+        177,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -226,7 +228,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        182,
+        181,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -234,7 +236,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        176,
+        175,
         "main builder entries"
     );
     assert_eq!(
@@ -250,7 +252,7 @@ fn manifest_counts_match_the_spec() {
         .iter()
         .filter(|r| r.page_bearing == PageBearing::Yes)
         .count();
-    assert_eq!(bearing, 62, "page-bearing HTTP routes");
+    assert_eq!(bearing, 61, "page-bearing HTTP routes");
 }
 
 #[test]
@@ -410,7 +412,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        172 // includes the GET/PUT telemetry consent routes and GET /api/activity, which carry no page markers
+        171 // includes the GET/PUT telemetry consent routes and GET /api/activity, which carry no page markers
     );
 }
 

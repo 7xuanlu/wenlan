@@ -112,6 +112,7 @@ async function installHandoffMock(page: Page): Promise<void> {
               ],
               everyday: { job: "everyday", lane: "on_device", model: "Qwen3 4B", mode: "auto", available: true },
               synthesis: { job: "synthesis", lane: "on_device", model: "Qwen3 4B", mode: "auto", available: true },
+              refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
             }
           : {
               state: "up_to_date",
@@ -123,6 +124,7 @@ async function installHandoffMock(page: Page): Promise<void> {
               ],
               everyday: { job: "everyday", lane: "on_device", model: "Qwen3 4B", mode: "auto", available: true },
               synthesis: { job: "synthesis", lane: "on_device", model: "Qwen3 4B", mode: "auto", available: true },
+              refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
             };
       }
 

@@ -72,7 +72,6 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "get_model_choice",
   "get_nurture_cards_cmd",
   "get_on_device_model",
-  "get_pipeline_status",
   "get_profile_narrative",
   "get_remote_access_status",
   "get_resolved_routing",
@@ -198,6 +197,13 @@ describe("review command contract", () => {
     const stale = OUTSIDE_THE_REVIEW_SURFACE.filter((command) => !invoked.has(command));
 
     expect(stale, "Remove these from OUTSIDE_THE_REVIEW_SURFACE; nothing invokes them.").toEqual([]);
+  });
+
+  it("still sees commands invoked with a typed generic", () => {
+    // INVOKE_LITERAL stops at the first `>`, so a nested generic such as
+    // invoke<Omit<A, "b">>("x") hides "x" from every check above. get_activity
+    // is read on every screen; losing sight of it must fail here.
+    expect(invokedCommands().has("get_activity")).toBe(true);
   });
 
   it("covers the page-review commands, which the Review surface does answer", () => {

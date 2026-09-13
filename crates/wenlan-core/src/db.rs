@@ -69,7 +69,9 @@ mod repair_receipt;
 pub(crate) mod repair_stale_projection;
 pub(crate) mod repair_target_receipt;
 pub(crate) mod repair_verification;
-pub use activity_counts::{ActivityCounts, AssetBacklog, DetectTally, StepBacklog, StepCount};
+pub use activity_counts::{
+    ActivityCounts, AssetBacklog, DetectTally, RefinementOpenCount, StepBacklog, StepCount,
+};
 mod scoped_entities;
 mod scoped_pages;
 mod source_sync;
@@ -49197,148 +49199,6 @@ impl MemoryDB {
             });
         }
         Ok(items)
-    }
-
-    /// Pipeline diagnostic: enrichment status, entity linking, refinement queue.
-    pub async fn pipeline_status(&self) -> Result<serde_json::Value, WenlanError> {
-        let conn = self.conn.lock().await;
-
-        // Enrichment status breakdown — derived from enrichment_steps table
-        let mut rows = conn
-            .query(
-                "SELECT status, COUNT(*) FROM enrichment_steps GROUP BY status",
-                (),
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status enrichment: {e}")))?;
-        let mut enrichment = serde_json::Map::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status row scan: {e}")))?
-        {
-            let status: String = row.get(0).unwrap_or_default();
-            let count: i64 = row.get(1).unwrap_or(0);
-            enrichment.insert(status, serde_json::Value::Number(count.into()));
-        }
-        // Count memories with no enrichment steps at all (raw)
-        let mut raw_rows = conn.query(
-            "SELECT COUNT(DISTINCT source_id) FROM memories WHERE source = 'memory' AND source_id NOT IN (SELECT DISTINCT source_id FROM enrichment_steps)",
-            (),
-        ).await.map_err(|e| WenlanError::VectorDb(format!("pipeline_status raw count: {e}")))?;
-        if let Some(row) = raw_rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status raw count row: {e}")))?
-        {
-            let raw_count: i64 = row.get(0).unwrap_or(0);
-            if raw_count > 0 {
-                enrichment.insert(
-                    "raw".to_string(),
-                    serde_json::Value::Number(raw_count.into()),
-                );
-            }
-        }
-
-        // Entity linking
-        let mut rows = conn
-            .query(
-                "SELECT \
-               COUNT(*) FILTER (WHERE entity_id IS NOT NULL) as linked, \
-               COUNT(*) FILTER (WHERE entity_id IS NULL) as unlinked \
-             FROM memories WHERE source = 'memory'",
-                (),
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status entity: {e}")))?;
-        let (linked, unlinked) = if let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status entity row: {e}")))?
-        {
-            (
-                row.get::<i64>(0).unwrap_or(0),
-                row.get::<i64>(1).unwrap_or(0),
-            )
-        } else {
-            (0, 0)
-        };
-
-        // Refinement queue
-        let mut rows = conn
-            .query(
-                "SELECT action, status, COUNT(*) FROM refinement_queue GROUP BY action, status",
-                (),
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status queue: {e}")))?;
-        let mut queue = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status row scan: {e}")))?
-        {
-            let action: String = row.get(0).unwrap_or_default();
-            let status: String = row.get(1).unwrap_or_default();
-            let count: i64 = row.get(2).unwrap_or(0);
-            queue.push(serde_json::json!({"action": action, "status": status, "count": count}));
-        }
-
-        // Recaps
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(*) FROM memories WHERE source = 'memory' AND is_recap = 1",
-                (),
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status recaps: {e}")))?;
-        let recap_count: i64 = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-            .map(|r| r.get::<i64>(0).unwrap_or(0))
-            .unwrap_or(0);
-
-        // Type breakdown
-        let mut rows = conn.query(
-            "SELECT memory_type, COUNT(*) FROM memories WHERE source = 'memory' GROUP BY memory_type ORDER BY COUNT(*) DESC",
-            (),
-        ).await.map_err(|e| WenlanError::VectorDb(format!("pipeline_status types: {e}")))?;
-        let mut types = serde_json::Map::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status row scan: {e}")))?
-        {
-            let mt: String = row.get(0).unwrap_or_else(|_| "null".to_string());
-            let count: i64 = row.get(1).unwrap_or(0);
-            types.insert(mt, serde_json::Value::Number(count.into()));
-        }
-
-        // Quality breakdown
-        let mut rows = conn.query(
-            "SELECT COALESCE(quality, 'unclassified'), COUNT(*) FROM memories WHERE source = 'memory' GROUP BY quality",
-            (),
-        ).await.map_err(|e| WenlanError::VectorDb(format!("pipeline_status quality: {e}")))?;
-        let mut quality = serde_json::Map::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("pipeline_status row scan: {e}")))?
-        {
-            let q: String = row.get(0).unwrap_or_default();
-            let count: i64 = row.get(1).unwrap_or(0);
-            quality.insert(q, serde_json::Value::Number(count.into()));
-        }
-
-        Ok(serde_json::json!({
-            "enrichment": enrichment,
-            "entity_linking": {"linked": linked, "unlinked": unlinked},
-            "refinement_queue": queue,
-            "recaps": recap_count,
-            "types": types,
-            "quality": quality,
-        }))
     }
 
     // NOTE: `get_most_recent_agent` used to live here as the fallback for paths

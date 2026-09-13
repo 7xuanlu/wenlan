@@ -18,6 +18,7 @@ import {
   routeSentence,
   ROUTE_JOBS,
   stepCount,
+  suggestionLines,
   trustSentence,
   type KnownActivityAsset,
   type KnownActivityAssetKind,
@@ -232,6 +233,60 @@ function AssetBlock({
   );
 }
 
+/**
+ * Open refinement suggestions, after the assets. Quiet on purpose: a neutral
+ * square, no state word, because these counts never change the state and
+ * some of them never move on their own.
+ */
+function SuggestionsBlock({ activity }: { readonly activity: ActivityResponse }) {
+  const { t } = useTranslation();
+  const lines = suggestionLines(activity);
+  if (lines.length === 0) return null;
+
+  return (
+    <div data-testid="activity-now-suggestions" style={{ display: "grid", gap: "5px" }}>
+      <div style={{ alignItems: "center", display: "flex", gap: "7px" }}>
+        <span
+          aria-hidden="true"
+          style={{
+            backgroundColor: "var(--mem-text-tertiary)",
+            borderRadius: "2px",
+            flexShrink: 0,
+            height: "8px",
+            width: "8px",
+          }}
+        />
+        <span
+          style={{
+            color: "var(--mem-text)",
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "12px",
+            fontWeight: 500,
+          }}
+        >
+          {t("activityStatus.suggestions.title")}
+        </span>
+      </div>
+      {lines.map((line) => (
+        <p
+          key={line.kind}
+          data-testid={`activity-now-suggestions-${line.kind}`}
+          style={{
+            color: "var(--mem-text-secondary)",
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "11px",
+            lineHeight: 1.45,
+            margin: 0,
+            paddingLeft: "15px",
+          }}
+        >
+          {t(line.key, line.params)}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function NowBody({
   activity,
   onOpenIntelligence,
@@ -281,6 +336,8 @@ function NowBody({
           ) : null;
         })}
       </div>
+
+      <SuggestionsBlock activity={activity} />
 
       <div
         style={{

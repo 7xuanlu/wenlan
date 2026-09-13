@@ -542,30 +542,6 @@ export async function getCaptureStats(): Promise<CaptureStats> {
   return invoke("get_capture_stats");
 }
 
-export interface PipelineEntityLinkingStatus {
-  linked: number;
-  unlinked: number;
-}
-
-export interface PipelineQueueEntry {
-  action: string;
-  status: string;
-  count: number;
-}
-
-export interface PipelineStatusResponse {
-  enrichment: Record<string, number>;
-  entity_linking: PipelineEntityLinkingStatus;
-  refinement_queue: PipelineQueueEntry[];
-  recaps: number;
-  types: Record<string, number>;
-  quality: Record<string, number>;
-}
-
-export async function getPipelineStatus(): Promise<PipelineStatusResponse> {
-  return invoke("get_pipeline_status");
-}
-
 // ── Activity status (daemon ≥ activity route; GET /api/activity) ───────────
 // Field names and enum string values mirror wenlan_types::activity exactly.
 
@@ -623,16 +599,45 @@ export interface ActivityAssetStatus {
   steps: ActivityStep[];
 }
 
+/** Open refinement rows for one action and status, verbatim labels. */
+export interface ActivityRefinementGroup {
+  action: string;
+  status: string;
+  count: number;
+}
+
+/** Open refinement suggestions. Reported only: never part of `state`. */
+export interface ActivityRefinement {
+  ready_for_review: number;
+  not_ready: number;
+  groups: ActivityRefinementGroup[];
+}
+
 export interface ActivityResponse {
   state: ActivityState;
   last_activity_at: number | null;
   assets: ActivityAssetStatus[];
   everyday: ActivityRoute;
   synthesis: ActivityRoute;
+  refinement: ActivityRefinement;
 }
 
+/** `/api/activity` as sent: a daemon from before `refinement` omits it. */
+type ActivityWire = Omit<ActivityResponse, "refinement"> & {
+  refinement?: ActivityRefinement;
+};
+
 export async function getActivity(): Promise<ActivityResponse> {
-  return invoke("get_activity");
+  // A flat generic keeps `get_activity` visible to the command scanners in
+  // reviewCommandContract.test.ts and preview/mocks/live-invoke.test.ts.
+  const response = await invoke<ActivityWire>("get_activity");
+  // The browser preview proxies the daemon's raw JSON, so a daemon from
+  // before `refinement` existed sends none. The app's Rust client already
+  // fills zeros through its serde default.
+  return {
+    ...response,
+    refinement: response.refinement ?? { ready_for_review: 0, not_ready: 0, groups: [] },
+  };
 }
 
 // ── Tags ────────────────────────────────────────────────────────────────

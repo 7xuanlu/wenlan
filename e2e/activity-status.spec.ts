@@ -65,6 +65,7 @@ const ACTIVITY_FIXTURE: ActivityResponse = {
   ],
   everyday: { job: "everyday", lane: "on_device", model: "Qwen3 4B", mode: "auto", available: true },
   synthesis: { job: "synthesis", lane: "anthropic", model: "Claude Sonnet", mode: "pinned", available: true },
+  refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
 };
 
 /** The shared mock answers `get_activity` with an idle, empty shape so every

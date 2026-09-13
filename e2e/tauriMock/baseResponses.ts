@@ -39,6 +39,7 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
       ],
       everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
       synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
+      refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     };
     case "get_profile": case "get_pending_revision": return null;
     case "get_briefing": return { content: "", new_today: 0, primary_agent: null, generated_at: 1_783_728_000, is_stale: false };

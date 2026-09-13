@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Wire types for `GET /api/activity` — one call describing all background
-//! organizing work, grouped by asset (Memories, Entities, Pages).
+//! organizing work, grouped by asset (Memories, Entities, Pages), plus the
+//! refinement suggestions still open.
 //!
 //! Counts, enum labels and model ids only: never page or memory prose, so the
 //! route is truth-manifest `NotApplicable` like `/api/config/routing`.
@@ -148,6 +149,29 @@ pub struct ActivityAssetStatus {
     pub steps: Vec<ActivityStep>,
 }
 
+/// Refinement suggestions still open (`pending` or `awaiting_review`).
+/// Reported only: never changes `ActivityResponse.state`, because some open
+/// rows never move on their own and would pin the state to Blocked.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ActivityRefinement {
+    /// Open rows the review queue lists now: `awaiting_review` in an action
+    /// it can show.
+    pub ready_for_review: u64,
+    /// Every other open row: not yet processed, or waiting in an action the
+    /// review queue cannot show.
+    pub not_ready: u64,
+    /// Open rows by action and status, verbatim labels, for Diagnostics.
+    pub groups: Vec<ActivityRefinementGroup>,
+}
+
+/// One `(action, status)` cell of the open refinement rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivityRefinementGroup {
+    pub action: String,
+    pub status: String,
+    pub count: u64,
+}
+
 /// The `GET /api/activity` response body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivityResponse {
@@ -158,6 +182,10 @@ pub struct ActivityResponse {
     pub assets: Vec<ActivityAssetStatus>,
     pub everyday: ActivityRoute,
     pub synthesis: ActivityRoute,
+    /// Open refinement suggestions. Defaults to all zero when absent, so this
+    /// build still reads a daemon from before the field existed.
+    #[serde(default)]
+    pub refinement: ActivityRefinement,
 }
 
 #[cfg(test)]
@@ -234,12 +262,43 @@ mod tests {
                 mode: "pinned_unavailable".to_string(),
                 available: false,
             },
+            refinement: ActivityRefinement {
+                ready_for_review: 2,
+                not_ready: 5,
+                groups: vec![
+                    ActivityRefinementGroup {
+                        action: "community_split".to_string(),
+                        status: "awaiting_review".to_string(),
+                        count: 1,
+                    },
+                    ActivityRefinementGroup {
+                        action: "entity_merge".to_string(),
+                        status: "pending".to_string(),
+                        count: 4,
+                    },
+                ],
+            },
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"pinned_unavailable\""));
         assert!(json.contains("\"on_device\""));
+        assert!(json.contains("\"ready_for_review\":2"));
         let back: ActivityResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back, response);
+    }
+
+    /// A daemon from before `refinement` existed still parses, with every
+    /// suggestion count at zero.
+    #[test]
+    fn activity_response_without_refinement_defaults_to_zero() {
+        let json = r#"{"state":"up_to_date","last_activity_at":null,"assets":[],
+            "everyday":{"job":"everyday","lane":"on_device","model":"m","mode":"pinned","available":true},
+            "synthesis":{"job":"synthesis","lane":"on_device","model":"m","mode":"pinned","available":true}}"#;
+        let response: ActivityResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.refinement, ActivityRefinement::default());
+        assert_eq!(response.refinement.ready_for_review, 0);
+        assert_eq!(response.refinement.not_ready, 0);
+        assert!(response.refinement.groups.is_empty());
     }
 
     /// An app older than its daemon must not lose the whole response to one
