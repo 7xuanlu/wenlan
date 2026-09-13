@@ -895,7 +895,6 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
     return del(`/api/memory/delete/${enc(sourceId)}`);
   },
   update_memory_cmd: (a) => put(`/api/memory/${enc(a.sourceId)}/update`, { content: a.content }),
-  get_pipeline_status: () => get("/api/debug/pipeline"),
   get_activity: () => get("/api/activity"),
   list_onboarding_milestones: () =>
     get("/api/onboarding/milestones").then((r) => r.milestones ?? r),

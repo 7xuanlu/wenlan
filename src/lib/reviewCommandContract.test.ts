@@ -72,7 +72,6 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "get_model_choice",
   "get_nurture_cards_cmd",
   "get_on_device_model",
-  "get_pipeline_status",
   "get_profile_narrative",
   "get_remote_access_status",
   "get_resolved_routing",

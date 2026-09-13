@@ -420,17 +420,6 @@ pub async fn get_capture_stats(
 }
 
 #[tauri::command]
-pub async fn get_pipeline_status(
-    state: tauri::State<'_, State>,
-) -> Result<crate::api::PipelineStatusResponse, String> {
-    let client = {
-        let s = state.read().await;
-        s.client.clone()
-    };
-    client.pipeline_status().await
-}
-
-#[tauri::command]
 pub async fn get_activity(
     state: tauri::State<'_, State>,
 ) -> Result<wenlan_types::activity::ActivityResponse, String> {
@@ -439,20 +428,6 @@ pub async fn get_activity(
         s.client.clone()
     };
     client.activity().await
-}
-
-#[cfg(test)]
-mod pipeline_status_command_type_tests {
-    use super::*;
-
-    #[allow(dead_code)]
-    async fn get_pipeline_status_uses_typed_response(state: tauri::State<'_, State>) {
-        let _: Result<crate::api::PipelineStatusResponse, String> =
-            get_pipeline_status(state).await;
-    }
-
-    #[test]
-    fn pipeline_status_command_response_type_is_checked() {}
 }
 
 // ── Remote access commands ────────────────────────────────────────────
